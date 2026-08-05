@@ -25,6 +25,15 @@ public static class StateValidator
         var filters = ValidateFilters(state.Filters, byName, errors, ignored);
         var sorts = ValidateSorts(state.Sorts is { Count: > 0 } ? state.Sorts : defaults?.Sorts, byName, ignored);
         var columns = ValidateColumns(state.Columns is { Count: > 0 } ? state.Columns : defaults?.Columns, schema, byName, ignored);
+        var aggregates = ValidateAggregates(state.Aggregates ?? defaults?.Aggregates, byName, errors, ignored);
+        var breaks = ValidateBreaks(state.Breaks ?? defaults?.Breaks, byName, ignored);
+
+        // Break columns must be selected — renderers group page rows by their values.
+        foreach (var b in breaks)
+        {
+            if (!columns.Any(c => string.Equals(c.Name, b.Name, StringComparison.OrdinalIgnoreCase)))
+                columns.Add(b);
+        }
 
         var search = string.IsNullOrWhiteSpace(state.Search) ? null : state.Search.Trim();
         if (search is not null && !columns.Any(c => c.Kind == ColumnKind.Text))
@@ -46,10 +55,76 @@ public static class StateValidator
             Search = search,
             Sorts = sorts,
             SelectColumns = columns,
+            Aggregates = aggregates,
+            Breaks = breaks,
             PageIndex = pageIndex,
             PageSize = pageSize,
             Ignored = ignored,
         };
+    }
+
+    private static List<ValidAggregate> ValidateAggregates(
+        List<AggregateRule>? rules,
+        Dictionary<string, ColumnModel> byName,
+        List<ValidationError> errors,
+        List<IgnoredItem> ignored)
+    {
+        var result = new List<ValidAggregate>();
+        if (rules is null) return result;
+
+        var seen = new HashSet<(string, AggregateFn)>();
+        for (var i = 0; i < rules.Count; i++)
+        {
+            var rule = rules[i];
+            var path = $"aggregates[{i}]";
+
+            if (!byName.TryGetValue(rule.Col, out var col))
+            {
+                ignored.Add(new IgnoredItem("aggregate", $"unknown column '{rule.Col}'"));
+                continue;
+            }
+
+            var ok = rule.Fn switch
+            {
+                AggregateFn.Sum or AggregateFn.Avg => col.Kind == ColumnKind.Number,
+                AggregateFn.Min or AggregateFn.Max =>
+                    col.Kind is ColumnKind.Number or ColumnKind.Date or ColumnKind.Text,
+                AggregateFn.Count or AggregateFn.CountDistinct => true,
+                _ => false,
+            };
+            if (!ok)
+            {
+                errors.Add(new ValidationError(path,
+                    $"aggregate '{JsonNamingPolicy.CamelCase.ConvertName(rule.Fn.ToString())}' is not valid for {col.KindName} column '{col.Name}'"));
+                continue;
+            }
+
+            if (seen.Add((col.Name, rule.Fn)))
+                result.Add(new ValidAggregate(col, rule.Fn));
+        }
+        return result;
+    }
+
+    private static List<ColumnModel> ValidateBreaks(
+        List<string>? requested,
+        Dictionary<string, ColumnModel> byName,
+        List<IgnoredItem> ignored)
+    {
+        var result = new List<ColumnModel>();
+        if (requested is null) return result;
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var name in requested)
+        {
+            if (!byName.TryGetValue(name, out var col))
+            {
+                ignored.Add(new IgnoredItem("break", $"unknown column '{name}'"));
+                continue;
+            }
+            if (seen.Add(col.Name))
+                result.Add(col);
+        }
+        return result;
     }
 
     private static (int Index, int Size) ClampPage(PageRequest? page, ReportDefinition def)
@@ -286,10 +361,6 @@ public static class StateValidator
     {
         if (state.Computed is { Count: > 0 })
             ignored.Add(new IgnoredItem("not-implemented", "computed columns arrive in M3"));
-        if (state.Breaks is { Count: > 0 })
-            ignored.Add(new IgnoredItem("not-implemented", "control breaks arrive in M2"));
-        if (state.Aggregates is { Count: > 0 })
-            ignored.Add(new IgnoredItem("not-implemented", "aggregates arrive in M2"));
         if (state.Highlights is { Count: > 0 })
             ignored.Add(new IgnoredItem("not-implemented", "highlights arrive in M3"));
         if (state.View is { } v && !string.Equals(v.Mode, "grid", StringComparison.OrdinalIgnoreCase))

@@ -153,8 +153,14 @@ starts ends blank nblank`.
 - `search` is the toolbar search: OR of `contains` across visible text columns.
 
 **Aggregate functions (closed set):** `count sum avg min max countDistinct`.
-(`median` deferred: no portable SQL across our three dialects; candidate for in-memory
-computation later.)
+- `sum/avg` require number columns; `min/max` allow number/date/text; `count/countDistinct`
+  allow anything. `count` counts non-null values of the column (row count is `totalRows`).
+- SQL Server `AVG` gets a float cast (integer AVG truncates there); other dialects native.
+- Control-break columns sort first (a user sort on a break column contributes its
+  direction) and are forced into the selection so renderers can group; break totals mirror
+  the page's group ordering.
+- (`median` deferred: no portable SQL across our three dialects; candidate for in-memory
+  computation later.)
 
 **Computed columns:** ids live in a separate namespace (`c1`, `c2`, …); may not shadow
 schema column names; referenced by id in `columns`, `sorts`, `filters`, `aggregates`,
@@ -366,11 +372,12 @@ Saved-report loads still pass the underlying report definition's authorization g
 
 ## 14. Milestones
 
-- **M1 — It's alive:** state doc (filters/sorts/paging/search) + composer + SQLite
-  execution + schema discovery + Workbench grid over a sample DB. Golden tests ×3
-  dialects for the composer.
-- **M2 — Numbers:** aggregates, control breaks + break totals, total count; schema/list
-  endpoints; auth wiring (endpoint gate, per-report policy, context params).
+- **M1 — It's alive** ✅ *(2026-08-04)*: state doc (filters/sorts/paging/search) +
+  composer + SQLite execution + schema discovery + Workbench grid over a sample DB.
+  Golden tests ×3 dialects for the composer.
+- **M2 — Numbers** ✅ *(2026-08-05)*: aggregates, control breaks + break totals, total
+  count; schema/list endpoints; auth wiring (endpoint gate, per-report policy verified
+  against a real host policy, context params).
 - **M3 — Expressions:** computed-column grammar/AST/emitters; highlights (server-side
   evaluation); `ignored[]` resilience.
 - **M4 — Views & export:** groupBy view, pivot-in-memory view, CSV export.

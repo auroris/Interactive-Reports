@@ -1,6 +1,6 @@
 namespace InteractiveReport.Core.Model;
 
-/// <summary>Response shape for a query. Aggregates/break totals/highlights arrive in later milestones.</summary>
+/// <summary>Response shape for a query. Highlights arrive in M3.</summary>
 public sealed class ReportResult
 {
     public required IReadOnlyList<ColumnInfo> Columns { get; init; }
@@ -13,10 +13,12 @@ public sealed class ReportResult
     /// <summary>Total rows in the whole filtered set (never just the visible page).</summary>
     public required long TotalRows { get; init; }
 
+    /// <summary>Column → aggregate-fn → value, computed over the whole filtered set.</summary>
     public IReadOnlyDictionary<string, IReadOnlyDictionary<string, object?>> Aggregates { get; init; }
         = new Dictionary<string, IReadOnlyDictionary<string, object?>>();
 
-    public IReadOnlyList<object> BreakTotals { get; init; } = [];
+    /// <summary>One entry per break group, ordered like the page rows.</summary>
+    public IReadOnlyList<BreakTotal> BreakTotals { get; init; } = [];
 
     public IReadOnlyList<HighlightHit> Highlights { get; init; } = [];
 
@@ -30,6 +32,12 @@ public sealed class ReportResult
 }
 
 public sealed record ColumnInfo(string Name, string Label, string Type, bool Computed);
+
+/// <summary>Totals for one control-break group: the break-column values, row count, and per-column aggregates.</summary>
+public sealed record BreakTotal(
+    IReadOnlyDictionary<string, object?> Key,
+    long Rows,
+    IReadOnlyDictionary<string, IReadOnlyDictionary<string, object?>> Aggregates);
 
 public sealed record HighlightHit(int Row, string Id, string? Col);
 

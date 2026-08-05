@@ -10,9 +10,17 @@ const OPS_BY_TYPE = {
 };
 const NO_VALUE_OPS = ["blank", "nblank"];
 const LIST_OPS = ["in", "nin"];
+const AGG_FNS_BY_TYPE = {
+    number: ["sum", "avg", "min", "max", "count", "countDistinct"],
+    text: ["min", "max", "count", "countDistinct"],
+    date: ["min", "max", "count", "countDistinct"],
+    bool: ["count", "countDistinct"],
+    other: ["count", "countDistinct"],
+};
 
 const els = Object.fromEntries(
-    ["report", "search", "add-filter", "filters", "thead", "tbody", "prev", "next", "pageinfo", "stats", "ignored", "error",
+    ["report", "search", "add-filter", "add-agg", "break", "filters", "aggs", "thead", "tbody", "prev", "next",
+     "pageinfo", "stats", "grand", "ignored", "error",
      "saved", "save-view", "global-wrap", "save-global", "delete-saved", "identity"]
         .map(id => [id.replace(/-/g, ""), document.getElementById(id)]));
 
@@ -44,9 +52,20 @@ async function selectReport(name) {
         { filters: [], sorts: [], page: { index: 1, size: 25 } },
         structuredClone(schema.defaultState ?? {}));
     state.page ??= { index: 1, size: 25 };
-    els.search.value = state.search ?? "";
-    els.filters.replaceChildren();
+    syncControlsFromState();
     await Promise.all([runQuery(), loadSaved()]);
+}
+
+// Reflect the current state document (report default or loaded saved view) in the controls.
+function syncControlsFromState() {
+    els.search.value = state.search ?? "";
+    els.filters.replaceChildren();   // active filters stay in state; builder rows reset
+    els.break.replaceChildren(
+        new Option("— none —", ""),
+        ...schema.columns.map(c => new Option(c.label, c.name)));
+    els.break.value = state.breaks?.[0] ?? "";
+    els.aggs.replaceChildren();
+    for (const a of state.aggregates ?? []) addAggRow(a.col, a.fn);
 }
 
 // --- identity & saved views -------------------------------------------------
@@ -89,8 +108,7 @@ async function loadSavedState(id) {
     state.filters ??= [];
     state.sorts ??= [];
     state.page ??= { index: 1, size: 25 };
-    els.search.value = state.search ?? "";
-    els.filters.replaceChildren();   // loaded filters stay active; builder rows reset
+    syncControlsFromState();
     await runQuery();
 }
 
@@ -146,7 +164,40 @@ function render(result) {
     }
     els.thead.replaceChildren(headRow);
 
-    els.tbody.replaceChildren(...result.rows.map(row => {
+    const breaks = state.breaks ?? [];
+    const breakKeyOf = row => breaks.map(b => String(row[b] ?? "")).join("");
+    const totalsByKey = new Map((result.breakTotals ?? []).map(bt =>
+        [breaks.map(b => String(bt.key[b] ?? "")).join(""), bt]));
+
+    const bodyRows = [];
+    let currentKey = null;
+    const emitTotals = key => {
+        const bt = totalsByKey.get(key);
+        if (!bt) return;
+        const tr = document.createElement("tr");
+        tr.className = "break-total";
+        const td = document.createElement("td");
+        td.colSpan = result.columns.length;
+        td.textContent = `Σ ${bt.rows} rows` + formatAggs(bt.aggregates, " · ");
+        tr.append(td);
+        bodyRows.push(tr);
+    };
+
+    for (const row of result.rows) {
+        if (breaks.length) {
+            const key = breakKeyOf(row);
+            if (key !== currentKey) {
+                if (currentKey !== null) emitTotals(currentKey);
+                const tr = document.createElement("tr");
+                tr.className = "break-header";
+                const td = document.createElement("td");
+                td.colSpan = result.columns.length;
+                td.textContent = breaks.map(b => `${b}: ${row[b] ?? "(blank)"}`).join("  ·  ");
+                tr.append(td);
+                bodyRows.push(tr);
+                currentKey = key;
+            }
+        }
         const tr = document.createElement("tr");
         for (const col of result.columns) {
             const td = document.createElement("td");
@@ -155,17 +206,31 @@ function render(result) {
             if (col.type === "number") td.className = "num";
             tr.append(td);
         }
-        return tr;
-    }));
+        bodyRows.push(tr);
+    }
+    if (currentKey !== null) emitTotals(currentKey);
+    els.tbody.replaceChildren(...bodyRows);
 
     const pages = Math.max(1, Math.ceil(totalRows / state.page.size));
     els.pageinfo.textContent = `page ${state.page.index} / ${pages}`;
     els.prev.disabled = state.page.index <= 1;
     els.next.disabled = state.page.index >= pages;
     els.stats.textContent = `${totalRows} rows · ${result.elapsedMs} ms`;
+    els.grand.textContent = formatAggs(result.aggregates, "  ");
     els.ignored.textContent = result.ignored?.length
         ? "ignored: " + result.ignored.map(i => `${i.kind} (${i.detail})`).join(", ")
         : "";
+}
+
+function formatAggs(aggregates, lead) {
+    const parts = [];
+    for (const [col, fns] of Object.entries(aggregates ?? {})) {
+        for (const [fn, v] of Object.entries(fns)) {
+            const num = typeof v === "number" ? v.toLocaleString(undefined, { maximumFractionDigits: 2 }) : v;
+            parts.push(`${fn}(${col}) = ${num ?? "—"}`);
+        }
+    }
+    return parts.length ? lead + parts.join(" · ") : "";
 }
 
 function toggleSort(col) {
@@ -261,10 +326,52 @@ function applyFilters() {
     runQuery();
 }
 
+// --- aggregate builder ------------------------------------------------------
+
+function addAggRow(col, fn) {
+    const row = document.createElement("div");
+    row.className = "filter-row";
+
+    const colSel = document.createElement("select");
+    colSel.replaceChildren(...schema.columns.map(c => new Option(c.label, c.name)));
+    if (col) colSel.value = col;
+
+    const fnSel = document.createElement("select");
+    const refreshFns = () => {
+        const type = schema.columns.find(c => c.name === colSel.value)?.type ?? "other";
+        fnSel.replaceChildren(...AGG_FNS_BY_TYPE[type].map(f => new Option(f, f)));
+        if (fn && AGG_FNS_BY_TYPE[type].includes(fn)) fnSel.value = fn;
+    };
+    colSel.onchange = () => { refreshFns(); applyAggs(); };
+    fnSel.onchange = applyAggs;
+
+    const del = document.createElement("button");
+    del.textContent = "×";
+    del.onclick = () => { row.remove(); applyAggs(); };
+
+    row.append(document.createTextNode("Σ "), colSel, fnSel, del);
+    els.aggs.append(row);
+    refreshFns();
+}
+
+function applyAggs() {
+    state.aggregates = [...els.aggs.querySelectorAll(".filter-row")].map(row => {
+        const [colSel, fnSel] = row.querySelectorAll("select");
+        return { col: colSel.value, fn: fnSel.value };
+    });
+    runQuery();
+}
+
 // --- wiring -----------------------------------------------------------------
 
 els.report.onchange = () => selectReport(els.report.value);
 els.addfilter.onclick = addFilterRow;
+els.addagg.onclick = () => addAggRow();
+els.break.onchange = () => {
+    state.breaks = els.break.value ? [els.break.value] : [];
+    state.page.index = 1;
+    runQuery();
+};
 els.prev.onclick = () => { state.page.index--; runQuery(); };
 els.next.onclick = () => { state.page.index++; runQuery(); };
 els.saved.onchange = () => { refreshSavedButtons(); if (els.saved.value) loadSavedState(els.saved.value); };

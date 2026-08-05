@@ -122,6 +122,90 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         // SHIPPED: 7500, 5000, 3000, 1500 in range; PENDING: 2000 in range
         Assert.Equal(5, result.TotalRows);
     }
+
+    [Fact]
+    public async Task Aggregates_cover_the_whole_filtered_set_not_the_page()
+    {
+        var result = await _executor.Query(Definition, new ReportState
+        {
+            Filters = [Filter("STATUS", FilterOp.Eq, "SHIPPED")],
+            Page = new PageRequest { Index = 1, Size = 2 },
+            Aggregates =
+            [
+                new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum },
+                new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Avg },
+                new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Min },
+                new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Max },
+            ],
+        }, NoParams);
+
+        Assert.Equal(2, result.Rows.Count);                      // page of 2...
+        var amount = result.Aggregates["AMOUNT"];
+        Assert.Equal(26000m, Convert.ToDecimal(amount["sum"]));  // ...totals over all 5
+        Assert.Equal(5200m, Convert.ToDecimal(amount["avg"]));
+        Assert.Equal(1500m, Convert.ToDecimal(amount["min"]));
+        Assert.Equal(9000m, Convert.ToDecimal(amount["max"]));
+    }
+
+    [Fact]
+    public async Task CountDistinct_counts_values_not_rows()
+    {
+        var result = await _executor.Query(Definition, new ReportState
+        {
+            Aggregates = [new AggregateRule { Col = "CUSTOMER", Fn = AggregateFn.CountDistinct }],
+        }, NoParams);
+
+        // 10 rows, but 'Acme Corp' appears twice → 9 distinct
+        Assert.Equal(9L, Convert.ToInt64(result.Aggregates["CUSTOMER"]["countDistinct"]));
+    }
+
+    [Fact]
+    public async Task Break_totals_group_and_order_like_the_page()
+    {
+        var result = await _executor.Query(Definition, new ReportState
+        {
+            Breaks = ["STATUS"],
+            Aggregates = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum }],
+        }, NoParams);
+
+        Assert.Equal(
+            ["CANCELLED", "NEW", "PENDING", "SHIPPED"],
+            result.BreakTotals.Select(b => (string)b.Key["STATUS"]!));
+        Assert.Equal(4, result.BreakTotals.Count);
+        Assert.Equal([1L, 1L, 3L, 5L], result.BreakTotals.Select(b => b.Rows));
+        Assert.Equal(
+            [6000m, 400m, 14800m, 26000m],
+            result.BreakTotals.Select(b => Convert.ToDecimal(b.Aggregates["AMOUNT"]["sum"])));
+
+        // Page rows arrive grouped: STATUS sorts first even with no user sort.
+        Assert.Equal("CANCELLED", result.Rows[0]["STATUS"]);
+    }
+
+    [Fact]
+    public async Task User_sort_direction_on_break_column_reverses_groups()
+    {
+        var result = await _executor.Query(Definition, new ReportState
+        {
+            Breaks = ["STATUS"],
+            Sorts = [new SortRule { Col = "STATUS", Dir = SortDir.Desc }],
+        }, NoParams);
+
+        Assert.Equal("SHIPPED", result.BreakTotals[0].Key["STATUS"]);
+        Assert.Equal("SHIPPED", result.Rows[0]["STATUS"]);
+    }
+
+    [Fact]
+    public async Task Aggregates_over_empty_filtered_set_are_null()
+    {
+        var result = await _executor.Query(Definition, new ReportState
+        {
+            Filters = [Filter("STATUS", FilterOp.Eq, "NO_SUCH_STATUS")],
+            Aggregates = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum }],
+        }, NoParams);
+
+        Assert.Equal(0, result.TotalRows);
+        Assert.Null(result.Aggregates["AMOUNT"]["sum"]);
+    }
 }
 
 public sealed class SqliteE2EFixture : IReportConnectionFactory, IDisposable

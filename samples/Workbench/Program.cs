@@ -14,6 +14,12 @@ builder.Services
     .AddAuthentication(DevAuthHandler.SchemeName)
     .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, DevAuthHandler>(DevAuthHandler.SchemeName, null);
 
+// Real ASP.NET Core policy, referenced by the "regional-summary" report definition —
+// proves the per-report policy gate against the host's authorization system.
+builder.Services.AddAuthorization(options =>
+    options.AddPolicy("WorkbenchAdmins", policy =>
+        policy.RequireAssertion(ctx => ctx.User.Identity?.Name == DevAuthHandler.DefaultUser)));
+
 var app = builder.Build();
 
 SampleData.EnsureSeeded(dbPath);

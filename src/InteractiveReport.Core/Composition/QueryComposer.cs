@@ -29,10 +29,15 @@ public static class QueryComposer
 
         var count = core.Clone().AsCount();
 
+        // Aggregates and break totals compute over the whole filtered set — they derive
+        // from the pre-select, pre-order, pre-paging core, same as count.
+        var aggregates = state.Aggregates.Count > 0 ? BuildAggregates(core, state, def.Dialect) : null;
+        var breakTotals = state.Breaks.Count > 0 ? BuildBreakTotals(core, state, def.Dialect) : null;
+
         var page = core.Clone()
             .Select(state.SelectColumns.Select(c => c.Name).ToArray());
 
-        foreach (var sort in state.Sorts)
+        foreach (var sort in EffectiveSorts(state))
         {
             if (sort.Dir == SortDir.Asc) page.OrderBy(sort.Column.Name);
             else page.OrderByDesc(sort.Column.Name);
@@ -40,7 +45,57 @@ public static class QueryComposer
 
         page.ForPage(state.PageIndex, state.PageSize);
 
-        return new ComposedQueries(page, count);
+        return new ComposedQueries(page, count, aggregates, breakTotals);
+    }
+
+    /// <summary>
+    /// Break columns must sort first so groups arrive contiguous. A user sort on a break
+    /// column contributes its direction to the break position; remaining user sorts
+    /// follow after all breaks.
+    /// </summary>
+    internal static IEnumerable<ValidSort> EffectiveSorts(ValidatedState state)
+    {
+        if (state.Breaks.Count == 0)
+            return state.Sorts;
+
+        var byName = state.Sorts.ToDictionary(s => s.Column.Name, StringComparer.OrdinalIgnoreCase);
+        var breakNames = new HashSet<string>(state.Breaks.Select(b => b.Name), StringComparer.OrdinalIgnoreCase);
+
+        return state.Breaks
+            .Select(b => byName.TryGetValue(b.Name, out var s) ? s : new ValidSort(b, SortDir.Asc))
+            .Concat(state.Sorts.Where(s => !breakNames.Contains(s.Column.Name)));
+    }
+
+    private static Query BuildAggregates(Query core, ValidatedState state, ReportDialect dialect)
+    {
+        var q = core.Clone();
+        for (var i = 0; i < state.Aggregates.Count; i++)
+        {
+            var agg = state.Aggregates[i];
+            q.SelectRaw($"{DialectSupport.AggregateExpression(dialect, agg.Fn, $"[{agg.Column.Name}]")} AS [a{i}]");
+        }
+        return q;
+    }
+
+    private static Query BuildBreakTotals(Query core, ValidatedState state, ReportDialect dialect)
+    {
+        var breakCols = state.Breaks.Select(b => b.Name).ToArray();
+        var q = core.Clone().Select(breakCols);
+        q.SelectRaw("COUNT(*) AS [__rows]");
+        for (var i = 0; i < state.Aggregates.Count; i++)
+        {
+            var agg = state.Aggregates[i];
+            q.SelectRaw($"{DialectSupport.AggregateExpression(dialect, agg.Fn, $"[{agg.Column.Name}]")} AS [a{i}]");
+        }
+        q.GroupBy(breakCols);
+
+        // Group ordering mirrors the page's break ordering so renderers walk both in step.
+        foreach (var sort in EffectiveSorts(state).Take(state.Breaks.Count))
+        {
+            if (sort.Dir == SortDir.Asc) q.OrderBy(sort.Column.Name);
+            else q.OrderByDesc(sort.Column.Name);
+        }
+        return q;
     }
 
     private static void ApplyFilter(Query q, ValidFilter f, ReportDialect dialect)
@@ -103,4 +158,4 @@ public static class QueryComposer
     }
 }
 
-public sealed record ComposedQueries(Query Page, Query Count);
+public sealed record ComposedQueries(Query Page, Query Count, Query? Aggregates = null, Query? BreakTotals = null);

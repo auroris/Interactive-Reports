@@ -18,6 +18,9 @@
         th .dir { color: #888; font-size: .8em; }
         tbody tr:nth-child(even) { background: #fafafa; }
         td.num { text-align: right; font-variant-numeric: tabular-nums; }
+        tr.break-header td { background: #e4e9f2; font-weight: 600; border-top: 2px solid #99a; }
+        tr.break-total td { background: #f2f4f8; font-style: italic; color: #445; }
+        #grand { font-weight: 600; color: #334; }
         .meta { color: #666; font-size: .85rem; margin-top: .5rem; display: flex; gap: 1.25rem; align-items: center; }
         .warn { color: #a15c00; }
         .error { color: #b00020; white-space: pre-wrap; }
@@ -31,6 +34,8 @@
         <label>Report <select id="report"></select></label>
         <input id="search" type="search" placeholder="Search…" size="24">
         <button id="add-filter">+ Filter</button>
+        <button id="add-agg">+ Aggregate</button>
+        <label>Break by <select id="break"></select></label>
         <label>Saved <select id="saved"></select></label>
         <button id="save-view">Save view</button>
         <label id="global-wrap" hidden><input id="save-global" type="checkbox"> as global</label>
@@ -39,6 +44,7 @@
     </div>
 
     <div id="filters" class="filters"></div>
+    <div id="aggs" class="filters"></div>
 
     <div id="error" class="error"></div>
     <table>
@@ -53,6 +59,7 @@
             <button id="next">&gt;</button>
         </span>
         <span id="stats"></span>
+        <span id="grand"></span>
         <span id="ignored" class="warn"></span>
     </div>
 

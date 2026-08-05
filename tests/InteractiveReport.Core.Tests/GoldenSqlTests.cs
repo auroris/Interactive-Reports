@@ -15,11 +15,22 @@ public class GoldenSqlTests
 {
     private static (SqlResult Page, SqlResult Count) Compile(ReportDialect dialect, ReportState state)
     {
+        var (page, count, _, _) = CompileAll(dialect, state);
+        return (page, count);
+    }
+
+    private static (SqlResult Page, SqlResult Count, SqlResult? Aggregates, SqlResult? BreakTotals) CompileAll(
+        ReportDialect dialect, ReportState state)
+    {
         var def = OrdersDefinition(dialect);
         var validated = StateValidator.Validate(def, state, OrdersSchema);
         var composed = QueryComposer.Compose(def, validated);
         var compiler = DialectSupport.GetCompiler(dialect);
-        return (compiler.Compile(composed.Page), compiler.Compile(composed.Count));
+        return (
+            compiler.Compile(composed.Page),
+            compiler.Compile(composed.Count),
+            composed.Aggregates is null ? null : compiler.Compile(composed.Aggregates),
+            composed.BreakTotals is null ? null : compiler.Compile(composed.BreakTotals));
     }
 
     private static readonly ReportState CoreState = new()
@@ -148,6 +159,69 @@ public class GoldenSqlTests
         });
 
         Assert.Contains("\"AMOUNT\" > @p0 AND (LOWER(", page.Sql);
+    }
+
+    [Fact]
+    public void Aggregate_query_computes_over_filtered_set_without_paging()
+    {
+        var (_, _, aggregates, _) = CompileAll(ReportDialect.Sqlite, new ReportState
+        {
+            Filters = [Filter("STATUS", FilterOp.Eq, "SHIPPED")],
+            Sorts = [new SortRule { Col = "ORDER_DATE", Dir = SortDir.Desc }],
+            Page = new PageRequest { Index = 2, Size = 25 },
+            Aggregates =
+            [
+                new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum },
+                new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Avg },
+                new AggregateRule { Col = "CUSTOMER", Fn = AggregateFn.CountDistinct },
+            ],
+        });
+
+        Assert.Equal(
+            "SELECT SUM(\"AMOUNT\") AS \"a0\", AVG(\"AMOUNT\") AS \"a1\", COUNT(DISTINCT \"CUSTOMER\") AS \"a2\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base WHERE \"STATUS\" = @p0",
+            aggregates!.Sql);
+    }
+
+    [Fact]
+    public void SqlServer_avg_gets_float_cast_against_integer_truncation()
+    {
+        var (_, _, aggregates, _) = CompileAll(ReportDialect.SqlServer, new ReportState
+        {
+            Aggregates = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Avg }],
+        });
+
+        Assert.Contains("AVG(CAST([AMOUNT] AS FLOAT)) AS [a0]", aggregates!.Sql);
+    }
+
+    [Fact]
+    public void Break_totals_group_the_filtered_set_with_row_counts()
+    {
+        var (_, _, _, breakTotals) = CompileAll(ReportDialect.Sqlite, new ReportState
+        {
+            Filters = [Filter("AMOUNT", FilterOp.Gt, 1000)],
+            Breaks = ["REGION"],
+            Aggregates = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum }],
+        });
+
+        Assert.Equal(
+            "SELECT \"REGION\", COUNT(*) AS \"__rows\", SUM(\"AMOUNT\") AS \"a0\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base WHERE \"AMOUNT\" > @p0 GROUP BY \"REGION\" ORDER BY \"REGION\"",
+            breakTotals!.Sql);
+    }
+
+    [Fact]
+    public void Breaks_sort_first_and_user_direction_on_break_column_wins()
+    {
+        var (page, _, _, _) = CompileAll(ReportDialect.Sqlite, new ReportState
+        {
+            Breaks = ["REGION"],
+            Sorts =
+            [
+                new SortRule { Col = "REGION", Dir = SortDir.Desc },
+                new SortRule { Col = "AMOUNT", Dir = SortDir.Asc },
+            ],
+        });
+
+        Assert.Contains("ORDER BY \"REGION\" DESC, \"AMOUNT\"", page.Sql);
     }
 
     [Fact]

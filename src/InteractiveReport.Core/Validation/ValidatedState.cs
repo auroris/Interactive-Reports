@@ -12,6 +12,9 @@ public sealed class ValidatedState
     public string? Search { get; init; }
     public required IReadOnlyList<ValidSort> Sorts { get; init; }
     public required IReadOnlyList<ColumnModel> SelectColumns { get; init; }
+    public required IReadOnlyList<ValidAggregate> Aggregates { get; init; }
+    /// <summary>Control-break columns; always members of SelectColumns so renderers can group.</summary>
+    public required IReadOnlyList<ColumnModel> Breaks { get; init; }
     public required int PageIndex { get; init; }
     public required int PageSize { get; init; }
     public required IReadOnlyList<IgnoredItem> Ignored { get; init; }
@@ -25,3 +28,5 @@ public sealed record ValidFilter(
     IReadOnlyList<object>? Values = null);
 
 public sealed record ValidSort(ColumnModel Column, SortDir Dir);
+
+public sealed record ValidAggregate(ColumnModel Column, AggregateFn Fn);

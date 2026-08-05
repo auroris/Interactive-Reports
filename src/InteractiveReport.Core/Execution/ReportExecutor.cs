@@ -60,6 +60,14 @@ public sealed class ReportExecutor
             totalRows = Convert.ToInt64(scalar);
         }
 
+        var aggregates = composed.Aggregates is null
+            ? new Dictionary<string, IReadOnlyDictionary<string, object?>>()
+            : await ReadAggregates(conn, compiler, composed.Aggregates, validated, contextParams, def, ct);
+
+        var breakTotals = composed.BreakTotals is null
+            ? (IReadOnlyList<BreakTotal>)[]
+            : await ReadBreakTotals(conn, compiler, composed.BreakTotals, validated, contextParams, def, ct);
+
         var rows = new List<IReadOnlyDictionary<string, object?>>();
         await using (var pageCmd = CommandBuilder.Build(conn, compiler.Compile(composed.Page), contextParams, def))
         await using (var reader = await pageCmd.ExecuteReaderAsync(ct))
@@ -83,8 +91,84 @@ public sealed class ReportExecutor
             Rows = rows,
             Page = new PageRequest { Index = validated.PageIndex, Size = validated.PageSize },
             TotalRows = totalRows,
+            Aggregates = aggregates,
+            BreakTotals = breakTotals,
             Ignored = validated.Ignored,
             ElapsedMs = sw.ElapsedMilliseconds,
         };
     }
+
+    /// <summary>Single-row aggregate query: aliases a0..aN in validated-aggregate order.</summary>
+    private static async Task<Dictionary<string, IReadOnlyDictionary<string, object?>>> ReadAggregates(
+        DbConnection conn,
+        SqlKata.Compilers.Compiler compiler,
+        SqlKata.Query query,
+        ValidatedState validated,
+        IReadOnlyDictionary<string, object?> contextParams,
+        ReportDefinition def,
+        CancellationToken ct)
+    {
+        await using var cmd = CommandBuilder.Build(conn, compiler.Compile(query), contextParams, def);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+
+        var values = new object?[validated.Aggregates.Count];
+        if (await reader.ReadAsync(ct))
+        {
+            for (var i = 0; i < values.Length; i++)
+                values[i] = reader.IsDBNull(i) ? null : reader.GetValue(i);
+        }
+        return Nest(validated.Aggregates, i => values[i]);
+    }
+
+    /// <summary>Break totals: break columns, then [__rows], then a0..aN — read by ordinal.</summary>
+    private static async Task<List<BreakTotal>> ReadBreakTotals(
+        DbConnection conn,
+        SqlKata.Compilers.Compiler compiler,
+        SqlKata.Query query,
+        ValidatedState validated,
+        IReadOnlyDictionary<string, object?> contextParams,
+        ReportDefinition def,
+        CancellationToken ct)
+    {
+        await using var cmd = CommandBuilder.Build(conn, compiler.Compile(query), contextParams, def);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+
+        var breakCount = validated.Breaks.Count;
+        var result = new List<BreakTotal>();
+        while (await reader.ReadAsync(ct))
+        {
+            var key = new Dictionary<string, object?>(breakCount, StringComparer.OrdinalIgnoreCase);
+            for (var i = 0; i < breakCount; i++)
+                key[validated.Breaks[i].Name] = reader.IsDBNull(i) ? null : reader.GetValue(i);
+
+            var rowCount = Convert.ToInt64(reader.GetValue(breakCount));
+
+            var offset = breakCount + 1;
+            var aggregates = Nest(validated.Aggregates,
+                i => reader.IsDBNull(offset + i) ? null : reader.GetValue(offset + i));
+
+            result.Add(new BreakTotal(key, rowCount, aggregates));
+        }
+        return result;
+    }
+
+    /// <summary>Flat aggregate values → column → camelCase fn → value.</summary>
+    private static Dictionary<string, IReadOnlyDictionary<string, object?>> Nest(
+        IReadOnlyList<ValidAggregate> aggregates,
+        Func<int, object?> valueAt)
+    {
+        var result = new Dictionary<string, IReadOnlyDictionary<string, object?>>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < aggregates.Count; i++)
+        {
+            var agg = aggregates[i];
+            if (result.TryGetValue(agg.Column.Name, out var existing))
+                ((Dictionary<string, object?>)existing)[FnName(agg.Fn)] = valueAt(i);
+            else
+                result[agg.Column.Name] = new Dictionary<string, object?> { [FnName(agg.Fn)] = valueAt(i) };
+        }
+        return result;
+    }
+
+    private static string FnName(AggregateFn fn)
+        => System.Text.Json.JsonNamingPolicy.CamelCase.ConvertName(fn.ToString());
 }

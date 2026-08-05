@@ -115,11 +115,72 @@ public class StateValidatorTests
     {
         var result = Validate(new ReportState
         {
-            Breaks = ["REGION"],
-            Aggregates = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum }],
+            Computed = [new ComputedColumn { Id = "c1", Expr = "1" }],
+            Highlights = [new HighlightRule { Id = "h1" }],
         });
 
         Assert.Equal(2, result.Ignored.Count(i => i.Kind == "not-implemented"));
+    }
+
+    [Fact]
+    public void Aggregates_validate_and_dedupe()
+    {
+        var result = Validate(new ReportState
+        {
+            Aggregates =
+            [
+                new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum },
+                new AggregateRule { Col = "amount", Fn = AggregateFn.Sum },   // dupe, case-insensitive
+                new AggregateRule { Col = "GHOST", Fn = AggregateFn.Sum },    // unknown → ignored
+            ],
+        });
+
+        var agg = Assert.Single(result.Aggregates);
+        Assert.Equal(("AMOUNT", AggregateFn.Sum), (agg.Column.Name, agg.Fn));
+        Assert.Contains(result.Ignored, i => i.Kind == "aggregate" && i.Detail.Contains("GHOST"));
+    }
+
+    [Fact]
+    public void Sum_on_text_column_is_a_validation_error()
+    {
+        var ex = Assert.Throws<ReportValidationException>(() =>
+            Validate(new ReportState
+            {
+                Aggregates = [new AggregateRule { Col = "CUSTOMER", Fn = AggregateFn.Sum }],
+            }));
+
+        Assert.Contains(ex.Errors, e => e.Path == "aggregates[0]" && e.Message.Contains("text column"));
+    }
+
+    [Fact]
+    public void Min_max_allowed_on_text_and_dates_but_count_on_anything()
+    {
+        var result = Validate(new ReportState
+        {
+            Aggregates =
+            [
+                new AggregateRule { Col = "CUSTOMER", Fn = AggregateFn.Min },
+                new AggregateRule { Col = "ORDER_DATE", Fn = AggregateFn.Max },
+                new AggregateRule { Col = "NOTES", Fn = AggregateFn.Count },
+            ],
+        });
+
+        Assert.Equal(3, result.Aggregates.Count);
+    }
+
+    [Fact]
+    public void Break_columns_are_forced_into_the_selection()
+    {
+        var result = Validate(new ReportState
+        {
+            Columns = ["AMOUNT"],
+            Breaks = ["REGION", "GHOST"],
+        });
+
+        Assert.Equal(["AMOUNT", "REGION"], result.SelectColumns.Select(c => c.Name));
+        var b = Assert.Single(result.Breaks);
+        Assert.Equal("REGION", b.Name);
+        Assert.Contains(result.Ignored, i => i.Kind == "break" && i.Detail.Contains("GHOST"));
     }
 
     [Fact]
