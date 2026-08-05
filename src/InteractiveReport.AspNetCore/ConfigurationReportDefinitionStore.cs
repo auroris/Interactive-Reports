@@ -1,0 +1,80 @@
+using System.Text.RegularExpressions;
+using InteractiveReport.Core.Definitions;
+using InteractiveReport.Core.Model;
+using InteractiveReport.Core.Schema;
+using Microsoft.Extensions.Options;
+
+namespace InteractiveReport.AspNetCore;
+
+/// <summary>
+/// Config-backed definition store. Definitions are validated on access (fail fast, with
+/// the report named in the error), and a configuration reload clears the schema cache.
+/// </summary>
+public sealed partial class ConfigurationReportDefinitionStore : IReportDefinitionStore, IDisposable
+{
+    private readonly IOptionsMonitor<InteractiveReportOptions> _options;
+    private readonly IDisposable? _reloadSubscription;
+
+    public ConfigurationReportDefinitionStore(IOptionsMonitor<InteractiveReportOptions> options, SchemaCache schemaCache)
+    {
+        _options = options;
+        _reloadSubscription = options.OnChange(_ => schemaCache.Clear());
+    }
+
+    public ValueTask<ReportDefinition?> Find(string name, CancellationToken ct = default)
+    {
+        if (!_options.CurrentValue.Reports.TryGetValue(name, out var def))
+            return ValueTask.FromResult<ReportDefinition?>(null);
+
+        def.Name = name;
+        Validate(def);
+        return ValueTask.FromResult<ReportDefinition?>(def);
+    }
+
+    public ValueTask<IReadOnlyList<ReportDefinition>> List(CancellationToken ct = default)
+    {
+        var result = new List<ReportDefinition>();
+        foreach (var (name, def) in _options.CurrentValue.Reports)
+        {
+            def.Name = name;
+            Validate(def);
+            result.Add(def);
+        }
+        return ValueTask.FromResult<IReadOnlyList<ReportDefinition>>(result);
+    }
+
+    private static void Validate(ReportDefinition def)
+    {
+        if (string.IsNullOrWhiteSpace(def.Sql))
+            throw new InvalidOperationException($"Report '{def.Name}': sql is required.");
+        if (string.IsNullOrWhiteSpace(def.Connection))
+            throw new InvalidOperationException($"Report '{def.Name}': connection is required.");
+
+        // The base SELECT becomes a derived table; a trailing ORDER BY breaks that on
+        // SQL Server (APEX imposes the same rule). Heuristic: an ORDER BY after the last
+        // closing paren is top-level.
+        var sql = def.Sql.TrimEnd().TrimEnd(';');
+        var lastOrderBy = OrderByPattern().Matches(sql).LastOrDefault()?.Index ?? -1;
+        if (lastOrderBy >= 0 && lastOrderBy > sql.LastIndexOf(')'))
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': base query must not end with ORDER BY — sorting belongs to report state.");
+
+        if (def.ContextParams is not null)
+        {
+            foreach (var name in def.ContextParams.Keys)
+            {
+                if (ReservedParamPattern().IsMatch(name))
+                    throw new InvalidOperationException(
+                        $"Report '{def.Name}': context parameter name '{name}' is reserved for composer bindings (p0, p1, ...).");
+            }
+        }
+    }
+
+    [GeneratedRegex(@"\bORDER\s+BY\b", RegexOptions.IgnoreCase)]
+    private static partial Regex OrderByPattern();
+
+    [GeneratedRegex(@"^p\d+$", RegexOptions.IgnoreCase)]
+    private static partial Regex ReservedParamPattern();
+
+    public void Dispose() => _reloadSubscription?.Dispose();
+}

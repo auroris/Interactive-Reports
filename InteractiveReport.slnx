@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/samples/">
+    <Project Path="samples/Workbench/Workbench.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/InteractiveReport.AspNetCore/InteractiveReport.AspNetCore.csproj" />
+    <Project Path="src/InteractiveReport.Core/InteractiveReport.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/InteractiveReport.Core.Tests/InteractiveReport.Core.Tests.csproj" />
+  </Folder>
+</Solution>
