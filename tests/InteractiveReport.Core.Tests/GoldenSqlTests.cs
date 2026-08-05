@@ -237,7 +237,7 @@ public class GoldenSqlTests
         });
 
         Assert.Equal(
-            "SELECT \"ORDER_ID\", \"c1\" FROM (SELECT \"ir_base\".*, ROUND((\"AMOUNT\" * @p0), @p1) AS \"c1\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base) AS \"ir_calc\" WHERE \"c1\" > @p2 ORDER BY \"c1\" DESC LIMIT @p3",
+            "SELECT \"ORDER_ID\", \"c1\" FROM (SELECT ir_base.*, ROUND((\"AMOUNT\" * @p0), @p1) AS \"c1\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base) AS \"ir_calc\" WHERE \"c1\" > @p2 ORDER BY \"c1\" DESC LIMIT @p3",
             page.Sql);
         Assert.Equal([1.0825m, 2m, 1000m, 10], page.NamedBindings.Values.ToArray());
     }

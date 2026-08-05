@@ -58,7 +58,9 @@ public static class QueryComposer
             // WHERE, so computed columns become real columns of ir_calc — after this,
             // filters, sorts, search, aggregates, breaks, and view dimensions treat
             // them uniformly.
-            inner.SelectRaw($"[{BaseAlias}].*");
+            // Bare, matching the unquoted alias above: a quoted "ir_base" would not
+            // resolve against the case-folded IR_BASE on Oracle (ORA-00904).
+            inner.SelectRaw($"{BaseAlias}.*");
             foreach (var comp in state.Computed)
             {
                 var (sql, bindings) = Expressions.ExprEmitter.Emit(comp.Ast, def.Dialect);
