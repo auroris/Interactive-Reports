@@ -33,9 +33,44 @@ public static partial class StateValidator
         var filters = ValidateFilters(state.Filters, byName, errors, ignored);
         var sorts = ValidateSorts(state.Sorts is { Count: > 0 } ? state.Sorts : defaults?.Sorts, byName, ignored);
         var columns = ValidateColumns(state.Columns is { Count: > 0 } ? state.Columns : defaults?.Columns, effectiveSchema, byName, ignored);
-        var aggregates = ValidateAggregates(state.Aggregates ?? defaults?.Aggregates, byName, errors, ignored);
+        var aggregates = ValidateAggregates(state.Aggregates ?? defaults?.Aggregates, "aggregates", byName, errors, ignored);
         var breaks = ValidateBreaks(state.Breaks ?? defaults?.Breaks, byName, ignored);
         var highlights = ValidateHighlights(state.Highlights ?? defaults?.Highlights, byName, errors, ignored);
+        var view = ValidateView(state.View ?? defaults?.View, byName, errors, ignored);
+
+        if (view.Mode != ViewMode.Grid)
+        {
+            // Alternate views present aggregated rows; grid-only features are noted, not fatal.
+            if (breaks.Count > 0)
+            {
+                ignored.Add(new IgnoredItem("view", "control breaks apply to the grid view only"));
+                breaks = [];
+            }
+            if (highlights.Count > 0)
+            {
+                ignored.Add(new IgnoredItem("view", "highlights apply to the grid view only"));
+                highlights = [];
+            }
+            if (aggregates.Count > 0)
+            {
+                ignored.Add(new IgnoredItem("view", "grid aggregates are ignored in alternate views (use view.values)"));
+                aggregates = [];
+            }
+
+            if (view.Mode == ViewMode.GroupBy)
+            {
+                var dims = new HashSet<string>(view.GroupBy.Select(g => g.Name), StringComparer.OrdinalIgnoreCase);
+                var kept = sorts.Where(s => dims.Contains(s.Column.Name)).ToList();
+                if (kept.Count != sorts.Count)
+                    ignored.Add(new IgnoredItem("view", "sorts on non-grouped columns are ignored in groupBy view"));
+                sorts = kept;
+            }
+            else if (sorts.Count > 0)
+            {
+                ignored.Add(new IgnoredItem("view", "pivot view orders by its dimensions; sorts are ignored"));
+                sorts = [];
+            }
+        }
 
         // Break columns must be selected — renderers group page rows by their values.
         foreach (var b in breaks)
@@ -50,8 +85,6 @@ public static partial class StateValidator
             ignored.Add(new IgnoredItem("search", "no visible text columns to search"));
             search = null;
         }
-
-        NoteNotImplemented(state, ignored);
 
         var (pageIndex, pageSize) = ClampPage(state.Page, def);
 
@@ -68,10 +101,72 @@ public static partial class StateValidator
             Highlights = highlights,
             Aggregates = aggregates,
             Breaks = breaks,
+            View = view,
             PageIndex = pageIndex,
             PageSize = pageSize,
             Ignored = ignored,
         };
+    }
+
+    private static ValidView ValidateView(
+        ViewSpec? spec,
+        Dictionary<string, ColumnModel> byName,
+        List<ValidationError> errors,
+        List<IgnoredItem> ignored)
+    {
+        if (spec is null || string.Equals(spec.Mode, "grid", StringComparison.OrdinalIgnoreCase))
+            return ValidView.Grid;
+
+        List<ColumnModel> ResolveDims(List<string>? names, string what)
+        {
+            var result = new List<ColumnModel>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var name in names ?? [])
+            {
+                if (!byName.TryGetValue(name, out var col))
+                {
+                    ignored.Add(new IgnoredItem("view", $"unknown {what} column '{name}'"));
+                    continue;
+                }
+                if (seen.Add(col.Name)) result.Add(col);
+            }
+            return result;
+        }
+
+        if (string.Equals(spec.Mode, "groupBy", StringComparison.OrdinalIgnoreCase))
+        {
+            var dims = ResolveDims(spec.GroupBy, "groupBy");
+            if (dims.Count == 0)
+            {
+                errors.Add(new ValidationError("view.groupBy", "groupBy view requires at least one valid group column"));
+                return ValidView.Grid;
+            }
+            var values = ValidateAggregates(spec.Values, "view.values", byName, errors, ignored);
+            return new ValidView(ViewMode.GroupBy, dims, [], [], values);
+        }
+
+        if (string.Equals(spec.Mode, "pivot", StringComparison.OrdinalIgnoreCase))
+        {
+            var rows = ResolveDims(spec.Rows, "pivot row");
+            var cols = ResolveDims(spec.Cols, "pivot column");
+            if (rows.Count == 0)
+                errors.Add(new ValidationError("view.rows", "pivot view requires at least one valid row dimension"));
+            if (cols.Count == 0)
+                errors.Add(new ValidationError("view.cols", "pivot view requires at least one valid column dimension"));
+            var overlap = rows.Select(r => r.Name)
+                .Intersect(cols.Select(c => c.Name), StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
+            if (overlap is not null)
+                errors.Add(new ValidationError("view", $"'{overlap}' cannot be both a pivot row and a pivot column"));
+            if (rows.Count == 0 || cols.Count == 0 || overlap is not null)
+                return ValidView.Grid;
+
+            var values = ValidateAggregates(spec.Values, "view.values", byName, errors, ignored);
+            return new ValidView(ViewMode.Pivot, [], rows, cols, values);
+        }
+
+        errors.Add(new ValidationError("view.mode", $"view mode must be 'grid', 'groupBy', or 'pivot', got '{spec.Mode}'"));
+        return ValidView.Grid;
     }
 
     private static List<ValidComputed> ValidateComputed(
@@ -209,6 +304,7 @@ public static partial class StateValidator
 
     private static List<ValidAggregate> ValidateAggregates(
         List<AggregateRule>? rules,
+        string pathPrefix,
         Dictionary<string, ColumnModel> byName,
         List<ValidationError> errors,
         List<IgnoredItem> ignored)
@@ -220,7 +316,7 @@ public static partial class StateValidator
         for (var i = 0; i < rules.Count; i++)
         {
             var rule = rules[i];
-            var path = $"aggregates[{i}]";
+            var path = $"{pathPrefix}[{i}]";
 
             if (!byName.TryGetValue(rule.Col, out var col))
             {
@@ -501,11 +597,6 @@ public static partial class StateValidator
         return result.Count > 0 ? result : schema.ToList();
     }
 
-    private static void NoteNotImplemented(ReportState state, List<IgnoredItem> ignored)
-    {
-        if (state.View is { } v && !string.Equals(v.Mode, "grid", StringComparison.OrdinalIgnoreCase))
-            ignored.Add(new IgnoredItem("not-implemented", $"view mode '{v.Mode}' arrives in M4"));
-    }
 
     private static string OpName(FilterOp op) => JsonNamingPolicy.CamelCase.ConvertName(op.ToString());
 }

@@ -268,6 +268,54 @@ public class GoldenSqlTests
     }
 
     [Fact]
+    public void GroupBy_view_pages_groups_and_counts_them()
+    {
+        var def = OrdersDefinition(ReportDialect.Sqlite);
+        var validated = StateValidator.Validate(def, new ReportState
+        {
+            View = new ViewSpec
+            {
+                Mode = "groupBy",
+                GroupBy = ["REGION"],
+                Values = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum }],
+            },
+            Page = new PageRequest { Index = 1, Size = 10 },
+        }, OrdersSchema);
+        var (page, count) = QueryComposer.ComposeGroupByView(def, validated);
+        var compiler = DialectSupport.GetCompiler(ReportDialect.Sqlite);
+
+        Assert.Equal(
+            "SELECT \"REGION\", COUNT(*) AS \"__rows\", SUM(\"AMOUNT\") AS \"a0\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base GROUP BY \"REGION\" ORDER BY \"REGION\" LIMIT @p0",
+            compiler.Compile(page).Sql);
+
+        var countSql = compiler.Compile(count).Sql;
+        Assert.StartsWith("SELECT COUNT(*)", countSql);
+        Assert.Contains("GROUP BY \"REGION\"", countSql);
+        Assert.Contains("\"ir_groups\"", countSql);
+    }
+
+    [Fact]
+    public void Pivot_source_groups_all_dims_ordered_and_capped()
+    {
+        var def = OrdersDefinition(ReportDialect.Sqlite);
+        var validated = StateValidator.Validate(def, new ReportState
+        {
+            View = new ViewSpec
+            {
+                Mode = "pivot",
+                Rows = ["REGION"],
+                Cols = ["STATUS"],
+                Values = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum }],
+            },
+        }, OrdersSchema);
+        var source = QueryComposer.ComposePivotSource(def, validated, 10_000);
+
+        Assert.Equal(
+            "SELECT \"REGION\", \"STATUS\", COUNT(*) AS \"__rows\", SUM(\"AMOUNT\") AS \"a0\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base GROUP BY \"REGION\", \"STATUS\" ORDER BY \"REGION\", \"STATUS\" LIMIT @p0",
+            DialectSupport.GetCompiler(ReportDialect.Sqlite).Compile(source).Sql);
+    }
+
+    [Fact]
     public void SqlServer_paging_without_sort_still_compiles_valid_sql()
     {
         var (page, _) = Compile(ReportDialect.SqlServer, new ReportState

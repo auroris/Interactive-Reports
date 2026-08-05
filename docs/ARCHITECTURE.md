@@ -167,9 +167,14 @@ schema column names; referenced by id in `columns`, `sorts`, `filters`, `aggrega
 `highlights`.
 
 **Views:** `grid` (default) · `groupBy` (`{ "mode": "groupBy", "groupBy": ["REGION"],
-"aggregates": [...] }` — pushed down, paginated) · `pivot` (`{ "mode": "pivot", "rows":
-[...], "cols": [...], "values": [...] }` — the groupBy result pivoted in memory;
-configurable cap on distinct pivot-column values).
+"values": [{"col","fn"}...] }` — pushed down, groups paginated with their own count
+query; response columns are the dims + `__count` + `v0..vN`) · `pivot` (`{ "mode":
+"pivot", "rows": [...], "cols": [...], "values": [...] }` — one grouped query over
+rows+cols dims transformed in memory; synthetic cell columns `p{col}_{value}` with
+human labels; empty `values` ⇒ implicit counts). Caps: `maxPivotColumns` per definition
+(default 60) and a hard 10,000-group source ceiling — both surface as precise 400s.
+Grid-only features (breaks, highlights, grid aggregates, non-dim sorts) are noted in
+`ignored[]` in alternate views, never fatal.
 
 **Resilience:** state elements referencing columns that no longer exist in the schema are
 *dropped, not fatal* — the response lists what was ignored (`"ignored": [...]`) so a saved
@@ -189,7 +194,7 @@ Mounted by the host: `app.MapInteractiveReports("/api/reports").RequireAuthoriza
 | `POST /api/reports/{name}/saved` | Save the posted state under a title (global publish = admin). |
 | `GET/PUT/DELETE /api/reports/saved/{id}` | Load / modify / delete one saved report (matrix in §13). |
 | `GET  /api/reports/admin/saved` | Administrator: every saved report in the system. |
-| *(later)* `POST /api/reports/{name}/export` | Same state → CSV/XLSX/HTML stream. |
+| `POST /api/reports/{name}/export` | Same state, same gate, no paging → CSV (UTF-8 BOM, label headers), capped at `maxRows` with `X-IR-Truncated` header. XLSX/HTML later. |
 
 POST is the primary verb deliberately: state documents outgrow querystrings, and GET puts
 filter values into proxy/server logs. Shareable deep links arrive later as saved-state
@@ -387,7 +392,9 @@ Saved-report loads still pass the underlying report definition's authorization g
   ir_calc second wrap (computed columns filter/sort/aggregate/break uniformly);
   highlights evaluated server-side with SQL-parity NULL semantics; `ignored[]` resilience
   extended to highlight rules.
-- **M4 — Views & export:** groupBy view, pivot-in-memory view, CSV export.
+- **M4 — Views & export** ✅ *(2026-08-05)*: groupBy view (pushed down, group-count
+  pagination), pivot-in-memory view (capped, implicit-count default), CSV export with
+  truncation signaling — all three views export through the same pipeline.
 - **M5 — Persistence & proof:** ~~saved reports (private/public, per user)~~ *(done
   early — see §13, including administration/whoami)*; SQL Server + Oracle verification
   passes; hardening (timeouts, caps, logging discipline).
@@ -410,3 +417,6 @@ Saved-report loads still pass the underlying report definition's authorization g
 | Global mutations admin-only, even for the owner | owner-managed globals | A published report is shared infrastructure; publishing and unpublishing are curation acts. |
 | Microsoft.Data.Sqlite dependency in the AspNetCore package | host-supplied providers only | The zero-config default saved-report store must work with no host setup; report-data connections remain host-supplied. |
 | Decimal parameters bind as double on SQLite | decimal-as-TEXT (provider default) | The provider's TEXT binding breaks comparisons against affinity-less expressions (computed columns) via SQLite's cross-type ordering; double is SQLite's native numeric storage, so the conversion is faithful to the engine. |
+| Pivot caps: 60 column groups (configurable) + hard 10k source groups | unbounded pivot | An unbounded pivot is a memory/usability grenade; the caps surface as precise 400s telling the user what to change. |
+| CSV: UTF-8 BOM, label headers, X-IR-Truncated header | bare UTF-8, name headers, silent truncation | Excel needs the BOM to detect encoding; users recognize labels, not internal names; silent truncation reads as complete data. |
+| Views share the export pipeline | grid-only export | Exporting "what the view shows" falls out of running the same validated state unpaged — no special cases. |

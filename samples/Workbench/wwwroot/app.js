@@ -20,6 +20,7 @@ const AGG_FNS_BY_TYPE = {
 
 const els = Object.fromEntries(
     ["report", "search", "add-filter", "add-agg", "add-computed", "add-highlight", "break",
+     "view", "groupdim-wrap", "group-dim", "pivotrow-wrap", "pivot-row", "pivotcol-wrap", "pivot-col", "export",
      "filters", "aggs", "computeds", "highlights", "thead", "tbody", "prev", "next",
      "pageinfo", "stats", "grand", "ignored", "error",
      "saved", "save-view", "global-wrap", "save-global", "delete-saved", "identity"]
@@ -66,11 +67,47 @@ function syncControlsFromState() {
         ...schema.columns.map(c => new Option(c.label, c.name)));
     els.break.value = state.breaks?.[0] ?? "";
     els.aggs.replaceChildren();
-    for (const a of state.aggregates ?? []) addAggRow(a.col, a.fn);
+    for (const a of (state.view?.values ?? state.aggregates ?? [])) addAggRow(a.col, a.fn);
     els.computeds.replaceChildren();
     for (const c of state.computed ?? []) addComputedRow(c.label, c.expr);
     els.highlights.replaceChildren();
     for (const h of state.highlights ?? []) addHighlightRow(h);
+
+    const cols = pickableColumns();
+    for (const sel of [els.groupdim, els.pivotrow, els.pivotcol])
+        sel.replaceChildren(...cols.map(c => new Option(c.label, c.name)));
+    els.view.value = state.view?.mode ?? "grid";
+    if (state.view?.groupBy?.[0]) els.groupdim.value = state.view.groupBy[0];
+    if (state.view?.rows?.[0]) els.pivotrow.value = state.view.rows[0];
+    if (state.view?.cols?.[0]) els.pivotcol.value = state.view.cols[0];
+    refreshViewControls();
+}
+
+function refreshViewControls() {
+    const mode = els.view.value;
+    els.groupdimwrap.hidden = mode !== "groupBy";
+    els.pivotrowwrap.hidden = mode !== "pivot";
+    els.pivotcolwrap.hidden = mode !== "pivot";
+}
+
+function applyView() {
+    refreshViewControls();
+    const mode = els.view.value;
+    const values = collectAggRows();
+    if (mode === "grid") {
+        state.view = undefined;
+        state.aggregates = values;
+    } else if (mode === "groupBy") {
+        state.view = { mode: "groupBy", groupBy: [els.groupdim.value], values };
+        state.aggregates = [];
+    } else {
+        if (els.pivotrow.value === els.pivotcol.value)
+            els.pivotcol.selectedIndex = (els.pivotcol.selectedIndex + 1) % els.pivotcol.options.length;
+        state.view = { mode: "pivot", rows: [els.pivotrow.value], cols: [els.pivotcol.value], values };
+        state.aggregates = [];
+    }
+    state.page.index = 1;
+    runQuery();
 }
 
 // Columns available to highlight/aggregate pickers: base schema + current computed ids.
@@ -175,7 +212,7 @@ function render(result) {
     }
     els.thead.replaceChildren(headRow);
 
-    const breaks = state.breaks ?? [];
+    const breaks = state.view && state.view.mode !== "grid" ? [] : (state.breaks ?? []);
     const breakKeyOf = row => breaks.map(b => String(row[b] ?? "")).join("");
     const totalsByKey = new Map((result.breakTotals ?? []).map(bt =>
         [breaks.map(b => String(bt.key[b] ?? "")).join(""), bt]));
@@ -385,11 +422,16 @@ function addAggRow(col, fn) {
     refreshFns();
 }
 
-function applyAggs() {
-    state.aggregates = [...els.aggs.querySelectorAll(".filter-row")].map(row => {
+function collectAggRows() {
+    return [...els.aggs.querySelectorAll(".filter-row")].map(row => {
         const [colSel, fnSel] = row.querySelectorAll("select");
         return { col: colSel.value, fn: fnSel.value };
     });
+}
+
+function applyAggs() {
+    if (els.view.value !== "grid") { applyView(); return; }   // Σ rows feed view.values in alternate views
+    state.aggregates = collectAggRows();
     runQuery();
 }
 
@@ -505,6 +547,25 @@ els.addfilter.onclick = addFilterRow;
 els.addagg.onclick = () => addAggRow();
 els.addcomputed.onclick = () => addComputedRow();
 els.addhighlight.onclick = () => addHighlightRow();
+els.view.onchange = applyView;
+els.groupdim.onchange = applyView;
+els.pivotrow.onchange = applyView;
+els.pivotcol.onchange = applyView;
+els.export.onclick = async () => {
+    const res = await fetch(`/api/reports/${els.report.value}/export`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(state),
+    });
+    if (!res.ok) { els.error.textContent = `export failed: HTTP ${res.status}`; return; }
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(await res.blob());
+    a.download = `${els.report.value}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    if (res.headers.get("X-IR-Truncated") === "true")
+        els.ignored.textContent = "export truncated at the report's row cap";
+};
 els.break.onchange = () => {
     state.breaks = els.break.value ? [els.break.value] : [];
     state.page.index = 1;

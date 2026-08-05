@@ -27,6 +27,7 @@ public static class EndpointExtensions
         group.MapGet("", ListReports);
         group.MapGet("/{name}/schema", GetSchema);
         group.MapPost("/{name}/query", PostQuery);
+        group.MapPost("/{name}/export", PostExport);
 
         // Identity + saved reports (literal segments win over {name} in ASP.NET routing).
         group.MapGet("/whoami", SavedReportEndpoints.Whoami);
@@ -127,6 +128,65 @@ public static class EndpointExtensions
         catch (Exception ex)
         {
             return ServerError(ctx, def.Name, "query", ex);
+        }
+    }
+
+    /// <summary>
+    /// Same state document, same gate, no paging: rows capped at the definition's
+    /// MaxRows with truncation signaled via the X-IR-Truncated response header.
+    /// </summary>
+    private static async Task<IResult> PostExport(string name, HttpContext ctx, CancellationToken ct)
+    {
+        var store = ctx.RequestServices.GetRequiredService<IReportDefinitionStore>();
+        var def = await store.Find(name, ct);
+        if (def is null) return Results.NotFound();
+        if (await Gate(def, ctx) is { } denied) return denied;
+
+        var format = ctx.Request.Query["format"].FirstOrDefault() ?? "csv";
+        if (!string.Equals(format, "csv", StringComparison.OrdinalIgnoreCase))
+            return Results.Problem(
+                title: "Unsupported export format",
+                detail: $"format '{format}' is not supported (csv only for now)",
+                statusCode: StatusCodes.Status400BadRequest);
+
+        ReportState state;
+        try
+        {
+            state = await JsonSerializer.DeserializeAsync<ReportState>(ctx.Request.Body, IrJson.Options, ct)
+                ?? new ReportState();
+        }
+        catch (JsonException ex)
+        {
+            return Results.Problem(
+                title: "Malformed report state document",
+                detail: ex.Message,
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        try
+        {
+            var executor = ctx.RequestServices.GetRequiredService<ReportExecutor>();
+            var contextParams = await ResolveContextParams(def, ctx, ct);
+            var export = await executor.Export(def, state, contextParams, ct);
+
+            var csv = Core.Export.CsvWriter.Write(export.Columns, export.Rows);
+            ctx.Response.Headers["X-IR-Truncated"] = export.Truncated ? "true" : "false";
+            return Results.File(csv, "text/csv; charset=utf-8", $"{def.Name}.csv");
+        }
+        catch (ReportValidationException ex)
+        {
+            var errors = ex.Errors
+                .GroupBy(e => e.Path)
+                .ToDictionary(g => g.Key, g => g.Select(e => e.Message).ToArray());
+            return Results.ValidationProblem(errors, title: "Report state failed validation");
+        }
+        catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return ServerError(ctx, def.Name, "export", ex);
         }
     }
 

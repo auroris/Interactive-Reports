@@ -18,34 +18,7 @@ public static class QueryComposer
 
     public static ComposedQueries Compose(ReportDefinition def, ValidatedState state)
     {
-        // Alias without AS: Oracle rejects AS in table aliases (ORA-00933); the bare
-        // form is valid on all three dialects.
-        var inner = new Query().FromRaw($"({def.Sql}) {BaseAlias}");
-
-        Query core;
-        if (state.Computed.Count > 0)
-        {
-            // Second wrap: no dialect reliably allows referencing a SELECT alias in
-            // WHERE, so computed columns become real columns of ir_calc — after this,
-            // filters, sorts, search, aggregates, and breaks treat them uniformly.
-            inner.SelectRaw($"[{BaseAlias}].*");
-            foreach (var comp in state.Computed)
-            {
-                var (sql, bindings) = Expressions.ExprEmitter.Emit(comp.Ast, def.Dialect);
-                inner.SelectRaw($"{sql} AS [{comp.Column.Name}]", bindings.ToArray());
-            }
-            core = new Query().From(inner.As(CalcAlias));
-        }
-        else
-        {
-            core = inner;
-        }
-
-        foreach (var filter in state.Filters)
-            ApplyFilter(core, filter, def.Dialect);
-
-        if (state.Search is not null)
-            ApplySearch(core, state);
+        var core = BuildFilteredCore(def, state);
 
         var count = core.Clone().AsCount();
 
@@ -66,6 +39,134 @@ public static class QueryComposer
         page.ForPage(state.PageIndex, state.PageSize);
 
         return new ComposedQueries(page, count, aggregates, breakTotals);
+    }
+
+    /// <summary>
+    /// The filtered core every derived query clones: base wrap (+ ir_calc second wrap
+    /// when computed columns exist) with filters and search applied.
+    /// </summary>
+    public static Query BuildFilteredCore(ReportDefinition def, ValidatedState state)
+    {
+        // Alias without AS: Oracle rejects AS in table aliases (ORA-00933); the bare
+        // form is valid on all three dialects.
+        var inner = new Query().FromRaw($"({def.Sql}) {BaseAlias}");
+
+        Query core;
+        if (state.Computed.Count > 0)
+        {
+            // Second wrap: no dialect reliably allows referencing a SELECT alias in
+            // WHERE, so computed columns become real columns of ir_calc — after this,
+            // filters, sorts, search, aggregates, breaks, and view dimensions treat
+            // them uniformly.
+            inner.SelectRaw($"[{BaseAlias}].*");
+            foreach (var comp in state.Computed)
+            {
+                var (sql, bindings) = Expressions.ExprEmitter.Emit(comp.Ast, def.Dialect);
+                inner.SelectRaw($"{sql} AS [{comp.Column.Name}]", bindings.ToArray());
+            }
+            core = new Query().From(inner.As(CalcAlias));
+        }
+        else
+        {
+            core = inner;
+        }
+
+        foreach (var filter in state.Filters)
+            ApplyFilter(core, filter, def.Dialect);
+
+        if (state.Search is not null)
+            ApplySearch(core, state);
+
+        return core;
+    }
+
+    /// <summary>GroupBy view: paginated groups plus the group-count query.</summary>
+    public static (Query Page, Query Count) ComposeGroupByView(ReportDefinition def, ValidatedState state)
+    {
+        var core = BuildFilteredCore(def, state);
+        var dims = state.View.GroupBy;
+
+        var page = BuildGrouped(core, dims, state.View.Values, def.Dialect, DimSorts(dims, state.Sorts));
+        page.ForPage(state.PageIndex, state.PageSize);
+
+        var groups = core.Clone().Select(dims.Select(d => d.Name).ToArray()).GroupBy(dims.Select(d => d.Name).ToArray());
+        var count = new Query().From(groups.As("ir_groups")).AsCount();
+
+        return (page, count);
+    }
+
+    /// <summary>GroupBy view for export: all groups, capped for truncation detection.</summary>
+    public static Query ComposeGroupByExport(ReportDefinition def, ValidatedState state, int maxRows)
+    {
+        var core = BuildFilteredCore(def, state);
+        var dims = state.View.GroupBy;
+        return BuildGrouped(core, dims, state.View.Values, def.Dialect, DimSorts(dims, state.Sorts))
+            .Limit(maxRows + 1);
+    }
+
+    /// <summary>
+    /// Pivot source: one grouped query over rows+cols dimensions, deterministically
+    /// ordered, capped at maxGroups+1 so the executor can detect overflow. The pivot
+    /// itself happens in memory — native PIVOT syntax never enters the picture.
+    /// </summary>
+    public static Query ComposePivotSource(ReportDefinition def, ValidatedState state, int maxGroups)
+    {
+        var core = BuildFilteredCore(def, state);
+        var dims = state.View.PivotRows.Concat(state.View.PivotCols).ToList();
+        return BuildGrouped(core, dims, state.View.Values, def.Dialect,
+                dims.Select(d => new ValidSort(d, SortDir.Asc)))
+            .Limit(maxGroups + 1);
+    }
+
+    /// <summary>Grid rows for export: selected columns, effective sorts, no paging, capped for truncation detection.</summary>
+    public static Query ComposeGridExport(ReportDefinition def, ValidatedState state, int maxRows)
+    {
+        var core = BuildFilteredCore(def, state);
+        var q = core.Clone().Select(state.SelectColumns.Select(c => c.Name).ToArray());
+        foreach (var sort in EffectiveSorts(state))
+        {
+            if (sort.Dir == SortDir.Asc) q.OrderBy(sort.Column.Name);
+            else q.OrderByDesc(sort.Column.Name);
+        }
+        return q.Limit(maxRows + 1);
+    }
+
+    /// <summary>
+    /// The shared grouped shape: dims, COUNT(*) AS __rows, value aggregates a0..aN,
+    /// GROUP BY dims, ordered. Break totals, the groupBy view, and the pivot source all
+    /// read through this one layout.
+    /// </summary>
+    private static Query BuildGrouped(
+        Query core,
+        IReadOnlyList<ColumnModel> dims,
+        IReadOnlyList<ValidAggregate> values,
+        ReportDialect dialect,
+        IEnumerable<ValidSort> order)
+    {
+        var dimNames = dims.Select(d => d.Name).ToArray();
+        var q = core.Clone().Select(dimNames);
+        q.SelectRaw("COUNT(*) AS [__rows]");
+        for (var i = 0; i < values.Count; i++)
+        {
+            var v = values[i];
+            q.SelectRaw($"{DialectSupport.AggregateExpression(dialect, v.Fn, $"[{v.Column.Name}]")} AS [a{i}]");
+        }
+        q.GroupBy(dimNames);
+
+        foreach (var sort in order)
+        {
+            if (sort.Dir == SortDir.Asc) q.OrderBy(sort.Column.Name);
+            else q.OrderByDesc(sort.Column.Name);
+        }
+        return q;
+    }
+
+    /// <summary>Dimension ordering, honoring a user sort's direction on that dimension.</summary>
+    private static IEnumerable<ValidSort> DimSorts(IReadOnlyList<ColumnModel> dims, IReadOnlyList<ValidSort> sorts)
+    {
+        var byName = sorts.ToDictionary(s => s.Column.Name, StringComparer.OrdinalIgnoreCase);
+        foreach (var dim in dims)
+            yield return byName.TryGetValue(dim.Name, out var s) ? s : new ValidSort(dim, SortDir.Asc);
     }
 
     /// <summary>
@@ -98,25 +199,9 @@ public static class QueryComposer
     }
 
     private static Query BuildBreakTotals(Query core, ValidatedState state, ReportDialect dialect)
-    {
-        var breakCols = state.Breaks.Select(b => b.Name).ToArray();
-        var q = core.Clone().Select(breakCols);
-        q.SelectRaw("COUNT(*) AS [__rows]");
-        for (var i = 0; i < state.Aggregates.Count; i++)
-        {
-            var agg = state.Aggregates[i];
-            q.SelectRaw($"{DialectSupport.AggregateExpression(dialect, agg.Fn, $"[{agg.Column.Name}]")} AS [a{i}]");
-        }
-        q.GroupBy(breakCols);
-
         // Group ordering mirrors the page's break ordering so renderers walk both in step.
-        foreach (var sort in EffectiveSorts(state).Take(state.Breaks.Count))
-        {
-            if (sort.Dir == SortDir.Asc) q.OrderBy(sort.Column.Name);
-            else q.OrderByDesc(sort.Column.Name);
-        }
-        return q;
-    }
+        => BuildGrouped(core, state.Breaks, state.Aggregates, dialect,
+            EffectiveSorts(state).Take(state.Breaks.Count));
 
     private static void ApplyFilter(Query q, ValidFilter f, ReportDialect dialect)
     {

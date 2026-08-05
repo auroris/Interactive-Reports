@@ -111,18 +111,6 @@ public class StateValidatorTests
     }
 
     [Fact]
-    public void Future_milestone_features_are_reported_ignored_not_fatal()
-    {
-        var result = Validate(new ReportState
-        {
-            View = new ViewSpec { Mode = "pivot" },
-        });
-
-        var item = Assert.Single(result.Ignored, i => i.Kind == "not-implemented");
-        Assert.Contains("pivot", item.Detail);
-    }
-
-    [Fact]
     public void Aggregates_validate_and_dedupe()
     {
         var result = Validate(new ReportState
@@ -279,6 +267,52 @@ public class StateValidatorTests
         var valid = Assert.Single(result.Highlights);
         Assert.Equal("h1", valid.Id);
         Assert.Equal(2, result.Ignored.Count(i => i.Kind == "highlight"));
+    }
+
+    [Fact]
+    public void GroupBy_view_validates_dims_and_moves_grid_features_to_ignored()
+    {
+        var result = Validate(new ReportState
+        {
+            View = new ViewSpec
+            {
+                Mode = "groupBy",
+                GroupBy = ["REGION", "GHOST"],
+                Values = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum }],
+            },
+            Breaks = ["STATUS"],
+            Aggregates = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Avg }],
+            Sorts = [new SortRule { Col = "REGION", Dir = SortDir.Desc }, new SortRule { Col = "AMOUNT" }],
+        });
+
+        Assert.Equal(ViewMode.GroupBy, result.View.Mode);
+        Assert.Equal("REGION", Assert.Single(result.View.GroupBy).Name);
+        Assert.Equal("AMOUNT", Assert.Single(result.View.Values).Column.Name);
+        Assert.Empty(result.Breaks);
+        Assert.Empty(result.Aggregates);
+        var sort = Assert.Single(result.Sorts);                       // non-dim sort dropped
+        Assert.Equal(("REGION", SortDir.Desc), (sort.Column.Name, sort.Dir));
+        Assert.Contains(result.Ignored, i => i.Detail.Contains("unknown groupBy column 'GHOST'"));
+        Assert.Contains(result.Ignored, i => i.Detail.Contains("control breaks"));
+    }
+
+    [Fact]
+    public void View_structural_problems_are_errors()
+    {
+        var badMode = Assert.Throws<ReportValidationException>(() =>
+            Validate(new ReportState { View = new ViewSpec { Mode = "kaleidoscope" } }));
+        Assert.Contains(badMode.Errors, e => e.Path == "view.mode");
+
+        var noDims = Assert.Throws<ReportValidationException>(() =>
+            Validate(new ReportState { View = new ViewSpec { Mode = "groupBy", GroupBy = ["GHOST"] } }));
+        Assert.Contains(noDims.Errors, e => e.Path == "view.groupBy");
+
+        var overlap = Assert.Throws<ReportValidationException>(() =>
+            Validate(new ReportState
+            {
+                View = new ViewSpec { Mode = "pivot", Rows = ["REGION"], Cols = ["REGION"] },
+            }));
+        Assert.Contains(overlap.Errors, e => e.Message.Contains("both a pivot row and a pivot column"));
     }
 
     [Fact]

@@ -18,9 +18,32 @@ public sealed class ValidatedState
     public required IReadOnlyList<ValidAggregate> Aggregates { get; init; }
     /// <summary>Control-break columns; always members of SelectColumns so renderers can group.</summary>
     public required IReadOnlyList<ColumnModel> Breaks { get; init; }
+    public required ValidView View { get; init; }
     public required int PageIndex { get; init; }
     public required int PageSize { get; init; }
     public required IReadOnlyList<IgnoredItem> Ignored { get; init; }
+}
+
+/// <summary>
+/// The validated alternate-view request. Grid is the default; groupBy pushes a GROUP BY
+/// down and paginates groups; pivot uses the same grouped query (Rows+Cols dims) and is
+/// transformed in memory. Values fall back to an implicit row count when empty.
+/// </summary>
+public sealed record ValidView(
+    ViewMode Mode,
+    IReadOnlyList<ColumnModel> GroupBy,
+    IReadOnlyList<ColumnModel> PivotRows,
+    IReadOnlyList<ColumnModel> PivotCols,
+    IReadOnlyList<ValidAggregate> Values)
+{
+    public static readonly ValidView Grid = new(ViewMode.Grid, [], [], [], []);
+}
+
+public enum ViewMode
+{
+    Grid,
+    GroupBy,
+    Pivot,
 }
 
 public sealed record ValidFilter(

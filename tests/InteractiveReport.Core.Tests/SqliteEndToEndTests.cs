@@ -277,6 +277,126 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     }
 
     [Fact]
+    public async Task GroupBy_view_returns_grouped_page_with_counts_and_values()
+    {
+        var result = await _executor.Query(Definition, new ReportState
+        {
+            View = new ViewSpec
+            {
+                Mode = "groupBy",
+                GroupBy = ["STATUS"],
+                Values = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum }],
+            },
+        }, NoParams);
+
+        Assert.Equal(4, result.TotalRows);
+        Assert.Equal(["STATUS", "__count", "v0"], result.Columns.Select(c => c.Name));
+        Assert.Equal("sum(Amount)", result.Columns[2].Label);
+        Assert.Equal(["CANCELLED", "NEW", "PENDING", "SHIPPED"], result.Rows.Select(r => (string)r["STATUS"]!));
+        Assert.Equal([1L, 1L, 3L, 5L], result.Rows.Select(r => Convert.ToInt64(r["__count"])));
+        Assert.Equal([6000m, 400m, 14800m, 26000m], result.Rows.Select(r => Convert.ToDecimal(r["v0"])));
+    }
+
+    [Fact]
+    public async Task GroupBy_view_paginates_groups()
+    {
+        var result = await _executor.Query(Definition, new ReportState
+        {
+            View = new ViewSpec { Mode = "groupBy", GroupBy = ["STATUS"] },
+            Page = new PageRequest { Index = 2, Size = 3 },
+        }, NoParams);
+
+        Assert.Equal(4, result.TotalRows);
+        var row = Assert.Single(result.Rows);
+        Assert.Equal("SHIPPED", row["STATUS"]);
+    }
+
+    [Fact]
+    public async Task Pivot_view_builds_the_matrix_in_memory()
+    {
+        var result = await _executor.Query(Definition, new ReportState
+        {
+            View = new ViewSpec
+            {
+                Mode = "pivot",
+                Rows = ["CUSTOMER"],
+                Cols = ["STATUS"],
+                Values = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum }],
+            },
+        }, NoParams);
+
+        // 9 distinct customers; columns = CUSTOMER + 4 statuses (sorted: CANCELLED, NEW, PENDING, SHIPPED)
+        Assert.Equal(9, result.TotalRows);
+        Assert.Equal(5, result.Columns.Count);
+        Assert.Equal(["CANCELLED", "NEW", "PENDING", "SHIPPED"], result.Columns.Skip(1).Select(c => c.Label));
+
+        var acme = result.Rows.Single(r => (string?)r["CUSTOMER"] == "Acme Corp");
+        Assert.Equal(12000m, Convert.ToDecimal(acme["p3_0"]));       // SHIPPED: 9000 + 3000
+        Assert.False(acme.TryGetValue("p2_0", out var pending) && pending is not null);   // no PENDING cell
+    }
+
+    [Fact]
+    public async Task Pivot_with_no_values_defaults_to_counts()
+    {
+        var result = await _executor.Query(Definition, new ReportState
+        {
+            View = new ViewSpec { Mode = "pivot", Rows = ["CUSTOMER"], Cols = ["STATUS"] },
+        }, NoParams);
+
+        var acme = result.Rows.Single(r => (string?)r["CUSTOMER"] == "Acme Corp");
+        Assert.Equal(2L, Convert.ToInt64(acme["p3_0"]));             // two SHIPPED orders
+    }
+
+    [Fact]
+    public async Task Pivot_column_cap_is_a_validation_error()
+    {
+        var def = Definition;
+        def.MaxPivotColumns = 2;
+
+        var ex = await Assert.ThrowsAsync<ReportValidationException>(() =>
+            _executor.Query(def, new ReportState
+            {
+                View = new ViewSpec { Mode = "pivot", Rows = ["STATUS"], Cols = ["CUSTOMER"] },
+            }, NoParams));
+
+        Assert.Contains(ex.Errors, e => e.Path == "view.cols" && e.Message.Contains("max 2"));
+    }
+
+    [Fact]
+    public async Task Export_grid_caps_rows_and_flags_truncation()
+    {
+        var def = Definition;
+        def.MaxRows = 3;
+
+        var export = await _executor.Export(def, new ReportState
+        {
+            Sorts = [new SortRule { Col = "AMOUNT", Dir = SortDir.Desc }],
+        }, NoParams);
+
+        Assert.True(export.Truncated);
+        Assert.Equal(3, export.Rows.Count);
+        Assert.Equal(12000m, Convert.ToDecimal(export.Rows[0]["AMOUNT"]));
+    }
+
+    [Fact]
+    public async Task Export_groupBy_view_exports_all_groups_untruncated()
+    {
+        var export = await _executor.Export(Definition, new ReportState
+        {
+            View = new ViewSpec
+            {
+                Mode = "groupBy",
+                GroupBy = ["STATUS"],
+                Values = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum }],
+            },
+        }, NoParams);
+
+        Assert.False(export.Truncated);
+        Assert.Equal(4, export.Rows.Count);
+        Assert.Equal(["STATUS", "__count", "v0"], export.Columns.Select(c => c.Name));
+    }
+
+    [Fact]
     public async Task Highlight_on_computed_column_cell()
     {
         var result = await _executor.Query(Definition, new ReportState

@@ -40,6 +40,9 @@ public sealed class ReportDefinition
 
     public int MaxPageSize { get; set; } = 500;
 
+    /// <summary>Cap on distinct pivot-column combinations the pivot view may produce.</summary>
+    public int MaxPivotColumns { get; set; } = 60;
+
     public int CommandTimeoutSeconds { get; set; } = 30;
 
     /// <summary>The developer's default view (APEX "Primary Report").</summary>

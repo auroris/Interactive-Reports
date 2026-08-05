@@ -38,6 +38,15 @@
         <button id="add-computed">+ Computed</button>
         <button id="add-highlight">+ Highlight</button>
         <label>Break by <select id="break"></select></label>
+        <label>View <select id="view">
+            <option value="grid">Grid</option>
+            <option value="groupBy">Group By</option>
+            <option value="pivot">Pivot</option>
+        </select></label>
+        <label id="groupdim-wrap" hidden>Group on <select id="group-dim"></select></label>
+        <label id="pivotrow-wrap" hidden>Rows <select id="pivot-row"></select></label>
+        <label id="pivotcol-wrap" hidden>Cols <select id="pivot-col"></select></label>
+        <button id="export">⬇ CSV</button>
         <label>Saved <select id="saved"></select></label>
         <button id="save-view">Save view</button>
         <label id="global-wrap" hidden><input id="save-global" type="checkbox"> as global</label>
