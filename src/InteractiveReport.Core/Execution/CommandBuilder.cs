@@ -1,11 +1,15 @@
+using System.Collections.Concurrent;
 using System.Data.Common;
+using System.Reflection;
 using InteractiveReport.Core.Model;
+using Microsoft.Extensions.Logging;
 using SqlKata;
 
 namespace InteractiveReport.Core.Execution;
 
 internal static class CommandBuilder
 {
+    private static readonly ConcurrentDictionary<Type, Action<DbCommand>?> BindByNameSetters = new();
     /// <summary>
     /// Builds a DbCommand from a compiled SqlKata result plus server-resolved context
     /// parameters. Composer bindings are named p0, p1, ... (context parameter names
@@ -16,19 +20,28 @@ internal static class CommandBuilder
         DbConnection connection,
         SqlResult compiled,
         IReadOnlyDictionary<string, object?> contextParams,
-        ReportDefinition def)
-        => Build(connection, compiled, contextParams, def.CommandTimeoutSeconds, def.Dialect);
+        ReportDefinition def,
+        ILogger? logger = null)
+        => Build(connection, compiled, contextParams, def.CommandTimeoutSeconds, def.Dialect, logger);
 
     public static DbCommand Build(
         DbConnection connection,
         SqlResult compiled,
         IReadOnlyDictionary<string, object?> contextParams,
         int commandTimeoutSeconds,
-        ReportDialect dialect)
+        ReportDialect dialect,
+        ILogger? logger = null)
     {
         var cmd = connection.CreateCommand();
         cmd.CommandText = compiled.Sql;
         cmd.CommandTimeout = commandTimeoutSeconds;
+
+        // ODP.NET binds by POSITION unless told otherwise. Context parameters appear
+        // first in the SQL text (inside the base subquery) but are added last here, so
+        // positional binding would silently misbind them. Set BindByName via reflection
+        // to avoid a hard Oracle provider dependency.
+        if (dialect == ReportDialect.Oracle)
+            EnableBindByName(cmd);
 
         foreach (var (name, value) in compiled.NamedBindings)
             AddParameter(cmd, Normalize(name), value, dialect);
@@ -36,7 +49,23 @@ internal static class CommandBuilder
         foreach (var (name, value) in contextParams)
             AddParameter(cmd, name, value, dialect);
 
+        // Logging discipline: SQL text at Debug only, and parameter VALUES never — the
+        // values are user filters and row-security context, i.e. data.
+        logger?.LogDebug("SQL: {Sql}", compiled.Sql);
+
         return cmd;
+    }
+
+    private static void EnableBindByName(DbCommand cmd)
+    {
+        var setter = BindByNameSetters.GetOrAdd(cmd.GetType(), static type =>
+        {
+            var prop = type.GetProperty("BindByName", BindingFlags.Public | BindingFlags.Instance);
+            if (prop is null || prop.PropertyType != typeof(bool) || !prop.CanWrite)
+                return null;
+            return c => prop.SetValue(c, true);
+        });
+        setter?.Invoke(cmd);
     }
 
     private static string Normalize(string name) => name.TrimStart('@', ':');

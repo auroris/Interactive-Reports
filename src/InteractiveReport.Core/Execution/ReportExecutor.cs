@@ -25,11 +25,16 @@ public sealed class ReportExecutor
 
     private readonly IReportConnectionFactory _connections;
     private readonly SchemaCache _schemaCache;
+    private readonly Microsoft.Extensions.Logging.ILogger? _logger;
 
-    public ReportExecutor(IReportConnectionFactory connections, SchemaCache schemaCache)
+    public ReportExecutor(
+        IReportConnectionFactory connections,
+        SchemaCache schemaCache,
+        Microsoft.Extensions.Logging.ILogger<ReportExecutor>? logger = null)
     {
         _connections = connections;
         _schemaCache = schemaCache;
+        _logger = logger;
     }
 
     public async Task<IReadOnlyList<ColumnModel>> GetSchema(
@@ -118,7 +123,7 @@ public sealed class ReportExecutor
         await conn.OpenAsync(ct);
 
         long totalRows;
-        await using (var countCmd = CommandBuilder.Build(conn, compiler.Compile(composed.Count), contextParams, def))
+        await using (var countCmd = CommandBuilder.Build(conn, compiler.Compile(composed.Count), contextParams, def, _logger))
         {
             totalRows = Convert.ToInt64(await countCmd.ExecuteScalarAsync(ct));
         }
@@ -171,7 +176,7 @@ public sealed class ReportExecutor
         await conn.OpenAsync(ct);
 
         long totalGroups;
-        await using (var countCmd = CommandBuilder.Build(conn, compiler.Compile(count), contextParams, def))
+        await using (var countCmd = CommandBuilder.Build(conn, compiler.Compile(count), contextParams, def, _logger))
         {
             totalGroups = Convert.ToInt64(await countCmd.ExecuteScalarAsync(ct));
         }
@@ -203,7 +208,7 @@ public sealed class ReportExecutor
     }
 
     /// <summary>Reads the shared grouped layout (dims, __rows, a0..aN) into flat dicts.</summary>
-    private static async Task<(List<IReadOnlyDictionary<string, object?>> Rows, bool Truncated)> ReadGroupedShaped(
+    private async Task<(List<IReadOnlyDictionary<string, object?>> Rows, bool Truncated)> ReadGroupedShaped(
         DbConnection conn,
         Compiler compiler,
         SqlKata.Query query,
@@ -217,7 +222,7 @@ public sealed class ReportExecutor
         var values = validated.View.Values;
 
         var rows = new List<IReadOnlyDictionary<string, object?>>();
-        await using var cmd = CommandBuilder.Build(conn, compiler.Compile(query), contextParams, def);
+        await using var cmd = CommandBuilder.Build(conn, compiler.Compile(query), contextParams, def, _logger);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
@@ -259,7 +264,7 @@ public sealed class ReportExecutor
         await using (var conn = _connections.CreateConnection(def.Connection))
         {
             await conn.OpenAsync(ct);
-            await using var cmd = CommandBuilder.Build(conn, compiler.Compile(source), contextParams, def);
+            await using var cmd = CommandBuilder.Build(conn, compiler.Compile(source), contextParams, def, _logger);
             await using var reader = await cmd.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct))
             {
@@ -404,7 +409,7 @@ public sealed class ReportExecutor
 
     // --- shared readers ------------------------------------------------------
 
-    private static async Task<List<IReadOnlyDictionary<string, object?>>> ReadRows(
+    private async Task<List<IReadOnlyDictionary<string, object?>>> ReadRows(
         DbConnection conn,
         Compiler compiler,
         SqlKata.Query query,
@@ -413,7 +418,7 @@ public sealed class ReportExecutor
         CancellationToken ct)
     {
         var rows = new List<IReadOnlyDictionary<string, object?>>();
-        await using var cmd = CommandBuilder.Build(conn, compiler.Compile(query), contextParams, def);
+        await using var cmd = CommandBuilder.Build(conn, compiler.Compile(query), contextParams, def, _logger);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
@@ -426,7 +431,7 @@ public sealed class ReportExecutor
     }
 
     /// <summary>Single-row aggregate query: aliases a0..aN in validated-aggregate order.</summary>
-    private static async Task<Dictionary<string, IReadOnlyDictionary<string, object?>>> ReadAggregates(
+    private async Task<Dictionary<string, IReadOnlyDictionary<string, object?>>> ReadAggregates(
         DbConnection conn,
         Compiler compiler,
         SqlKata.Query query,
@@ -435,7 +440,7 @@ public sealed class ReportExecutor
         ReportDefinition def,
         CancellationToken ct)
     {
-        await using var cmd = CommandBuilder.Build(conn, compiler.Compile(query), contextParams, def);
+        await using var cmd = CommandBuilder.Build(conn, compiler.Compile(query), contextParams, def, _logger);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
 
         var values = new object?[validated.Aggregates.Count];
@@ -448,7 +453,7 @@ public sealed class ReportExecutor
     }
 
     /// <summary>Break totals: break columns, then [__rows], then a0..aN — read by ordinal.</summary>
-    private static async Task<List<BreakTotal>> ReadBreakTotals(
+    private async Task<List<BreakTotal>> ReadBreakTotals(
         DbConnection conn,
         Compiler compiler,
         SqlKata.Query query,
@@ -457,7 +462,7 @@ public sealed class ReportExecutor
         ReportDefinition def,
         CancellationToken ct)
     {
-        await using var cmd = CommandBuilder.Build(conn, compiler.Compile(query), contextParams, def);
+        await using var cmd = CommandBuilder.Build(conn, compiler.Compile(query), contextParams, def, _logger);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
 
         var breakCount = validated.Breaks.Count;

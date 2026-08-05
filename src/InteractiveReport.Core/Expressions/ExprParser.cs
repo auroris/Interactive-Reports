@@ -15,10 +15,13 @@ namespace InteractiveReport.Core.Expressions;
 /// </summary>
 public sealed class ExprParser
 {
+    private const int MaxDepth = 64;
+
     private readonly string _input;
     private readonly IReadOnlyDictionary<string, ColumnModel> _schema;
     private readonly List<Token> _tokens = [];
     private int _pos;
+    private int _depth;
 
     private ExprParser(string input, IReadOnlyDictionary<string, ColumnModel> schema)
     {
@@ -143,15 +146,26 @@ public sealed class ExprParser
 
     private ExprNode ParseExpr()
     {
-        var left = ParseTerm();
-        while (AtOp("+") || AtOp("-") || AtOp("||"))
+        // Recursion guard: hostile deeply-nested input must be a clean validation
+        // error, never a stack overflow.
+        if (++_depth > MaxDepth)
+            throw new ExprError($"expression nesting exceeds {MaxDepth} levels");
+        try
         {
-            var op = Current.Text;
-            _pos++;
-            var right = ParseTerm();
-            left = MakeBinary(op, left, right);
+            var left = ParseTerm();
+            while (AtOp("+") || AtOp("-") || AtOp("||"))
+            {
+                var op = Current.Text;
+                _pos++;
+                var right = ParseTerm();
+                left = MakeBinary(op, left, right);
+            }
+            return left;
         }
-        return left;
+        finally
+        {
+            _depth--;
+        }
     }
 
     private ExprNode ParseTerm()

@@ -397,7 +397,10 @@ Saved-report loads still pass the underlying report definition's authorization g
   truncation signaling — all three views export through the same pipeline.
 - **M5 — Persistence & proof:** ~~saved reports (private/public, per user)~~ *(done
   early — see §13, including administration/whoami)*; SQL Server + Oracle verification
-  passes; hardening (timeouts, caps, logging discipline).
+  passes; hardening (timeouts, caps, logging discipline). *Prep complete 2026-08-05:
+  env-gated live-dialect battery (docs/TESTING.md), operator × dialect golden matrix,
+  SQL-safety corpus, Oracle BindByName fix, parser recursion guard, Debug-only SQL
+  logging. Awaiting live database runs.*
 
 ## Appendix: decision log
 
@@ -420,3 +423,4 @@ Saved-report loads still pass the underlying report definition's authorization g
 | Pivot caps: 60 column groups (configurable) + hard 10k source groups | unbounded pivot | An unbounded pivot is a memory/usability grenade; the caps surface as precise 400s telling the user what to change. |
 | CSV: UTF-8 BOM, label headers, X-IR-Truncated header | bare UTF-8, name headers, silent truncation | Excel needs the BOM to detect encoding; users recognize labels, not internal names; silent truncation reads as complete data. |
 | Views share the export pipeline | grid-only export | Exporting "what the view shows" falls out of running the same validated state unpaged — no special cases. |
+| Oracle BindByName via reflection in CommandBuilder | reference ODP.NET from Core | ODP.NET binds by position by default; context params appear first in SQL but are added last, so positional binding silently misbinds. Reflection keeps Core provider-free. |
