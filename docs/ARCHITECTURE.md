@@ -273,14 +273,19 @@ args    := expr (',' expr)*
 
 | AST | SqlServer | Oracle | Sqlite |
 |---|---|---|---|
-| `SUBSTR(s,a,n)` | `SUBSTRING(s,a,n)` | `SUBSTR(s,a,n)` | `SUBSTR(s,a,n)` |
-| `a || b` | `a + b` (or `CONCAT`) | `a || b` | `a || b` |
+| `SUBSTR(s,a[,n])` | `SUBSTRING(s,a,n)` (2-arg → `LEN(s)` for n) | `SUBSTR(s,a[,n])` | `SUBSTR(s,a[,n])` |
+| `a || b` / `CONCAT` | `CONCAT(a,b,…)` | `(a || b || …)` | `CONCAT(a,b,…)` (3.44+) |
 | `LENGTH(s)` | `LEN(s)` | `LENGTH(s)` | `LENGTH(s)` |
-| `YEAR(d)` | `YEAR(d)` | `EXTRACT(YEAR FROM d)` | `CAST(strftime('%Y',d) AS INT)` |
+| `YEAR(d)` | `YEAR(d)` | `EXTRACT(YEAR FROM d)` | `CAST(strftime('%Y',d) AS INTEGER)` |
 | `COALESCE` | `COALESCE` | `COALESCE` | `COALESCE` |
 
-- The emitter produces SQL fragments **we** wrote, injected via `SelectRaw`/`WhereRaw`
-  with parameterized literals. Client text never reaches SQL; only the AST does.
+- The emitter produces SQL fragments **we** wrote, injected via `SelectRaw` with `?`
+  bindings for every literal — client text never reaches SQL; only the AST does. Every
+  binary operation is parenthesized.
+- Semantics notes: concatenation treats NULL as empty on all three dialects (CONCAT on
+  SqlServer/Sqlite; Oracle's `||` natively); `YEAR/MONTH/DAY` accept ISO date *text*
+  because SQLite date columns discover as text.
+- Computed columns cannot reference other computed columns (no dependency ordering in v1).
 - `CASE WHEN` is a known future extension (APEX supports it); excluded from v1 grammar.
 
 ## 9. Dialect strategy
@@ -378,8 +383,10 @@ Saved-report loads still pass the underlying report definition's authorization g
 - **M2 — Numbers** ✅ *(2026-08-05)*: aggregates, control breaks + break totals, total
   count; schema/list endpoints; auth wiring (endpoint gate, per-report policy verified
   against a real host policy, context params).
-- **M3 — Expressions:** computed-column grammar/AST/emitters; highlights (server-side
-  evaluation); `ignored[]` resilience.
+- **M3 — Expressions** ✅ *(2026-08-05)*: computed-column grammar/AST/emitters with the
+  ir_calc second wrap (computed columns filter/sort/aggregate/break uniformly);
+  highlights evaluated server-side with SQL-parity NULL semantics; `ignored[]` resilience
+  extended to highlight rules.
 - **M4 — Views & export:** groupBy view, pivot-in-memory view, CSV export.
 - **M5 — Persistence & proof:** ~~saved reports (private/public, per user)~~ *(done
   early — see §13, including administration/whoami)*; SQL Server + Oracle verification
@@ -402,3 +409,4 @@ Saved-report loads still pass the underlying report definition's authorization g
 | Timestamps as ISO text, flags as 0/1 | native per-dialect types | Uniform semantics and sorting across dialects for an engine-internal table. |
 | Global mutations admin-only, even for the owner | owner-managed globals | A published report is shared infrastructure; publishing and unpublishing are curation acts. |
 | Microsoft.Data.Sqlite dependency in the AspNetCore package | host-supplied providers only | The zero-config default saved-report store must work with no host setup; report-data connections remain host-supplied. |
+| Decimal parameters bind as double on SQLite | decimal-as-TEXT (provider default) | The provider's TEXT binding breaks comparisons against affinity-less expressions (computed columns) via SQLite's cross-type ordering; double is SQLite's native numeric storage, so the conversion is faithful to the engine. |

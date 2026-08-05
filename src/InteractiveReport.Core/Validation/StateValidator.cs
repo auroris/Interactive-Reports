@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using InteractiveReport.Core.Model;
 
 namespace InteractiveReport.Core.Validation;
@@ -10,7 +11,7 @@ namespace InteractiveReport.Core.Validation;
 /// resilience); structurally wrong requests (bad arity, untypeable values, text operators
 /// on non-text columns) are precise validation errors.
 /// </summary>
-public static class StateValidator
+public static partial class StateValidator
 {
     private const int MaxInListValues = 1000;
 
@@ -22,11 +23,19 @@ public static class StateValidator
 
         var defaults = def.DefaultState;
 
+        // Computed columns validate first against the BASE schema, then join the
+        // effective schema — everything after this line treats them as ordinary columns.
+        var computed = ValidateComputed(state.Computed ?? defaults?.Computed, byName, errors);
+        var effectiveSchema = schema.Concat(computed.Select(c => c.Column)).ToList();
+        foreach (var c in computed)
+            byName[c.Column.Name] = c.Column;
+
         var filters = ValidateFilters(state.Filters, byName, errors, ignored);
         var sorts = ValidateSorts(state.Sorts is { Count: > 0 } ? state.Sorts : defaults?.Sorts, byName, ignored);
-        var columns = ValidateColumns(state.Columns is { Count: > 0 } ? state.Columns : defaults?.Columns, schema, byName, ignored);
+        var columns = ValidateColumns(state.Columns is { Count: > 0 } ? state.Columns : defaults?.Columns, effectiveSchema, byName, ignored);
         var aggregates = ValidateAggregates(state.Aggregates ?? defaults?.Aggregates, byName, errors, ignored);
         var breaks = ValidateBreaks(state.Breaks ?? defaults?.Breaks, byName, ignored);
+        var highlights = ValidateHighlights(state.Highlights ?? defaults?.Highlights, byName, errors, ignored);
 
         // Break columns must be selected — renderers group page rows by their values.
         foreach (var b in breaks)
@@ -55,6 +64,8 @@ public static class StateValidator
             Search = search,
             Sorts = sorts,
             SelectColumns = columns,
+            Computed = computed,
+            Highlights = highlights,
             Aggregates = aggregates,
             Breaks = breaks,
             PageIndex = pageIndex,
@@ -62,6 +73,139 @@ public static class StateValidator
             Ignored = ignored,
         };
     }
+
+    private static List<ValidComputed> ValidateComputed(
+        List<Model.ComputedColumn>? rules,
+        Dictionary<string, ColumnModel> baseSchema,
+        List<ValidationError> errors)
+    {
+        var result = new List<ValidComputed>();
+        if (rules is null) return result;
+
+        if (rules.Count > 20)
+        {
+            errors.Add(new ValidationError("computed", "at most 20 computed columns per report state"));
+            return result;
+        }
+
+        var seenIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < rules.Count; i++)
+        {
+            var rule = rules[i];
+            var path = $"computed[{i}]";
+
+            if (!ComputedIdPattern().IsMatch(rule.Id))
+            {
+                errors.Add(new ValidationError(path, $"computed column id '{rule.Id}' must match c1, c2, … (lowercase c + digits)"));
+                continue;
+            }
+            if (!seenIds.Add(rule.Id))
+            {
+                errors.Add(new ValidationError(path, $"duplicate computed column id '{rule.Id}'"));
+                continue;
+            }
+            if (baseSchema.ContainsKey(rule.Id))
+            {
+                errors.Add(new ValidationError(path, $"computed column id '{rule.Id}' shadows a schema column"));
+                continue;
+            }
+
+            var (ast, error) = Expressions.ExprParser.Parse(rule.Expr, baseSchema);
+            if (ast is null)
+            {
+                errors.Add(new ValidationError($"{path}.expr", error!));
+                continue;
+            }
+
+            var clrType = ast.Kind switch
+            {
+                ColumnKind.Number => typeof(decimal),
+                ColumnKind.Date => typeof(DateTime),
+                _ => typeof(string),
+            };
+            result.Add(new ValidComputed(new ColumnModel
+            {
+                Name = rule.Id,
+                Label = string.IsNullOrWhiteSpace(rule.Label) ? rule.Id : rule.Label.Trim(),
+                ClrType = clrType,
+                IsComputed = true,
+            }, ast));
+        }
+        return result;
+    }
+
+    private static List<ValidHighlight> ValidateHighlights(
+        List<HighlightRule>? rules,
+        Dictionary<string, ColumnModel> byName,
+        List<ValidationError> errors,
+        List<IgnoredItem> ignored)
+    {
+        var result = new List<ValidHighlight>();
+        if (rules is null) return result;
+
+        if (rules.Count > 50)
+        {
+            errors.Add(new ValidationError("highlights", "at most 50 highlight rules per report state"));
+            return result;
+        }
+
+        var seenIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < rules.Count; i++)
+        {
+            var rule = rules[i];
+            var path = $"highlights[{i}]";
+
+            if (string.IsNullOrWhiteSpace(rule.Id))
+            {
+                errors.Add(new ValidationError(path, "highlight id is required"));
+                continue;
+            }
+            if (!seenIds.Add(rule.Id))
+            {
+                errors.Add(new ValidationError(path, $"duplicate highlight id '{rule.Id}'"));
+                continue;
+            }
+
+            HighlightScope scope;
+            if (string.Equals(rule.Scope, "row", StringComparison.OrdinalIgnoreCase)) scope = HighlightScope.Row;
+            else if (string.Equals(rule.Scope, "cell", StringComparison.OrdinalIgnoreCase)) scope = HighlightScope.Cell;
+            else
+            {
+                errors.Add(new ValidationError(path, $"scope must be 'row' or 'cell', got '{rule.Scope}'"));
+                continue;
+            }
+
+            ColumnModel? cellCol = null;
+            if (scope == HighlightScope.Cell)
+            {
+                if (rule.Col is null || !byName.TryGetValue(rule.Col, out cellCol))
+                {
+                    ignored.Add(new IgnoredItem("highlight", $"'{rule.Id}': unknown cell column '{rule.Col}'"));
+                    continue;
+                }
+            }
+
+            if (rule.Condition is null)
+            {
+                errors.Add(new ValidationError(path, "highlight condition is required"));
+                continue;
+            }
+            if (!byName.TryGetValue(rule.Condition.Col, out var condCol))
+            {
+                ignored.Add(new IgnoredItem("highlight", $"'{rule.Id}': unknown condition column '{rule.Condition.Col}'"));
+                continue;
+            }
+
+            var condition = ValidateFilter(rule.Condition, condCol, $"{path}.condition", errors);
+            if (condition is null) continue;
+
+            result.Add(new ValidHighlight(rule.Id, scope, cellCol, condition));
+        }
+        return result;
+    }
+
+    [GeneratedRegex(@"^c\d+$")]
+    private static partial Regex ComputedIdPattern();
 
     private static List<ValidAggregate> ValidateAggregates(
         List<AggregateRule>? rules,
@@ -359,10 +503,6 @@ public static class StateValidator
 
     private static void NoteNotImplemented(ReportState state, List<IgnoredItem> ignored)
     {
-        if (state.Computed is { Count: > 0 })
-            ignored.Add(new IgnoredItem("not-implemented", "computed columns arrive in M3"));
-        if (state.Highlights is { Count: > 0 })
-            ignored.Add(new IgnoredItem("not-implemented", "highlights arrive in M3"));
         if (state.View is { } v && !string.Equals(v.Mode, "grid", StringComparison.OrdinalIgnoreCase))
             ignored.Add(new IgnoredItem("not-implemented", $"view mode '{v.Mode}' arrives in M4"));
     }

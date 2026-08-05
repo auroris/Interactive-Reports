@@ -14,12 +14,32 @@ namespace InteractiveReport.Core.Composition;
 public static class QueryComposer
 {
     public const string BaseAlias = "ir_base";
+    public const string CalcAlias = "ir_calc";
 
     public static ComposedQueries Compose(ReportDefinition def, ValidatedState state)
     {
         // Alias without AS: Oracle rejects AS in table aliases (ORA-00933); the bare
         // form is valid on all three dialects.
-        var core = new Query().FromRaw($"({def.Sql}) {BaseAlias}");
+        var inner = new Query().FromRaw($"({def.Sql}) {BaseAlias}");
+
+        Query core;
+        if (state.Computed.Count > 0)
+        {
+            // Second wrap: no dialect reliably allows referencing a SELECT alias in
+            // WHERE, so computed columns become real columns of ir_calc — after this,
+            // filters, sorts, search, aggregates, and breaks treat them uniformly.
+            inner.SelectRaw($"[{BaseAlias}].*");
+            foreach (var comp in state.Computed)
+            {
+                var (sql, bindings) = Expressions.ExprEmitter.Emit(comp.Ast, def.Dialect);
+                inner.SelectRaw($"{sql} AS [{comp.Column.Name}]", bindings.ToArray());
+            }
+            core = new Query().From(inner.As(CalcAlias));
+        }
+        else
+        {
+            core = inner;
+        }
 
         foreach (var filter in state.Filters)
             ApplyFilter(core, filter, def.Dialect);

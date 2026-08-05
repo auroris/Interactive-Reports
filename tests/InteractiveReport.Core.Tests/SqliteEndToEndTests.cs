@@ -206,6 +206,92 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         Assert.Equal(0, result.TotalRows);
         Assert.Null(result.Aggregates["AMOUNT"]["sum"]);
     }
+
+    [Fact]
+    public async Task Computed_column_filters_sorts_and_returns_values()
+    {
+        var result = await _executor.Query(Definition, new ReportState
+        {
+            Computed = [new ComputedColumn { Id = "c1", Label = "Double", Expr = "ROUND(AMOUNT * 2, 0)" }],
+            Columns = ["CUSTOMER", "c1"],
+            Filters = [Filter("c1", FilterOp.Ge, 10000)],
+            Sorts = [new SortRule { Col = "c1", Dir = SortDir.Desc }],
+        }, NoParams);
+
+        // Doubled amounts ≥ 10000: 24000 (Stark), 18000 (Acme 9000), 15000 (Globex), 12000 (Tyrell), 10000 (Initech)
+        Assert.Equal(5, result.TotalRows);
+        Assert.Equal(["CUSTOMER", "c1"], result.Columns.Select(c => c.Name));
+        Assert.True(result.Columns.Single(c => c.Name == "c1").Computed);
+        Assert.Equal(24000m, Convert.ToDecimal(result.Rows[0]["c1"]));
+        Assert.Equal("Stark Ind", result.Rows[0]["CUSTOMER"]);
+    }
+
+    [Fact]
+    public async Task Aggregate_over_computed_column()
+    {
+        var result = await _executor.Query(Definition, new ReportState
+        {
+            Computed = [new ComputedColumn { Id = "c1", Expr = "AMOUNT * 2" }],
+            Aggregates = [new AggregateRule { Col = "c1", Fn = AggregateFn.Sum }],
+        }, NoParams);
+
+        Assert.Equal(94400m, Convert.ToDecimal(result.Aggregates["c1"]["sum"]));   // 2 × 47200
+    }
+
+    [Fact]
+    public async Task Text_computed_column_concatenates()
+    {
+        var result = await _executor.Query(Definition, new ReportState
+        {
+            Computed = [new ComputedColumn { Id = "c1", Expr = "UPPER(CUSTOMER) || '!'" }],
+            Filters = [Filter("CUSTOMER", FilterOp.Eq, "Globex")],
+        }, NoParams);
+
+        Assert.Equal("GLOBEX!", Assert.Single(result.Rows)["c1"]);
+    }
+
+    [Fact]
+    public async Task Highlights_hit_rows_and_cells_with_sql_parity()
+    {
+        var result = await _executor.Query(Definition, new ReportState
+        {
+            Sorts = [new SortRule { Col = "AMOUNT", Dir = SortDir.Desc }],
+            Page = new PageRequest { Index = 1, Size = 10 },
+            Highlights =
+            [
+                new HighlightRule { Id = "big", Scope = "row", Condition = Filter("AMOUNT", FilterOp.Gt, 5000) },
+                new HighlightRule { Id = "acme", Scope = "cell", Col = "CUSTOMER", Condition = Filter("CUSTOMER", FilterOp.Contains, "ACME") },
+                new HighlightRule { Id = "noNotes", Scope = "row", Condition = Filter("NOTES", FilterOp.Blank) },
+            ],
+        }, NoParams);
+
+        // Amounts desc: 12000, 9000, 7500, 6000, 5000, 3000, 2000, 1500, 800, 400
+        Assert.Equal([0, 1, 2, 3], result.Highlights.Where(h => h.Id == "big").Select(h => h.Row));
+
+        var acme = result.Highlights.Where(h => h.Id == "acme").ToList();
+        Assert.Equal([1, 5, 6], acme.Select(h => h.Row));            // Acme Corp ×2, acme llc (case-insensitive)
+        Assert.All(acme, h => Assert.Equal("CUSTOMER", h.Col));
+
+        // NOTES blank = 3 NULLs + 1 empty string: Globex(7500)→2, Initech(5000)→4, Hooli(1500)→7, Umbrella(800)→8
+        Assert.Equal([2, 4, 7, 8], result.Highlights.Where(h => h.Id == "noNotes").Select(h => h.Row));
+    }
+
+    [Fact]
+    public async Task Highlight_on_computed_column_cell()
+    {
+        var result = await _executor.Query(Definition, new ReportState
+        {
+            Computed = [new ComputedColumn { Id = "c1", Expr = "AMOUNT * 2" }],
+            Sorts = [new SortRule { Col = "AMOUNT", Dir = SortDir.Desc }],
+            Highlights =
+            [
+                new HighlightRule { Id = "h1", Scope = "cell", Col = "c1", Condition = Filter("c1", FilterOp.Gt, 20000) },
+            ],
+        }, NoParams);
+
+        var hit = Assert.Single(result.Highlights);
+        Assert.Equal((0, "h1", "c1"), (hit.Row, hit.Id, hit.Col));   // only Stark: 24000
+    }
 }
 
 public sealed class SqliteE2EFixture : IReportConnectionFactory, IDisposable

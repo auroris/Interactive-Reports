@@ -101,7 +101,7 @@ public sealed partial class SqlSavedReportStore : ISavedReportStore
 
         await using var conn = await OpenConnection(cfg, ct);
         var compiled = DialectSupport.GetCompiler(cfg.Dialect).Compile(query);
-        await using var cmd = CommandBuilder.Build(conn, compiled, NoParams, TimeoutSeconds);
+        await using var cmd = CommandBuilder.Build(conn, compiled, NoParams, TimeoutSeconds, cfg.Dialect);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
 
         var result = new List<SavedReport>();
@@ -126,7 +126,7 @@ public sealed partial class SqlSavedReportStore : ISavedReportStore
         var cfg = Validated(_config());
         await using var conn = await OpenConnection(cfg, ct);
         var compiled = DialectSupport.GetCompiler(cfg.Dialect).Compile(query);
-        await using var cmd = CommandBuilder.Build(conn, compiled, NoParams, TimeoutSeconds);
+        await using var cmd = CommandBuilder.Build(conn, compiled, NoParams, TimeoutSeconds, cfg.Dialect);
         return await cmd.ExecuteNonQueryAsync(ct);
     }
 

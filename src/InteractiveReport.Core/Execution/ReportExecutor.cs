@@ -81,6 +81,10 @@ public sealed class ReportExecutor
             }
         }
 
+        var highlights = validated.Highlights.Count > 0
+            ? HighlightEvaluator.Evaluate(validated.Highlights, rows)
+            : [];
+
         sw.Stop();
 
         return new ReportResult
@@ -93,6 +97,7 @@ public sealed class ReportExecutor
             TotalRows = totalRows,
             Aggregates = aggregates,
             BreakTotals = breakTotals,
+            Highlights = highlights,
             Ignored = validated.Ignored,
             ElapsedMs = sw.ElapsedMilliseconds,
         };

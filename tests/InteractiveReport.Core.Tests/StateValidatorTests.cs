@@ -115,11 +115,11 @@ public class StateValidatorTests
     {
         var result = Validate(new ReportState
         {
-            Computed = [new ComputedColumn { Id = "c1", Expr = "1" }],
-            Highlights = [new HighlightRule { Id = "h1" }],
+            View = new ViewSpec { Mode = "pivot" },
         });
 
-        Assert.Equal(2, result.Ignored.Count(i => i.Kind == "not-implemented"));
+        var item = Assert.Single(result.Ignored, i => i.Kind == "not-implemented");
+        Assert.Contains("pivot", item.Detail);
     }
 
     [Fact]
@@ -190,5 +190,112 @@ public class StateValidatorTests
 
         var f = Assert.Single(result.Filters);
         Assert.Equal("STATUS", f.Column.Name);
+    }
+
+    [Fact]
+    public void Computed_columns_join_the_effective_schema_for_everything_downstream()
+    {
+        var result = Validate(new ReportState
+        {
+            Computed = [new ComputedColumn { Id = "c1", Label = "Double", Expr = "AMOUNT * 2" }],
+            Filters = [Filter("c1", FilterOp.Gt, 100)],
+            Sorts = [new SortRule { Col = "c1", Dir = SortDir.Desc }],
+            Aggregates = [new AggregateRule { Col = "c1", Fn = AggregateFn.Sum }],
+        });
+
+        Assert.Equal("c1", Assert.Single(result.Computed).Column.Name);
+        Assert.Equal("c1", Assert.Single(result.Filters).Column.Name);
+        Assert.Equal("c1", Assert.Single(result.Sorts).Column.Name);
+        Assert.Equal("c1", Assert.Single(result.Aggregates).Column.Name);
+        Assert.Contains(result.SelectColumns, c => c.Name == "c1" && c.IsComputed && c.Label == "Double");
+    }
+
+    [Fact]
+    public void Computed_id_rules_are_enforced()
+    {
+        var bad = Assert.Throws<ReportValidationException>(() =>
+            Validate(new ReportState { Computed = [new ComputedColumn { Id = "x1", Expr = "1" }] }));
+        Assert.Contains(bad.Errors, e => e.Message.Contains("must match c1"));
+
+        var dupe = Assert.Throws<ReportValidationException>(() =>
+            Validate(new ReportState
+            {
+                Computed =
+                [
+                    new ComputedColumn { Id = "c1", Expr = "1" },
+                    new ComputedColumn { Id = "c1", Expr = "2" },
+                ],
+            }));
+        Assert.Contains(dupe.Errors, e => e.Message.Contains("duplicate"));
+    }
+
+    [Fact]
+    public void Computed_id_shadowing_a_schema_column_is_rejected()
+    {
+        var schemaWithC1 = OrdersSchema.Append(Col("C1", typeof(string))).ToList();
+        var ex = Assert.Throws<ReportValidationException>(() =>
+            StateValidator.Validate(
+                OrdersDefinition(ReportDialect.Sqlite),
+                new ReportState { Computed = [new ComputedColumn { Id = "c1", Expr = "1" }] },
+                schemaWithC1));
+
+        Assert.Contains(ex.Errors, e => e.Message.Contains("shadows"));
+    }
+
+    [Fact]
+    public void Bad_expression_is_a_precise_error_at_the_expr_path()
+    {
+        var ex = Assert.Throws<ReportValidationException>(() =>
+            Validate(new ReportState { Computed = [new ComputedColumn { Id = "c1", Expr = "AMOUNT +" }] }));
+
+        Assert.Contains(ex.Errors, e => e.Path == "computed[0].expr");
+    }
+
+    [Fact]
+    public void Highlights_validate_scope_condition_and_resilience()
+    {
+        var result = Validate(new ReportState
+        {
+            Highlights =
+            [
+                new HighlightRule
+                {
+                    Id = "h1", Scope = "row",
+                    Condition = Filter("AMOUNT", FilterOp.Gt, 1000),
+                },
+                new HighlightRule
+                {
+                    Id = "h2", Scope = "cell", Col = "GONE_COLUMN",
+                    Condition = Filter("AMOUNT", FilterOp.Gt, 1),
+                },
+                new HighlightRule
+                {
+                    Id = "h3", Scope = "row",
+                    Condition = Filter("GONE_TOO", FilterOp.Eq, 1),
+                },
+            ],
+        });
+
+        var valid = Assert.Single(result.Highlights);
+        Assert.Equal("h1", valid.Id);
+        Assert.Equal(2, result.Ignored.Count(i => i.Kind == "highlight"));
+    }
+
+    [Fact]
+    public void Highlight_structural_problems_are_errors()
+    {
+        var badScope = Assert.Throws<ReportValidationException>(() =>
+            Validate(new ReportState
+            {
+                Highlights = [new HighlightRule { Id = "h1", Scope = "diagonal", Condition = Filter("AMOUNT", FilterOp.Gt, 1) }],
+            }));
+        Assert.Contains(badScope.Errors, e => e.Message.Contains("'row' or 'cell'"));
+
+        var badCondition = Assert.Throws<ReportValidationException>(() =>
+            Validate(new ReportState
+            {
+                Highlights = [new HighlightRule { Id = "h1", Scope = "row", Condition = Filter("AMOUNT", FilterOp.Contains, "x") }],
+            }));
+        Assert.Contains(badCondition.Errors, e => e.Path == "highlights[0].condition");
     }
 }

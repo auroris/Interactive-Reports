@@ -225,6 +225,49 @@ public class GoldenSqlTests
     }
 
     [Fact]
+    public void Computed_columns_get_a_second_wrap_and_become_ordinary_columns()
+    {
+        var (page, _, _, _) = CompileAll(ReportDialect.Sqlite, new ReportState
+        {
+            Computed = [new ComputedColumn { Id = "c1", Label = "With Tax", Expr = "ROUND(AMOUNT * 1.0825, 2)" }],
+            Columns = ["ORDER_ID", "c1"],
+            Filters = [Filter("c1", FilterOp.Gt, 1000)],
+            Sorts = [new SortRule { Col = "c1", Dir = SortDir.Desc }],
+            Page = new PageRequest { Index = 1, Size = 10 },
+        });
+
+        Assert.Equal(
+            "SELECT \"ORDER_ID\", \"c1\" FROM (SELECT \"ir_base\".*, ROUND((\"AMOUNT\" * @p0), @p1) AS \"c1\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base) AS \"ir_calc\" WHERE \"c1\" > @p2 ORDER BY \"c1\" DESC LIMIT @p3",
+            page.Sql);
+        Assert.Equal([1.0825m, 2m, 1000m, 10], page.NamedBindings.Values.ToArray());
+    }
+
+    [Fact]
+    public void Oracle_second_wrap_alias_has_no_AS_keyword()
+    {
+        var (page, _, _, _) = CompileAll(ReportDialect.Oracle, new ReportState
+        {
+            Computed = [new ComputedColumn { Id = "c1", Expr = "AMOUNT * 2" }],
+        });
+
+        Assert.Contains(") \"ir_calc\"", page.Sql);
+        Assert.DoesNotContain("AS \"ir_calc\"", page.Sql);
+    }
+
+    [Fact]
+    public void Aggregate_on_computed_column_rides_the_wrap()
+    {
+        var (_, _, aggregates, _) = CompileAll(ReportDialect.Sqlite, new ReportState
+        {
+            Computed = [new ComputedColumn { Id = "c1", Expr = "AMOUNT * 2" }],
+            Aggregates = [new AggregateRule { Col = "c1", Fn = AggregateFn.Sum }],
+        });
+
+        Assert.Contains("SUM(\"c1\") AS \"a0\"", aggregates!.Sql);
+        Assert.Contains("AS \"ir_calc\"", aggregates.Sql);
+    }
+
+    [Fact]
     public void SqlServer_paging_without_sort_still_compiles_valid_sql()
     {
         var (page, _) = Compile(ReportDialect.SqlServer, new ReportState
