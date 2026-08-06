@@ -173,7 +173,7 @@ public class LiveDialectTests
                 new ComputedColumn
                 {
                     Id = "c2",
-                    Expr = "CASE WHEN NOTES IS NULL OR NOTES = '' THEN 0 ELSE 1 END",
+                    Expr = "CASE WHEN NOTES IS NULL THEN 0 ELSE 1 END",
                 },
             ],
             Filters = [Filter("c1", FilterOp.Eq, "BIG")],
@@ -184,10 +184,60 @@ public class LiveDialectTests
         // BIG = amounts ≥ 6000: Stark 12000, Acme 9000, Globex 7500, Tyrell 6000.
         Assert.Equal(4, result.TotalRows);
         Assert.All(result.Rows, r => Assert.Equal("BIG", r["c1"]));
-        // Of the BIG rows, those with a real note: insured, rush, refunded
-        // (Globex's NOTES is NULL; the '' arm keeps the expression honest on
-        // dialects where empty string and NULL differ).
+        // Of the BIG rows, those with a real note: insured, rush, refunded.
+        // Globex's NOTES is NULL. Empty-string parity is covered separately below.
         Assert.Equal(3m, Convert.ToDecimal(result.Aggregates["c2"]["sum"]));
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Dialects))]
+    public async Task Case_blank_condition_exercises_null_and_empty_string_rows(ReportDialect dialect)
+    {
+        var live = LiveDb.For(dialect);
+        var result = await live.Executor.Query(live.Definition(), new ReportState
+        {
+            Computed =
+            [
+                new ComputedColumn
+                {
+                    Id = "c1",
+                    Expr = "CASE WHEN NOTES IS NULL OR NOTES = '' THEN 1 ELSE 0 END",
+                },
+            ],
+            Aggregates = [new AggregateRule { Col = "c1", Fn = AggregateFn.Sum }],
+        }, NoParams);
+
+        // SQL Server preserves the seeded empty string; Oracle stores it as NULL.
+        // The explicit portable blank condition must count the same four rows on both.
+        Assert.Equal(4m, Convert.ToDecimal(result.Aggregates["c1"]["sum"]));
+    }
+
+    [SkippableFact]
+    public async Task Boolean_column_condition_executes_on_sqlserver()
+    {
+        var live = LiveDb.For(ReportDialect.SqlServer);
+        var def = live.Definition();
+        def.Name = "live-SqlServer-bool-expression";
+        def.Sql = """
+            SELECT ORDER_ID, CUSTOMER, STATUS, AMOUNT, NOTES,
+                   CAST(CASE WHEN AMOUNT >= 5000 THEN 1 ELSE 0 END AS bit) AS LARGE_FLAG
+            FROM IR_TEST_ORDERS
+            """;
+
+        var result = await live.Executor.Query(def, new ReportState
+        {
+            Computed =
+            [
+                new ComputedColumn
+                {
+                    Id = "c1",
+                    Expr = "CASE WHEN LARGE_FLAG THEN 1 ELSE 0 END",
+                },
+            ],
+            Aggregates = [new AggregateRule { Col = "c1", Fn = AggregateFn.Sum }],
+        }, NoParams);
+
+        Assert.Equal(5m, Convert.ToDecimal(result.Aggregates["c1"]["sum"]));
     }
 
     [SkippableTheory]

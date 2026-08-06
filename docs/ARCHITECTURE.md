@@ -295,9 +295,18 @@ error says to wrap the condition in `CASE WHEN … THEN 1 ELSE 0 END`). Comparis
 require both operands of the same kind; comparing conditions (chained comparisons) is
 rejected.
 
+Boolean-*valued* columns (a SQL Server `BIT`, say) are the one bridge: they may stand
+directly in condition position (`CASE WHEN IS_PRIORITY THEN …`), and the emitter
+lowers them to an explicit predicate (`([IS_PRIORITY] = 1)`) because T-SQL accepts a
+bit as a value but never as a condition. The type checker's view (bool column ≈
+condition) and the database's view (bit ≈ value) meet at emission, not in the user's
+face.
+
 **NULL rules** (explicit, because SQL's are silent):
-- `NULL` is a value of every type; its type comes from context. `COALESCE` and CASE
-  branch unification skip NULLs; all-NULL means "cannot infer a type" — an error.
+- `NULL` is a value of every type; its type comes from context — function arguments,
+  concatenation, arithmetic (`AMOUNT + NULL` is a number-typed NULL), CASE branches.
+  `COALESCE` and CASE branch unification skip NULLs; all-NULL means "cannot infer a
+  type" — an error.
 - `x = NULL` never matches in SQL; the binder rejects it and points at `IS NULL`.
 - Simple `CASE x WHEN …` uses SQL equality, so `WHEN NULL` never matches — rejected,
   pointing at the searched form with `IS NULL`.
@@ -537,4 +546,6 @@ APEX's Interactive Reports.
 | Function registry (arity/rules/inference/emitters as data) | ExprFn enum + switches | Two switches per function was already drift-prone at 12 functions; a registry row is one place, and the registry doubles as the subset's documentation. |
 | Bool is internal to expressions; computed columns must yield values | allow boolean results | SQL Server has no scalar boolean; the error teaches the portable form (CASE WHEN … THEN 1 ELSE 0 END) instead of failing per-dialect. |
 | `x = NULL` and simple-CASE `WHEN NULL` are rejected | let SQL's null semantics apply | Both silently never match — silence is the one thing a validation layer must never emit; the errors point at IS NULL / searched CASE. |
+| Bool-valued columns lower to `= 1` predicates in condition position | reject bare bool columns as conditions | `CASE WHEN IS_PRIORITY THEN …` is the natural spelling; T-SQL's bit-is-not-boolean rule is an emission detail, not a user error. Proven live on SQL Server. |
+| NULL participates in arithmetic | number-only operands | Consistency: NULL already joined functions, concat, and CASE branches; `AMOUNT + NULL` failing while `CONCAT(NULL, …)` passed was an inconsistency, not a rule. |
 | No date literals in v1 expressions | text-vs-date comparison | Implicit text→date conversion is an NLS/format trap on Oracle; a typed DATE '…' literal is the clean extension point. |

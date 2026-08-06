@@ -66,7 +66,7 @@ internal sealed class EmitContext(ReportDialect dialect)
 
             case NotOp n:
                 _sb.Append("(NOT ");
-                Visit(n.Operand);
+                VisitCondition(n.Operand);
                 _sb.Append(')');
                 break;
 
@@ -83,7 +83,11 @@ internal sealed class EmitContext(ReportDialect dialect)
                 break;
 
             case LogicalOp l:
-                Infix(l.Op, l.Left, l.Right);
+                _sb.Append('(');
+                VisitCondition(l.Left);
+                _sb.Append(' ').Append(l.Op).Append(' ');
+                VisitCondition(l.Right);
+                _sb.Append(')');
                 break;
 
             case NullTest t:
@@ -114,6 +118,25 @@ internal sealed class EmitContext(ReportDialect dialect)
         _sb.Append(')');
     }
 
+    /// <summary>
+    /// Emit a node where SQL demands a predicate. Condition nodes pass through;
+    /// a boolean-*valued* expression (a BIT column, say) is lowered to an explicit
+    /// "= 1" test — T-SQL has no boolean expressions, so "WHEN [FLAG]" is invalid
+    /// there even though the type checker rightly accepted the column as a
+    /// condition. The 1 is our literal, not client data.
+    /// </summary>
+    private void VisitCondition(ExprNode node)
+    {
+        if (node is Comparison or LogicalOp or NotOp or NullTest)
+        {
+            Visit(node);
+            return;
+        }
+        _sb.Append('(');
+        Visit(node);
+        _sb.Append(" = 1)");
+    }
+
     private void EmitCase(CaseWhen c)
     {
         _sb.Append("CASE");
@@ -125,7 +148,8 @@ internal sealed class EmitContext(ReportDialect dialect)
         foreach (var branch in c.Branches)
         {
             _sb.Append(" WHEN ");
-            Visit(branch.When);
+            if (c.Operand is null) VisitCondition(branch.When);
+            else Visit(branch.When);
             _sb.Append(" THEN ");
             Visit(branch.Then);
         }

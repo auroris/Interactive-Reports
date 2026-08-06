@@ -205,4 +205,21 @@ public class ExprParserTests
     {
         Assert.Contains(expectedFragment, Error(expr));
     }
+
+    [Theory]
+    [InlineData("NULL + 1")]
+    [InlineData("1 * NULL")]
+    [InlineData("-NULL")]
+    public void Null_infers_number_from_arithmetic_context(string expr)
+    {
+        Assert.Equal(ColumnKind.Number, Parse(expr).Kind);
+    }
+
+    [Fact]
+    public void Unary_minus_counts_toward_the_nesting_limit()
+    {
+        var expr = new string('-', 65) + "1";
+
+        Assert.Contains("nesting exceeds", Error(expr));
+    }
 }

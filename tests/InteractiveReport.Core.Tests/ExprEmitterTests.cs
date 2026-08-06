@@ -132,4 +132,28 @@ public class ExprEmitterTests
         Assert.Equal("CASE WHEN (LENGTH([CUSTOMER]) > ?) THEN ? ELSE ? END",
             Emit("CASE WHEN LENGTH(CUSTOMER) > 5 THEN 1 ELSE 0 END", ReportDialect.Oracle).Sql);
     }
+
+    [Fact]
+    public void Boolean_valued_columns_lower_to_explicit_predicates_in_condition_position()
+    {
+        // T-SQL has no boolean expressions: "WHEN [FLAG]" is invalid there, so a
+        // bool-valued operand in condition position becomes an explicit "= 1" test.
+        var schema = OrdersSchema.Append(Col("IS_PRIORITY", typeof(bool)))
+            .ToDictionary(c => c.Name, StringComparer.OrdinalIgnoreCase);
+
+        (string Sql, IReadOnlyList<object> Bindings) EmitBool(string expr, ReportDialect dialect)
+        {
+            var (ast, error) = ExprParser.Parse(expr, schema);
+            Assert.Null(error);
+            return ExprEmitter.Emit(ast!, dialect);
+        }
+
+        foreach (var d in AllDialects)
+        {
+            Assert.Equal("CASE WHEN ([IS_PRIORITY] = 1) THEN ? ELSE ? END",
+                EmitBool("CASE WHEN IS_PRIORITY THEN 1 ELSE 0 END", d).Sql);
+            Assert.Equal("CASE WHEN ((NOT ([IS_PRIORITY] = 1)) AND ([AMOUNT] > ?)) THEN ? ELSE ? END",
+                EmitBool("CASE WHEN NOT IS_PRIORITY AND AMOUNT > 5 THEN 1 ELSE 0 END", d).Sql);
+        }
+    }
 }

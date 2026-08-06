@@ -266,9 +266,20 @@ internal sealed class ExprSyntaxParser
     {
         if (AtOp("-"))
         {
-            var pos = Current.Position;
-            _pos++;
-            return new UnarySyntax(pos, "-", ParsePrefix());
+            // ParsePrefix recurses on itself here, bypassing ParseBinary — count the
+            // depth or a hostile '-----…-1' walks straight past the nesting guard.
+            if (++_depth > MaxDepth)
+                throw new ExprError($"expression nesting exceeds {MaxDepth} levels");
+            try
+            {
+                var pos = Current.Position;
+                _pos++;
+                return new UnarySyntax(pos, "-", ParsePrefix());
+            }
+            finally
+            {
+                _depth--;
+            }
         }
 
         if (AtKeyword("NOT"))

@@ -69,10 +69,14 @@ internal static class ExprBinder
             return new NotOp(operand);
         }
 
-        if (operand.Kind != ColumnKind.Number)
+        if (!NumberContextAccepts(operand))
             throw new ExprError("unary '-' requires a number operand");
         return new UnaryMinus(operand);
     }
+
+    /// <summary>NULL joins arithmetic the way it joins every other context: as a value of the needed type.</summary>
+    private static bool NumberContextAccepts(ExprNode node)
+        => node is NullLit || node.Kind == ColumnKind.Number;
 
     private static ExprNode BindBinary(BinarySyntax b, IReadOnlyDictionary<string, ColumnModel> schema)
     {
@@ -95,7 +99,7 @@ internal static class ExprBinder
                 return new BinaryOp("||", left, right);
 
             default:
-                if (left.Kind != ColumnKind.Number || right.Kind != ColumnKind.Number)
+                if (!NumberContextAccepts(left) || !NumberContextAccepts(right))
                     throw new ExprError(
                         $"operator '{b.Op}' requires number operands (got {KindName(left)} and {KindName(right)})");
                 return new BinaryOp(b.Op, left, right);
@@ -189,6 +193,10 @@ internal static class ExprBinder
             throw new ExprError($"{where}: cannot concatenate a {KindName(node)} value");
     }
 
-    private static string KindName(ExprNode node)
-        => node.Kind == ColumnKind.Bool ? "condition" : node.Kind.ToString().ToLowerInvariant();
+    private static string KindName(ExprNode node) => node switch
+    {
+        NullLit => "null",
+        { Kind: ColumnKind.Bool } => "condition",
+        _ => node.Kind.ToString().ToLowerInvariant(),
+    };
 }
