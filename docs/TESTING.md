@@ -6,15 +6,16 @@
 dotnet test
 ```
 
-Everything except `LiveDialectTests` runs with zero infrastructure (SQLite in-memory).
-Coverage: composer goldens ×3 dialects, the full operator × dialect matrix, expression
-parser/emitter, validator rules, SQL-safety corpus, saved-report store, CSV writer, and
+The Core and ASP.NET test projects run with zero infrastructure (SQLite in-memory).
+Coverage: composer goldens ×4 dialects, the row-condition corpus × dialect matrix, expression
+parser/emitter, the shared computed/filter/highlight rule plan (including disabled-rule
+elision), validator rules, SQL-safety corpus, saved-report store, CSV writer, and
 end-to-end engine passes.
 
 ## Live-dialect verification (M5)
 
-`LiveDialectTests` runs the engine corpus against **real SQL Server, Oracle, and
-PostgreSQL**. Each test skips (never fails) unless the matching environment variable
+`InteractiveReport.Live.Tests` runs the engine corpus against **real SQL Server, Oracle,
+and PostgreSQL**. Each test skips (never fails) unless the matching environment variable
 holds a connection string:
 
 | Variable | Target | Example |
@@ -26,25 +27,23 @@ holds a connection string:
 Run just the battery:
 
 ```bash
-dotnet test tests/InteractiveReport.Core.Tests --filter "FullyQualifiedName~LiveDialectTests"
+dotnet test tests/InteractiveReport.Live.Tests
 ```
 
 **What it does:** on first use per run it **drops and recreates a table named
 `IR_TEST_ORDERS`** in the target database and seeds the canonical 10 rows, then runs
-filters/search/blank semantics/aggregates/breaks/computed columns (including CASE,
+expression filters and highlights/search/explicit null-or-empty conditions/aggregates/breaks/computed columns (including CASE,
 date-part extraction over native and ISO-text dates, and the date vocabulary —
 NOW/TO_DATE/DATE_TRUNC/TO_STRING, whole-day arithmetic, BETWEEN, and session
 timezone pinning via definition TimeZone)/context-param
-binding/groupBy/pivot/export against it. UUID filter binding runs on SQL Server and
-Postgres (derived uuid columns, no schema change), and the saved-report store corpus
+binding/groupBy/pivot/export against it, and the saved-report store corpus
 runs against Postgres in a dedicated `IR_SAVED_REPORTS_TEST` table
 (`PostgresSavedReportStoreTests`). Point it at a scratch database, not anything you
 care about.
 
-Expected numbers are identical on every dialect by design — including the blank-count
-test (4): SQLite/SQL Server/PostgreSQL count 3 NULLs + 1 empty string, while Oracle
-turns the empty string into a fourth NULL at insert. If that test passes on every
-engine, the per-dialect `blank` semantics are doing their job.
+Expected numbers are identical on every dialect by design, including the explicit
+`NOTES IS NULL OR NOTES = ''` condition (4): SQLite/SQL Server/PostgreSQL count three
+NULLs plus one empty string, while Oracle stores the empty string as a fourth NULL.
 
 Two dialect-specific boolean tests pin opposite emissions of the same expression:
 `CASE WHEN LARGE_FLAG THEN …` lowers to `= 1` on SQL Server (bit is a value, not a
@@ -115,9 +114,9 @@ The architecture recommends pointing *report* connections at a read-only princip
 $env:IR_TEST_SQLSERVER = "Server=vm-host;Database=irtest;User Id=irtest;Password=***;TrustServerCertificate=True"
 $env:IR_TEST_ORACLE    = "User Id=irtest;Password=***;Data Source=vm-host:1521/XEPDB1"
 $env:IR_TEST_POSTGRES  = "Host=vm-host;Port=5432;Database=irtest;Username=irtest;Password=***"
-dotnet test tests/InteractiveReport.Core.Tests --filter "FullyQualifiedName~LiveDialectTests" -v normal
+dotnet test tests/InteractiveReport.Live.Tests -v normal
 ```
 
-Every `LiveDialectTests` entry flips from Skipped to Passed per variable that is set —
-or run `run-live-tests.ps1` at the repo root, which sets all three for the dev VM and
-probes the ports first.
+Every live entry flips from Skipped to Passed per variable that is set. Alternatively,
+run `run-live-tests.ps1` at the repo root; it sets all three for the dev VM, probes the
+ports first, and includes the PostgreSQL saved-report corpus.

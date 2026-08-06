@@ -49,7 +49,7 @@ internal static class SavedReportEndpoints
         var store = ctx.RequestServices.GetRequiredService<IReportDefinitionStore>();
         var def = await store.Find(name, ct);
         if (def is null) return Results.NotFound();
-        if (await EndpointExtensions.Gate(def, ctx) is { } denied) return denied;
+        if (await ReportRequestAccess.Authorize(def, ctx) is { } denied) return denied;
 
         var identity = Identity(ctx);
         var saved = await SavedStore(ctx).ListVisible(def.Name, identity, ct);
@@ -61,7 +61,7 @@ internal static class SavedReportEndpoints
         var store = ctx.RequestServices.GetRequiredService<IReportDefinitionStore>();
         var def = await store.Find(name, ct);
         if (def is null) return Results.NotFound();
-        if (await EndpointExtensions.Gate(def, ctx) is { } denied) return denied;
+        if (await ReportRequestAccess.Authorize(def, ctx) is { } denied) return denied;
 
         var identity = Identity(ctx);
         if (identity is null) return Results.Unauthorized();
@@ -101,11 +101,13 @@ internal static class SavedReportEndpoints
         if (report is null) return Results.NotFound();
 
         var identity = Identity(ctx);
-        if (!CanSee(report, identity, IsAdmin(ctx))) return Results.NotFound();
+        if (Denied(SavedReportAccessPolicy.Read(report, identity, IsAdmin(ctx)), "") is { } visibilityDenied)
+            return visibilityDenied;
 
         // Loading a state document still requires access to the underlying report.
         var def = await ctx.RequestServices.GetRequiredService<IReportDefinitionStore>().Find(report.ReportName, ct);
-        if (def is not null && await EndpointExtensions.Gate(def, ctx) is { } denied) return denied;
+        if (def is null) return Results.NotFound();
+        if (await ReportRequestAccess.Authorize(def, ctx) is { } denied) return denied;
 
         using var state = JsonDocument.Parse(report.StateJson);
         return Results.Json(new
@@ -123,11 +125,10 @@ internal static class SavedReportEndpoints
 
         var identity = Identity(ctx);
         var admin = IsAdmin(ctx);
-        var owner = IsOwner(report, identity);
-
-        if (!admin && !owner) return Results.NotFound();
-        if (!admin && report.IsGlobal)
-            return AdminRequired("modifying a global report requires an administrator");
+        if (Denied(
+                SavedReportAccessPolicy.Modify(report, identity, admin),
+                "modifying a global report requires an administrator") is { } denied)
+            return denied;
 
         UpdateSavedReportRequest? request;
         try
@@ -172,11 +173,10 @@ internal static class SavedReportEndpoints
 
         var identity = Identity(ctx);
         var admin = IsAdmin(ctx);
-        var owner = IsOwner(report, identity);
-
-        if (!admin && !owner) return Results.NotFound();
-        if (!admin && report.IsGlobal)
-            return AdminRequired("deleting a global report requires an administrator");
+        if (Denied(
+                SavedReportAccessPolicy.Modify(report, identity, admin),
+                "deleting a global report requires an administrator") is { } denied)
+            return denied;
 
         return await savedStore.Delete(id, ct) ? Results.NoContent() : Results.NotFound();
     }
@@ -213,12 +213,6 @@ internal static class SavedReportEndpoints
         return ReportIdentity.IsAdministrator(ctx.User, opts.IdentityClaim, opts.Administrators);
     }
 
-    private static bool IsOwner(SavedReport report, string? identity)
-        => identity is not null && string.Equals(report.Owner, identity, StringComparison.OrdinalIgnoreCase);
-
-    private static bool CanSee(SavedReport report, string? identity, bool admin)
-        => admin || report.IsGlobal || IsOwner(report, identity);
-
     private static object Summary(SavedReport r, string? caller) => new
     {
         id = r.Id,
@@ -226,7 +220,7 @@ internal static class SavedReportEndpoints
         title = r.Title,
         isGlobal = r.IsGlobal,
         owner = r.Owner,
-        mine = IsOwner(r, caller),
+        mine = SavedReportAccessPolicy.IsOwner(r, caller),
         modifiedUtc = r.ModifiedUtc,
     };
 
@@ -240,6 +234,14 @@ internal static class SavedReportEndpoints
 
     private static IResult AdminRequired(string detail)
         => Results.Problem(title: "Administrator required", detail: detail, statusCode: StatusCodes.Status403Forbidden);
+
+    private static IResult? Denied(SavedReportAccess access, string administratorDetail) => access switch
+    {
+        SavedReportAccess.Allowed => null,
+        SavedReportAccess.Hidden => Results.NotFound(),
+        SavedReportAccess.AdministratorRequired => AdminRequired(administratorDetail),
+        _ => throw new ArgumentOutOfRangeException(nameof(access)),
+    };
 }
 
 internal sealed class SaveReportRequest

@@ -15,12 +15,6 @@ public static class DialectSupport
     };
 
     /// <summary>
-    /// Oracle treats '' as NULL, so text blank/nblank collapses to a pure NULL test there;
-    /// elsewhere text-blank means (IS NULL OR = '').
-    /// </summary>
-    public static bool EmptyStringIsNull(ReportDialect dialect) => dialect == ReportDialect.Oracle;
-
-    /// <summary>
     /// Aggregate SQL fragment. quotedCol arrives in SqlKata bracket form ("[COL]") so raw
     /// fragments still get dialect-correct identifier quoting. Count counts non-null
     /// values of the column (row count is TotalRows). SQL Server AVG over integers

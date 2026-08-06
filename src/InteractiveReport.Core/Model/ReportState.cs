@@ -1,5 +1,3 @@
-using System.Text.Json;
-
 namespace InteractiveReport.Core.Model;
 
 /// <summary>
@@ -9,7 +7,9 @@ namespace InteractiveReport.Core.Model;
 /// </summary>
 public sealed class ReportState
 {
-    public int V { get; set; } = 1;
+    public const int CurrentVersion = 2;
+
+    public int V { get; set; } = CurrentVersion;
 
     /// <summary>Toolbar search: OR of case-insensitive contains across visible text columns.</summary>
     public string? Search { get; set; }
@@ -21,8 +21,6 @@ public sealed class ReportState
     /// <summary>Visible columns in display order. Null/empty = all schema columns.</summary>
     public List<string>? Columns { get; set; }
 
-    // Parsed today, implemented in later milestones. Non-empty values are reported back
-    // in ignored[] rather than failing, so old clients and saved states stay harmless.
     public List<ComputedColumn>? Computed { get; set; }
     public List<string>? Breaks { get; set; }
     public List<AggregateRule>? Aggregates { get; set; }
@@ -32,18 +30,18 @@ public sealed class ReportState
     public PageRequest? Page { get; set; }
 }
 
-public sealed class FilterRule
+/// <summary>
+/// A typed expression instruction that is independently enabled or disabled.
+/// Computed columns, filters, and highlights share this protocol shape; their
+/// effect determines the required result type and where the expression is applied.
+/// </summary>
+public abstract class ExpressionRule
 {
-    public string Col { get; set; } = "";
-    public FilterOp Op { get; set; }
-
-    /// <summary>
-    /// Raw JSON value; typed against the column's CLR type during validation.
-    /// Scalar for most operators, two-element array for Between, array for In/Nin,
-    /// absent for Blank/Nblank.
-    /// </summary>
-    public JsonElement? Value { get; set; }
+    public bool Enabled { get; set; } = true;
+    public string Expr { get; set; } = "";
 }
+
+public sealed class FilterRule : ExpressionRule;
 
 public sealed class SortRule
 {
@@ -59,12 +57,11 @@ public sealed class PageRequest
     public int Size { get; set; } = 50;
 }
 
-public sealed class ComputedColumn
+public sealed class ComputedColumn : ExpressionRule
 {
     /// <summary>Separate namespace from schema columns ("c1", "c2", ...); may not shadow them.</summary>
     public string Id { get; set; } = "";
     public string? Label { get; set; }
-    public string Expr { get; set; } = "";
 }
 
 public sealed class AggregateRule
@@ -73,7 +70,7 @@ public sealed class AggregateRule
     public AggregateFn Fn { get; set; }
 }
 
-public sealed class HighlightRule
+public sealed class HighlightRule : ExpressionRule
 {
     public string Id { get; set; } = "";
 
@@ -83,7 +80,6 @@ public sealed class HighlightRule
     /// <summary>Target column for cell scope.</summary>
     public string? Col { get; set; }
 
-    public FilterRule? Condition { get; set; }
     public HighlightStyle? Style { get; set; }
 }
 

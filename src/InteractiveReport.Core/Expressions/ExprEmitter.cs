@@ -14,7 +14,7 @@ namespace InteractiveReport.Core.Expressions;
 /// the registry knows names and dialect idioms. CASE/comparisons/BETWEEN/IS NULL
 /// emit identically on every dialect — the portable core of the subset — except
 /// that SQLite normalizes date comparands (see VisitComparand) and date arithmetic
-/// is per-dialect by nature (see ExprFunctions.EmitDateAdd).
+/// is per-dialect by nature (see ExprFunctionEmitter.EmitDateAdd).
 /// </summary>
 public static class ExprEmitter
 {
@@ -22,6 +22,20 @@ public static class ExprEmitter
     {
         var ctx = new EmitContext(dialect);
         ctx.Visit(ast);
+        return (ctx.Sql, ctx.Bindings);
+    }
+
+    /// <summary>
+    /// Emits an AST where SQL requires a predicate. This matters for bare boolean
+    /// columns: SQL Server needs an explicit = 1 while PostgreSQL must use the
+    /// boolean value directly.
+    /// </summary>
+    public static (string Sql, IReadOnlyList<object> Bindings) EmitCondition(
+        ExprNode ast,
+        ReportDialect dialect)
+    {
+        var ctx = new EmitContext(dialect);
+        ctx.VisitCondition(ast);
         return (ctx.Sql, ctx.Bindings);
     }
 }
@@ -81,7 +95,7 @@ internal sealed class EmitContext(ReportDialect dialect)
                 break;
 
             case BinaryOp { Op: "||" } b:
-                ExprFunctions.EmitConcat(this, [b.Left, b.Right]);
+                ExprFunctionEmitter.EmitConcat(this, [b.Left, b.Right]);
                 break;
 
             case BinaryOp b:
@@ -89,7 +103,7 @@ internal sealed class EmitContext(ReportDialect dialect)
                 break;
 
             case DateAdd d:
-                ExprFunctions.EmitDateAdd(this, d);
+                ExprFunctionEmitter.EmitDateAdd(this, d);
                 break;
 
             case Comparison c:
@@ -155,9 +169,11 @@ internal sealed class EmitContext(ReportDialect dialect)
     /// its booleans are real conditions, and "= 1" would be a boolean/integer type
     /// error — there the value emits bare.
     /// </summary>
-    private void VisitCondition(ExprNode node)
+    internal void VisitCondition(ExprNode node)
     {
-        if (node is Comparison or Between or LogicalOp or NotOp or NullTest || Dialect == ReportDialect.Postgres)
+        if (node is Comparison or Between or LogicalOp or NotOp or NullTest
+            or FuncCall { Kind: ColumnKind.Bool }
+            || Dialect == ReportDialect.Postgres)
         {
             Visit(node);
             return;

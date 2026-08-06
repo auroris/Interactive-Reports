@@ -1,0 +1,32 @@
+using InteractiveReport.Core.Model;
+
+namespace InteractiveReport.Core.Validation;
+
+/// <summary>
+/// Resolves a partial request over a report's default state. Null means inherit;
+/// an explicitly supplied empty string/list means clear the corresponding default.
+/// </summary>
+public static class ReportStateResolver
+{
+    public static ReportState Resolve(ReportState? defaults, ReportState requested)
+    {
+        ArgumentNullException.ThrowIfNull(requested);
+
+        return new ReportState
+        {
+            V = requested.V,
+            Search = requested.Search ?? defaults?.Search,
+            Filters = Copy(requested.Filters ?? defaults?.Filters),
+            Sorts = Copy(requested.Sorts ?? defaults?.Sorts),
+            Columns = Copy(requested.Columns ?? defaults?.Columns),
+            Computed = Copy(requested.Computed ?? defaults?.Computed),
+            Breaks = Copy(requested.Breaks ?? defaults?.Breaks),
+            Aggregates = Copy(requested.Aggregates ?? defaults?.Aggregates),
+            Highlights = Copy(requested.Highlights ?? defaults?.Highlights),
+            View = requested.View ?? defaults?.View,
+            Page = requested.Page ?? defaults?.Page,
+        };
+    }
+
+    private static List<T>? Copy<T>(List<T>? values) => values is null ? null : [.. values];
+}

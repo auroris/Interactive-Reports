@@ -50,7 +50,7 @@ public class LiveDialectTests
         var live = LiveDb.For(dialect);
         var result = await live.Executor.Query(live.Definition(), new ReportState
         {
-            Filters = [Filter("STATUS", FilterOp.Eq, "SHIPPED")],
+            Filters = [Filter("STATUS = 'SHIPPED'")],
             Sorts = [new SortRule { Col = "AMOUNT", Dir = SortDir.Desc }],
             Page = new PageRequest { Index = 1, Size = 3 },
         }, NoParams);
@@ -71,12 +71,44 @@ public class LiveDialectTests
 
     [SkippableTheory]
     [MemberData(nameof(Dialects))]
+    public async Task Highlight_conditions_use_the_shared_expression_pipeline(ReportDialect dialect)
+    {
+        var live = LiveDb.For(dialect);
+        var result = await live.Executor.Query(live.Definition(), new ReportState
+        {
+            Sorts = [new SortRule { Col = "AMOUNT", Dir = SortDir.Desc }],
+            Highlights =
+            [
+                new HighlightRule
+                {
+                    Id = "large", Scope = "row", Expr = "ROUND(AMOUNT, 0) >= 9000",
+                    Style = new HighlightStyle { Bg = "#fee2e2" },
+                },
+                new HighlightRule
+                {
+                    Id = "acme", Scope = "cell", Col = "CUSTOMER",
+                    Expr = "CONTAINS(CUSTOMER, 'ACME')",
+                    Style = new HighlightStyle { Bg = "#fef3c7" },
+                },
+            ],
+        }, NoParams);
+
+        Assert.Equal(2, result.Highlights.Count(hit => hit.Id == "large"));
+        Assert.Equal(3, result.Highlights.Count(hit => hit.Id == "acme"));
+        Assert.All(result.Highlights.Where(hit => hit.Id == "acme"),
+            hit => Assert.Equal("CUSTOMER", hit.Col, ignoreCase: true));
+        Assert.All(result.Rows, row =>
+            Assert.DoesNotContain(row.Keys, key => key.StartsWith("__ir_highlight_", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Dialects))]
     public async Task Blank_counts_converge_across_dialects(ReportDialect dialect)
     {
         var live = LiveDb.For(dialect);
         var result = await live.Executor.Query(live.Definition(), new ReportState
         {
-            Filters = [Filter("NOTES", FilterOp.Blank)],
+            Filters = [Filter("NOTES IS NULL OR NOTES = ''")],
         }, NoParams);
 
         Assert.Equal(4, result.TotalRows);
@@ -91,8 +123,8 @@ public class LiveDialectTests
         {
             Filters =
             [
-                Filter("AMOUNT", FilterOp.Between, new[] { 1000, 8000 }),
-                Filter("STATUS", FilterOp.In, new[] { "SHIPPED", "PENDING" }),
+                Filter("AMOUNT BETWEEN 1000 AND 8000"),
+                Filter("IN_LIST(STATUS, 'SHIPPED', 'PENDING')"),
             ],
         }, NoParams);
 
@@ -106,7 +138,7 @@ public class LiveDialectTests
         var live = LiveDb.For(dialect);
         var result = await live.Executor.Query(live.Definition(), new ReportState
         {
-            Filters = [Filter("STATUS", FilterOp.Eq, "SHIPPED")],
+            Filters = [Filter("STATUS = 'SHIPPED'")],
             Aggregates =
             [
                 new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum },
@@ -151,7 +183,7 @@ public class LiveDialectTests
                 new ComputedColumn { Id = "c1", Expr = "ROUND(AMOUNT * 2, 0)" },
                 new ComputedColumn { Id = "c2", Expr = "UPPER(CUSTOMER) || '!'" },
             ],
-            Filters = [Filter("c1", FilterOp.Ge, 10000)],
+            Filters = [Filter("c1 >= 10000")],
             Sorts = [new SortRule { Col = "c1", Dir = SortDir.Desc }],
         }, NoParams);
 
@@ -180,7 +212,7 @@ public class LiveDialectTests
                     Expr = "CASE WHEN NOTES IS NULL THEN 0 ELSE 1 END",
                 },
             ],
-            Filters = [Filter("c1", FilterOp.Eq, "BIG")],
+            Filters = [Filter("c1 = 'BIG'")],
             Sorts = [new SortRule { Col = "AMOUNT", Dir = SortDir.Desc }],
             Aggregates = [new AggregateRule { Col = "c2", Fn = AggregateFn.Sum }],
         }, NoParams);
@@ -291,7 +323,7 @@ public class LiveDialectTests
                 new ComputedColumn { Id = "c3", Expr = "MONTH(ORDER_DATE_TEXT)" },
                 new ComputedColumn { Id = "c4", Expr = "DAY(ORDER_DATE)" },
             ],
-            Filters = [Filter("c1", FilterOp.Eq, 2026)],
+            Filters = [Filter("c1 = 2026")],
             Sorts = [new SortRule { Col = "ORDER_ID", Dir = SortDir.Asc }],
         }, NoParams);
 
@@ -389,48 +421,6 @@ public class LiveDialectTests
     }
 
     [SkippableTheory]
-    [InlineData(ReportDialect.SqlServer)]
-    [InlineData(ReportDialect.Postgres)]
-    public async Task Uuid_filters_bind_native_uuid_values(ReportDialect dialect)
-    {
-        // Postgres rejects uuid = text outright, so the validator binds Guid columns
-        // as Guids. The uuid column is derived deterministically per row so the test
-        // needs no schema change; values are read back and re-sent as the JSON
-        // strings a client would put in the state document.
-        var live = LiveDb.For(dialect);
-        var def = live.Definition();
-        def.Name = $"live-uuid-{dialect}";
-        def.Sql = dialect == ReportDialect.Postgres
-            ? "SELECT ORDER_ID, CUSTOMER, CAST(MD5(CAST(ORDER_ID AS TEXT)) AS UUID) AS ROW_UUID FROM IR_TEST_ORDERS"
-            : "SELECT ORDER_ID, CUSTOMER, CONVERT(UNIQUEIDENTIFIER, HASHBYTES('MD5', CAST(ORDER_ID AS VARCHAR(10)))) AS ROW_UUID FROM IR_TEST_ORDERS";
-
-        var all = await live.Executor.Query(def, new ReportState
-        {
-            Sorts = [new SortRule { Col = "ORDER_ID", Dir = SortDir.Asc }],
-        }, NoParams);
-        var uuidOf = (int index) => ((Guid)all.Rows[index]["ROW_UUID"]!).ToString();
-
-        var eq = await live.Executor.Query(def, new ReportState
-        {
-            Filters = [Filter("ROW_UUID", FilterOp.Eq, uuidOf(0))],
-        }, NoParams);
-        Assert.Equal(1, eq.TotalRows);
-        Assert.Equal(1, Convert.ToInt32(eq.Rows.Single()["ORDER_ID"]));
-
-        var ne = await live.Executor.Query(def, new ReportState
-        {
-            Filters = [Filter("ROW_UUID", FilterOp.Ne, uuidOf(0))],
-        }, NoParams);
-        Assert.Equal(9, ne.TotalRows);
-
-        var inList = await live.Executor.Query(def, new ReportState
-        {
-            Filters = [Filter("ROW_UUID", FilterOp.In, new[] { uuidOf(0), uuidOf(1) })],
-        }, NoParams);
-        Assert.Equal(2, inList.TotalRows);
-    }
-
-    [SkippableTheory]
     [MemberData(nameof(Dialects))]
     public async Task Context_params_bind_by_name(ReportDialect dialect)
     {
@@ -444,7 +434,7 @@ public class LiveDialectTests
 
         var result = await live.Executor.Query(def, new ReportState
         {
-            Filters = [Filter("STATUS", FilterOp.Eq, "SHIPPED")],
+            Filters = [Filter("STATUS = 'SHIPPED'")],
         }, new Dictionary<string, object?> { ["minAmount"] = 5000m });
 
         Assert.Equal(3, result.TotalRows);   // SHIPPED with AMOUNT >= 5000: 9000, 7500, 5000

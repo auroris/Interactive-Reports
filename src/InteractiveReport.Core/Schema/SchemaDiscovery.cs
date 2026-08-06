@@ -14,7 +14,7 @@ namespace InteractiveReport.Core.Schema;
 /// </summary>
 public static class SchemaDiscovery
 {
-    public static async Task<IReadOnlyList<ColumnModel>> Discover(
+    public static async Task<ReportSchema> Discover(
         DbConnection connection,
         ReportDefinition def,
         IReadOnlyDictionary<string, object?> contextParams,
@@ -46,9 +46,6 @@ public static class SchemaDiscovery
             });
         }
 
-        if (columns.Count == 0)
-            throw new InvalidOperationException($"Report '{def.Name}': base query returned no columns.");
-
-        return columns;
+        return ReportSchema.Create(def.Name, columns);
     }
 }

@@ -1,0 +1,41 @@
+using System.Collections.Frozen;
+using System.Text.Json;
+using InteractiveReport.Core.Model;
+
+namespace InteractiveReport.Core.Validation;
+
+/// <summary>One source of truth for aggregate/type compatibility and client capabilities.</summary>
+public static class AggregateCatalog
+{
+    private static readonly AggregateFn[] All =
+    [
+        AggregateFn.Sum,
+        AggregateFn.Avg,
+        AggregateFn.Min,
+        AggregateFn.Max,
+        AggregateFn.Count,
+        AggregateFn.CountDistinct,
+    ];
+
+    public static IReadOnlyDictionary<string, IReadOnlyList<string>> FunctionsByColumnType { get; } =
+        Enum.GetValues<ColumnKind>().ToFrozenDictionary(
+            kind => KindName(kind),
+            kind => (IReadOnlyList<string>)Array.AsReadOnly(All
+                .Where(function => IsCompatible(kind, function))
+                .Select(FunctionName)
+                .ToArray()),
+            StringComparer.OrdinalIgnoreCase);
+
+    public static bool IsCompatible(ColumnKind kind, AggregateFn function) => function switch
+    {
+        AggregateFn.Sum or AggregateFn.Avg => kind == ColumnKind.Number,
+        AggregateFn.Min or AggregateFn.Max => kind is ColumnKind.Number or ColumnKind.Date or ColumnKind.Text,
+        AggregateFn.Count or AggregateFn.CountDistinct => true,
+        _ => false,
+    };
+
+    private static string FunctionName(AggregateFn function)
+        => JsonNamingPolicy.CamelCase.ConvertName(function.ToString());
+
+    private static string KindName(ColumnKind kind) => kind.ToString().ToLowerInvariant();
+}

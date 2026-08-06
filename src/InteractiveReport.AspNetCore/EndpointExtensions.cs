@@ -1,8 +1,9 @@
 using System.Text.Json;
 using InteractiveReport.Core.Definitions;
 using InteractiveReport.Core.Execution;
+using InteractiveReport.Core.Expressions;
 using InteractiveReport.Core.Model;
-using Microsoft.AspNetCore.Authorization;
+using InteractiveReport.Core.Validation;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -13,6 +14,14 @@ namespace InteractiveReport.AspNetCore;
 
 public static class EndpointExtensions
 {
+    private delegate Task<IResult> StateOperation(
+        HttpContext context,
+        ReportDefinition definition,
+        ReportExecutor executor,
+        ReportState state,
+        IReadOnlyDictionary<string, object?> contextParameters,
+        CancellationToken ct);
+
     /// <summary>
     /// Mounts the report endpoints. Returns the group so hosts can chain standard
     /// conventions — .RequireAuthorization(...), antiforgery/CSRF filters for
@@ -50,7 +59,7 @@ public static class EndpointExtensions
         var visible = new List<ReportSummary>();
         foreach (var def in await store.List(ct))
         {
-            if (await Gate(def, ctx) is null)
+            if (await ReportRequestAccess.Authorize(def, ctx) is null)
                 visible.Add(new ReportSummary { Name = def.Name, Title = def.Title ?? ColumnModel.Prettify(def.Name) });
         }
         return Results.Json(visible, IrJson.Options);
@@ -61,12 +70,12 @@ public static class EndpointExtensions
         var store = ctx.RequestServices.GetRequiredService<IReportDefinitionStore>();
         var def = await store.Find(name, ct);
         if (def is null) return Results.NotFound();
-        if (await Gate(def, ctx) is { } denied) return denied;
+        if (await ReportRequestAccess.Authorize(def, ctx) is { } denied) return denied;
 
         try
         {
             var executor = ctx.RequestServices.GetRequiredService<ReportExecutor>();
-            var contextParams = await ResolveContextParams(def, ctx, ct);
+            var contextParams = await ReportRequestAccess.ResolveContextParameters(def, ctx, ct);
             var columns = await executor.GetSchema(def, contextParams, ct);
 
             return Results.Json(new
@@ -75,6 +84,12 @@ public static class EndpointExtensions
                 title = def.Title ?? ColumnModel.Prettify(def.Name),
                 columns = columns.Select(c => new ColumnInfo(c.Name, c.Label, c.KindName, c.IsComputed)),
                 defaultState = def.DefaultState,
+                stateVersion = ReportState.CurrentVersion,
+                capabilities = new
+                {
+                    expressionFunctions = ExpressionLanguageCatalog.Functions,
+                    aggregateFunctions = AggregateCatalog.FunctionsByColumnType,
+                },
                 limits = new { defaultPageSize = def.DefaultPageSize, maxPageSize = def.MaxPageSize, maxRows = def.MaxRows },
             }, IrJson.Options);
         }
@@ -88,69 +103,65 @@ public static class EndpointExtensions
         }
     }
 
-    private static async Task<IResult> PostQuery(string name, HttpContext ctx, CancellationToken ct)
-    {
-        var store = ctx.RequestServices.GetRequiredService<IReportDefinitionStore>();
-        var def = await store.Find(name, ct);
-        if (def is null) return Results.NotFound();
-        if (await Gate(def, ctx) is { } denied) return denied;
-
-        ReportState state;
-        try
-        {
-            state = await JsonSerializer.DeserializeAsync<ReportState>(ctx.Request.Body, IrJson.Options, ct)
-                ?? new ReportState();
-        }
-        catch (JsonException ex)
-        {
-            // Precise by design: the message only ever references the client's own input.
-            return Results.Problem(
-                title: "Malformed report state document",
-                detail: ex.Message,
-                statusCode: StatusCodes.Status400BadRequest);
-        }
-
-        try
-        {
-            var executor = ctx.RequestServices.GetRequiredService<ReportExecutor>();
-            var contextParams = await ResolveContextParams(def, ctx, ct);
-            var result = await executor.Query(def, state, contextParams, ct);
-            return Results.Json(result, IrJson.Options);
-        }
-        catch (ReportValidationException ex)
-        {
-            var errors = ex.Errors
-                .GroupBy(e => e.Path)
-                .ToDictionary(g => g.Key, g => g.Select(e => e.Message).ToArray());
-            return Results.ValidationProblem(errors, title: "Report state failed validation");
-        }
-        catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return ServerError(ctx, def.Name, "query", ex);
-        }
-    }
+    private static Task<IResult> PostQuery(string name, HttpContext ctx, CancellationToken ct)
+        => ExecuteStateOperation(
+            name,
+            ctx,
+            "query",
+            preflight: null,
+            static async (_, definition, executor, state, contextParams, token) =>
+            {
+                var result = await executor.Query(definition, state, contextParams, token);
+                return Results.Json(result, IrJson.Options);
+            },
+            ct);
 
     /// <summary>
     /// Same state document, same gate, no paging: rows capped at the definition's
     /// MaxRows with truncation signaled via the X-IR-Truncated response header.
     /// </summary>
-    private static async Task<IResult> PostExport(string name, HttpContext ctx, CancellationToken ct)
+    private static Task<IResult> PostExport(string name, HttpContext ctx, CancellationToken ct)
+        => ExecuteStateOperation(
+            name,
+            ctx,
+            "export",
+            static context =>
+            {
+                var format = context.Request.Query["format"].FirstOrDefault() ?? "csv";
+                return string.Equals(format, "csv", StringComparison.OrdinalIgnoreCase)
+                    ? null
+                    : Results.Problem(
+                        title: "Unsupported export format",
+                        detail: $"format '{format}' is not supported (csv only for now)",
+                        statusCode: StatusCodes.Status400BadRequest);
+            },
+            static async (context, definition, executor, state, contextParams, token) =>
+            {
+                var export = await executor.Export(definition, state, contextParams, token);
+                var csv = Core.Export.CsvWriter.Write(export.Columns, export.Rows);
+                context.Response.Headers["X-IR-Truncated"] = export.Truncated ? "true" : "false";
+                return Results.File(csv, "text/csv; charset=utf-8", $"{definition.Name}.csv");
+            },
+            ct);
+
+    /// <summary>
+    /// Shared report-state request pipeline. Definition lookup and authorization happen
+    /// before body parsing, then both query and export receive identical context
+    /// resolution, validation error shaping, cancellation, and sanitization behavior.
+    /// </summary>
+    private static async Task<IResult> ExecuteStateOperation(
+        string name,
+        HttpContext ctx,
+        string operationName,
+        Func<HttpContext, IResult?>? preflight,
+        StateOperation operation,
+        CancellationToken ct)
     {
         var store = ctx.RequestServices.GetRequiredService<IReportDefinitionStore>();
-        var def = await store.Find(name, ct);
-        if (def is null) return Results.NotFound();
-        if (await Gate(def, ctx) is { } denied) return denied;
-
-        var format = ctx.Request.Query["format"].FirstOrDefault() ?? "csv";
-        if (!string.Equals(format, "csv", StringComparison.OrdinalIgnoreCase))
-            return Results.Problem(
-                title: "Unsupported export format",
-                detail: $"format '{format}' is not supported (csv only for now)",
-                statusCode: StatusCodes.Status400BadRequest);
+        var definition = await store.Find(name, ct);
+        if (definition is null) return Results.NotFound();
+        if (await ReportRequestAccess.Authorize(definition, ctx) is { } denied) return denied;
+        if (preflight?.Invoke(ctx) is { } rejected) return rejected;
 
         ReportState state;
         try
@@ -160,6 +171,7 @@ public static class EndpointExtensions
         }
         catch (JsonException ex)
         {
+            // Precise by design: the message only references the caller's input.
             return Results.Problem(
                 title: "Malformed report state document",
                 detail: ex.Message,
@@ -169,18 +181,14 @@ public static class EndpointExtensions
         try
         {
             var executor = ctx.RequestServices.GetRequiredService<ReportExecutor>();
-            var contextParams = await ResolveContextParams(def, ctx, ct);
-            var export = await executor.Export(def, state, contextParams, ct);
-
-            var csv = Core.Export.CsvWriter.Write(export.Columns, export.Rows);
-            ctx.Response.Headers["X-IR-Truncated"] = export.Truncated ? "true" : "false";
-            return Results.File(csv, "text/csv; charset=utf-8", $"{def.Name}.csv");
+            var contextParams = await ReportRequestAccess.ResolveContextParameters(definition, ctx, ct);
+            return await operation(ctx, definition, executor, state, contextParams, ct);
         }
         catch (ReportValidationException ex)
         {
             var errors = ex.Errors
-                .GroupBy(e => e.Path)
-                .ToDictionary(g => g.Key, g => g.Select(e => e.Message).ToArray());
+                .GroupBy(error => error.Path)
+                .ToDictionary(group => group.Key, group => group.Select(error => error.Message).ToArray());
             return Results.ValidationProblem(errors, title: "Report state failed validation");
         }
         catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)
@@ -189,46 +197,8 @@ public static class EndpointExtensions
         }
         catch (Exception ex)
         {
-            return ServerError(ctx, def.Name, "export", ex);
+            return ServerError(ctx, definition.Name, operationName, ex);
         }
-    }
-
-    /// <summary>
-    /// Layered, default-deny authorization. Null result = pass. Unauthenticated callers
-    /// get 401; authenticated callers failing a report's policy get 404 — a failed policy
-    /// must not confirm the report exists.
-    /// </summary>
-    internal static async Task<IResult?> Gate(ReportDefinition def, HttpContext ctx)
-    {
-        var auth = def.Authorization;
-        if (auth?.AllowAnonymous == true) return null;
-
-        if (ctx.User.Identity?.IsAuthenticated != true)
-            return Results.Unauthorized();
-
-        if (auth?.Policy is { Length: > 0 } policy)
-        {
-            var authz = ctx.RequestServices.GetService<IAuthorizationService>()
-                ?? throw new InvalidOperationException(
-                    $"Report '{def.Name}' declares policy '{policy}' but the host has not registered authorization services (AddAuthorization).");
-            var decision = await authz.AuthorizeAsync(ctx.User, policy);
-            if (!decision.Succeeded) return Results.NotFound();
-        }
-
-        return null;
-    }
-
-    private static async Task<IReadOnlyDictionary<string, object?>> ResolveContextParams(
-        ReportDefinition def, HttpContext ctx, CancellationToken ct)
-    {
-        if (def.ContextParams is null || def.ContextParams.Count == 0)
-            return new Dictionary<string, object?>();
-
-        var resolver = ctx.RequestServices.GetRequiredService<IContextParameterResolver>();
-        var result = new Dictionary<string, object?>();
-        foreach (var (paramName, spec) in def.ContextParams)
-            result[paramName] = await resolver.Resolve(paramName, spec, ctx.User, ct);
-        return result;
     }
 
     /// <summary>

@@ -10,57 +10,87 @@ public class StateValidatorTests
         => StateValidator.Validate(def ?? OrdersDefinition(ReportDialect.Sqlite), state, OrdersSchema);
 
     [Fact]
-    public void Unknown_filter_column_is_ignored_not_fatal()
+    public void Version_one_state_gets_a_direct_migration_error()
     {
-        var result = Validate(new ReportState { Filters = [Filter("NO_SUCH", FilterOp.Eq, 1)] });
+        var ex = Assert.Throws<ReportValidationException>(() =>
+            Validate(new ReportState { V = 1 }));
 
-        Assert.Empty(result.Filters);
-        Assert.Contains(result.Ignored, i => i.Kind == "filter" && i.Detail.Contains("NO_SUCH"));
+        Assert.Contains(ex.Errors, error => error.Path == "v" && error.Message.Contains("version 2"));
+    }
+
+    [Fact]
+    public void Unknown_filter_column_is_a_precise_expression_error()
+    {
+        var ex = Assert.Throws<ReportValidationException>(() =>
+            Validate(new ReportState { Filters = [Filter("NO_SUCH = 1")] }));
+
+        Assert.Contains(ex.Errors, error => error.Path == "filters[0].expr" && error.Message.Contains("NO_SUCH"));
     }
 
     [Fact]
     public void Text_operator_on_number_column_is_a_validation_error()
     {
         var ex = Assert.Throws<ReportValidationException>(() =>
-            Validate(new ReportState { Filters = [Filter("AMOUNT", FilterOp.Contains, "12")] }));
+            Validate(new ReportState { Filters = [Filter("CONTAINS(AMOUNT, '12')")] }));
 
-        Assert.Contains(ex.Errors, e => e.Path == "filters[0]" && e.Message.Contains("text column"));
+        Assert.Contains(ex.Errors, e => e.Path == "filters[0].expr" && e.Message.Contains("must be text"));
     }
 
     [Fact]
     public void Between_requires_two_element_array()
     {
         var ex = Assert.Throws<ReportValidationException>(() =>
-            Validate(new ReportState { Filters = [Filter("AMOUNT", FilterOp.Between, new[] { 1 })] }));
+            Validate(new ReportState { Filters = [Filter("AMOUNT BETWEEN 1")] }));
 
-        Assert.Contains(ex.Errors, e => e.Message.Contains("two-element"));
+        Assert.Contains(ex.Errors, e => e.Message.Contains("expected AND"));
     }
 
     [Fact]
     public void Comparison_without_value_points_at_blank_operators()
     {
         var ex = Assert.Throws<ReportValidationException>(() =>
-            Validate(new ReportState { Filters = [Filter("STATUS", FilterOp.Eq)] }));
+            Validate(new ReportState { Filters = [Filter("STATUS = NULL")] }));
 
-        Assert.Contains(ex.Errors, e => e.Message.Contains("blank"));
+        Assert.Contains(ex.Errors, e => e.Message.Contains("use IS NULL"));
     }
 
     [Fact]
     public void Untypeable_value_is_precise_error()
     {
         var ex = Assert.Throws<ReportValidationException>(() =>
-            Validate(new ReportState { Filters = [Filter("AMOUNT", FilterOp.Gt, "not-a-number")] }));
+            Validate(new ReportState { Filters = [Filter("AMOUNT > 'not-a-number'")] }));
 
-        Assert.Contains(ex.Errors, e => e.Path == "filters[0]" && e.Message.Contains("AMOUNT"));
+        Assert.Contains(ex.Errors, e => e.Path == "filters[0].expr" && e.Message.Contains("number and text"));
     }
 
     [Fact]
     public void Blank_needs_no_value_and_passes()
     {
-        var result = Validate(new ReportState { Filters = [Filter("NOTES", FilterOp.Blank)] });
+        var result = Validate(new ReportState { Filters = [Filter("NOTES IS NULL OR NOTES = ''")] });
 
-        var f = Assert.Single(result.Filters);
-        Assert.Equal(FilterOp.Blank, f.Op);
+        var rule = Assert.Single(result.Rules.RowPredicates);
+        Assert.NotNull(rule.Expression.Ast);
+    }
+
+    [Fact]
+    public void Disabled_expression_rules_remain_state_but_leave_the_execution_plan()
+    {
+        var result = Validate(new ReportState
+        {
+            Filters = [new FilterRule { Enabled = false, Expr = "REMOVED_COLUMN = 1" }],
+            Computed = [new ComputedColumn { Enabled = false, Id = "invalid", Expr = "also invalid" }],
+            Highlights =
+            [
+                new HighlightRule
+                {
+                    Id = "", Enabled = false, Scope = "diagonal", Expr = "also invalid",
+                },
+            ],
+        });
+
+        Assert.Empty(result.Rules.Definitions);
+        Assert.Empty(result.Rules.RowPredicates);
+        Assert.Empty(result.Rules.Decorations);
     }
 
     [Fact]
@@ -83,6 +113,17 @@ public class StateValidatorTests
         var sort = Assert.Single(result.Sorts);
         Assert.Equal("ORDER_DATE", sort.Column.Name);
         Assert.Equal(SortDir.Desc, sort.Dir);
+    }
+
+    [Fact]
+    public void Explicit_empty_sorts_clear_report_defaults()
+    {
+        var def = OrdersDefinition(ReportDialect.Sqlite);
+        def.DefaultState = new ReportState { Sorts = [new SortRule { Col = "ORDER_DATE", Dir = SortDir.Desc }] };
+
+        var result = Validate(new ReportState { Sorts = [] }, def);
+
+        Assert.Empty(result.Sorts);
     }
 
     [Fact]
@@ -174,10 +215,11 @@ public class StateValidatorTests
     [Fact]
     public void Case_insensitive_column_matching()
     {
-        var result = Validate(new ReportState { Filters = [Filter("status", FilterOp.Eq, "SHIPPED")] });
+        var result = Validate(new ReportState { Filters = [Filter("status = 'SHIPPED'")] });
 
-        var f = Assert.Single(result.Filters);
-        Assert.Equal("STATUS", f.Column.Name);
+        var rule = Assert.Single(result.Rules.RowPredicates);
+        var comparison = Assert.IsType<InteractiveReport.Core.Expressions.Comparison>(rule.Expression.Ast);
+        Assert.Equal("STATUS", Assert.IsType<InteractiveReport.Core.Expressions.ColumnRef>(comparison.Left).Column.Name);
     }
 
     [Fact]
@@ -186,16 +228,50 @@ public class StateValidatorTests
         var result = Validate(new ReportState
         {
             Computed = [new ComputedColumn { Id = "c1", Label = "Double", Expr = "AMOUNT * 2" }],
-            Filters = [Filter("c1", FilterOp.Gt, 100)],
+            Filters = [Filter("c1 > 100")],
             Sorts = [new SortRule { Col = "c1", Dir = SortDir.Desc }],
             Aggregates = [new AggregateRule { Col = "c1", Fn = AggregateFn.Sum }],
         });
 
-        Assert.Equal("c1", Assert.Single(result.Computed).Column.Name);
-        Assert.Equal("c1", Assert.Single(result.Filters).Column.Name);
+        Assert.Equal("c1", Assert.Single(result.Rules.Definitions).Effect.Column.Name);
+        var condition = Assert.IsType<InteractiveReport.Core.Expressions.Comparison>(
+            Assert.Single(result.Rules.RowPredicates).Expression.Ast);
+        Assert.Equal("c1", Assert.IsType<InteractiveReport.Core.Expressions.ColumnRef>(condition.Left).Column.Name);
         Assert.Equal("c1", Assert.Single(result.Sorts).Column.Name);
         Assert.Equal("c1", Assert.Single(result.Aggregates).Column.Name);
         Assert.Contains(result.SelectColumns, c => c.Name == "c1" && c.IsComputed && c.Label == "Double");
+    }
+
+    [Fact]
+    public void Expression_rules_compile_into_typed_effect_phases()
+    {
+        var result = Validate(new ReportState
+        {
+            Computed = [new ComputedColumn { Id = "c1", Expr = "AMOUNT * 2" }],
+            Filters = [Filter("c1 > 100")],
+            Highlights =
+            [
+                new HighlightRule
+                {
+                    Id = "h1",
+                    Scope = "cell",
+                    Col = "c1",
+                    Expr = "c1 > 200",
+                    Style = new HighlightStyle { Bg = "gold" },
+                },
+            ],
+        });
+
+        var definition = Assert.Single(result.Rules.Definitions);
+        Assert.Equal(ColumnKind.Number, definition.Expression.Kind);
+        Assert.Equal("c1", definition.Effect.Column.Name);
+
+        var predicate = Assert.Single(result.Rules.RowPredicates);
+        Assert.Equal(ColumnKind.Bool, predicate.Expression.Kind);
+
+        var decoration = Assert.Single(result.Rules.Decorations);
+        Assert.Equal(ColumnKind.Bool, decoration.Expression.Kind);
+        Assert.Equal("c1", decoration.Effect.Column!.Name);
     }
 
     [Fact]
@@ -240,7 +316,7 @@ public class StateValidatorTests
     }
 
     [Fact]
-    public void Highlights_validate_scope_condition_and_resilience()
+    public void Highlights_validate_scope_expression_and_resilience()
     {
         var result = Validate(new ReportState
         {
@@ -249,24 +325,24 @@ public class StateValidatorTests
                 new HighlightRule
                 {
                     Id = "h1", Scope = "row",
-                    Condition = Filter("AMOUNT", FilterOp.Gt, 1000),
+                    Expr = "AMOUNT > 1000", Style = new HighlightStyle { Bg = "#fff3cd" },
                 },
                 new HighlightRule
                 {
                     Id = "h2", Scope = "cell", Col = "GONE_COLUMN",
-                    Condition = Filter("AMOUNT", FilterOp.Gt, 1),
+                    Expr = "AMOUNT > 1", Style = new HighlightStyle { Bg = "#fff3cd" },
                 },
                 new HighlightRule
                 {
-                    Id = "h3", Scope = "row",
-                    Condition = Filter("GONE_TOO", FilterOp.Eq, 1),
+                    Id = "h3", Scope = "row", Enabled = false,
+                    Expr = "GONE_TOO = 1",
                 },
             ],
         });
 
-        var valid = Assert.Single(result.Highlights);
-        Assert.Equal("h1", valid.Id);
-        Assert.Equal(2, result.Ignored.Count(i => i.Kind == "highlight"));
+        var valid = Assert.Single(result.Rules.Decorations);
+        Assert.Equal("h1", valid.Effect.Id);
+        Assert.Single(result.Ignored, i => i.Kind == "highlight");
     }
 
     [Fact]
@@ -321,15 +397,22 @@ public class StateValidatorTests
         var badScope = Assert.Throws<ReportValidationException>(() =>
             Validate(new ReportState
             {
-                Highlights = [new HighlightRule { Id = "h1", Scope = "diagonal", Condition = Filter("AMOUNT", FilterOp.Gt, 1) }],
+                Highlights = [new HighlightRule { Id = "h1", Scope = "diagonal", Expr = "AMOUNT > 1", Style = new HighlightStyle { Bg = "red" } }],
             }));
         Assert.Contains(badScope.Errors, e => e.Message.Contains("'row' or 'cell'"));
 
         var badCondition = Assert.Throws<ReportValidationException>(() =>
             Validate(new ReportState
             {
-                Highlights = [new HighlightRule { Id = "h1", Scope = "row", Condition = Filter("AMOUNT", FilterOp.Contains, "x") }],
+                Highlights = [new HighlightRule { Id = "h1", Scope = "row", Expr = "AMOUNT + 1", Style = new HighlightStyle { Bg = "red" } }],
             }));
-        Assert.Contains(badCondition.Errors, e => e.Path == "highlights[0].condition");
+        Assert.Contains(badCondition.Errors, e => e.Path == "highlights[0].expr");
+
+        var noColor = Assert.Throws<ReportValidationException>(() =>
+            Validate(new ReportState
+            {
+                Highlights = [new HighlightRule { Id = "h1", Scope = "row", Expr = "AMOUNT > 1" }],
+            }));
+        Assert.Contains(noColor.Errors, e => e.Path == "highlights[0].style");
     }
 }

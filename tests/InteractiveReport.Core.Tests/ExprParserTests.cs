@@ -308,4 +308,27 @@ public class ExprParserTests
     {
         Assert.Contains(expectedFragment, Error(expr));
     }
+
+    [Fact]
+    public void Row_conditions_accept_the_full_typed_expression_corpus()
+    {
+        var expression =
+            "ROUND(AMOUNT, 2) >= 1000 AND "
+            + "DATE_TRUNC('YEAR', ORDER_DATE) = TO_DATE('2026-01-01') "
+            + "AND (CONTAINS(CUSTOMER, 'ACME') OR IN_LIST(STATUS, 'NEW', 'PENDING'))";
+
+        var (ast, error) = ExprParser.ParseCondition(expression, Schema);
+
+        Assert.Null(error);
+        Assert.Equal(ColumnKind.Bool, ast!.Kind);
+    }
+
+    [Fact]
+    public void Row_conditions_reject_value_expressions()
+    {
+        var (ast, error) = ExprParser.ParseCondition("ROUND(AMOUNT, 2)", Schema);
+
+        Assert.Null(ast);
+        Assert.Contains("true/false", error);
+    }
 }

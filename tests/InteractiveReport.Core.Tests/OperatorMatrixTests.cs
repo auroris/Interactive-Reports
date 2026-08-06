@@ -5,186 +5,72 @@ using static InteractiveReport.Core.Tests.TestFixtures;
 
 namespace InteractiveReport.Core.Tests;
 
-/// <summary>
-/// The full operator × dialect matrix: every FilterOp's WHERE fragment locked for
-/// SqlServer, Oracle, and Sqlite. When the live-dialect battery runs against real
-/// engines, these are the shapes it is executing.
-/// </summary>
+/// <summary>The row-condition expression vocabulary compiled across every dialect.</summary>
 public class OperatorMatrixTests
 {
-    private static string PageSql(ReportDialect dialect, FilterRule filter)
-    {
-        var def = OrdersDefinition(dialect);
-        var validated = StateValidator.Validate(def, new ReportState { Filters = [filter] }, OrdersSchema);
-        var composed = QueryComposer.Compose(def, validated);
-        return DialectSupport.GetCompiler(dialect).Compile(composed.Page).Sql;
-    }
-
-    // Comparison operators on a number column.
     [Theory]
-    [InlineData(ReportDialect.Sqlite, FilterOp.Eq, "\"AMOUNT\" = @p0")]
-    [InlineData(ReportDialect.Sqlite, FilterOp.Ne, "\"AMOUNT\" <> @p0")]
-    [InlineData(ReportDialect.Sqlite, FilterOp.Lt, "\"AMOUNT\" < @p0")]
-    [InlineData(ReportDialect.Sqlite, FilterOp.Le, "\"AMOUNT\" <= @p0")]
-    [InlineData(ReportDialect.Sqlite, FilterOp.Gt, "\"AMOUNT\" > @p0")]
-    [InlineData(ReportDialect.Sqlite, FilterOp.Ge, "\"AMOUNT\" >= @p0")]
-    [InlineData(ReportDialect.SqlServer, FilterOp.Eq, "[AMOUNT] = @p0")]
-    [InlineData(ReportDialect.SqlServer, FilterOp.Ne, "[AMOUNT] <> @p0")]
-    [InlineData(ReportDialect.SqlServer, FilterOp.Lt, "[AMOUNT] < @p0")]
-    [InlineData(ReportDialect.SqlServer, FilterOp.Le, "[AMOUNT] <= @p0")]
-    [InlineData(ReportDialect.SqlServer, FilterOp.Gt, "[AMOUNT] > @p0")]
-    [InlineData(ReportDialect.SqlServer, FilterOp.Ge, "[AMOUNT] >= @p0")]
-    [InlineData(ReportDialect.Oracle, FilterOp.Eq, "\"AMOUNT\" = :p0")]
-    [InlineData(ReportDialect.Oracle, FilterOp.Ne, "\"AMOUNT\" <> :p0")]
-    [InlineData(ReportDialect.Oracle, FilterOp.Lt, "\"AMOUNT\" < :p0")]
-    [InlineData(ReportDialect.Oracle, FilterOp.Le, "\"AMOUNT\" <= :p0")]
-    [InlineData(ReportDialect.Oracle, FilterOp.Gt, "\"AMOUNT\" > :p0")]
-    [InlineData(ReportDialect.Oracle, FilterOp.Ge, "\"AMOUNT\" >= :p0")]
-    [InlineData(ReportDialect.Postgres, FilterOp.Eq, "\"AMOUNT\" = @p0")]
-    [InlineData(ReportDialect.Postgres, FilterOp.Ne, "\"AMOUNT\" <> @p0")]
-    [InlineData(ReportDialect.Postgres, FilterOp.Lt, "\"AMOUNT\" < @p0")]
-    [InlineData(ReportDialect.Postgres, FilterOp.Le, "\"AMOUNT\" <= @p0")]
-    [InlineData(ReportDialect.Postgres, FilterOp.Gt, "\"AMOUNT\" > @p0")]
-    [InlineData(ReportDialect.Postgres, FilterOp.Ge, "\"AMOUNT\" >= @p0")]
-    public void Comparisons(ReportDialect dialect, FilterOp op, string expected)
+    [InlineData(ReportDialect.Sqlite, "(\"AMOUNT\" >= @p0)")]
+    [InlineData(ReportDialect.SqlServer, "([AMOUNT] >= @p0)")]
+    [InlineData(ReportDialect.Oracle, "(\"AMOUNT\" >= :p0)")]
+    [InlineData(ReportDialect.Postgres, "(\"AMOUNT\" >= @p0)")]
+    public void Comparisons_are_bound_predicates(ReportDialect dialect, string expected)
     {
-        Assert.Contains(expected, PageSql(dialect, Filter("AMOUNT", op, 1000)));
+        var compiled = Compile(dialect, "AMOUNT >= 1000");
+
+        Assert.Contains(expected, compiled.Sql);
+        Assert.Contains(1000m, compiled.NamedBindings.Values);
     }
 
     [Theory]
-    [InlineData(ReportDialect.Sqlite, "\"AMOUNT\" BETWEEN @p0 AND @p1")]
-    [InlineData(ReportDialect.SqlServer, "[AMOUNT] BETWEEN @p0 AND @p1")]
-    [InlineData(ReportDialect.Oracle, "\"AMOUNT\" BETWEEN :p0 AND :p1")]
-    [InlineData(ReportDialect.Postgres, "\"AMOUNT\" BETWEEN @p0 AND @p1")]
-    public void Between(ReportDialect dialect, string expected)
+    [InlineData(ReportDialect.Sqlite, "\"STATUS\" IN (@p0, @p1)")]
+    [InlineData(ReportDialect.SqlServer, "[STATUS] IN (@p0, @p1)")]
+    [InlineData(ReportDialect.Oracle, "\"STATUS\" IN (:p0, :p1)")]
+    [InlineData(ReportDialect.Postgres, "\"STATUS\" IN (@p0, @p1)")]
+    public void In_list_is_a_typed_condition_function(ReportDialect dialect, string expected)
     {
-        Assert.Contains(expected, PageSql(dialect, Filter("AMOUNT", FilterOp.Between, new[] { 1, 2 })));
+        var compiled = Compile(dialect, "IN_LIST(STATUS, 'NEW', 'SHIPPED')");
+
+        Assert.Contains(expected, compiled.Sql);
+        Assert.Contains("NEW", compiled.NamedBindings.Values);
+        Assert.Contains("SHIPPED", compiled.NamedBindings.Values);
     }
 
-    [Theory]
-    [InlineData(ReportDialect.Sqlite, FilterOp.In, "\"STATUS\" IN (@p0, @p1)")]
-    [InlineData(ReportDialect.Sqlite, FilterOp.Nin, "\"STATUS\" NOT IN (@p0, @p1)")]
-    [InlineData(ReportDialect.SqlServer, FilterOp.In, "[STATUS] IN (@p0, @p1)")]
-    [InlineData(ReportDialect.SqlServer, FilterOp.Nin, "[STATUS] NOT IN (@p0, @p1)")]
-    [InlineData(ReportDialect.Oracle, FilterOp.In, "\"STATUS\" IN (:p0, :p1)")]
-    [InlineData(ReportDialect.Oracle, FilterOp.Nin, "\"STATUS\" NOT IN (:p0, :p1)")]
-    [InlineData(ReportDialect.Postgres, FilterOp.In, "\"STATUS\" IN (@p0, @p1)")]
-    [InlineData(ReportDialect.Postgres, FilterOp.Nin, "\"STATUS\" NOT IN (@p0, @p1)")]
-    public void In_lists(ReportDialect dialect, FilterOp op, string expected)
-    {
-        Assert.Contains(expected, PageSql(dialect, Filter("STATUS", op, new[] { "NEW", "SHIPPED" })));
-    }
-
-    // Text matching is case-insensitive by operator definition: LOWER(col) + lowered binding.
-    [Theory]
-    [InlineData(ReportDialect.Sqlite, FilterOp.Contains, "LOWER(\"CUSTOMER\") like @p0")]
-    [InlineData(ReportDialect.Sqlite, FilterOp.Starts, "LOWER(\"CUSTOMER\") like @p0")]
-    [InlineData(ReportDialect.Sqlite, FilterOp.Ends, "LOWER(\"CUSTOMER\") like @p0")]
-    [InlineData(ReportDialect.SqlServer, FilterOp.Contains, "LOWER([CUSTOMER]) like @p0")]
-    [InlineData(ReportDialect.SqlServer, FilterOp.Starts, "LOWER([CUSTOMER]) like @p0")]
-    [InlineData(ReportDialect.SqlServer, FilterOp.Ends, "LOWER([CUSTOMER]) like @p0")]
-    [InlineData(ReportDialect.Oracle, FilterOp.Contains, "LOWER(\"CUSTOMER\") like :p0")]
-    [InlineData(ReportDialect.Oracle, FilterOp.Starts, "LOWER(\"CUSTOMER\") like :p0")]
-    [InlineData(ReportDialect.Oracle, FilterOp.Ends, "LOWER(\"CUSTOMER\") like :p0")]
-    // Postgres: SqlKata compiles the same case-insensitive intent as native ILIKE.
-    [InlineData(ReportDialect.Postgres, FilterOp.Contains, "\"CUSTOMER\" ilike @p0")]
-    [InlineData(ReportDialect.Postgres, FilterOp.Starts, "\"CUSTOMER\" ilike @p0")]
-    [InlineData(ReportDialect.Postgres, FilterOp.Ends, "\"CUSTOMER\" ilike @p0")]
-    public void Text_matching(ReportDialect dialect, FilterOp op, string expected)
-    {
-        Assert.Contains(expected, PageSql(dialect, Filter("CUSTOMER", op, "ACME")));
-    }
-
-    [Fact]
-    public void Text_match_bindings_carry_the_wildcard_pattern()
-    {
-        var def = OrdersDefinition(ReportDialect.Sqlite);
-        string BindingFor(FilterOp op)
-        {
-            var validated = StateValidator.Validate(def, new ReportState { Filters = [Filter("CUSTOMER", op, "ACME")] }, OrdersSchema);
-            var compiled = DialectSupport.GetCompiler(ReportDialect.Sqlite).Compile(QueryComposer.Compose(def, validated).Page);
-            return (string)compiled.NamedBindings.Values.First()!;
-        }
-
-        Assert.Equal("%acme%", BindingFor(FilterOp.Contains));
-        Assert.Equal("acme%", BindingFor(FilterOp.Starts));
-        Assert.Equal("%acme", BindingFor(FilterOp.Ends));
-    }
-
-    [Theory]
-    [InlineData(ReportDialect.Sqlite, FilterOp.Ncontains)]
-    [InlineData(ReportDialect.SqlServer, FilterOp.Ncontains)]
-    [InlineData(ReportDialect.Oracle, FilterOp.Ncontains)]
-    [InlineData(ReportDialect.Postgres, FilterOp.Ncontains)]
-    public void Negated_text_matching_negates_the_like(ReportDialect dialect, FilterOp op)
-    {
-        var sql = PageSql(dialect, Filter("CUSTOMER", op, "ACME"));
-        Assert.Contains("NOT", sql, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("like", sql, StringComparison.OrdinalIgnoreCase);
-    }
-
-    // Blank semantics: Oracle's '' IS NULL collapses text-blank to a pure NULL test.
-    [Theory]
-    [InlineData(ReportDialect.Sqlite, FilterOp.Blank, "(\"NOTES\" IS NULL OR \"NOTES\" = @p0)")]
-    [InlineData(ReportDialect.Sqlite, FilterOp.Nblank, "(\"NOTES\" IS NOT NULL AND \"NOTES\" <> @p0)")]
-    [InlineData(ReportDialect.SqlServer, FilterOp.Blank, "([NOTES] IS NULL OR [NOTES] = @p0)")]
-    [InlineData(ReportDialect.SqlServer, FilterOp.Nblank, "([NOTES] IS NOT NULL AND [NOTES] <> @p0)")]
-    [InlineData(ReportDialect.Oracle, FilterOp.Blank, "\"NOTES\" IS NULL")]
-    [InlineData(ReportDialect.Oracle, FilterOp.Nblank, "\"NOTES\" IS NOT NULL")]
-    [InlineData(ReportDialect.Postgres, FilterOp.Blank, "(\"NOTES\" IS NULL OR \"NOTES\" = @p0)")]
-    [InlineData(ReportDialect.Postgres, FilterOp.Nblank, "(\"NOTES\" IS NOT NULL AND \"NOTES\" <> @p0)")]
-    public void Blank_semantics(ReportDialect dialect, FilterOp op, string expected)
-    {
-        var sql = PageSql(dialect, Filter("NOTES", op));
-        Assert.Contains(expected, sql);
-        if (dialect == ReportDialect.Oracle)
-        {
-            // No empty-string comparison binding on Oracle — '' IS NULL there.
-            Assert.DoesNotContain("= :p", sql);
-            Assert.DoesNotContain("<> :p", sql);
-        }
-    }
-
-    // Blank on a NUMBER column is a pure NULL test everywhere — '' is a text concept.
     [Theory]
     [InlineData(ReportDialect.Sqlite)]
     [InlineData(ReportDialect.SqlServer)]
     [InlineData(ReportDialect.Oracle)]
     [InlineData(ReportDialect.Postgres)]
-    public void Blank_on_non_text_is_pure_null_test(ReportDialect dialect)
+    public void Text_predicates_are_case_insensitive_and_bind_wildcards(ReportDialect dialect)
     {
-        var sql = PageSql(dialect, Filter("AMOUNT", FilterOp.Blank));
-        Assert.Contains("IS NULL", sql);
-        Assert.DoesNotContain(" OR ", sql);
+        var compiled = Compile(dialect, "CONTAINS(CUSTOMER, 'Acme')");
+
+        Assert.Contains("LOWER", compiled.Sql, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("LIKE", compiled.Sql, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(["%", "Acme", "%"], compiled.NamedBindings.Values.Take(3));
     }
 
-    // "Other" binds by discovered CLR type where it matters: Postgres rejects
-    // uuid = text outright, so Guid columns must carry Guid parameters.
-    [Fact]
-    public void Guid_columns_bind_guid_parameters_not_text()
+    [Theory]
+    [InlineData(ReportDialect.Sqlite)]
+    [InlineData(ReportDialect.SqlServer)]
+    [InlineData(ReportDialect.Oracle)]
+    [InlineData(ReportDialect.Postgres)]
+    public void Logical_and_null_conditions_compose(ReportDialect dialect)
     {
-        var schema = OrdersSchema.Append(Col("ROW_UUID", typeof(Guid))).ToList();
-        var def = OrdersDefinition(ReportDialect.Postgres);
-        var one = Guid.NewGuid();
-        var two = Guid.NewGuid();
+        var compiled = Compile(dialect, "NOTES IS NULL OR (AMOUNT BETWEEN 100 AND 500 AND STATUS <> 'CANCELLED')");
 
-        ICollection<object?> BindingsFor(FilterRule filter)
-        {
-            var validated = StateValidator.Validate(def, new ReportState { Filters = [filter] }, schema);
-            return DialectSupport.GetCompiler(ReportDialect.Postgres)
-                .Compile(QueryComposer.Compose(def, validated).Page).NamedBindings.Values;
-        }
+        Assert.Contains("IS NULL", compiled.Sql);
+        Assert.Contains("BETWEEN", compiled.Sql);
+        Assert.Contains(" AND ", compiled.Sql);
+        Assert.Contains(" OR ", compiled.Sql);
+    }
 
-        Assert.Contains(one, BindingsFor(Filter("ROW_UUID", FilterOp.Eq, one.ToString())).OfType<Guid>());
-        Assert.Equal(2, BindingsFor(Filter("ROW_UUID", FilterOp.In, new[] { one.ToString(), two.ToString() }))
-            .OfType<Guid>().Count());
-
-        // Garbage is a precise validation error here, never a provider error there.
-        var ex = Assert.Throws<ReportValidationException>(() =>
-            StateValidator.Validate(def, new ReportState
-            {
-                Filters = [Filter("ROW_UUID", FilterOp.Eq, "not-a-uuid")],
-            }, schema));
-        Assert.Contains("not valid", ex.Errors.Single().Message);
+    private static SqlKata.SqlResult Compile(ReportDialect dialect, string expression)
+    {
+        var definition = OrdersDefinition(dialect);
+        var state = StateValidator.Validate(
+            definition,
+            new ReportState { Filters = [new FilterRule { Expr = expression }] },
+            OrdersSchema);
+        return DialectSupport.GetCompiler(dialect).Compile(QueryComposer.Compose(definition, state).Page);
     }
 }

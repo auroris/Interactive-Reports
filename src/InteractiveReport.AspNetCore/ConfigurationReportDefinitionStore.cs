@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using System.Text.Json;
 using InteractiveReport.Core.Definitions;
 using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Model;
@@ -27,9 +28,9 @@ public sealed partial class ConfigurationReportDefinitionStore : IReportDefiniti
         if (!_options.CurrentValue.Reports.TryGetValue(name, out var def))
             return ValueTask.FromResult<ReportDefinition?>(null);
 
-        def.Name = name;
-        Validate(def);
-        return ValueTask.FromResult<ReportDefinition?>(def);
+        var snapshot = Snapshot(name, def);
+        Validate(snapshot);
+        return ValueTask.FromResult<ReportDefinition?>(snapshot);
     }
 
     public ValueTask<IReadOnlyList<ReportDefinition>> List(CancellationToken ct = default)
@@ -37,11 +38,23 @@ public sealed partial class ConfigurationReportDefinitionStore : IReportDefiniti
         var result = new List<ReportDefinition>();
         foreach (var (name, def) in _options.CurrentValue.Reports)
         {
-            def.Name = name;
-            Validate(def);
-            result.Add(def);
+            var snapshot = Snapshot(name, def);
+            Validate(snapshot);
+            result.Add(snapshot);
         }
         return ValueTask.FromResult<IReadOnlyList<ReportDefinition>>(result);
+    }
+
+    private static ReportDefinition Snapshot(string name, ReportDefinition source)
+    {
+        // OptionsMonitor owns and may replace its object graph. Returning a detached
+        // snapshot prevents request code from mutating configuration or observing a
+        // half-reloaded nested definition.
+        var snapshot = JsonSerializer.Deserialize<ReportDefinition>(
+            JsonSerializer.Serialize(source, IrJson.Options),
+            IrJson.Options) ?? throw new InvalidOperationException($"Report '{name}': definition could not be copied.");
+        snapshot.Name = name;
+        return snapshot;
     }
 
     private static void Validate(ReportDefinition def)

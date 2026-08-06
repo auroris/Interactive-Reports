@@ -9,22 +9,22 @@ namespace InteractiveReport.Core.Schema;
 /// </summary>
 public sealed class SchemaCache
 {
-    private readonly ConcurrentDictionary<string, Lazy<Task<IReadOnlyList<ColumnModel>>>> _cache
-        = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<SchemaCacheKey, Lazy<Task<ReportSchema>>> _cache = new();
 
-    public Task<IReadOnlyList<ColumnModel>> GetOrDiscover(
-        string reportName,
-        Func<Task<IReadOnlyList<ColumnModel>>> discover)
+    public Task<ReportSchema> GetOrDiscover(
+        ReportDefinition definition,
+        Func<Task<ReportSchema>> discover)
     {
-        var lazy = _cache.GetOrAdd(reportName, _ => new Lazy<Task<IReadOnlyList<ColumnModel>>>(
-            () => WithEviction(reportName, discover)));
+        var key = SchemaCacheKey.From(definition);
+        var lazy = _cache.GetOrAdd(key, _ => new Lazy<Task<ReportSchema>>(
+            () => WithEviction(key, discover)));
         return lazy.Value;
     }
 
     /// <summary>A failed discovery must not be cached forever — evict so the next request retries.</summary>
-    private async Task<IReadOnlyList<ColumnModel>> WithEviction(
-        string reportName,
-        Func<Task<IReadOnlyList<ColumnModel>>> discover)
+    private async Task<ReportSchema> WithEviction(
+        SchemaCacheKey key,
+        Func<Task<ReportSchema>> discover)
     {
         try
         {
@@ -32,12 +32,36 @@ public sealed class SchemaCache
         }
         catch
         {
-            _cache.TryRemove(reportName, out _);
+            _cache.TryRemove(key, out _);
             throw;
         }
     }
 
-    public void Remove(string reportName) => _cache.TryRemove(reportName, out _);
+    public void Remove(string reportName)
+    {
+        foreach (var key in _cache.Keys.Where(
+                     key => string.Equals(key.ReportName, reportName, StringComparison.OrdinalIgnoreCase)))
+            _cache.TryRemove(key, out _);
+    }
 
     public void Clear() => _cache.Clear();
+
+    private sealed record SchemaCacheKey(
+        string ReportName,
+        string Connection,
+        ReportDialect Dialect,
+        string Sql,
+        string ContextSignature)
+    {
+        public static SchemaCacheKey From(ReportDefinition definition) => new(
+            definition.Name.ToUpperInvariant(),
+            definition.Connection,
+            definition.Dialect,
+            definition.Sql,
+            string.Join(
+                "\n",
+                (definition.ContextParams ?? [])
+                .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(pair => $"{pair.Key.ToUpperInvariant()}\0{pair.Value?.Claim}")));
+    }
 }

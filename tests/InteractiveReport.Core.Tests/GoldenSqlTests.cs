@@ -35,7 +35,7 @@ public class GoldenSqlTests
 
     private static readonly ReportState CoreState = new()
     {
-        Filters = [Filter("STATUS", FilterOp.Eq, "SHIPPED")],
+        Filters = [Filter("STATUS = 'SHIPPED'")],
         Sorts = [new SortRule { Col = "ORDER_DATE", Dir = SortDir.Desc }],
         Columns = ["ORDER_ID", "CUSTOMER", "AMOUNT"],
         Page = new PageRequest { Index = 2, Size = 25 },
@@ -47,7 +47,7 @@ public class GoldenSqlTests
         var (page, _) = Compile(ReportDialect.Sqlite, CoreState);
 
         Assert.Equal(
-            "SELECT \"ORDER_ID\", \"CUSTOMER\", \"AMOUNT\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base WHERE \"STATUS\" = @p0 ORDER BY \"ORDER_DATE\" DESC LIMIT @p1 OFFSET @p2",
+            "SELECT \"ORDER_ID\", \"CUSTOMER\", \"AMOUNT\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base WHERE (\"STATUS\" = @p0) ORDER BY \"ORDER_DATE\" DESC LIMIT @p1 OFFSET @p2",
             page.Sql);
         Assert.Equal(["SHIPPED", 25, 25L], page.NamedBindings.Values.ToArray());
     }
@@ -58,7 +58,7 @@ public class GoldenSqlTests
         var (page, _) = Compile(ReportDialect.SqlServer, CoreState);
 
         Assert.Equal(
-            "SELECT [ORDER_ID], [CUSTOMER], [AMOUNT] FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base WHERE [STATUS] = @p0 ORDER BY [ORDER_DATE] DESC OFFSET @p1 ROWS FETCH NEXT @p2 ROWS ONLY",
+            "SELECT [ORDER_ID], [CUSTOMER], [AMOUNT] FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base WHERE ([STATUS] = @p0) ORDER BY [ORDER_DATE] DESC OFFSET @p1 ROWS FETCH NEXT @p2 ROWS ONLY",
             page.Sql);
     }
 
@@ -68,7 +68,7 @@ public class GoldenSqlTests
         var (page, _) = Compile(ReportDialect.Oracle, CoreState);
 
         Assert.Equal(
-            "SELECT \"ORDER_ID\", \"CUSTOMER\", \"AMOUNT\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base WHERE \"STATUS\" = :p0 ORDER BY \"ORDER_DATE\" DESC OFFSET :p1 ROWS FETCH NEXT :p2 ROWS ONLY",
+            "SELECT \"ORDER_ID\", \"CUSTOMER\", \"AMOUNT\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base WHERE (\"STATUS\" = :p0) ORDER BY \"ORDER_DATE\" DESC OFFSET :p1 ROWS FETCH NEXT :p2 ROWS ONLY",
             page.Sql);
     }
 
@@ -78,7 +78,7 @@ public class GoldenSqlTests
         var (page, _) = Compile(ReportDialect.Postgres, CoreState);
 
         Assert.Equal(
-            "SELECT \"ORDER_ID\", \"CUSTOMER\", \"AMOUNT\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base WHERE \"STATUS\" = @p0 ORDER BY \"ORDER_DATE\" DESC LIMIT @p1 OFFSET @p2",
+            "SELECT \"ORDER_ID\", \"CUSTOMER\", \"AMOUNT\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base WHERE (\"STATUS\" = @p0) ORDER BY \"ORDER_DATE\" DESC LIMIT @p1 OFFSET @p2",
             page.Sql);
         Assert.Equal(["SHIPPED", 25, 25L], page.NamedBindings.Values.ToArray());
     }
@@ -98,11 +98,11 @@ public class GoldenSqlTests
     {
         var (page, _) = Compile(ReportDialect.Sqlite, new ReportState
         {
-            Filters = [Filter("CUSTOMER", FilterOp.Contains, "ACME")],
+            Filters = [Filter("CONTAINS(CUSTOMER, 'ACME')")],
         });
 
-        Assert.Contains("LOWER(\"CUSTOMER\") like @p0", page.Sql);
-        Assert.Contains("%acme%", page.NamedBindings.Values.Select(v => v?.ToString()));
+        Assert.Contains("LOWER(\"CUSTOMER\") LIKE LOWER", page.Sql);
+        Assert.Equal(["%", "ACME", "%"], page.NamedBindings.Values.Take(3));
     }
 
     [Fact]
@@ -110,22 +110,23 @@ public class GoldenSqlTests
     {
         var (sqlitePage, _) = Compile(ReportDialect.Sqlite, new ReportState
         {
-            Filters = [Filter("NOTES", FilterOp.Blank)],
+            Filters = [Filter("NOTES IS NULL OR NOTES = ''")],
         });
 
-        Assert.Contains("(\"NOTES\" IS NULL OR \"NOTES\" = @p0)", sqlitePage.Sql);
+        Assert.Contains("(\"NOTES\" IS NULL)", sqlitePage.Sql);
+        Assert.Contains("(\"NOTES\" = @p0)", sqlitePage.Sql);
     }
 
     [Fact]
-    public void Blank_on_text_is_pure_null_test_on_oracle()
+    public void Explicit_empty_string_branch_is_preserved_on_oracle()
     {
         var (oraclePage, _) = Compile(ReportDialect.Oracle, new ReportState
         {
-            Filters = [Filter("NOTES", FilterOp.Blank)],
+            Filters = [Filter("NOTES IS NULL OR NOTES = ''")],
         });
 
         Assert.Contains("\"NOTES\" IS NULL", oraclePage.Sql);
-        Assert.DoesNotContain("= :p", oraclePage.Sql);
+        Assert.Contains("= :p", oraclePage.Sql);
     }
 
     [Fact]
@@ -133,7 +134,7 @@ public class GoldenSqlTests
     {
         var (page, _) = Compile(ReportDialect.Sqlite, new ReportState
         {
-            Filters = [Filter("STATUS", FilterOp.In, new[] { "NEW", "PENDING" })],
+            Filters = [Filter("IN_LIST(STATUS, 'NEW', 'PENDING')")],
         });
 
         Assert.Contains("\"STATUS\" IN (@p0, @p1)", page.Sql);
@@ -145,7 +146,7 @@ public class GoldenSqlTests
     {
         var (page, _) = Compile(ReportDialect.Sqlite, new ReportState
         {
-            Filters = [Filter("AMOUNT", FilterOp.Between, new[] { 100, 500 })],
+            Filters = [Filter("AMOUNT BETWEEN 100 AND 500")],
         });
 
         Assert.Contains("\"AMOUNT\" BETWEEN @p0 AND @p1", page.Sql);
@@ -165,11 +166,11 @@ public class GoldenSqlTests
     {
         var (page, _) = Compile(ReportDialect.Sqlite, new ReportState
         {
-            Filters = [Filter("AMOUNT", FilterOp.Gt, 1000)],
+            Filters = [Filter("AMOUNT > 1000")],
             Search = "acme",
         });
 
-        Assert.Contains("\"AMOUNT\" > @p0 AND (LOWER(", page.Sql);
+        Assert.Contains("(\"AMOUNT\" > @p0) AND (LOWER(", page.Sql);
     }
 
     [Fact]
@@ -177,7 +178,7 @@ public class GoldenSqlTests
     {
         var (_, _, aggregates, _) = CompileAll(ReportDialect.Sqlite, new ReportState
         {
-            Filters = [Filter("STATUS", FilterOp.Eq, "SHIPPED")],
+            Filters = [Filter("STATUS = 'SHIPPED'")],
             Sorts = [new SortRule { Col = "ORDER_DATE", Dir = SortDir.Desc }],
             Page = new PageRequest { Index = 2, Size = 25 },
             Aggregates =
@@ -189,7 +190,7 @@ public class GoldenSqlTests
         });
 
         Assert.Equal(
-            "SELECT SUM(\"AMOUNT\") AS \"a0\", AVG(\"AMOUNT\") AS \"a1\", COUNT(DISTINCT \"CUSTOMER\") AS \"a2\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base WHERE \"STATUS\" = @p0",
+            "SELECT SUM(\"AMOUNT\") AS \"a0\", AVG(\"AMOUNT\") AS \"a1\", COUNT(DISTINCT \"CUSTOMER\") AS \"a2\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base WHERE (\"STATUS\" = @p0)",
             aggregates!.Sql);
     }
 
@@ -209,13 +210,13 @@ public class GoldenSqlTests
     {
         var (_, _, _, breakTotals) = CompileAll(ReportDialect.Sqlite, new ReportState
         {
-            Filters = [Filter("AMOUNT", FilterOp.Gt, 1000)],
+            Filters = [Filter("AMOUNT > 1000")],
             Breaks = ["REGION"],
             Aggregates = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum }],
         });
 
         Assert.Equal(
-            "SELECT \"REGION\", COUNT(*) AS \"__rows\", SUM(\"AMOUNT\") AS \"a0\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base WHERE \"AMOUNT\" > @p0 GROUP BY \"REGION\" ORDER BY \"REGION\"",
+            "SELECT \"REGION\", COUNT(*) AS \"__rows\", SUM(\"AMOUNT\") AS \"a0\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base WHERE (\"AMOUNT\" > @p0) GROUP BY \"REGION\" ORDER BY \"REGION\"",
             breakTotals!.Sql);
     }
 
@@ -242,13 +243,13 @@ public class GoldenSqlTests
         {
             Computed = [new ComputedColumn { Id = "c1", Label = "With Tax", Expr = "ROUND(AMOUNT * 1.0825, 2)" }],
             Columns = ["ORDER_ID", "c1"],
-            Filters = [Filter("c1", FilterOp.Gt, 1000)],
+            Filters = [Filter("c1 > 1000")],
             Sorts = [new SortRule { Col = "c1", Dir = SortDir.Desc }],
             Page = new PageRequest { Index = 1, Size = 10 },
         });
 
         Assert.Equal(
-            "SELECT \"ORDER_ID\", \"c1\" FROM (SELECT ir_base.*, ROUND((\"AMOUNT\" * @p0), @p1) AS \"c1\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base) AS \"ir_calc\" WHERE \"c1\" > @p2 ORDER BY \"c1\" DESC LIMIT @p3",
+            "SELECT \"ORDER_ID\", \"c1\" FROM (SELECT ir_base.*, ROUND((\"AMOUNT\" * @p0), @p1) AS \"c1\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base) AS \"ir_calc\" WHERE (\"c1\" > @p2) ORDER BY \"c1\" DESC LIMIT @p3",
             page.Sql);
         Assert.Equal([1.0825m, 2m, 1000m, 10], page.NamedBindings.Values.ToArray());
     }

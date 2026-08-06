@@ -20,8 +20,8 @@ consumer of that protocol.
   computed columns, highlights, paging, view mode.
 - Every element of the state document is validated before composition:
   - column names → must exist in the discovered schema (or be declared computed columns);
-  - operators / aggregate functions → closed enums;
-  - computed-column and expression text → parsed by our constrained grammar into an AST;
+  - aggregate functions → a closed enum;
+  - computed-column, filter, and highlight expressions → parsed by our constrained grammar into an AST;
     only whitelisted functions; we emit the SQL, never the client.
 - Identifiers never pass through raw: the client sends names, we match them against the
   schema-discovered column set and use *our* copy, quoted by SqlKata.
@@ -58,11 +58,11 @@ component-clearing and structurally cannot disagree with the page query.)
 `Clone()` is load-bearing: the page query, total count, column aggregates, and
 control-break totals all derive from one composed core and cannot disagree.
 
-**Pushdown line:** only operations that change *which rows come back* push down —
-filters, search, sorts, aggregates, group-by, computed columns. Presentation stays in
-C#: highlight rules evaluate over the fetched page; the pivot view pivots a pushed-down
-GROUP BY result in memory. This fences per-dialect work to predicates plus a function
-whitelist, and eliminates the worst dialect divergence (native PIVOT syntax) entirely.
+**Pushdown line:** row selection and predicate evaluation push down: filters, search,
+sorts, aggregates, group-by, computed columns, and private true/false projections for
+highlights. C# converts those private projections into highlight hits and pivots grouped
+results in memory. This gives filters and highlights one predicate implementation while
+still avoiding the worst dialect divergence (native PIVOT syntax) entirely.
 
 ## 3. Solution layout
 
@@ -71,7 +71,7 @@ whitelist, and eliminates the worst dialect divergence (native PIVOT syntax) ent
 | `src/InteractiveReport.Core` | State model, validation, expression parser, query composition (SqlKata), execution, schema discovery, highlight evaluation, in-memory pivot, export. No ASP.NET dependencies. |
 | `src/InteractiveReport.AspNetCore` | Endpoint mapping (`MapInteractiveReports`), config-backed definition store, auth integration, JSON protocol shaping, problem+json errors. `Ui/` holds the packaged product UI (§14), embedded and served by the same mapping. |
 | `samples/Workbench` | Dev harness: SQLite sample DB. `index.html`/`admin.html` host the packaged UI; `plain.html` is the deliberately plain JS page exercising every engine feature — the living spec for the protocol. |
-| `tests/InteractiveReport.Core.Tests` | Composer golden tests (state doc → expected SQL, ×3 dialects), expression parser tests, SQLite end-to-end integration tests. |
+| `tests/InteractiveReport.Core.Tests` | Composer golden tests (state doc → expected SQL, ×4 dialects), expression parser tests, SQLite end-to-end integration tests. |
 
 Target framework: `net8.0` (Umbraco 13 LTS floor; builds under SDK 8/10).
 
@@ -118,26 +118,29 @@ Notes:
 ## 5. Report state document
 
 The single artifact that is simultaneously: the request body, the saved report, and the
-shareable view state. Versioned (`"v": 1`) for forward migration.
+shareable view state. Versioned (`"v": 2`) for forward migration. Version 2 replaces
+the version 1 column/operator/value filter shape with shared boolean expressions; version
+1 state must be migrated before loading.
 
 ```json
 {
-  "v": 1,
+  "v": 2,
   "search": "acme",
   "filters": [
-    { "col": "STATUS", "op": "in", "value": ["SHIPPED", "PENDING"] },
-    { "col": "AMOUNT", "op": "gt", "value": 1000 }
+    { "enabled": true, "expr": "IN_LIST(STATUS, 'SHIPPED', 'PENDING')" },
+    { "enabled": false, "expr": "AMOUNT > 1000" }
   ],
   "sorts":  [ { "col": "ORDER_DATE", "dir": "desc" } ],
   "columns": ["ORDER_ID", "CUSTOMER", "AMOUNT", "ORDER_DATE", "c1"],
   "computed": [
-    { "id": "c1", "label": "Amount w/ Tax", "expr": "ROUND(AMOUNT * 1.0825, 2)" }
+    { "id": "c1", "enabled": true, "label": "Amount w/ Tax",
+      "expr": "ROUND(AMOUNT * 1.0825, 2)" }
   ],
   "breaks": ["REGION"],
   "aggregates": [ { "col": "AMOUNT", "fn": "sum" } ],
   "highlights": [
-    { "id": "h1", "scope": "row",
-      "condition": { "col": "AMOUNT", "op": "gt", "value": 10000 },
+    { "id": "h1", "enabled": true, "scope": "row",
+      "expr": "ROUND(AMOUNT, 2) > 10000",
       "style": { "bg": "#fff3cd" } }
   ],
   "view": { "mode": "grid" },
@@ -145,12 +148,19 @@ shareable view state. Versioned (`"v": 1`) for forward migration.
 }
 ```
 
-**Filter operators (closed set):** `eq ne lt le gt ge between in nin contains ncontains
-starts ends blank nblank`.
-- `contains/ncontains/starts/ends` are case-insensitive by definition (`LOWER()` both sides).
-- `blank/nblank`: semantics owned by the filter layer per dialect — on Oracle,
-  `'' IS NULL`, so "blank" is `IS NULL`; elsewhere it is `IS NULL OR = ''` for text.
+**Expression rules:** computed columns, filters, and highlights all contain an `enabled`
+flag and an `expr`. Computed columns must bind to a number, text, or date value; filters
+and highlights must bind to a true/false condition. All three consume the complete
+expression language in §8. A computed value defines a column, a true filter keeps the
+row, and a true highlight paints its row or target cell.
+Cell highlighting has priority: renderers apply matching row styles first, then cell
+styles. `CONTAINS`, `STARTS_WITH`, and `ENDS_WITH` are case-insensitive; `IN_LIST`
+provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
+`IS NULL OR col = ''` when empty text should also count.
 - `search` is the toolbar search: OR of `contains` across visible text columns.
+- A partial request resolves over `defaultState` once: a missing property inherits,
+  while an explicit empty string/list clears the default. `{ "mode": "grid" }`
+  explicitly overrides an alternate default view.
 
 **Aggregate functions (closed set):** `count sum avg min max countDistinct`.
 - `sum/avg` require number columns; `min/max` allow number/date/text; `count/countDistinct`
@@ -176,9 +186,10 @@ human labels; empty `values` ⇒ implicit counts). Caps: `maxPivotColumns` per d
 Grid-only features (breaks, highlights, grid aggregates, non-dim sorts) are noted in
 `ignored[]` in alternate views, never fatal.
 
-**Resilience:** state elements referencing columns that no longer exist in the schema are
-*dropped, not fatal* — the response lists what was ignored (`"ignored": [...]`) so a saved
-report survives a definition change gracefully instead of 500ing.
+**Resilience:** structural state elements referencing columns that no longer exist are
+dropped into `ignored[]`. Expressions are typed programs, so an unknown referenced column
+is a precise validation error. Disabled filters/highlights are not parsed or planned,
+which lets an off instruction remain in saved state while its schema is being revised.
 
 ## 6. HTTP protocol
 
@@ -236,38 +247,70 @@ resolve definition (store)                         404 if absent
 → resolve context params (claims/resolver)
 → discover/fetch cached schema
 → validate state doc against schema + enums        400 problem+json (precise)
-→ parse computed-column & filter expressions → AST
+→ compile enabled expression rules                 typed definition/predicate/decoration plan
 → build core query:
     wrap base SQL as subquery (ir_base)
     [if computed columns] second wrap layer:
         SELECT ir_base.*, <expr> AS c1 FROM (base) ir_base  → AS ir_calc
         (aliases become filterable/sortable universally — no dialect
          supports referencing a SELECT alias in WHERE reliably)
-    apply filters, search, sorts (breaks force-prepended to sort list)
+    apply filter predicates and search
 → derive via Clone():
-    page query   (+ ForPage)
+    page query   (+ private highlight predicate projections + ForPage)
     count query  (ClearComponent order → AsCount)
     aggregates   (ClearComponent order/limit → SELECT fn(col)…)
     break totals (… → GROUP BY break cols + aggregate fns)
-→ compile (dialect compiler) → execute (Dapper, dynamic rows, CancellationToken)
-→ post-process in C#: highlight evaluation, pivot transform (pivot view only)
+→ compile (dialect compiler) → execute (provider-neutral DbCommand/DbDataReader, CancellationToken)
+→ post-process in C#: projection markers → ordered highlight hits; pivot transform
+→ remove private projections and shape visible rows
 → shape response
 ```
 
-Execution runs the derived queries concurrently on separate connections where the
-provider allows; SQLite runs them sequentially on one connection.
+The execution path is split by responsibility rather than view mode:
+
+- `ReportExecutor` is the application-service orchestrator. It selects the view path and
+  coordinates validation, composition, execution, and response timing.
+- `ReportConnectionManager` owns opening connections and applying trusted session policy,
+  including timezone configuration.
+- `ReportQueryReader` owns command compilation/execution and maps the engine's stable
+  ordinal query layouts into provider-neutral rows.
+- `PivotTableBuilder`, `ReportResultColumns`, and `ReportRowProjector` are database-free response shapers. Pivot
+  mechanics and protocol metadata can evolve without changing connection code.
+- `StateValidator` is the validation facade. Feature validators own effect metadata such
+  as computed-column identity and highlight scope/style. `ExpressionRuleCompiler` is the
+  single enabled → metadata → parse/bind → result-contract pipeline for computed columns,
+  filters, and highlights. It produces an `ExpressionRulePlan` whose typed effects keep
+  definition, row-predicate, and decoration phases explicit.
+- `ExpressionRuleSqlApplicator` translates those typed effects into projection, `WHERE`,
+  or private-marker SQL while `QueryComposer` remains responsible for phase ordering.
+- `HighlightEvaluator` consumes database-computed markers, ordering row hits before cell
+  hits. It does not reimplement expression semantics in memory.
+- In the ASP.NET Core adapter, `ReportRequestAccess` owns per-definition authorization and
+  server-trusted context parameters. Query and export share one state-request pipeline so
+  their validation and sanitized error behavior stay aligned.
+
+Derived queries run sequentially on one prepared connection per request. This keeps one
+transaction/session context and remains SQLite-friendly; provider-specific parallelism is
+a future optimization if measurements justify its extra connection pressure.
 
 ## 8. Expression language
 
 Small, typed, and closed — a **documented portable subset**, not "whatever the target
-database accepts". Used for computed columns; filter values stay structured (the
-`op`/`value` model) and do not use the expression language in v1.
+database accepts". Used for computed columns and, in condition position, by both filters
+and highlights.
 
-**Pipeline (staged):** text → *syntax* (untyped tree with source positions; lexer +
-recursive descent, binary operators via a Pratt precedence loop) → *bind* (schema +
-function registry → typed AST; all typing rules live here) → *emit* (registry-driven
-per-dialect SQL). The stages are `ExprSyntaxParser` → `ExprBinder` → `ExprEmitter`,
-fronted by the `ExprParser.Parse` facade.
+**Pipeline (staged):** rule → enabled check → effect-metadata validation → *syntax*
+(untyped tree with source positions; lexer + recursive descent, binary operators via a
+Pratt precedence loop) → *bind* (schema + function registry → typed AST; all typing rules
+live here) → result-contract check → typed effect → *emit* (registry-driven per-dialect
+SQL). `ExpressionRuleCompiler` owns the common rule stages. Expression internals remain
+`ExprSyntaxParser` → `ExprBinder` → `ExprEmitter`; `ExpressionRequirement.Value` and
+`.Predicate` describe what the consuming effect accepts.
+
+The compiled plan runs in dependency order: definition effects project computed columns
+and extend the schema; row-predicate effects enter `WHERE`; decoration effects project
+private highlight markers from the filtered rowset. The value pipeline is shared even
+though each effect deliberately lands in a different query stage.
 
 ```
 expr        := or
@@ -284,6 +327,7 @@ factor      := number | 'string' | NULL | column | func '(' args ')'
 case        := CASE [expr] (WHEN expr THEN expr)+ [ELSE expr] END
 func        := UPPER | LOWER | TRIM | LENGTH | SUBSTR | CONCAT
              | ROUND | ABS | COALESCE
+             | CONTAINS | STARTS_WITH | ENDS_WITH | IN_LIST
              | YEAR | MONTH | DAY                  (date part extraction)
              | NOW | TO_DATE | TO_STRING | DATE_TRUNC
 args        := expr (',' args)*
@@ -291,7 +335,7 @@ args        := expr (',' args)*
 
 **Type discipline.** Values are number/text/date. Conditions (boolean) arise from
 comparisons, `BETWEEN`, `IS [NOT] NULL`, and `AND`/`OR`/`NOT`, and are consumed by
-searched-CASE `WHEN`s and by `NOT`/`AND`/`OR` — nowhere else. A computed column's result must be a
+searched-CASE `WHEN`s, row conditions, and by `NOT`/`AND`/`OR`. A computed column's result must be a
 value: SQL Server has no scalar boolean, so the portable subset doesn't either (the
 error says to wrap the condition in `CASE WHEN … THEN 1 ELSE 0 END`). Comparisons
 require both operands of the same kind; comparing conditions (chained comparisons) is
@@ -351,8 +395,7 @@ functions; the operators are the vocabulary):
   language, `NLS_DATE_FORMAT`, `DateStyle`) — the one place they would leak into
   report output, so the conversion stays explicit.
 - **Timezone is connection configuration, not expression vocabulary.** The language
-  assumes single-timezone, wall-clock data; date filter values parse the same way
-  (invariant culture, `AssumeLocal`). A definition may set `TimeZone` (a region name
+  assumes single-timezone, wall-clock data. A definition may set `TimeZone` (a region name
   or offset, bindable from appsettings): the executor pins the session when it opens
   the connection — `ALTER SESSION SET TIME_ZONE` on Oracle, `SET TIME ZONE` on
   Postgres — and `NOW()` then follows it. Unset means the server's own setting, and
@@ -374,9 +417,10 @@ functions; the operators are the vocabulary):
   before its own midnight timestamp.
 
 **Function registry** (`ExprFunctions`): one entry per function — arity, argument
-rules, result-kind inference, per-dialect emitter. Adding a function is adding a row;
-there is no enum and no switches to grow. The registry is the only dialect-specific
-surface outside operators:
+rules, result-kind inference, and an emission strategy. Adding a function is adding a
+row; there is no enum and no switches to grow. `ExprFunctionEmitter` owns the dialect SQL,
+while `ExprDateRules` owns the portable truncation and format vocabularies shared by bind
+and emit. The emitter is the only dialect-specific function surface outside operators:
 
 | AST | SqlServer | Oracle | Sqlite | Postgres |
 |---|---|---|---|---|
@@ -422,10 +466,8 @@ as a parameter.)
   beats clever.
 - SqlKata owns: identifier quoting, parameter naming, pagination syntax (including Oracle
   12c `OFFSET/FETCH`).
-- We own (per-dialect semantic decisions, centralized in the filter/operator layer):
-  - Oracle `'' IS NULL` → `blank` operator semantics (§5);
-  - case-insensitive text matching policy (`LOWER` both sides; SqlKata compiles the
-    same intent as native `ILIKE` on Postgres);
+- We own (per-dialect semantic decisions, centralized in expression emission):
+  - case-insensitive condition functions (`LOWER` both sides around `LIKE`);
   - Oracle ADO specifics: `BindByName = true`, parameter prefix — isolated in the
     Oracle execution adapter;
   - boolean columns in expression condition position: `= 1` lowering everywhere
@@ -494,7 +536,10 @@ case-insensitively exact.
 ISO-8601 text). Cross-dialect-uniform storage types on purpose; auto-created unless
 `autoCreate` is disabled. Location via `savedReports.connection` (a named connection —
 point it at the data database to co-locate saved reports with report data), defaulting
-zero-config to a local SQLite file `App_Data/interactivereport.saved.db`.
+zero-config to a local SQLite file `App_Data/interactivereport.saved.db`. Each operation
+uses one validated configuration snapshot, and auto-creation is tracked per
+connection/dialect/table target so live configuration changes cannot mix query and storage
+targets or inherit stale initialization state.
 
 **Authorization matrix** (enforced at the endpoint layer; the store is dumb):
 
@@ -530,22 +575,26 @@ APEX's Interactive Reports.
   assembly and served at `{prefix}/ui/{file}` by `MapInteractiveReports`. `base`
   defaults to the prefix the script was loaded from (attribute overrides). Changing
   the `report` attribute re-initializes in place.
-- Modules: `ir.js` (element, state doc plumbing, toolbar/menus), `ir-api.js`
+- Modules: `ir.js` (element, toolbar/menus), `ir-state.js` (pure normalization,
+  serialization, and scoped-search expression construction), `ir-api.js`
   (fetch + problem+json), `ir-ui.js` (menu/dialog primitives), `ir-render.js`
   (chips, grid, pager), `ir-dialogs.js` (the Actions dialogs), `ir-admin.js`
   (admin element), `ir.css`.
-- **Feature surface**: scoped toolbar search (all text columns or one column → filter);
+- **Feature surface**: scoped toolbar search (all text columns or one typed column → expression filter);
   Actions menu (Columns shuttle, Filter, Sort, Control Break, Highlight, Aggregate,
   Compute with token-insert helpers, Group By, Pivot, Save/Save As/Delete/Reset,
   CSV download); column-header menus (sort/hide/break/filter); settings chips with
-  APEX-style enable/disable checkboxes; break groups with per-column subtotal rows and
+  APEX-style enable/disable checkboxes for expression rules; break groups with per-column subtotal rows and
   grand-total rows; row/cell highlights; groupBy/pivot rendering; saved-report select
   (Primary Report + Global/Private groups); `ignored[]` and problem+json surfaced as
   notices — validation problems render *inside* the originating dialog, which stays
   open (apply is optimistic: mutate, re-query, roll back on failure).
-- **Client-only state** (chip disabled flags, `_`-prefixed keys) is stripped at
-  serialization: the server, saved reports, and exports only ever see the canonical
-  state document.
+- **Enabled state:** computed, filter, and highlight checkboxes write their canonical
+  `enabled` property, which survives saving and export. Breaks and aggregates have no
+  enabled protocol state, so their chips edit or remove them without a false toggle.
+- Schema metadata advertises `stateVersion`, expression functions, and aggregate
+  functions by column type. Query results include the effective base+computed schema,
+  so clients do not duplicate language catalogs or guess computed types.
 - **Styling**: light DOM, every rule namespaced `.ir-*` under CSS custom properties
   (`--ir-accent`, …). `ir.css` auto-links once per document; a host can pre-link its
   own `<link data-ir-css>` to fully retheme. No Shadow DOM — hosts theme it; popups
@@ -570,15 +619,14 @@ APEX's Interactive Reports.
   against a real host policy, context params).
 - **M3 — Expressions** ✅ *(2026-08-05)*: computed-column grammar/AST/emitters with the
   ir_calc second wrap (computed columns filter/sort/aggregate/break uniformly);
-  highlights evaluated server-side with SQL-parity NULL semantics; `ignored[]` resilience
-  extended to highlight rules.
+  highlights evaluated server-side with SQL-parity NULL semantics.
 - **M4 — Views & export** ✅ *(2026-08-05)*: groupBy view (pushed down, group-count
   pagination), pivot-in-memory view (capped, implicit-count default), CSV export with
   truncation signaling — all three views export through the same pipeline.
 - **M5 — Persistence & proof:** ~~saved reports (private/public, per user)~~ *(done
   early — see §13, including administration/whoami)*; SQL Server + Oracle verification
   passes; hardening (timeouts, caps, logging discipline). *Prep complete 2026-08-05:
-  env-gated live-dialect battery (docs/TESTING.md), operator × dialect golden matrix,
+  env-gated live-dialect battery (docs/TESTING.md), condition × dialect golden matrix,
   SQL-safety corpus, Oracle BindByName fix, parser recursion guard, Debug-only SQL
   logging. Live battery verified green ×2 dialects 2026-08-05.*
 - **M6 — The real UI** ✅ *(2026-08-05)*: packaged APEX-style widget + saved-report
@@ -595,11 +643,12 @@ APEX's Interactive Reports.
   byte-identical by the golden suite; CASE proven end-to-end on SQLite and live
   against SQL Server + Oracle (battery green ×24, 2026-08-06).
 - **M8 — PostgreSQL** ✅ *(2026-08-06)*: fourth dialect end to end — compiler,
-  operator matrix (native `ILIKE` for case-insensitive matching), `EXTRACT` date
+  condition matrix, `EXTRACT` date
   parts, `ROUND` signature casts, native-boolean condition emission (the inverse of
   SQL Server's `= 1` lowering), quoted-identifier saved-report DDL, identifier-folding
-  absorbed by case-insensitive schema matching. Live battery green 41/41 across
-  SQL Server + Oracle + PostgreSQL.
+  absorbed by case-insensitive schema matching. Live battery green 53/53 across
+  SQL Server + Oracle + PostgreSQL after shared filter/highlight predicates and
+  highlight projections were added.
 
 ## Appendix: decision log
 
@@ -610,7 +659,7 @@ APEX's Interactive Reports.
 | Borrow host auth | Engine-owned API keys | Hosts (Umbraco et al.) already have real auth; a second mechanism would be weaker and clash. |
 | POST-primary protocol | GET + querystring state | State size; filter values leak into logs via GET; deep links return later as saved-state ids. |
 | Rows as JSON objects | Positional arrays | Page-granularity size difference is negligible; consumption ergonomics win. |
-| Highlights & pivot in C# | Push down | They don't change row selection; avoids the ugliest dialect SQL (PIVOT) and keeps JS dumb. |
+| Highlight predicates push down as private booleans; pivot stays in C# | Interpret highlight expressions in C# or use native PIVOT | Filters and highlights share one typed predicate implementation; private markers are removed before the response. Pivot still avoids the least-portable SQL surface. |
 | `net8.0` | `net10.0` | Umbraco 13 LTS floor; SDK 8 present; bump is cheap later. |
 | whoami off by default | always on | It's an information endpoint; enabling is a deliberate operator act (samples enable it). |
 | Admin match case-insensitive exact | case-sensitive | Operator-friendly for emails/usernames; GUID-style values don't collide under folding. |
@@ -628,8 +677,9 @@ APEX's Interactive Reports.
 | UI asset endpoint `AllowAnonymous` | inherit group auth | Assets are public package code (readable on any feed); an auth-gated script tag turns "session expired" into a blank region that can't even say "sign in". Data endpoints keep the full gate. |
 | Asset ETags hash content | assembly version tag | Version-tagged ETags 304 stale content across rebuilds of the same version (bitten in dev; would bite ops on patch releases). |
 | Light DOM + `.ir-*` prefix + CSS custom properties | Shadow DOM | Hosts want to theme the region, not fight encapsulation; prefix discipline is enough isolation and keeps the DOM inspectable. |
-| Chip disable-toggles are client-only state, stripped at serialization | protocol-level `disabled` flags | The engine's state document stays canonical (validation, saved reports, exports agree); a toggle is presentation-side convenience. |
-| Save persists only enabled items | persist disabled items too | Round-tripping disabled items would need protocol support; "what you see is what you saved" is predictable. |
+| Expression-rule `enabled` is canonical protocol state | strip disabled instructions | A saved computed column, filter, or highlight is either on or off; disabling does not delete the author's expression, label, or color choice. |
+| Compiled rule + typed effect plan | separate computed/filter/highlight expression pipelines | Parsing, binding, result contracts, and enabled behavior are one pipeline; definition, row-inclusion, and decoration effects still make query placement explicit. |
+| Cell styles apply after row styles | depend on rule order | Cell highlighting has explicit priority over the background/foreground inherited from a row highlight. |
 | Expression pipeline staged: untyped syntax → bind → emit | grow the single-pass parser | NULL, CASE result inference, and overloads need types the parser can't know mid-parse; positions survive to the error message; each stage is testable alone. |
 | Function registry (arity/rules/inference/emitters as data) | ExprFn enum + switches | Two switches per function was already drift-prone at 12 functions; a registry row is one place, and the registry doubles as the subset's documentation. |
 | Bool is internal to expressions; computed columns must yield values | allow boolean results | SQL Server has no scalar boolean; the error teaches the portable form (CASE WHEN … THEN 1 ELSE 0 END) instead of failing per-dialect. |
@@ -639,7 +689,6 @@ APEX's Interactive Reports.
 | No date literals in v1 expressions | text-vs-date comparison | Implicit text→date conversion is an NLS/format trap on Oracle; a typed DATE '…' literal is the clean extension point. |
 | Postgres ROUND emits signature casts | bind precision as int | `round(numeric, integer)` is the only two-arg ROUND Postgres has; casting both arguments in SQL keeps bindings uniform across dialects (goldens: 2 always binds as decimal). |
 | Date parts on ISO text convert at emission (Oracle TO_DATE, Postgres CAST) | dialect-aware binding rules | The portable subset's types stay dialect-free; EXTRACT's strictness is an emission detail. Rejecting text outright would break the SQLite date-as-text story the feature exists for. |
-| Guid filter values bind as Guid | string binding for Other kind | Postgres rejects `uuid = text` outright; "Other" is a family, not a type, so binding consults the discovered CLR type where it matters. Unparseable UUIDs die as precise validation errors, not provider errors. |
 | Dates use SQL comparison operators and BETWEEN | `BEFORE()`/`AFTER()`/`BETWEEN()` functions | No new vocabulary to learn and nothing to mistranslate: `<`/`>=`/BETWEEN already mean the right thing in SQL, and the binder's same-kind rule keeps them typed. `TO_DATE('…')` doubles as the date literal, superseding the planned `DATE '…'`. |
 | Date arithmetic is whole calendar days, integrality established at bind | intervals or fractional days | Whole days cover the reporting cases; "provably integral or rejected" beats each dialect truncating fractions differently and silently. |
 | NOW() is session-local (LOCALTIMESTAMP on Oracle) | UTC everywhere; Oracle SYSDATE | Stored DATE columns are wall time, so UTC would sit an offset away. SYSDATE looks idiomatic but follows the DB host's clock, not the session; LOCALTIMESTAMP honors the session-timezone contract. SQL Server and SQLite have no session timezone — there the server's clock is the only clock. |

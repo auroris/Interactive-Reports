@@ -1,9 +1,8 @@
-using System.Text.Json;
 using InteractiveReport.Core.Model;
 
 namespace InteractiveReport.Core.Tests;
 
-internal static class TestFixtures
+public static class TestFixtures
 {
     public static readonly IReadOnlyList<ColumnModel> OrdersSchema =
     [
@@ -31,10 +30,5 @@ internal static class TestFixtures
         ClrType = type,
     };
 
-    public static FilterRule Filter(string col, FilterOp op, object? value = null) => new()
-    {
-        Col = col,
-        Op = op,
-        Value = value is null ? null : JsonSerializer.SerializeToElement(value),
-    };
+    public static FilterRule Filter(string expression) => new() { Expr = expression };
 }

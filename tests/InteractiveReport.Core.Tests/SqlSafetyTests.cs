@@ -27,7 +27,7 @@ public class SqlSafetyTests
     {
         var (sql, bindings) = Compile(new ReportState
         {
-            Filters = [Filter("CUSTOMER", FilterOp.Eq, Hostile)],
+            Filters = [Filter($"CUSTOMER = {TextLiteral(Hostile)}")],
         });
 
         Assert.DoesNotContain("DROP", sql, StringComparison.OrdinalIgnoreCase);
@@ -48,7 +48,7 @@ public class SqlSafetyTests
     {
         var (sql, bindings) = Compile(new ReportState
         {
-            Filters = [Filter("STATUS", FilterOp.In, new[] { Hostile, "SHIPPED" })],
+            Filters = [Filter($"IN_LIST(STATUS, {TextLiteral(Hostile)}, 'SHIPPED')")],
         });
 
         Assert.DoesNotContain("DROP", sql, StringComparison.OrdinalIgnoreCase);
@@ -58,12 +58,16 @@ public class SqlSafetyTests
     [Fact]
     public void Hostile_column_names_never_reach_sql()
     {
-        // Identifiers are matched against the discovered schema; unknown ones are
-        // dropped into ignored[], so injected identifier text cannot be emitted.
+        // Expression identifiers are parsed, while structural column/sort names
+        // are matched against the discovered schema.
         var def = OrdersDefinition(ReportDialect.Sqlite);
+        Assert.Throws<ReportValidationException>(() => StateValidator.Validate(def, new ReportState
+        {
+            Filters = [new FilterRule { Expr = "AMOUNT\" OR 1=1 -- = 1" }],
+        }, OrdersSchema));
+
         var validated = StateValidator.Validate(def, new ReportState
         {
-            Filters = [Filter("AMOUNT\" OR 1=1 --", FilterOp.Eq, 1)],
             Columns = ["ORDER_ID", "CUSTOMER]; DROP TABLE ORDERS;--"],
             Sorts = [new SortRule { Col = "1; DELETE FROM ORDERS" }],
         }, OrdersSchema);
@@ -72,8 +76,7 @@ public class SqlSafetyTests
 
         Assert.DoesNotContain("DROP", sql, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("DELETE", sql, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("1=1", sql);
-        Assert.Equal(3, validated.Ignored.Count);
+        Assert.Equal(2, validated.Ignored.Count);
     }
 
     [Theory]
@@ -105,4 +108,7 @@ public class SqlSafetyTests
         Assert.Null(ast);
         Assert.Contains("nesting exceeds", error);
     }
+
+    private static string TextLiteral(string value)
+        => $"'{value.Replace("'", "''", StringComparison.Ordinal)}'";
 }

@@ -1,19 +1,20 @@
 <#
 .SYNOPSIS
-    Runs the live-dialect test battery against the SQL Server + Oracle test VM.
+    Runs the live-dialect test battery against the SQL Server, Oracle, and PostgreSQL test VM.
 .DESCRIPTION
-    Sets IR_TEST_SQLSERVER and IR_TEST_ORACLE for this process only, probes both
-    ports so a down VM fails fast with one clear message, then runs the
-    LiveDialectTests filter (see docs/TESTING.md).
+    Sets all three IR_TEST_* variables for this process only, probes their
+    ports so a down VM fails fast with one clear message, then runs the dedicated
+    live-test project (see docs/TESTING.md).
 
     The embedded credential targets a throwaway VM on the VirtualBox host-only
     network (192.168.56.x is unreachable from outside this machine).
 .PARAMETER Filter
-    dotnet test --filter expression. Defaults to the live battery.
+    Optional dotnet test --filter expression. Empty runs the full live battery,
+    including the PostgreSQL saved-report corpus.
 #>
 [CmdletBinding()]
 param(
-    [string] $Filter = 'FullyQualifiedName~LiveDialectTests'
+    [string] $Filter = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -38,5 +39,10 @@ foreach ($probe in @{ Name = 'SQL Server'; Port = 1433 }, @{ Name = 'Oracle'; Po
     Write-Host "$($probe.Name) reachable on port $($probe.Port)" -ForegroundColor Green
 }
 
-dotnet test (Join-Path $PSScriptRoot 'tests/InteractiveReport.Core.Tests') --filter $Filter -v normal
+$testProject = Join-Path $PSScriptRoot 'tests/InteractiveReport.Live.Tests'
+$testArguments = @('test', $testProject, '-v', 'normal')
+if (-not [string]::IsNullOrWhiteSpace($Filter)) {
+    $testArguments += @('--filter', $Filter)
+}
+dotnet @testArguments
 exit $LASTEXITCODE

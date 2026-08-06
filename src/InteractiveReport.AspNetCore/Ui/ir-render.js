@@ -33,25 +33,6 @@ export const FN_LABELS = {
 };
 const FN_ORDER = ["sum", "avg", "min", "max", "count", "countDistinct"];
 
-const OP_TEXT = {
-    eq: v => `= ${v}`, ne: v => `≠ ${v}`,
-    lt: v => `< ${v}`, le: v => `≤ ${v}`, gt: v => `> ${v}`, ge: v => `≥ ${v}`,
-    contains: v => `contains '${v}'`, ncontains: v => `doesn't contain '${v}'`,
-    starts: v => `starts with '${v}'`, ends: v => `ends with '${v}'`,
-    blank: () => "is blank", nblank: () => "is not blank",
-};
-
-export function filterText(w, rule) {
-    const type = w.typeOf(rule.col);
-    const fmt = v => formatValue(v, type);
-    const v = rule.value;
-    if (rule.op === "between" && Array.isArray(v)) return `between ${fmt(v[0])} and ${fmt(v[1])}`;
-    if ((rule.op === "in" || rule.op === "nin") && Array.isArray(v))
-        return `${rule.op === "in" ? "in" : "not in"} (${v.map(fmt).join(", ")})`;
-    const text = OP_TEXT[rule.op] ?? (x => `${rule.op} ${x}`);
-    return text(Array.isArray(v) ? v.map(fmt).join(", ") : fmt(v));
-}
-
 // --- settings chips ----------------------------------------------------------
 
 function chip({ w, kind, index, text, colLabel, off, toggleable = true, removable = true, swatch }) {
@@ -88,19 +69,19 @@ export function renderChips(w, container) {
         chips.push(chip({ w, kind: "search", index: 0, toggleable: false, colLabel: "Search", text: `'${d.search}'` }));
     }
     (d.filters ?? []).forEach((f, i) =>
-        chips.push(chip({ w, kind: "filter", index: i, off: f._off, colLabel: w.labelOf(f.col), text: filterText(w, f) })));
+        chips.push(chip({ w, kind: "filter", index: i, off: f.enabled === false, colLabel: "Filter", text: f.expr })));
     (d.breaks ?? []).forEach((b, i) =>
-        chips.push(chip({ w, kind: "break", index: i, off: w.isBreakOff(b), colLabel: "Break", text: w.labelOf(b) })));
+        chips.push(chip({ w, kind: "break", index: i, toggleable: false, colLabel: "Break", text: w.labelOf(b) })));
     (d.aggregates ?? []).forEach((a, i) =>
-        chips.push(chip({ w, kind: "aggregate", index: i, off: a._off, colLabel: "Σ", text: `${FN_LABELS[a.fn] ?? a.fn} of ${w.labelOf(a.col)}` })));
+        chips.push(chip({ w, kind: "aggregate", index: i, toggleable: false, colLabel: "Σ", text: `${FN_LABELS[a.fn] ?? a.fn} of ${w.labelOf(a.col)}` })));
     (d.computed ?? []).forEach((c, i) =>
-        chips.push(chip({ w, kind: "computed", index: i, off: c._off, colLabel: "ƒ", text: c.label ?? c.id })));
+        chips.push(chip({ w, kind: "computed", index: i, off: c.enabled === false, colLabel: "ƒ", text: c.label ?? c.id })));
     (d.highlights ?? []).forEach((h, i) =>
         chips.push(chip({
-            w, kind: "highlight", index: i, off: h._off,
+            w, kind: "highlight", index: i, off: h.enabled === false,
             swatch: h.style?.bg ?? "#fff3a0",
-            colLabel: h.condition ? w.labelOf(h.condition.col) : "Highlight",
-            text: (h.condition ? filterText(w, h.condition) : "") + (h.scope === "cell" ? " (cell)" : ""),
+            colLabel: "Highlight",
+            text: h.expr + (h.scope === "cell" ? ` (${w.labelOf(h.col)} cell)` : " (row)"),
         })));
     if (d.view?.mode === "groupBy") {
         chips.push(chip({
@@ -148,7 +129,7 @@ export function renderGrid(w, table) {
     }
 
     // Body: data rows with break groups, per-group aggregate rows, highlights.
-    const breaks = mode === "grid" ? (w.doc.breaks ?? []).filter(b => !w.isBreakOff(b)) : [];
+    const breaks = mode === "grid" ? (w.doc.breaks ?? []) : [];
     const keyOf = source => breaks.map(b => String(source[b] ?? "")).join("");
     const totalsByKey = new Map((result.breakTotals ?? []).map(bt => [keyOf(bt.key), bt]));
 
@@ -213,7 +194,9 @@ export function renderGrid(w, table) {
             const cls = [col.type === "number" ? "ir-num" : "", col.type === "date" ? "ir-date" : ""].join(" ").trim();
             tr.append(el("td", { class: cls || undefined }, formatValue(row[col.name], col.type, decimalCols.has(col.name))));
         }
-        for (const hit of hitsByRow.get(r) ?? []) {
+        const rowHits = (hitsByRow.get(r) ?? []).filter(hit => !hit.col);
+        const cellHits = (hitsByRow.get(r) ?? []).filter(hit => !!hit.col);
+        for (const hit of [...rowHits, ...cellHits]) {
             const style = styleById.get(hit.id) ?? {};
             if (!hit.col) {
                 if (style.bg) tr.style.background = style.bg;

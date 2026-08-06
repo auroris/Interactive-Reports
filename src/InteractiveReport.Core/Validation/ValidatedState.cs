@@ -1,4 +1,5 @@
 using InteractiveReport.Core.Model;
+using InteractiveReport.Core.Schema;
 
 namespace InteractiveReport.Core.Validation;
 
@@ -8,13 +9,11 @@ namespace InteractiveReport.Core.Validation;
 /// </summary>
 public sealed class ValidatedState
 {
-    public required IReadOnlyList<ValidFilter> Filters { get; init; }
+    public required ReportSchema Schema { get; init; }
+    public required ExpressionRulePlan Rules { get; init; }
     public string? Search { get; init; }
     public required IReadOnlyList<ValidSort> Sorts { get; init; }
     public required IReadOnlyList<ColumnModel> SelectColumns { get; init; }
-    /// <summary>Computed columns; after the ir_calc wrap they are ordinary columns everywhere downstream.</summary>
-    public required IReadOnlyList<ValidComputed> Computed { get; init; }
-    public required IReadOnlyList<ValidHighlight> Highlights { get; init; }
     public required IReadOnlyList<ValidAggregate> Aggregates { get; init; }
     /// <summary>Control-break columns; always members of SelectColumns so renderers can group.</summary>
     public required IReadOnlyList<ColumnModel> Breaks { get; init; }
@@ -46,20 +45,44 @@ public enum ViewMode
     Pivot,
 }
 
-public sealed record ValidFilter(
-    ColumnModel Column,
-    FilterOp Op,
-    object? Value = null,
-    object? Value2 = null,
-    IReadOnlyList<object>? Values = null);
-
 public sealed record ValidSort(ColumnModel Column, SortDir Dir);
 
 public sealed record ValidAggregate(ColumnModel Column, AggregateFn Fn);
 
-public sealed record ValidComputed(ColumnModel Column, Expressions.ExprNode Ast);
+/// <summary>A schema-bound expression shared by every expression-backed rule.</summary>
+public sealed record BoundExpression(Expressions.ExprNode Ast)
+{
+    public ColumnKind Kind => Ast.Kind;
+}
 
-public sealed record ValidHighlight(string Id, HighlightScope Scope, ColumnModel? Col, ValidFilter Condition);
+/// <summary>
+/// One compiled expression plus the effect that consumes its value. The effect type
+/// preserves domain metadata without splitting parsing and binding into separate paths.
+/// </summary>
+public sealed record CompiledRule<TEffect>(BoundExpression Expression, TEffect Effect)
+    where TEffect : RuleEffect;
+
+public abstract record RuleEffect;
+
+public sealed record DefineColumnEffect(ColumnModel Column) : RuleEffect;
+
+public sealed record IncludeRowEffect : RuleEffect;
+
+public sealed record HighlightEffect(
+    string Id,
+    HighlightScope Scope,
+    ColumnModel? Column,
+    string ProjectionName) : RuleEffect;
+
+/// <summary>
+/// Explicit execution phases for the unified expression-rule pipeline. Definitions
+/// extend the schema, row predicates shape the dataset, and decorations annotate the
+/// final page.
+/// </summary>
+public sealed record ExpressionRulePlan(
+    IReadOnlyList<CompiledRule<DefineColumnEffect>> Definitions,
+    IReadOnlyList<CompiledRule<IncludeRowEffect>> RowPredicates,
+    IReadOnlyList<CompiledRule<HighlightEffect>> Decorations);
 
 public enum HighlightScope
 {

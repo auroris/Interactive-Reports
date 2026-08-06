@@ -1,8 +1,11 @@
 namespace InteractiveReport.Core.Model;
 
-/// <summary>Response shape for a query. Highlights arrive in M3.</summary>
+/// <summary>Response shape for a report query.</summary>
 public sealed class ReportResult
 {
+    /// <summary>Every base and enabled computed column available to subsequent UI actions.</summary>
+    public required IReadOnlyList<ColumnInfo> AvailableColumns { get; init; }
+
     public required IReadOnlyList<ColumnInfo> Columns { get; init; }
 
     /// <summary>Rows as objects keyed by column name — page-granularity size cost is negligible, ergonomics win.</summary>

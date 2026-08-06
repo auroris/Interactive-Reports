@@ -30,6 +30,12 @@ public static class QueryComposer
         var page = core.Clone()
             .Select(state.SelectColumns.Select(c => c.Name).ToArray());
 
+        // Highlights are predicates over the same filtered row source. Project
+        // their truth values as private markers so every expression function and
+        // dialect rule is evaluated by the database, not reimplemented in C#.
+        foreach (var rule in state.Rules.Decorations)
+            ExpressionRuleSqlApplicator.ApplyDecoration(page, rule, def.Dialect);
+
         foreach (var sort in EffectiveSorts(state))
         {
             if (sort.Dir == SortDir.Asc) page.OrderBy(sort.Column.Name);
@@ -52,7 +58,7 @@ public static class QueryComposer
         var inner = new Query().FromRaw($"({def.Sql}) {BaseAlias}");
 
         Query core;
-        if (state.Computed.Count > 0)
+        if (state.Rules.Definitions.Count > 0)
         {
             // Second wrap: no dialect reliably allows referencing a SELECT alias in
             // WHERE, so computed columns become real columns of ir_calc — after this,
@@ -61,11 +67,8 @@ public static class QueryComposer
             // Bare, matching the unquoted alias above: a quoted "ir_base" would not
             // resolve against the case-folded IR_BASE on Oracle (ORA-00904).
             inner.SelectRaw($"{BaseAlias}.*");
-            foreach (var comp in state.Computed)
-            {
-                var (sql, bindings) = Expressions.ExprEmitter.Emit(comp.Ast, def.Dialect);
-                inner.SelectRaw($"{sql} AS [{comp.Column.Name}]", bindings.ToArray());
-            }
+            foreach (var rule in state.Rules.Definitions)
+                ExpressionRuleSqlApplicator.ApplyDefinition(inner, rule, def.Dialect);
             core = new Query().From(inner.As(CalcAlias));
         }
         else
@@ -73,8 +76,8 @@ public static class QueryComposer
             core = inner;
         }
 
-        foreach (var filter in state.Filters)
-            ApplyFilter(core, filter, def.Dialect);
+        foreach (var rule in state.Rules.RowPredicates)
+            ExpressionRuleSqlApplicator.ApplyRowPredicate(core, rule, def.Dialect);
 
         if (state.Search is not null)
             ApplySearch(core, state);
@@ -201,56 +204,10 @@ public static class QueryComposer
     }
 
     private static Query BuildBreakTotals(Query core, ValidatedState state, ReportDialect dialect)
+    {
         // Group ordering mirrors the page's break ordering so renderers walk both in step.
-        => BuildGrouped(core, state.Breaks, state.Aggregates, dialect,
+        return BuildGrouped(core, state.Breaks, state.Aggregates, dialect,
             EffectiveSorts(state).Take(state.Breaks.Count));
-
-    private static void ApplyFilter(Query q, ValidFilter f, ReportDialect dialect)
-    {
-        var col = f.Column.Name;
-        switch (f.Op)
-        {
-            case FilterOp.Eq: q.Where(col, "=", f.Value); break;
-            case FilterOp.Ne: q.Where(col, "<>", f.Value); break;
-            case FilterOp.Lt: q.Where(col, "<", f.Value); break;
-            case FilterOp.Le: q.Where(col, "<=", f.Value); break;
-            case FilterOp.Gt: q.Where(col, ">", f.Value); break;
-            case FilterOp.Ge: q.Where(col, ">=", f.Value); break;
-
-            case FilterOp.Between: q.WhereBetween(col, f.Value, f.Value2); break;
-
-            case FilterOp.In: q.WhereIn(col, f.Values!); break;
-            case FilterOp.Nin: q.WhereNotIn(col, f.Values!); break;
-
-            // Case-insensitive by operator definition; SqlKata lowers both sides.
-            case FilterOp.Contains: q.WhereContains(col, f.Value!, caseSensitive: false); break;
-            case FilterOp.Ncontains: q.WhereNotContains(col, f.Value!, caseSensitive: false); break;
-            case FilterOp.Starts: q.WhereStarts(col, f.Value!, caseSensitive: false); break;
-            case FilterOp.Ends: q.WhereEnds(col, f.Value!, caseSensitive: false); break;
-
-            case FilterOp.Blank: ApplyBlank(q, f, dialect); break;
-            case FilterOp.Nblank: ApplyNotBlank(q, f, dialect); break;
-
-            default: throw new ArgumentOutOfRangeException(nameof(f), f.Op, "unreachable: validator admits only known operators");
-        }
-    }
-
-    private static void ApplyBlank(Query q, ValidFilter f, ReportDialect dialect)
-    {
-        var col = f.Column.Name;
-        if (f.Column.Kind == ColumnKind.Text && !DialectSupport.EmptyStringIsNull(dialect))
-            q.Where(sub => sub.WhereNull(col).OrWhere(col, "=", ""));
-        else
-            q.WhereNull(col);
-    }
-
-    private static void ApplyNotBlank(Query q, ValidFilter f, ReportDialect dialect)
-    {
-        var col = f.Column.Name;
-        if (f.Column.Kind == ColumnKind.Text && !DialectSupport.EmptyStringIsNull(dialect))
-            q.Where(sub => sub.WhereNotNull(col).Where(col, "<>", ""));
-        else
-            q.WhereNotNull(col);
     }
 
     private static void ApplySearch(Query q, ValidatedState state)

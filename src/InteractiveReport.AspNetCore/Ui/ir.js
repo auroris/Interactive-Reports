@@ -2,9 +2,8 @@
 //
 // The packaged Interactive Report widget: an APEX-style consumer of the report
 // protocol. The report state document is the single source of truth; the widget
-// builds it, POSTs it, and renders the response. Client-only annotations
-// (underscore-prefixed keys, disabled chips) are stripped before anything is
-// sent — the server only ever sees the canonical state document.
+// builds it, POSTs it, and renders the response. Expression-rule enabled state
+// is canonical; underscore-prefixed working-copy annotations are stripped.
 //
 // Attributes:
 //   report — report definition name (required)
@@ -13,6 +12,7 @@
 import { api, download, saveBlob } from "./ir-api.js";
 import { el, icon, banner, ensureCss, popupMenu, confirmDialog } from "./ir-ui.js";
 import { renderChips, renderGrid, renderPager } from "./ir-render.js";
+import { normalizeReportState, scopedSearchExpression, serializeReportState } from "./ir-state.js";
 import {
     columnsDialog, filterDialog, sortDialog, breakDialog, aggregateDialog,
     computeDialog, highlightDialog, groupByDialog, pivotDialog, saveDialog,
@@ -20,28 +20,6 @@ import {
 
 // …/api/reports/ui/ir.js → …/api/reports
 const BASE_DEFAULT = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
-
-const OPS_BY_TYPE = {
-    text: ["contains", "ncontains", "starts", "ends", "eq", "ne", "in", "nin", "blank", "nblank"],
-    number: ["eq", "ne", "lt", "le", "gt", "ge", "between", "in", "nin", "blank", "nblank"],
-    date: ["eq", "ne", "lt", "le", "gt", "ge", "between", "blank", "nblank"],
-    bool: ["eq", "ne", "blank", "nblank"],
-    other: ["eq", "ne", "blank", "nblank"],
-};
-const FNS_BY_TYPE = {
-    number: ["sum", "avg", "min", "max", "count", "countDistinct"],
-    text: ["min", "max", "count", "countDistinct"],
-    date: ["min", "max", "count", "countDistinct"],
-    bool: ["count", "countDistinct"],
-    other: ["count", "countDistinct"],
-};
-// Client-side guess at a computed column's type (drives which operators the filter
-// dialogs offer); the server's binder is the real authority. "THEN '…'" catches
-// CASE expressions that yield text. Text wins over date so TO_STRING(NOW()) lands
-// text; CASE … THEN 1 over date conditions guesses date — a wrong but harmless
-// guess, like the ones the text heuristic already makes.
-const TEXTY_EXPR = /UPPER|LOWER|TRIM|CONCAT|SUBSTR|TO_STRING|\|\||THEN\s*'/i;
-const DATEY_EXPR = /NOW\s*\(|TO_DATE|DATE_TRUNC/i;
 
 class InteractiveReportElement extends HTMLElement {
     static observedAttributes = ["report", "base"];
@@ -170,65 +148,36 @@ class InteractiveReportElement extends HTMLElement {
     // --- schema lookups ------------------------------------------------------
 
     pickable() {
-        // The last query result carries the binder's real type for each computed
-        // column; the regex guess only covers columns that haven't run yet (the
-        // guess cannot see that CASE WHEN date-condition THEN 1 yields a number).
-        const served = new Map((this.lastResult?.columns ?? [])
-            .filter(c => c.computed).map(c => [c.name, c.type]));
-        const computed = (this.doc?.computed ?? []).map(c => ({
-            name: c.id,
-            label: c.label ?? c.id,
-            type: served.get(c.id)
-                ?? (TEXTY_EXPR.test(c.expr ?? "") ? "text"
-                    : DATEY_EXPR.test(c.expr ?? "") ? "date" : "number"),
-            computed: true,
-        }));
-        return [...(this.schema?.columns ?? []), ...computed];
+        return this.lastResult?.availableColumns ?? this.schema?.columns ?? [];
     }
 
     typeOf(name) { return this.pickable().find(c => c.name === name)?.type ?? "other"; }
     labelOf(name) { return this.pickable().find(c => c.name === name)?.label ?? name; }
-    opsFor(type) { return OPS_BY_TYPE[type] ?? OPS_BY_TYPE.other; }
-    fnsFor(type) { return FNS_BY_TYPE[type] ?? FNS_BY_TYPE.other; }
+    fnsFor(type) {
+        const catalog = this.schema?.capabilities?.aggregateFunctions ?? {};
+        return catalog[type] ?? catalog.other ?? [];
+    }
+
+    expressionFunctions() { return this.schema?.capabilities?.expressionFunctions ?? []; }
 
     visibleColumnNames() {
         if (this.doc?.columns?.length) return [...this.doc.columns];
         return this.pickable().map(c => c.name);
     }
 
-    isBreakOff(name) { return (this.doc?._offBreaks ?? []).includes(name); }
-
     // --- state doc plumbing --------------------------------------------------
 
     normalize(raw) {
-        const d = raw ? structuredClone(raw) : {};
-        d.filters ??= [];
-        d.sorts ??= [];
-        d.page = { index: 1, size: d.page?.size ?? this.schema?.limits?.defaultPageSize ?? 50 };
-        return d;
+        return normalizeReportState(
+            raw,
+            this.schema?.limits?.defaultPageSize ?? 50,
+            this.schema?.defaultState);
     }
 
-    /// The canonical state document: client-only keys (_*) and disabled items removed.
+    /// Canonical state: explicit empty values survive so they can clear report defaults;
+    /// undefined values and underscore-prefixed working data do not cross the protocol.
     serialize() {
-        const walk = v => {
-            if (Array.isArray(v)) return v.filter(x => !(x && typeof x === "object" && x._off)).map(walk);
-            if (v && typeof v === "object") {
-                const out = {};
-                for (const [k, value] of Object.entries(v)) {
-                    if (k.startsWith("_") || value === undefined) continue;
-                    out[k] = walk(value);
-                }
-                return out;
-            }
-            return v;
-        };
-        const doc = walk(this.doc);
-        if (doc.breaks) doc.breaks = doc.breaks.filter(b => !this.isBreakOff(b));
-        for (const k of ["filters", "sorts", "breaks", "aggregates", "computed", "highlights", "columns"])
-            if (Array.isArray(doc[k]) && doc[k].length === 0) delete doc[k];
-        if (doc.search === "") delete doc.search;
-        doc.v = 1;
-        return doc;
+        return serializeReportState(this.doc, this.schema?.stateVersion ?? 2);
     }
 
     async runQuery(opts = {}) {
@@ -308,29 +257,25 @@ class InteractiveReportElement extends HTMLElement {
     doSearch() {
         const raw = this.els.search.value.trim();
         if (!this.searchScopeCol) {
-            this.applyOrBanner(d => { d.search = raw || undefined; });
+            this.applyOrBanner(d => { d.search = raw; });
             return;
         }
         if (!raw) return;
         const col = this.searchScopeCol;
         const type = this.typeOf(col);
-        let value = raw;
-        if (type === "number") {
-            const n = Number(raw);
-            if (Number.isNaN(n)) { this.showError(new Error(`'${raw}' is not a number`)); return; }
-            value = n;
-        }
-        const op = type === "text" ? "contains" : "eq";
+        let expr;
+        try { expr = scopedSearchExpression(col, type, raw); }
+        catch (error) { this.showError(error); return; }
         this.els.search.value = "";
-        this.applyOrBanner(d => { (d.filters ??= []).push({ col, op, value }); });
+        this.applyOrBanner(d => { (d.filters ??= []).push({ enabled: true, expr }); });
     }
 
     openSearchScopeMenu(anchor) {
-        const textCols = this.pickable().filter(c => c.type === "text");
+        const searchableColumns = this.pickable().filter(c => ["text", "number", "date", "bool"].includes(c.type));
         popupMenu(anchor, [
             { label: "All Text Columns", checked: !this.searchScopeCol, onPick: () => this.setSearchScope(null) },
             "-",
-            ...textCols.map(c => ({ label: c.label, checked: this.searchScopeCol === c.name, onPick: () => this.setSearchScope(c.name) })),
+            ...searchableColumns.map(c => ({ label: c.label, checked: this.searchScopeCol === c.name, onPick: () => this.setSearchScope(c.name) })),
         ]);
     }
 
@@ -351,7 +296,7 @@ class InteractiveReportElement extends HTMLElement {
     switchView(mode) {
         const current = this.doc.view?.mode ?? "grid";
         if (mode === current) return;
-        if (mode === "grid") { this.applyOrBanner(d => { d.view = undefined; }); return; }
+        if (mode === "grid") { this.applyOrBanner(d => { d.view = { mode: "grid" }; }); return; }
         const memory = this.viewMemory[mode];
         if (memory) this.applyOrBanner(d => { d.view = memory; });
         else mode === "groupBy" ? groupByDialog(this) : pivotDialog(this);
@@ -408,7 +353,6 @@ class InteractiveReportElement extends HTMLElement {
                 checked: breaking,
                 onPick: () => this.applyOrBanner(d => {
                     d.breaks = breaking ? (d.breaks ?? []).filter(b => b !== col) : [...(d.breaks ?? []), col];
-                    d._offBreaks = (d._offBreaks ?? []).filter(b => d.breaks.includes(b));
                 }),
             },
             "-",
@@ -424,28 +368,21 @@ class InteractiveReportElement extends HTMLElement {
 
     chipToggle(kind, index, on) {
         this.applyOrBanner(d => {
-            if (kind === "break") {
-                const name = (d.breaks ?? [])[index];
-                d._offBreaks = (d._offBreaks ?? []).filter(b => b !== name);
-                if (!on) (d._offBreaks ??= []).push(name);
-            } else {
-                const item = this.chipArray(d, kind)?.[index];
-                if (item) on ? delete item._off : item._off = true;
-            }
+            if (kind !== "filter" && kind !== "computed" && kind !== "highlight") return;
+            const item = this.chipArray(d, kind)?.[index];
+            if (item) item.enabled = on;
         });
     }
 
     chipRemove(kind, index) {
         this.applyOrBanner(d => {
             switch (kind) {
-                case "search": d.search = undefined; this.els.search.value = ""; break;
+                case "search": d.search = ""; this.els.search.value = ""; break;
                 case "break": {
-                    const name = (d.breaks ?? [])[index];
                     d.breaks = (d.breaks ?? []).filter((_, i) => i !== index);
-                    d._offBreaks = (d._offBreaks ?? []).filter(b => b !== name);
                     break;
                 }
-                case "view": d.view = undefined; break;
+                case "view": d.view = { mode: "grid" }; break;
                 default: this.chipArray(d, kind)?.splice(index, 1);
             }
         });

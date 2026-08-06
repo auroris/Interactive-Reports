@@ -47,7 +47,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     {
         var result = await _executor.Query(Definition, new ReportState
         {
-            Filters = [Filter("STATUS", FilterOp.Eq, "SHIPPED")],
+            Filters = [Filter("STATUS = 'SHIPPED'")],
             Sorts = [new SortRule { Col = "AMOUNT", Dir = SortDir.Desc }],
             Page = new PageRequest { Index = 1, Size = 3 },
         }, NoParams);
@@ -63,7 +63,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     {
         var state = new ReportState
         {
-            Filters = [Filter("STATUS", FilterOp.Eq, "SHIPPED")],
+            Filters = [Filter("STATUS = 'SHIPPED'")],
             Sorts = [new SortRule { Col = "AMOUNT", Dir = SortDir.Desc }],
             Page = new PageRequest { Index = 2, Size = 3 },
         };
@@ -89,22 +89,22 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     {
         var result = await _executor.Query(Definition, new ReportState
         {
-            Filters = [Filter("NOTES", FilterOp.Blank)],
+            Filters = [Filter("NOTES IS NULL OR NOTES = ''")],
         }, NoParams);
 
         Assert.Equal(4, result.TotalRows);                       // 3 NULL + 1 ''
     }
 
     [Fact]
-    public async Task Unknown_column_in_saved_state_degrades_to_ignored()
+    public async Task Disabled_condition_with_removed_column_remains_loadable()
     {
         var result = await _executor.Query(Definition, new ReportState
         {
-            Filters = [Filter("REMOVED_COLUMN", FilterOp.Eq, "x")],
+            Filters = [new FilterRule { Enabled = false, Expr = "REMOVED_COLUMN = 'x'" }],
         }, NoParams);
 
-        Assert.Equal(10, result.TotalRows);                      // filter dropped, all rows
-        Assert.Contains(result.Ignored, i => i.Kind == "filter" && i.Detail.Contains("REMOVED_COLUMN"));
+        Assert.Equal(10, result.TotalRows);
+        Assert.Empty(result.Ignored);
     }
 
     [Fact]
@@ -114,8 +114,8 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         {
             Filters =
             [
-                Filter("AMOUNT", FilterOp.Between, new[] { 1000, 8000 }),
-                Filter("STATUS", FilterOp.In, new[] { "SHIPPED", "PENDING" }),
+                Filter("AMOUNT BETWEEN 1000 AND 8000"),
+                Filter("IN_LIST(STATUS, 'SHIPPED', 'PENDING')"),
             ],
         }, NoParams);
 
@@ -128,7 +128,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     {
         var result = await _executor.Query(Definition, new ReportState
         {
-            Filters = [Filter("STATUS", FilterOp.Eq, "SHIPPED")],
+            Filters = [Filter("STATUS = 'SHIPPED'")],
             Page = new PageRequest { Index = 1, Size = 2 },
             Aggregates =
             [
@@ -199,7 +199,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     {
         var result = await _executor.Query(Definition, new ReportState
         {
-            Filters = [Filter("STATUS", FilterOp.Eq, "NO_SUCH_STATUS")],
+            Filters = [Filter("STATUS = 'NO_SUCH_STATUS'")],
             Aggregates = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum }],
         }, NoParams);
 
@@ -214,7 +214,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         {
             Computed = [new ComputedColumn { Id = "c1", Label = "Double", Expr = "ROUND(AMOUNT * 2, 0)" }],
             Columns = ["CUSTOMER", "c1"],
-            Filters = [Filter("c1", FilterOp.Ge, 10000)],
+            Filters = [Filter("c1 >= 10000")],
             Sorts = [new SortRule { Col = "c1", Dir = SortDir.Desc }],
         }, NoParams);
 
@@ -222,6 +222,9 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         Assert.Equal(5, result.TotalRows);
         Assert.Equal(["CUSTOMER", "c1"], result.Columns.Select(c => c.Name));
         Assert.True(result.Columns.Single(c => c.Name == "c1").Computed);
+        var availableComputed = result.AvailableColumns.Single(c => c.Name == "c1");
+        Assert.True(availableComputed.Computed);
+        Assert.Equal("number", availableComputed.Type);
         Assert.Equal(24000m, Convert.ToDecimal(result.Rows[0]["c1"]));
         Assert.Equal("Stark Ind", result.Rows[0]["CUSTOMER"]);
     }
@@ -244,7 +247,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         var result = await _executor.Query(Definition, new ReportState
         {
             Computed = [new ComputedColumn { Id = "c1", Expr = "UPPER(CUSTOMER) || '!'" }],
-            Filters = [Filter("CUSTOMER", FilterOp.Eq, "Globex")],
+            Filters = [Filter("CUSTOMER = 'Globex'")],
         }, NoParams);
 
         Assert.Equal("GLOBEX!", Assert.Single(result.Rows)["c1"]);
@@ -262,7 +265,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                 Expr = "CASE WHEN AMOUNT >= 6000 THEN 'BIG' WHEN AMOUNT >= 2000 THEN 'MID' ELSE 'SMALL' END",
             }],
             Columns = ["CUSTOMER", "AMOUNT", "c1"],
-            Filters = [Filter("c1", FilterOp.Eq, "BIG")],
+            Filters = [Filter("c1 = 'BIG'")],
             Sorts = [new SortRule { Col = "AMOUNT", Dir = SortDir.Desc }],
         }, NoParams);
 
@@ -371,7 +374,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         var result = await _executor.Query(DateDefinition, new ReportState
         {
             Computed = [new ComputedColumn { Id = "c1", Expr = "TO_STRING(TO_DATE(ORDER_DATE), 'MM/DD/YYYY')" }],
-            Filters = [Filter("CUSTOMER", FilterOp.Eq, "Globex")],
+            Filters = [Filter("CUSTOMER = 'Globex'")],
         }, NoParams);
 
         Assert.Equal("07/21/2025", Assert.Single(result.Rows)["c1"]);
@@ -383,7 +386,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         var result = await _executor.Query(DateDefinition, new ReportState
         {
             Computed = [new ComputedColumn { Id = "c1", Expr = "TO_STRING(TO_DATE(ORDER_DATE) + 10)" }],
-            Filters = [Filter("CUSTOMER", FilterOp.Eq, "Tyrell Corp")],
+            Filters = [Filter("CUSTOMER = 'Tyrell Corp'")],
         }, NoParams);
 
         // 2026-02-19 + 10 crosses the February month end.
@@ -429,7 +432,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                 Id = "c1",
                 Expr = "CASE STATUS WHEN 'SHIPPED' THEN 'done' WHEN 'CANCELLED' THEN 'void' ELSE 'open' END",
             }],
-            Filters = [Filter("CUSTOMER", FilterOp.Eq, "Tyrell Corp")],
+            Filters = [Filter("CUSTOMER = 'Tyrell Corp'")],
         }, NoParams);
 
         Assert.Equal("void", Assert.Single(result.Rows)["c1"]);
@@ -444,9 +447,9 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
             Page = new PageRequest { Index = 1, Size = 10 },
             Highlights =
             [
-                new HighlightRule { Id = "big", Scope = "row", Condition = Filter("AMOUNT", FilterOp.Gt, 5000) },
-                new HighlightRule { Id = "acme", Scope = "cell", Col = "CUSTOMER", Condition = Filter("CUSTOMER", FilterOp.Contains, "ACME") },
-                new HighlightRule { Id = "noNotes", Scope = "row", Condition = Filter("NOTES", FilterOp.Blank) },
+                new HighlightRule { Id = "big", Scope = "row", Expr = "AMOUNT > 5000", Style = new HighlightStyle { Bg = "#fee2e2" } },
+                new HighlightRule { Id = "acme", Scope = "cell", Col = "CUSTOMER", Expr = "CONTAINS(CUSTOMER, 'ACME')", Style = new HighlightStyle { Bg = "#fef3c7" } },
+                new HighlightRule { Id = "noNotes", Scope = "row", Expr = "NOTES IS NULL OR NOTES = ''", Style = new HighlightStyle { Bg = "#e0f2fe" } },
             ],
         }, NoParams);
 
@@ -459,6 +462,41 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
 
         // NOTES blank = 3 NULLs + 1 empty string: Globex(7500)→2, Initech(5000)→4, Hooli(1500)→7, Umbrella(800)→8
         Assert.Equal([2, 4, 7, 8], result.Highlights.Where(h => h.Id == "noNotes").Select(h => h.Row));
+        Assert.Equal(["big", "acme"], result.Highlights.Where(h => h.Row == 1).Select(h => h.Id));
+        Assert.All(result.Rows, row =>
+            Assert.DoesNotContain(row.Keys, key => key.StartsWith("__ir_highlight_", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [Fact]
+    public async Task Full_expression_conditions_drive_filters_and_highlights()
+    {
+        const string condition =
+            "ROUND(AMOUNT, 0) >= 5000 AND "
+            + "DATE_TRUNC('YEAR', TO_DATE(ORDER_DATE)) = TO_DATE('2026-01-01')";
+        var definition = Definition;
+        definition.Name = "orders-date-conditions";
+        definition.Sql = "SELECT ORDER_ID, CUSTOMER, STATUS, AMOUNT, NOTES, ORDER_DATE FROM ORDERS";
+
+        var filtered = await _executor.Query(definition, new ReportState
+        {
+            Filters = [new FilterRule { Expr = condition }],
+        }, NoParams);
+        Assert.Equal(2, filtered.TotalRows); // Stark and Tyrell
+
+        var highlighted = await _executor.Query(definition, new ReportState
+        {
+            Sorts = [new SortRule { Col = "AMOUNT", Dir = SortDir.Desc }],
+            Highlights =
+            [
+                new HighlightRule
+                {
+                    Id = "full", Scope = "row", Expr = condition,
+                    Style = new HighlightStyle { Bg = "#fee2e2" },
+                },
+            ],
+        }, NoParams);
+
+        Assert.Equal([0, 3], highlighted.Highlights.Select(hit => hit.Row));
     }
 
     [Fact]
@@ -590,7 +628,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
             Sorts = [new SortRule { Col = "AMOUNT", Dir = SortDir.Desc }],
             Highlights =
             [
-                new HighlightRule { Id = "h1", Scope = "cell", Col = "c1", Condition = Filter("c1", FilterOp.Gt, 20000) },
+                new HighlightRule { Id = "h1", Scope = "cell", Col = "c1", Expr = "c1 > 20000", Style = new HighlightStyle { Bg = "#fef3c7" } },
             ],
         }, NoParams);
 

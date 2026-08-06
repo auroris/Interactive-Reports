@@ -7,6 +7,8 @@
     <Project Path="src/InteractiveReport.Core/InteractiveReport.Core.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/InteractiveReport.AspNetCore.Tests/InteractiveReport.AspNetCore.Tests.csproj" />
     <Project Path="tests/InteractiveReport.Core.Tests/InteractiveReport.Core.Tests.csproj" />
+    <Project Path="tests/InteractiveReport.Live.Tests/InteractiveReport.Live.Tests.csproj" />
   </Folder>
 </Solution>

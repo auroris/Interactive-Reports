@@ -1,23 +1,6 @@
 // Workbench: a deliberately plain client for the report protocol. Everything it does —
 // build a state document, POST it, render the response — is exactly what a real UI will do.
 
-const OPS_BY_TYPE = {
-    text: ["contains", "ncontains", "starts", "ends", "eq", "ne", "in", "nin", "blank", "nblank"],
-    number: ["eq", "ne", "lt", "le", "gt", "ge", "between", "in", "nin", "blank", "nblank"],
-    date: ["eq", "ne", "lt", "le", "gt", "ge", "between", "blank", "nblank"],
-    bool: ["eq", "ne", "blank", "nblank"],
-    other: ["eq", "ne", "blank", "nblank"],
-};
-const NO_VALUE_OPS = ["blank", "nblank"];
-const LIST_OPS = ["in", "nin"];
-const AGG_FNS_BY_TYPE = {
-    number: ["sum", "avg", "min", "max", "count", "countDistinct"],
-    text: ["min", "max", "count", "countDistinct"],
-    date: ["min", "max", "count", "countDistinct"],
-    bool: ["count", "countDistinct"],
-    other: ["count", "countDistinct"],
-};
-
 const els = Object.fromEntries(
     ["report", "search", "add-filter", "add-agg", "add-computed", "add-highlight", "break",
      "view", "groupdim-wrap", "group-dim", "pivotrow-wrap", "pivot-row", "pivotcol-wrap", "pivot-col", "export",
@@ -30,6 +13,7 @@ let schema = null;          // {columns:[{name,label,type}], defaultState, limit
 let state = null;           // the report state document
 let totalRows = 0;
 let whoami = null;          // {identity, isAdministrator, ...}
+let availableColumns = null;
 
 async function api(path, options) {
     const res = await fetch(path, options);
@@ -50,26 +34,30 @@ async function loadReports() {
 
 async function selectReport(name) {
     schema = await api(`/api/reports/${name}/schema`);
+    availableColumns = null;
     state = Object.assign(
-        { filters: [], sorts: [], page: { index: 1, size: 25 } },
+        { v: schema.stateVersion, filters: [], sorts: [], page: { index: 1, size: schema.limits.defaultPageSize } },
         structuredClone(schema.defaultState ?? {}));
-    state.page ??= { index: 1, size: 25 };
+    state.v = schema.stateVersion;
+    state.page ??= { index: 1, size: schema.limits.defaultPageSize };
     syncControlsFromState();
     await Promise.all([runQuery(), loadSaved()]);
+    syncControlsFromState();
 }
 
 // Reflect the current state document (report default or loaded saved view) in the controls.
 function syncControlsFromState() {
     els.search.value = state.search ?? "";
-    els.filters.replaceChildren();   // active filters stay in state; builder rows reset
+    els.filters.replaceChildren();
+    for (const f of state.filters ?? []) addFilterRow(f);
     els.break.replaceChildren(
         new Option("— none —", ""),
-        ...schema.columns.map(c => new Option(c.label, c.name)));
+        ...pickableColumns().map(c => new Option(c.label, c.name)));
     els.break.value = state.breaks?.[0] ?? "";
     els.aggs.replaceChildren();
     for (const a of (state.view?.values ?? state.aggregates ?? [])) addAggRow(a.col, a.fn);
     els.computeds.replaceChildren();
-    for (const c of state.computed ?? []) addComputedRow(c.label, c.expr);
+    for (const c of state.computed ?? []) addComputedRow(c);
     els.highlights.replaceChildren();
     for (const h of state.highlights ?? []) addHighlightRow(h);
 
@@ -95,7 +83,7 @@ function applyView() {
     const mode = els.view.value;
     const values = collectAggRows();
     if (mode === "grid") {
-        state.view = undefined;
+        state.view = { mode: "grid" };
         state.aggregates = values;
     } else if (mode === "groupBy") {
         state.view = { mode: "groupBy", groupBy: [els.groupdim.value], values };
@@ -112,8 +100,12 @@ function applyView() {
 
 // Columns available to highlight/aggregate pickers: base schema + current computed ids.
 function pickableColumns() {
-    const computed = (state.computed ?? []).map(c => ({ name: c.id, label: c.label ?? c.id, type: "number" }));
-    return [...schema.columns, ...computed];
+    return availableColumns ?? schema.columns;
+}
+
+function aggregateFunctions(type) {
+    const catalog = schema.capabilities?.aggregateFunctions ?? {};
+    return catalog[type] ?? catalog.other ?? [];
 }
 
 // --- identity & saved views -------------------------------------------------
@@ -152,12 +144,19 @@ function refreshSavedButtons() {
 
 async function loadSavedState(id) {
     const doc = await api(`/api/reports/saved/${id}`);
-    state = doc.state ?? {};
+    state = Object.assign(
+        {},
+        structuredClone(schema.defaultState ?? {}),
+        Object.fromEntries(Object.entries(structuredClone(doc.state ?? {}))
+            .filter(([, value]) => value !== null && value !== undefined)));
+    availableColumns = null;
+    state.v = schema.stateVersion;
     state.filters ??= [];
     state.sorts ??= [];
-    state.page ??= { index: 1, size: 25 };
+    state.page ??= { index: 1, size: schema.limits.defaultPageSize };
     syncControlsFromState();
     await runQuery();
+    syncControlsFromState();
 }
 
 async function saveCurrentView() {
@@ -191,6 +190,7 @@ async function runQuery() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(state),
         });
+        availableColumns = result.availableColumns;
         totalRows = result.totalRows;
         render(result);
     } catch (e) {
@@ -261,7 +261,9 @@ function render(result) {
             if (col.type === "number") td.className = "num";
             tr.append(td);
         }
-        for (const hit of hitsByRow.get(r) ?? []) {
+        const rowHits = (hitsByRow.get(r) ?? []).filter(hit => !hit.col);
+        const cellHits = (hitsByRow.get(r) ?? []).filter(hit => !!hit.col);
+        for (const hit of [...rowHits, ...cellHits]) {
             const style = styleById.get(hit.id) ?? {};
             if (!hit.col) {
                 if (style.bg) tr.style.background = style.bg;
@@ -312,39 +314,20 @@ function toggleSort(col) {
 
 // --- filter builder ---------------------------------------------------------
 
-function addFilterRow() {
+function addFilterRow(existing) {
     const row = document.createElement("div");
     row.className = "filter-row";
 
-    const colSel = document.createElement("select");
-    colSel.replaceChildren(...schema.columns.map(c => new Option(c.label, c.name)));
+    const enabled = document.createElement("input");
+    enabled.type = "checkbox";
+    enabled.checked = existing?.enabled !== false;
 
-    const opSel = document.createElement("select");
-    const values = document.createElement("span");
-
-    const refreshOps = () => {
-        const type = schema.columns.find(c => c.name === colSel.value)?.type ?? "other";
-        opSel.replaceChildren(...OPS_BY_TYPE[type].map(o => new Option(o, o)));
-        refreshInputs();
-    };
-    const refreshInputs = () => {
-        const type = schema.columns.find(c => c.name === colSel.value)?.type ?? "other";
-        const inputType = type === "number" ? "number" : type === "date" ? "date" : "text";
-        if (NO_VALUE_OPS.includes(opSel.value)) { values.replaceChildren(); }
-        else if (opSel.value === "between") {
-            values.replaceChildren(makeInput(inputType), document.createTextNode(" and "), makeInput(inputType));
-        } else if (LIST_OPS.includes(opSel.value)) {
-            const inp = makeInput("text");
-            inp.placeholder = "comma,separated,values";
-            inp.size = 28;
-            values.replaceChildren(inp);
-        } else {
-            values.replaceChildren(makeInput(inputType));
-        }
-    };
-
-    colSel.onchange = refreshOps;
-    opSel.onchange = refreshInputs;
+    const expr = document.createElement("input");
+    expr.type = "text";
+    expr.placeholder = "e.g. AMOUNT > 1000 AND STATUS <> 'CANCELLED'";
+    expr.size = 52;
+    expr.value = existing?.expr ?? "";
+    expr.onkeydown = e => { if (e.key === "Enter") applyFilters(); };
 
     const del = document.createElement("button");
     del.textContent = "×";
@@ -354,41 +337,14 @@ function addFilterRow() {
     apply.textContent = "Apply";
     apply.onclick = applyFilters;
 
-    row.append(colSel, opSel, values, apply, del);
+    row.append(enabled, document.createTextNode(" on "), expr, apply, del);
     els.filters.append(row);
-    refreshOps();
-}
-
-function makeInput(type) {
-    const inp = document.createElement("input");
-    inp.type = type;
-    inp.onkeydown = e => { if (e.key === "Enter") applyFilters(); };
-    return inp;
 }
 
 function applyFilters() {
     state.filters = [...els.filters.querySelectorAll(".filter-row")].flatMap(row => {
-        const [colSel, opSel] = row.querySelectorAll("select");
-        const inputs = [...row.querySelectorAll("input")];
-        const type = schema.columns.find(c => c.name === colSel.value)?.type;
-        const op = opSel.value;
-
-        const coerce = raw => {
-            if (raw === "") return null;
-            return type === "number" ? Number(raw) : raw;
-        };
-
-        if (NO_VALUE_OPS.includes(op)) return [{ col: colSel.value, op }];
-        if (op === "between") {
-            const [lo, hi] = inputs.map(i => coerce(i.value));
-            return lo != null && hi != null ? [{ col: colSel.value, op, value: [lo, hi] }] : [];
-        }
-        if (LIST_OPS.includes(op)) {
-            const list = inputs[0].value.split(",").map(s => coerce(s.trim())).filter(v => v != null);
-            return list.length ? [{ col: colSel.value, op, value: list }] : [];
-        }
-        const v = coerce(inputs[0].value);
-        return v != null ? [{ col: colSel.value, op, value: v }] : [];
+        const [enabled, expr] = row.querySelectorAll("input");
+        return expr.value.trim() ? [{ enabled: enabled.checked, expr: expr.value.trim() }] : [];
     });
     state.page.index = 1;
     runQuery();
@@ -401,14 +357,15 @@ function addAggRow(col, fn) {
     row.className = "filter-row";
 
     const colSel = document.createElement("select");
-    colSel.replaceChildren(...schema.columns.map(c => new Option(c.label, c.name)));
+    colSel.replaceChildren(...pickableColumns().map(c => new Option(c.label, c.name)));
     if (col) colSel.value = col;
 
     const fnSel = document.createElement("select");
     const refreshFns = () => {
-        const type = schema.columns.find(c => c.name === colSel.value)?.type ?? "other";
-        fnSel.replaceChildren(...AGG_FNS_BY_TYPE[type].map(f => new Option(f, f)));
-        if (fn && AGG_FNS_BY_TYPE[type].includes(fn)) fnSel.value = fn;
+        const type = pickableColumns().find(c => c.name === colSel.value)?.type ?? "other";
+        const functions = aggregateFunctions(type);
+        fnSel.replaceChildren(...functions.map(f => new Option(f, f)));
+        if (fn && functions.includes(fn)) fnSel.value = fn;
     };
     colSel.onchange = () => { refreshFns(); applyAggs(); };
     fnSel.onchange = applyAggs;
@@ -437,19 +394,23 @@ function applyAggs() {
 
 // --- computed & highlight builders ------------------------------------------
 
-function addComputedRow(label, expr) {
+function addComputedRow(existing = {}) {
     const row = document.createElement("div");
     row.className = "filter-row";
+
+    const enabled = document.createElement("input");
+    enabled.type = "checkbox";
+    enabled.checked = existing.enabled !== false;
 
     const labelInp = document.createElement("input");
     labelInp.placeholder = "Label";
     labelInp.size = 14;
-    if (label) labelInp.value = label;
+    if (existing.label) labelInp.value = existing.label;
 
     const exprInp = document.createElement("input");
     exprInp.placeholder = "e.g. ROUND(AMOUNT * 1.0825, 2)";
     exprInp.size = 44;
-    if (expr) exprInp.value = expr;
+    if (existing.expr) exprInp.value = existing.expr;
     exprInp.onkeydown = e => { if (e.key === "Enter") applyComputed(); };
 
     const apply = document.createElement("button");
@@ -460,27 +421,33 @@ function addComputedRow(label, expr) {
     del.textContent = "×";
     del.onclick = () => { row.remove(); applyComputed(); };
 
-    row.append(document.createTextNode("ƒ "), labelInp, exprInp, apply, del);
+    row.append(document.createTextNode("ƒ "), enabled, document.createTextNode(" on "), labelInp, exprInp, apply, del);
     els.computeds.append(row);
 }
 
 function applyComputed() {
     state.computed = [...els.computeds.querySelectorAll(".filter-row")].flatMap((row, i) => {
-        const [labelInp, exprInp] = row.querySelectorAll("input");
+        const [enabled, labelInp, exprInp] = row.querySelectorAll("input");
         return exprInp.value.trim()
-            ? [{ id: `c${i + 1}`, label: labelInp.value.trim() || `c${i + 1}`, expr: exprInp.value.trim() }]
+            ? [{
+                id: `c${i + 1}`,
+                enabled: enabled.checked,
+                label: labelInp.value.trim() || `c${i + 1}`,
+                expr: exprInp.value.trim(),
+            }]
             : [];
     });
     state.page.index = 1;
     runQuery();
 }
 
-const HL_OPS_BY_TYPE = Object.fromEntries(Object.entries(OPS_BY_TYPE)
-    .map(([t, ops]) => [t, ops.filter(o => !LIST_OPS.includes(o) && o !== "between")]));
-
 function addHighlightRow(existing) {
     const row = document.createElement("div");
     row.className = "filter-row";
+
+    const enabled = document.createElement("input");
+    enabled.type = "checkbox";
+    enabled.checked = existing?.enabled !== false;
 
     const scopeSel = document.createElement("select");
     scopeSel.replaceChildren(new Option("row", "row"), new Option("cell", "cell"));
@@ -488,22 +455,14 @@ function addHighlightRow(existing) {
 
     const colSel = document.createElement("select");
     colSel.replaceChildren(...pickableColumns().map(c => new Option(c.label, c.name)));
-    if (existing?.condition?.col) colSel.value = existing.condition.col;
+    if (existing?.col) colSel.value = existing.col;
 
-    const opSel = document.createElement("select");
-    const valInp = document.createElement("input");
-    valInp.size = 12;
-    valInp.onkeydown = e => { if (e.key === "Enter") applyHighlights(); };
-
-    const refreshOps = () => {
-        const type = pickableColumns().find(c => c.name === colSel.value)?.type ?? "other";
-        opSel.replaceChildren(...HL_OPS_BY_TYPE[type].map(o => new Option(o, o)));
-        if (existing?.condition?.op) opSel.value = existing.condition.op;
-        valInp.hidden = NO_VALUE_OPS.includes(opSel.value);
-    };
-    colSel.onchange = refreshOps;
-    opSel.onchange = () => { valInp.hidden = NO_VALUE_OPS.includes(opSel.value); };
-    if (existing?.condition?.value !== undefined) valInp.value = existing.condition.value;
+    const exprInp = document.createElement("input");
+    exprInp.type = "text";
+    exprInp.size = 42;
+    exprInp.placeholder = "e.g. ROUND(AMOUNT, 2) > 1000";
+    exprInp.value = existing?.expr ?? "";
+    exprInp.onkeydown = e => { if (e.key === "Enter") applyHighlights(); };
 
     const bgInp = document.createElement("input");
     bgInp.type = "color";
@@ -517,23 +476,22 @@ function addHighlightRow(existing) {
     del.textContent = "×";
     del.onclick = () => { row.remove(); applyHighlights(); };
 
-    row.append(document.createTextNode("🖍 "), scopeSel, colSel, opSel, valInp, bgInp, apply, del);
+    row.append(document.createTextNode("🖍 "), enabled, scopeSel, colSel, exprInp, bgInp, apply, del);
     els.highlights.append(row);
-    refreshOps();
 }
 
 function applyHighlights() {
     state.highlights = [...els.highlights.querySelectorAll(".filter-row")].flatMap((row, i) => {
-        const [scopeSel, colSel, opSel] = row.querySelectorAll("select");
-        const [valInp, bgInp] = row.querySelectorAll("input");
-        const type = pickableColumns().find(c => c.name === colSel.value)?.type;
-        const op = opSel.value;
-        const condition = { col: colSel.value, op };
-        if (!NO_VALUE_OPS.includes(op)) {
-            if (valInp.value === "") return [];
-            condition.value = type === "number" ? Number(valInp.value) : valInp.value;
-        }
-        const rule = { id: `h${i + 1}`, scope: scopeSel.value, condition, style: { bg: bgInp.value } };
+        const [scopeSel, colSel] = row.querySelectorAll("select");
+        const [enabled, exprInp, bgInp] = row.querySelectorAll("input");
+        if (!exprInp.value.trim()) return [];
+        const rule = {
+            id: `h${i + 1}`,
+            enabled: enabled.checked,
+            scope: scopeSel.value,
+            expr: exprInp.value.trim(),
+            style: { bg: bgInp.value },
+        };
         if (scopeSel.value === "cell") rule.col = colSel.value;
         return [rule];
     });
@@ -581,7 +539,7 @@ let searchTimer;
 els.search.oninput = () => {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => {
-        state.search = els.search.value || undefined;
+        state.search = els.search.value;
         state.page.index = 1;
         runQuery();
     }, 300);

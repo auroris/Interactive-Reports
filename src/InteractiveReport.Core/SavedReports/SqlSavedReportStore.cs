@@ -23,7 +23,7 @@ public sealed partial class SqlSavedReportStore : ISavedReportStore
     private readonly Func<SavedReportStoreConfig> _config;
     private readonly IReportConnectionFactory _connections;
     private readonly SemaphoreSlim _createLock = new(1, 1);
-    private volatile bool _created;
+    private readonly HashSet<StoreTarget> _createdTargets = [];
 
     public SqlSavedReportStore(Func<SavedReportStoreConfig> config, IReportConnectionFactory connections)
     {
@@ -64,7 +64,7 @@ public sealed partial class SqlSavedReportStore : ISavedReportStore
     public async Task Create(SavedReport report, CancellationToken ct = default)
     {
         report.ModifiedUtc = DateTime.UtcNow;
-        await Execute(new Query(Table).AsInsert(ToRow(report)), ct);
+        await Execute(config => new Query(config.TableName).AsInsert(ToRow(report)), ct);
     }
 
     public async Task<bool> Update(SavedReport report, CancellationToken ct = default)
@@ -72,15 +72,17 @@ public sealed partial class SqlSavedReportStore : ISavedReportStore
         report.ModifiedUtc = DateTime.UtcNow;
         var row = ToRow(report);
         row.Remove("ID");
-        return await Execute(new Query(Table).Where("ID", report.Id).AsUpdate(row), ct) == 1;
+        return await Execute(
+            config => new Query(config.TableName).Where("ID", report.Id).AsUpdate(row),
+            ct) == 1;
     }
 
     public async Task<bool> Delete(string id, CancellationToken ct = default)
-        => await Execute(new Query(Table).Where("ID", id).AsDelete(), ct) == 1;
+        => await Execute(
+            config => new Query(config.TableName).Where("ID", id).AsDelete(),
+            ct) == 1;
 
     // --- plumbing ------------------------------------------------------------
-
-    private string Table => Validated(_config()).TableName;
 
     private static Dictionary<string, object> ToRow(SavedReport r) => new()
     {
@@ -121,9 +123,12 @@ public sealed partial class SqlSavedReportStore : ISavedReportStore
         return result;
     }
 
-    private async Task<int> Execute(Query query, CancellationToken ct)
+    private async Task<int> Execute(
+        Func<SavedReportStoreConfig, Query> buildQuery,
+        CancellationToken ct)
     {
         var cfg = Validated(_config());
+        var query = buildQuery(cfg);
         await using var conn = await OpenConnection(cfg, ct);
         var compiled = DialectSupport.GetCompiler(cfg.Dialect).Compile(query);
         await using var cmd = CommandBuilder.Build(conn, compiled, NoParams, TimeoutSeconds, cfg.Dialect);
@@ -133,22 +138,31 @@ public sealed partial class SqlSavedReportStore : ISavedReportStore
     private async Task<DbConnection> OpenConnection(SavedReportStoreConfig cfg, CancellationToken ct)
     {
         var conn = _connections.CreateConnection(cfg.ConnectionName);
-        await conn.OpenAsync(ct);
-        if (cfg.AutoCreate && !_created)
-            await EnsureCreated(conn, cfg, ct);
-        return conn;
+        try
+        {
+            await conn.OpenAsync(ct);
+            if (cfg.AutoCreate)
+                await EnsureCreated(conn, cfg, ct);
+            return conn;
+        }
+        catch
+        {
+            await conn.DisposeAsync();
+            throw;
+        }
     }
 
     private async Task EnsureCreated(DbConnection conn, SavedReportStoreConfig cfg, CancellationToken ct)
     {
+        var target = new StoreTarget(cfg.ConnectionName, cfg.Dialect, cfg.TableName);
         await _createLock.WaitAsync(ct);
         try
         {
-            if (_created) return;
+            if (_createdTargets.Contains(target)) return;
             await using var cmd = conn.CreateCommand();
             cmd.CommandText = CreateTableSql(cfg);
             await cmd.ExecuteNonQueryAsync(ct);
-            _created = true;
+            _createdTargets.Add(target);
         }
         finally
         {
@@ -211,4 +225,9 @@ public sealed partial class SqlSavedReportStore : ISavedReportStore
             """,
         _ => throw new ArgumentOutOfRangeException(nameof(cfg), cfg.Dialect, null),
     };
+
+    private readonly record struct StoreTarget(
+        string ConnectionName,
+        ReportDialect Dialect,
+        string TableName);
 }
