@@ -196,6 +196,19 @@ public sealed partial class SqlSavedReportStore : ISavedReportStore
                 IF SQLCODE != -955 THEN RAISE; END IF;
             END;
             """,
+        // Identifiers are quoted: unquoted names would fold to lowercase and never
+        // match the quoted uppercase identifiers SqlKata emits in queries.
+        ReportDialect.Postgres => $"""
+            CREATE TABLE IF NOT EXISTS "{cfg.TableName}" (
+                "ID"           VARCHAR(64) PRIMARY KEY,
+                "REPORT_NAME"  VARCHAR(200) NOT NULL,
+                "TITLE"        VARCHAR(200) NOT NULL,
+                "OWNER"        VARCHAR(400) NOT NULL,
+                "IS_GLOBAL"    INT NOT NULL,
+                "STATE_JSON"   TEXT NOT NULL,
+                "MODIFIED_UTC" VARCHAR(40) NOT NULL
+            )
+            """,
         _ => throw new ArgumentOutOfRangeException(nameof(cfg), cfg.Dialect, null),
     };
 }

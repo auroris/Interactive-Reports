@@ -80,7 +80,8 @@ internal static class ExprFunctions
                 a.Require(0, "a number", ColumnKind.Number);
                 if (a.Args.Count == 2) a.Require(1, "a number", ColumnKind.Number);
                 return ColumnKind.Number;
-            });
+            },
+            EmitRound);
 
         Add("ABS", 1, 1, a => { a.Require(0, "a number", ColumnKind.Number); return ColumnKind.Number; });
 
@@ -145,6 +146,24 @@ internal static class ExprFunctions
         EmitPlain(ctx, "CONCAT", args);
     }
 
+    private static void EmitRound(EmitContext ctx, IReadOnlyList<ExprNode> args)
+    {
+        // Postgres two-arg ROUND is exactly round(numeric, integer): a numeric-typed
+        // precision parameter resolves to no function at all, and a double-precision
+        // first argument fares no better. Cast both into the one signature that exists.
+        if (ctx.Dialect == ReportDialect.Postgres && args.Count == 2)
+        {
+            ctx.Append("ROUND(CAST(");
+            ctx.Visit(args[0]);
+            ctx.Append(" AS NUMERIC), CAST(");
+            ctx.Visit(args[1]);
+            ctx.Append(" AS INT))");
+            return;
+        }
+
+        EmitPlain(ctx, "ROUND", args);
+    }
+
     private static void EmitSubstr(EmitContext ctx, IReadOnlyList<ExprNode> args)
     {
         if (ctx.Dialect != ReportDialect.SqlServer)
@@ -180,7 +199,7 @@ internal static class ExprFunctions
                 EmitPlain(ctx, part, args);
                 break;
 
-            case ReportDialect.Oracle:
+            case ReportDialect.Oracle or ReportDialect.Postgres:
                 ctx.Append("EXTRACT(").Append(part).Append(" FROM ");
                 ctx.Visit(args[0]);
                 ctx.Append(')');

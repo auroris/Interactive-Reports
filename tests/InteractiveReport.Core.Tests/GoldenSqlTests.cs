@@ -73,6 +73,17 @@ public class GoldenSqlTests
     }
 
     [Fact]
+    public void Postgres_page_query()
+    {
+        var (page, _) = Compile(ReportDialect.Postgres, CoreState);
+
+        Assert.Equal(
+            "SELECT \"ORDER_ID\", \"CUSTOMER\", \"AMOUNT\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base WHERE \"STATUS\" = @p0 ORDER BY \"ORDER_DATE\" DESC LIMIT @p1 OFFSET @p2",
+            page.Sql);
+        Assert.Equal(["SHIPPED", 25, 25L], page.NamedBindings.Values.ToArray());
+    }
+
+    [Fact]
     public void Count_query_has_no_order_by_and_counts_star()
     {
         var (_, count) = Compile(ReportDialect.Sqlite, CoreState);

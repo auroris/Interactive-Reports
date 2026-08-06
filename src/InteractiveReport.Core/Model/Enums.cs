@@ -5,6 +5,7 @@ public enum ReportDialect
     SqlServer,
     Oracle,
     Sqlite,
+    Postgres,
 }
 
 /// <summary>

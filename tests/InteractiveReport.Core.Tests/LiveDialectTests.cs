@@ -4,6 +4,7 @@ using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Model;
 using InteractiveReport.Core.Schema;
 using Microsoft.Data.SqlClient;
+using Npgsql;
 using Oracle.ManagedDataAccess.Client;
 using static InteractiveReport.Core.Tests.TestFixtures;
 
@@ -11,20 +12,23 @@ namespace InteractiveReport.Core.Tests;
 
 /// <summary>
 /// The M5 verification pass: the same engine corpus the SQLite e2e suite locks, executed
-/// against real SQL Server and Oracle instances. Skipped unless the environment provides
-/// connection strings:
+/// against real SQL Server, Oracle, and PostgreSQL instances. Skipped unless the
+/// environment provides connection strings:
 ///
 ///   IR_TEST_SQLSERVER  e.g. Server=vm;Database=irtest;User Id=irtest;Password=...;TrustServerCertificate=True
 ///   IR_TEST_ORACLE     e.g. User Id=irtest;Password=...;Data Source=vm:1521/XEPDB1
+///   IR_TEST_POSTGRES   e.g. Host=vm;Port=5432;Database=irtest;Username=irtest;Password=...
 ///
 /// Each run drops and recreates a table named IR_TEST_ORDERS in that database and seeds
 /// the canonical 10 rows (see docs/TESTING.md). Expected numbers are identical across
-/// all dialects — including blank-count 4, which converges by design: SQLite/SqlServer
-/// count 3 NULLs + 1 empty string; Oracle turns the empty string into a 4th NULL.
+/// all dialects — including blank-count 4, which converges by design: SQLite/SqlServer/
+/// Postgres count 3 NULLs + 1 empty string; Oracle turns the empty string into a 4th NULL.
+/// (Postgres folds unquoted identifiers to lowercase; the engine's case-insensitive
+/// schema matching and response dictionaries absorb that without special-casing.)
 /// </summary>
 public class LiveDialectTests
 {
-    public static TheoryData<ReportDialect> Dialects => new() { ReportDialect.SqlServer, ReportDialect.Oracle };
+    public static TheoryData<ReportDialect> Dialects => new() { ReportDialect.SqlServer, ReportDialect.Oracle, ReportDialect.Postgres };
 
     private static readonly IReadOnlyDictionary<string, object?> NoParams = new Dictionary<string, object?>();
 
@@ -240,6 +244,33 @@ public class LiveDialectTests
         Assert.Equal(5m, Convert.ToDecimal(result.Aggregates["c1"]["sum"]));
     }
 
+    [SkippableFact]
+    public async Task Boolean_column_condition_executes_on_postgres()
+    {
+        // Postgres has REAL booleans: the same expression that lowers to "= 1" on
+        // SQL Server must emit the column bare here (boolean = integer is a type
+        // error in Postgres) — the two live boolean tests pin both sides.
+        var live = LiveDb.For(ReportDialect.Postgres);
+        var def = live.Definition();
+        def.Name = "live-Postgres-bool-expression";
+        def.Sql = """
+            SELECT ORDER_ID, CUSTOMER, STATUS, AMOUNT, NOTES,
+                   (AMOUNT >= 5000) AS LARGE_FLAG
+            FROM IR_TEST_ORDERS
+            """;
+
+        var result = await live.Executor.Query(def, new ReportState
+        {
+            Computed =
+            [
+                new ComputedColumn { Id = "c1", Expr = "CASE WHEN LARGE_FLAG THEN 1 ELSE 0 END" },
+            ],
+            Aggregates = [new AggregateRule { Col = "c1", Fn = AggregateFn.Sum }],
+        }, NoParams);
+
+        Assert.Equal(5m, Convert.ToDecimal(result.Aggregates["c1"]["sum"]));
+    }
+
     [SkippableTheory]
     [MemberData(nameof(Dialects))]
     public async Task Context_params_bind_by_name(ReportDialect dialect)
@@ -324,7 +355,13 @@ internal sealed class LiveDb : IReportConnectionFactory
 
     public static LiveDb For(ReportDialect dialect)
     {
-        var env = dialect == ReportDialect.SqlServer ? "IR_TEST_SQLSERVER" : "IR_TEST_ORACLE";
+        var env = dialect switch
+        {
+            ReportDialect.SqlServer => "IR_TEST_SQLSERVER",
+            ReportDialect.Oracle => "IR_TEST_ORACLE",
+            ReportDialect.Postgres => "IR_TEST_POSTGRES",
+            _ => throw new ArgumentOutOfRangeException(nameof(dialect), dialect, null),
+        };
         var cs = Environment.GetEnvironmentVariable(env);
         Skip.If(string.IsNullOrWhiteSpace(cs), $"set {env} to run live {dialect} verification");
 
@@ -339,9 +376,13 @@ internal sealed class LiveDb : IReportConnectionFactory
         Seed();
     }
 
-    public DbConnection CreateConnection(string name) => _dialect == ReportDialect.SqlServer
-        ? new SqlConnection(_connectionString)
-        : new OracleConnection(_connectionString);
+    public DbConnection CreateConnection(string name) => _dialect switch
+    {
+        ReportDialect.SqlServer => new SqlConnection(_connectionString),
+        ReportDialect.Oracle => new OracleConnection(_connectionString),
+        ReportDialect.Postgres => new NpgsqlConnection(_connectionString),
+        _ => throw new ArgumentOutOfRangeException(nameof(_dialect), _dialect, null),
+    };
 
     public ReportDefinition Definition() => new()
     {
@@ -356,35 +397,51 @@ internal sealed class LiveDb : IReportConnectionFactory
         using var conn = CreateConnection("live");
         conn.Open();
 
-        Execute(conn, _dialect == ReportDialect.SqlServer
-            ? "IF OBJECT_ID('IR_TEST_ORDERS', 'U') IS NOT NULL DROP TABLE IR_TEST_ORDERS"
-            : """
-              BEGIN
-                  EXECUTE IMMEDIATE 'DROP TABLE IR_TEST_ORDERS';
-              EXCEPTION WHEN OTHERS THEN
-                  IF SQLCODE != -942 THEN RAISE; END IF;
-              END;
-              """);
+        Execute(conn, _dialect switch
+        {
+            ReportDialect.SqlServer => "IF OBJECT_ID('IR_TEST_ORDERS', 'U') IS NOT NULL DROP TABLE IR_TEST_ORDERS",
+            ReportDialect.Postgres => "DROP TABLE IF EXISTS IR_TEST_ORDERS",
+            _ => """
+                 BEGIN
+                     EXECUTE IMMEDIATE 'DROP TABLE IR_TEST_ORDERS';
+                 EXCEPTION WHEN OTHERS THEN
+                     IF SQLCODE != -942 THEN RAISE; END IF;
+                 END;
+                 """,
+        });
 
-        Execute(conn, _dialect == ReportDialect.SqlServer
-            ? """
-              CREATE TABLE IR_TEST_ORDERS (
-                  ORDER_ID INT PRIMARY KEY,
-                  CUSTOMER NVARCHAR(100) NOT NULL,
-                  STATUS   NVARCHAR(20) NOT NULL,
-                  AMOUNT   DECIMAL(12,2) NOT NULL,
-                  NOTES    NVARCHAR(200) NULL
-              )
-              """
-            : """
-              CREATE TABLE IR_TEST_ORDERS (
-                  ORDER_ID NUMBER(10) PRIMARY KEY,
-                  CUSTOMER VARCHAR2(100) NOT NULL,
-                  STATUS   VARCHAR2(20) NOT NULL,
-                  AMOUNT   NUMBER(12,2) NOT NULL,
-                  NOTES    VARCHAR2(200) NULL
-              )
-              """);
+        Execute(conn, _dialect switch
+        {
+            ReportDialect.SqlServer => """
+                CREATE TABLE IR_TEST_ORDERS (
+                    ORDER_ID INT PRIMARY KEY,
+                    CUSTOMER NVARCHAR(100) NOT NULL,
+                    STATUS   NVARCHAR(20) NOT NULL,
+                    AMOUNT   DECIMAL(12,2) NOT NULL,
+                    NOTES    NVARCHAR(200) NULL
+                )
+                """,
+            // Unquoted on purpose: names fold to lowercase, matching the unquoted
+            // identifiers in the definition's base SELECT.
+            ReportDialect.Postgres => """
+                CREATE TABLE IR_TEST_ORDERS (
+                    ORDER_ID INT PRIMARY KEY,
+                    CUSTOMER VARCHAR(100) NOT NULL,
+                    STATUS   VARCHAR(20) NOT NULL,
+                    AMOUNT   NUMERIC(12,2) NOT NULL,
+                    NOTES    VARCHAR(200) NULL
+                )
+                """,
+            _ => """
+                CREATE TABLE IR_TEST_ORDERS (
+                    ORDER_ID NUMBER(10) PRIMARY KEY,
+                    CUSTOMER VARCHAR2(100) NOT NULL,
+                    STATUS   VARCHAR2(20) NOT NULL,
+                    AMOUNT   NUMBER(12,2) NOT NULL,
+                    NOTES    VARCHAR2(200) NULL
+                )
+                """,
+        });
 
         // The canonical 10 rows — must match SqliteE2EFixture. On Oracle the ''
         // note becomes NULL at insert, which is exactly the semantic the blank

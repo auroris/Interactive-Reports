@@ -21,8 +21,9 @@ $ErrorActionPreference = 'Stop'
 $vmIp = '192.168.56.101'
 $env:IR_TEST_SQLSERVER = "Server=$vmIp\sqlexpress;Database=irtest;User Id=testuser;Password=win-tbps8gs7ur2;TrustServerCertificate=True"
 $env:IR_TEST_ORACLE    = "User Id=testuser;Password=win-tbps8gs7ur2;Data Source=${vmIp}:1521/xepdb1"
+$env:IR_TEST_POSTGRES  = "Host=$vmIp;Port=5432;Database=irtest;Username=testuser;Password=win-tbps8gs7ur2"
 
-foreach ($probe in @{ Name = 'SQL Server'; Port = 1433 }, @{ Name = 'Oracle'; Port = 1521 }) {
+foreach ($probe in @{ Name = 'SQL Server'; Port = 1433 }, @{ Name = 'Oracle'; Port = 1521 }, @{ Name = 'PostgreSQL'; Port = 5432 }) {
     $tcp = [System.Net.Sockets.TcpClient]::new()
     $reachable = $false
     try { $reachable = $tcp.ConnectAsync($vmIp, $probe.Port).Wait(5000) -and $tcp.Connected }

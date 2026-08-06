@@ -10,6 +10,7 @@ public static class DialectSupport
         ReportDialect.SqlServer => new SqlServerCompiler(),
         ReportDialect.Oracle => new OracleCompiler(),
         ReportDialect.Sqlite => new SqliteCompiler(),
+        ReportDialect.Postgres => new PostgresCompiler(),
         _ => throw new ArgumentOutOfRangeException(nameof(dialect), dialect, null),
     };
 

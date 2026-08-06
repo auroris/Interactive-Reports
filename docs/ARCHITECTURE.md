@@ -94,7 +94,7 @@ public interface IReportDefinitionStore
     "open-orders": {
       "title": "Open Orders",
       "connection": "MainDb",
-      "dialect": "SqlServer",            // SqlServer | Oracle | Sqlite
+      "dialect": "SqlServer",            // SqlServer | Oracle | Sqlite | Postgres
       "sql": "SELECT o.ORDER_ID, o.CUSTOMER, o.AMOUNT, o.ORDER_DATE FROM ORDERS o WHERE o.SALES_REP = @currentUser",
       "contextParams": { "currentUser": { "claim": "sub" } },
       "authorization": { "policy": "SalesRead" },
@@ -298,9 +298,10 @@ rejected.
 Boolean-*valued* columns (a SQL Server `BIT`, say) are the one bridge: they may stand
 directly in condition position (`CASE WHEN IS_PRIORITY THEN …`), and the emitter
 lowers them to an explicit predicate (`([IS_PRIORITY] = 1)`) because T-SQL accepts a
-bit as a value but never as a condition. The type checker's view (bool column ≈
-condition) and the database's view (bit ≈ value) meet at emission, not in the user's
-face.
+bit as a value but never as a condition. Postgres is the exact inverse — its booleans
+are real conditions and `= 1` would be a boolean/integer type error — so there the
+column emits bare. The type checker's view (bool column ≈ condition) and each
+database's view meet at emission, not in the user's face.
 
 **NULL rules** (explicit, because SQL's are silent):
 - `NULL` is a value of every type; its type comes from context — function arguments,
@@ -317,13 +318,14 @@ rules, result-kind inference, per-dialect emitter. Adding a function is adding a
 there is no enum and no switches to grow. The registry is the only dialect-specific
 surface outside operators:
 
-| AST | SqlServer | Oracle | Sqlite |
-|---|---|---|---|
-| `SUBSTR(s,a[,n])` | `SUBSTRING(s,a,n)` (2-arg → `LEN(s)` for n) | `SUBSTR(s,a[,n])` | `SUBSTR(s,a[,n])` |
-| `a || b` / `CONCAT` | `CONCAT(a,b,…)` | `(a || b || …)` | `CONCAT(a,b,…)` (3.44+) |
-| `LENGTH(s)` | `LEN(s)` | `LENGTH(s)` | `LENGTH(s)` |
-| `YEAR(d)` | `YEAR(d)` | `EXTRACT(YEAR FROM d)` | `CAST(strftime('%Y',d) AS INTEGER)` |
-| `COALESCE` | `COALESCE` | `COALESCE` | `COALESCE` |
+| AST | SqlServer | Oracle | Sqlite | Postgres |
+|---|---|---|---|---|
+| `SUBSTR(s,a[,n])` | `SUBSTRING(s,a,n)` (2-arg → `LEN(s)` for n) | `SUBSTR(s,a[,n])` | `SUBSTR(s,a[,n])` | `SUBSTR(s,a[,n])` |
+| `a || b` / `CONCAT` | `CONCAT(a,b,…)` | `(a || b || …)` | `CONCAT(a,b,…)` (3.44+) | `CONCAT(a,b,…)` |
+| `LENGTH(s)` | `LEN(s)` | `LENGTH(s)` | `LENGTH(s)` | `LENGTH(s)` |
+| `ROUND(x,n)` | `ROUND(x,n)` | `ROUND(x,n)` | `ROUND(x,n)` | `ROUND(CAST(x AS NUMERIC), CAST(n AS INT))` |
+| `YEAR(d)` | `YEAR(d)` | `EXTRACT(YEAR FROM d)` | `CAST(strftime('%Y',d) AS INTEGER)` | `EXTRACT(YEAR FROM d)` |
+| `COALESCE` | `COALESCE` | `COALESCE` | `COALESCE` | `COALESCE` |
 
 - The emitter produces SQL fragments **we** wrote, injected via `SelectRaw` with `?`
   bindings for every literal — client text never reaches SQL; only the AST does. The one
@@ -342,15 +344,22 @@ surface outside operators:
 
 ## 9. Dialect strategy
 
-- SqlKata compilers: `SqlServerCompiler`, `OracleCompiler`, `SqliteCompiler`. Dialect is
-  declared per definition (not inferred) — explicit beats clever.
+- SqlKata compilers: `SqlServerCompiler`, `OracleCompiler`, `SqliteCompiler`,
+  `PostgresCompiler`. Dialect is declared per definition (not inferred) — explicit
+  beats clever.
 - SqlKata owns: identifier quoting, parameter naming, pagination syntax (including Oracle
   12c `OFFSET/FETCH`).
 - We own (per-dialect semantic decisions, centralized in the filter/operator layer):
   - Oracle `'' IS NULL` → `blank` operator semantics (§5);
-  - case-insensitive text matching policy (`LOWER` both sides, all dialects);
+  - case-insensitive text matching policy (`LOWER` both sides; SqlKata compiles the
+    same intent as native `ILIKE` on Postgres);
   - Oracle ADO specifics: `BindByName = true`, parameter prefix — isolated in the
     Oracle execution adapter;
+  - boolean columns in expression condition position: `= 1` lowering everywhere
+    except Postgres, whose native booleans emit bare (§8);
+  - Postgres folds unquoted identifiers to lowercase: absorbed by case-insensitive
+    schema matching and response dictionaries, with quoted identifiers only where we
+    own both sides (the saved-report table DDL);
   - date literal handling: parameters only, never inline date strings.
 - Golden tests lock the emitted SQL per dialect so drift is loud.
 
@@ -512,6 +521,12 @@ APEX's Interactive Reports.
   enum and its switches replaced by the function registry. Existing emissions locked
   byte-identical by the golden suite; CASE proven end-to-end on SQLite and live
   against SQL Server + Oracle (battery green ×24, 2026-08-06).
+- **M8 — PostgreSQL** ✅ *(2026-08-06)*: fourth dialect end to end — compiler,
+  operator matrix (native `ILIKE` for case-insensitive matching), `EXTRACT` date
+  parts, `ROUND` signature casts, native-boolean condition emission (the inverse of
+  SQL Server's `= 1` lowering), quoted-identifier saved-report DDL, identifier-folding
+  absorbed by case-insensitive schema matching. Live battery green 41/41 across
+  SQL Server + Oracle + PostgreSQL.
 
 ## Appendix: decision log
 
@@ -549,3 +564,4 @@ APEX's Interactive Reports.
 | Bool-valued columns lower to `= 1` predicates in condition position | reject bare bool columns as conditions | `CASE WHEN IS_PRIORITY THEN …` is the natural spelling; T-SQL's bit-is-not-boolean rule is an emission detail, not a user error. Proven live on SQL Server. |
 | NULL participates in arithmetic | number-only operands | Consistency: NULL already joined functions, concat, and CASE branches; `AMOUNT + NULL` failing while `CONCAT(NULL, …)` passed was an inconsistency, not a rule. |
 | No date literals in v1 expressions | text-vs-date comparison | Implicit text→date conversion is an NLS/format trap on Oracle; a typed DATE '…' literal is the clean extension point. |
+| Postgres ROUND emits signature casts | bind precision as int | `round(numeric, integer)` is the only two-arg ROUND Postgres has; casting both arguments in SQL keeps bindings uniform across dialects (goldens: 2 always binds as decimal). |

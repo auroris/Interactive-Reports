@@ -40,6 +40,12 @@ public class OperatorMatrixTests
     [InlineData(ReportDialect.Oracle, FilterOp.Le, "\"AMOUNT\" <= :p0")]
     [InlineData(ReportDialect.Oracle, FilterOp.Gt, "\"AMOUNT\" > :p0")]
     [InlineData(ReportDialect.Oracle, FilterOp.Ge, "\"AMOUNT\" >= :p0")]
+    [InlineData(ReportDialect.Postgres, FilterOp.Eq, "\"AMOUNT\" = @p0")]
+    [InlineData(ReportDialect.Postgres, FilterOp.Ne, "\"AMOUNT\" <> @p0")]
+    [InlineData(ReportDialect.Postgres, FilterOp.Lt, "\"AMOUNT\" < @p0")]
+    [InlineData(ReportDialect.Postgres, FilterOp.Le, "\"AMOUNT\" <= @p0")]
+    [InlineData(ReportDialect.Postgres, FilterOp.Gt, "\"AMOUNT\" > @p0")]
+    [InlineData(ReportDialect.Postgres, FilterOp.Ge, "\"AMOUNT\" >= @p0")]
     public void Comparisons(ReportDialect dialect, FilterOp op, string expected)
     {
         Assert.Contains(expected, PageSql(dialect, Filter("AMOUNT", op, 1000)));
@@ -49,6 +55,7 @@ public class OperatorMatrixTests
     [InlineData(ReportDialect.Sqlite, "\"AMOUNT\" BETWEEN @p0 AND @p1")]
     [InlineData(ReportDialect.SqlServer, "[AMOUNT] BETWEEN @p0 AND @p1")]
     [InlineData(ReportDialect.Oracle, "\"AMOUNT\" BETWEEN :p0 AND :p1")]
+    [InlineData(ReportDialect.Postgres, "\"AMOUNT\" BETWEEN @p0 AND @p1")]
     public void Between(ReportDialect dialect, string expected)
     {
         Assert.Contains(expected, PageSql(dialect, Filter("AMOUNT", FilterOp.Between, new[] { 1, 2 })));
@@ -61,6 +68,8 @@ public class OperatorMatrixTests
     [InlineData(ReportDialect.SqlServer, FilterOp.Nin, "[STATUS] NOT IN (@p0, @p1)")]
     [InlineData(ReportDialect.Oracle, FilterOp.In, "\"STATUS\" IN (:p0, :p1)")]
     [InlineData(ReportDialect.Oracle, FilterOp.Nin, "\"STATUS\" NOT IN (:p0, :p1)")]
+    [InlineData(ReportDialect.Postgres, FilterOp.In, "\"STATUS\" IN (@p0, @p1)")]
+    [InlineData(ReportDialect.Postgres, FilterOp.Nin, "\"STATUS\" NOT IN (@p0, @p1)")]
     public void In_lists(ReportDialect dialect, FilterOp op, string expected)
     {
         Assert.Contains(expected, PageSql(dialect, Filter("STATUS", op, new[] { "NEW", "SHIPPED" })));
@@ -77,6 +86,10 @@ public class OperatorMatrixTests
     [InlineData(ReportDialect.Oracle, FilterOp.Contains, "LOWER(\"CUSTOMER\") like :p0")]
     [InlineData(ReportDialect.Oracle, FilterOp.Starts, "LOWER(\"CUSTOMER\") like :p0")]
     [InlineData(ReportDialect.Oracle, FilterOp.Ends, "LOWER(\"CUSTOMER\") like :p0")]
+    // Postgres: SqlKata compiles the same case-insensitive intent as native ILIKE.
+    [InlineData(ReportDialect.Postgres, FilterOp.Contains, "\"CUSTOMER\" ilike @p0")]
+    [InlineData(ReportDialect.Postgres, FilterOp.Starts, "\"CUSTOMER\" ilike @p0")]
+    [InlineData(ReportDialect.Postgres, FilterOp.Ends, "\"CUSTOMER\" ilike @p0")]
     public void Text_matching(ReportDialect dialect, FilterOp op, string expected)
     {
         Assert.Contains(expected, PageSql(dialect, Filter("CUSTOMER", op, "ACME")));
@@ -102,6 +115,7 @@ public class OperatorMatrixTests
     [InlineData(ReportDialect.Sqlite, FilterOp.Ncontains)]
     [InlineData(ReportDialect.SqlServer, FilterOp.Ncontains)]
     [InlineData(ReportDialect.Oracle, FilterOp.Ncontains)]
+    [InlineData(ReportDialect.Postgres, FilterOp.Ncontains)]
     public void Negated_text_matching_negates_the_like(ReportDialect dialect, FilterOp op)
     {
         var sql = PageSql(dialect, Filter("CUSTOMER", op, "ACME"));
@@ -117,6 +131,8 @@ public class OperatorMatrixTests
     [InlineData(ReportDialect.SqlServer, FilterOp.Nblank, "([NOTES] IS NOT NULL AND [NOTES] <> @p0)")]
     [InlineData(ReportDialect.Oracle, FilterOp.Blank, "\"NOTES\" IS NULL")]
     [InlineData(ReportDialect.Oracle, FilterOp.Nblank, "\"NOTES\" IS NOT NULL")]
+    [InlineData(ReportDialect.Postgres, FilterOp.Blank, "(\"NOTES\" IS NULL OR \"NOTES\" = @p0)")]
+    [InlineData(ReportDialect.Postgres, FilterOp.Nblank, "(\"NOTES\" IS NOT NULL AND \"NOTES\" <> @p0)")]
     public void Blank_semantics(ReportDialect dialect, FilterOp op, string expected)
     {
         var sql = PageSql(dialect, Filter("NOTES", op));
@@ -134,6 +150,7 @@ public class OperatorMatrixTests
     [InlineData(ReportDialect.Sqlite)]
     [InlineData(ReportDialect.SqlServer)]
     [InlineData(ReportDialect.Oracle)]
+    [InlineData(ReportDialect.Postgres)]
     public void Blank_on_non_text_is_pure_null_test(ReportDialect dialect)
     {
         var sql = PageSql(dialect, Filter("AMOUNT", FilterOp.Blank));

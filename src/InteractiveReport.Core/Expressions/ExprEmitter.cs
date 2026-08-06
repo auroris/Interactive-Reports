@@ -119,15 +119,17 @@ internal sealed class EmitContext(ReportDialect dialect)
     }
 
     /// <summary>
-    /// Emit a node where SQL demands a predicate. Condition nodes pass through;
-    /// a boolean-*valued* expression (a BIT column, say) is lowered to an explicit
+    /// Emit a node where SQL demands a predicate. Condition nodes pass through.
+    /// A boolean-*valued* expression (a BIT column, say) is lowered to an explicit
     /// "= 1" test — T-SQL has no boolean expressions, so "WHEN [FLAG]" is invalid
     /// there even though the type checker rightly accepted the column as a
-    /// condition. The 1 is our literal, not client data.
+    /// condition. The 1 is our literal, not client data. Postgres is the inverse:
+    /// its booleans are real conditions, and "= 1" would be a boolean/integer type
+    /// error — there the value emits bare.
     /// </summary>
     private void VisitCondition(ExprNode node)
     {
-        if (node is Comparison or LogicalOp or NotOp or NullTest)
+        if (node is Comparison or LogicalOp or NotOp or NullTest || Dialect == ReportDialect.Postgres)
         {
             Visit(node);
             return;

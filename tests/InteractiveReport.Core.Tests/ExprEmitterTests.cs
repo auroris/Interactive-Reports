@@ -30,10 +30,22 @@ public class ExprEmitterTests
     }
 
     [Fact]
+    public void Two_arg_round_casts_into_postgres_only_signature()
+    {
+        // round(numeric, integer) is the only two-arg ROUND Postgres has; numeric
+        // bindings and double-precision columns both need the casts.
+        Assert.Equal("ROUND(CAST(([AMOUNT] * ?) AS NUMERIC), CAST(? AS INT))",
+            Emit("ROUND(AMOUNT * 1.0825, 2)", ReportDialect.Postgres).Sql);
+        Assert.Equal("ROUND([AMOUNT])",
+            Emit("ROUND(AMOUNT)", ReportDialect.Postgres).Sql);
+    }
+
+    [Fact]
     public void Concat_is_variadic_concat_except_oracle_native_pipes()
     {
         Assert.Equal("CONCAT(UPPER([CUSTOMER]), ?)", Emit("UPPER(CUSTOMER) || '!'", ReportDialect.SqlServer).Sql);
         Assert.Equal("CONCAT(UPPER([CUSTOMER]), ?)", Emit("UPPER(CUSTOMER) || '!'", ReportDialect.Sqlite).Sql);
+        Assert.Equal("CONCAT(UPPER([CUSTOMER]), ?)", Emit("UPPER(CUSTOMER) || '!'", ReportDialect.Postgres).Sql);
         Assert.Equal("(UPPER([CUSTOMER]) || ?)", Emit("UPPER(CUSTOMER) || '!'", ReportDialect.Oracle).Sql);
     }
 
@@ -43,6 +55,7 @@ public class ExprEmitterTests
         Assert.Equal("SUBSTRING([CUSTOMER], ?, LEN([CUSTOMER]))", Emit("SUBSTR(CUSTOMER, 2)", ReportDialect.SqlServer).Sql);
         Assert.Equal("SUBSTR([CUSTOMER], ?)", Emit("SUBSTR(CUSTOMER, 2)", ReportDialect.Oracle).Sql);
         Assert.Equal("SUBSTR([CUSTOMER], ?)", Emit("SUBSTR(CUSTOMER, 2)", ReportDialect.Sqlite).Sql);
+        Assert.Equal("SUBSTR([CUSTOMER], ?)", Emit("SUBSTR(CUSTOMER, 2)", ReportDialect.Postgres).Sql);
     }
 
     [Fact]
@@ -50,6 +63,7 @@ public class ExprEmitterTests
     {
         Assert.Equal("LEN([CUSTOMER])", Emit("LENGTH(CUSTOMER)", ReportDialect.SqlServer).Sql);
         Assert.Equal("LENGTH([CUSTOMER])", Emit("LENGTH(CUSTOMER)", ReportDialect.Oracle).Sql);
+        Assert.Equal("LENGTH([CUSTOMER])", Emit("LENGTH(CUSTOMER)", ReportDialect.Postgres).Sql);
     }
 
     [Fact]
@@ -57,6 +71,7 @@ public class ExprEmitterTests
     {
         Assert.Equal("YEAR([ORDER_DATE])", Emit("YEAR(ORDER_DATE)", ReportDialect.SqlServer).Sql);
         Assert.Equal("EXTRACT(YEAR FROM [ORDER_DATE])", Emit("YEAR(ORDER_DATE)", ReportDialect.Oracle).Sql);
+        Assert.Equal("EXTRACT(YEAR FROM [ORDER_DATE])", Emit("YEAR(ORDER_DATE)", ReportDialect.Postgres).Sql);
         Assert.Equal("CAST(strftime('%Y', [ORDER_DATE]) AS INTEGER)", Emit("YEAR(ORDER_DATE)", ReportDialect.Sqlite).Sql);
         Assert.Equal("CAST(strftime('%m', [ORDER_DATE]) AS INTEGER)", Emit("MONTH(ORDER_DATE)", ReportDialect.Sqlite).Sql);
     }
@@ -78,7 +93,7 @@ public class ExprEmitterTests
     // --- CASE, conditions, NULL: the portable core emits identically everywhere ---
 
     private static readonly ReportDialect[] AllDialects =
-        [ReportDialect.SqlServer, ReportDialect.Oracle, ReportDialect.Sqlite];
+        [ReportDialect.SqlServer, ReportDialect.Oracle, ReportDialect.Sqlite, ReportDialect.Postgres];
 
     [Fact]
     public void Searched_case_emits_identically_on_all_dialects()
@@ -148,12 +163,19 @@ public class ExprEmitterTests
             return ExprEmitter.Emit(ast!, dialect);
         }
 
-        foreach (var d in AllDialects)
+        foreach (var d in AllDialects.Where(d => d != ReportDialect.Postgres))
         {
             Assert.Equal("CASE WHEN ([IS_PRIORITY] = 1) THEN ? ELSE ? END",
                 EmitBool("CASE WHEN IS_PRIORITY THEN 1 ELSE 0 END", d).Sql);
             Assert.Equal("CASE WHEN ((NOT ([IS_PRIORITY] = 1)) AND ([AMOUNT] > ?)) THEN ? ELSE ? END",
                 EmitBool("CASE WHEN NOT IS_PRIORITY AND AMOUNT > 5 THEN 1 ELSE 0 END", d).Sql);
         }
+
+        // Postgres booleans are real conditions — "= 1" would be a boolean/integer
+        // type error there, so the value emits bare.
+        Assert.Equal("CASE WHEN [IS_PRIORITY] THEN ? ELSE ? END",
+            EmitBool("CASE WHEN IS_PRIORITY THEN 1 ELSE 0 END", ReportDialect.Postgres).Sql);
+        Assert.Equal("CASE WHEN ((NOT [IS_PRIORITY]) AND ([AMOUNT] > ?)) THEN ? ELSE ? END",
+            EmitBool("CASE WHEN NOT IS_PRIORITY AND AMOUNT > 5 THEN 1 ELSE 0 END", ReportDialect.Postgres).Sql);
     }
 }
