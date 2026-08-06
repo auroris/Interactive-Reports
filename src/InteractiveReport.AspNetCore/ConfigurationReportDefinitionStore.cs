@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using InteractiveReport.Core.Definitions;
+using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Model;
 using InteractiveReport.Core.Schema;
 using Microsoft.Extensions.Options;
@@ -50,6 +51,23 @@ public sealed partial class ConfigurationReportDefinitionStore : IReportDefiniti
         if (string.IsNullOrWhiteSpace(def.Connection))
             throw new InvalidOperationException($"Report '{def.Name}': connection is required.");
 
+        if (def.MaxRows is < 1 or int.MaxValue)
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': maxRows must be between 1 and {int.MaxValue - 1}.");
+        if (def.MaxPageSize < 1)
+            throw new InvalidOperationException($"Report '{def.Name}': maxPageSize must be at least 1.");
+        if (def.DefaultPageSize < 1 || def.DefaultPageSize > def.MaxPageSize)
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': defaultPageSize must be between 1 and maxPageSize ({def.MaxPageSize}).");
+        if (def.MaxPageSize > def.MaxRows)
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': maxPageSize ({def.MaxPageSize}) must not exceed maxRows ({def.MaxRows}).");
+        if (def.MaxPivotColumns < 1 || def.MaxPivotColumns > ReportExecutor.MaxPivotGroups)
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': maxPivotColumns must be between 1 and {ReportExecutor.MaxPivotGroups}.");
+        if (def.CommandTimeoutSeconds < 1)
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': commandTimeoutSeconds must be at least 1.");
         // The base SELECT becomes a derived table; a trailing ORDER BY breaks that on
         // SQL Server (APEX imposes the same rule). Heuristic: an ORDER BY after the last
         // closing paren is top-level.

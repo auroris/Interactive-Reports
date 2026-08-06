@@ -3,79 +3,65 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>InteractiveReport Workbench</title>
+    <title>InteractiveReport — Workbench</title>
     <style>
-        /* Deliberately plain: this is the engine's test harness, not the product UI. */
-        body { font-family: system-ui, sans-serif; margin: 1.5rem; color: #222; }
-        h1 { font-size: 1.3rem; }
-        .toolbar { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; margin-bottom: .75rem; }
-        .filters { margin: .5rem 0; display: flex; flex-direction: column; gap: .4rem; }
-        .filter-row { display: flex; gap: .4rem; align-items: center; }
-        select, input, button { font: inherit; padding: .25rem .4rem; }
-        table { border-collapse: collapse; width: 100%; margin-top: .5rem; }
-        th, td { border: 1px solid #ccc; padding: .3rem .55rem; text-align: left; white-space: nowrap; }
-        th { background: #f0f0f2; cursor: pointer; user-select: none; }
-        th .dir { color: #888; font-size: .8em; }
-        tbody tr:nth-child(even) { background: #fafafa; }
-        td.num { text-align: right; font-variant-numeric: tabular-nums; }
-        tr.break-header td { background: #e4e9f2; font-weight: 600; border-top: 2px solid #99a; }
-        tr.break-total td { background: #f2f4f8; font-style: italic; color: #445; }
-        #grand { font-weight: 600; color: #334; }
-        .meta { color: #666; font-size: .85rem; margin-top: .5rem; display: flex; gap: 1.25rem; align-items: center; }
-        .warn { color: #a15c00; }
-        .error { color: #b00020; white-space: pre-wrap; }
-        .chip { margin-left: auto; background: #eef; border: 1px solid #ccd; border-radius: 1em; padding: .15rem .7rem; font-size: .85rem; }
+        /* Host-page chrome only — everything inside <interactive-report> ships with the package. */
+        :root { color-scheme: light; }
+        body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; background: #eef1f4; color: #1f2733; }
+        header {
+            display: flex; align-items: center; gap: 1.25rem;
+            background: #123a5e; color: #fff; padding: .65rem 1.25rem;
+        }
+        header h1 { font-size: 1rem; margin: 0; font-weight: 600; letter-spacing: .01em; }
+        header .links { margin-left: auto; display: flex; gap: 1rem; align-items: center; font-size: .8rem; }
+        header a { color: #bcd8f2; text-decoration: none; }
+        header a:hover { color: #fff; text-decoration: underline; }
+        #identity { background: rgba(255,255,255,.12); border-radius: 1em; padding: .15rem .7rem; font-size: .75rem; }
+        main { max-width: 72rem; margin: 1.25rem auto; padding: 0 1rem; }
+        nav.tabs { display: flex; gap: .25rem; margin-bottom: .75rem; flex-wrap: wrap; }
+        nav.tabs button {
+            font: inherit; font-size: .82rem; cursor: pointer;
+            border: 1px solid #c9d2da; border-radius: 4px 4px 0 0; background: #f7f9fa;
+            padding: .4rem .9rem; color: #33414e;
+        }
+        nav.tabs button.active { background: #fff; border-bottom-color: #fff; font-weight: 600; color: #0b5394; }
     </style>
+    <script type="module" src="/api/reports/ui/ir.js"></script>
 </head>
 <body>
-    <h1>InteractiveReport Workbench</h1>
+    <header>
+        <h1>InteractiveReport Workbench</h1>
+        <div class="links">
+            <span id="identity"></span>
+            <a href="/admin.html">Saved-report admin</a>
+            <a href="/plain.html">Plain harness</a>
+        </div>
+    </header>
 
-    <div class="toolbar">
-        <label>Report <select id="report"></select></label>
-        <input id="search" type="search" placeholder="Search…" size="24">
-        <button id="add-filter">+ Filter</button>
-        <button id="add-agg">+ Aggregate</button>
-        <button id="add-computed">+ Computed</button>
-        <button id="add-highlight">+ Highlight</button>
-        <label>Break by <select id="break"></select></label>
-        <label>View <select id="view">
-            <option value="grid">Grid</option>
-            <option value="groupBy">Group By</option>
-            <option value="pivot">Pivot</option>
-        </select></label>
-        <label id="groupdim-wrap" hidden>Group on <select id="group-dim"></select></label>
-        <label id="pivotrow-wrap" hidden>Rows <select id="pivot-row"></select></label>
-        <label id="pivotcol-wrap" hidden>Cols <select id="pivot-col"></select></label>
-        <button id="export">⬇ CSV</button>
-        <label>Saved <select id="saved"></select></label>
-        <button id="save-view">Save view</button>
-        <label id="global-wrap" hidden><input id="save-global" type="checkbox"> as global</label>
-        <button id="delete-saved" disabled>Delete saved</button>
-        <span id="identity" class="chip"></span>
-    </div>
+    <main>
+        <nav class="tabs" id="tabs" aria-label="Reports"></nav>
+        <interactive-report id="ir"></interactive-report>
+    </main>
 
-    <div id="filters" class="filters"></div>
-    <div id="aggs" class="filters"></div>
-    <div id="computeds" class="filters"></div>
-    <div id="highlights" class="filters"></div>
+    <script type="module">
+        const tabs = document.getElementById("tabs");
+        const ir = document.getElementById("ir");
 
-    <div id="error" class="error"></div>
-    <table>
-        <thead id="thead"></thead>
-        <tbody id="tbody"></tbody>
-    </table>
+        const reports = await fetch("/api/reports").then(r => r.json());
+        for (const [i, r] of reports.entries()) {
+            const btn = document.createElement("button");
+            btn.textContent = r.title;
+            btn.onclick = () => {
+                ir.setAttribute("report", r.name);
+                tabs.querySelectorAll("button").forEach(b => b.classList.toggle("active", b === btn));
+            };
+            tabs.append(btn);
+            if (i === 0) btn.onclick();
+        }
 
-    <div class="meta">
-        <span>
-            <button id="prev">&lt;</button>
-            <span id="pageinfo"></span>
-            <button id="next">&gt;</button>
-        </span>
-        <span id="stats"></span>
-        <span id="grand"></span>
-        <span id="ignored" class="warn"></span>
-    </div>
-
-    <script src="app.js"></script>
+        const who = await fetch("/api/reports/whoami").then(r => r.ok ? r.json() : null).catch(() => null);
+        if (who) document.getElementById("identity").textContent =
+            (who.identity ?? "anonymous") + (who.isAdministrator ? " · admin" : "");
+    </script>
 </body>
 </html>

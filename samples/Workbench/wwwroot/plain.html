@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>InteractiveReport Workbench — plain harness</title>
+    <style>
+        /* Deliberately plain: this is the engine's test harness, not the product UI. */
+        body { font-family: system-ui, sans-serif; margin: 1.5rem; color: #222; }
+        h1 { font-size: 1.3rem; }
+        .toolbar { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; margin-bottom: .75rem; }
+        .filters { margin: .5rem 0; display: flex; flex-direction: column; gap: .4rem; }
+        .filter-row { display: flex; gap: .4rem; align-items: center; }
+        select, input, button { font: inherit; padding: .25rem .4rem; }
+        table { border-collapse: collapse; width: 100%; margin-top: .5rem; }
+        th, td { border: 1px solid #ccc; padding: .3rem .55rem; text-align: left; white-space: nowrap; }
+        th { background: #f0f0f2; cursor: pointer; user-select: none; }
+        th .dir { color: #888; font-size: .8em; }
+        tbody tr:nth-child(even) { background: #fafafa; }
+        td.num { text-align: right; font-variant-numeric: tabular-nums; }
+        tr.break-header td { background: #e4e9f2; font-weight: 600; border-top: 2px solid #99a; }
+        tr.break-total td { background: #f2f4f8; font-style: italic; color: #445; }
+        #grand { font-weight: 600; color: #334; }
+        .meta { color: #666; font-size: .85rem; margin-top: .5rem; display: flex; gap: 1.25rem; align-items: center; }
+        .warn { color: #a15c00; }
+        .error { color: #b00020; white-space: pre-wrap; }
+        .chip { margin-left: auto; background: #eef; border: 1px solid #ccd; border-radius: 1em; padding: .15rem .7rem; font-size: .85rem; }
+    </style>
+</head>
+<body>
+    <h1>InteractiveReport Workbench <small style="font-weight:normal;color:#888">— plain harness (the living protocol spec); the product UI is at <a href="/">/</a></small></h1>
+
+    <div class="toolbar">
+        <label>Report <select id="report"></select></label>
+        <input id="search" type="search" placeholder="Search…" size="24">
+        <button id="add-filter">+ Filter</button>
+        <button id="add-agg">+ Aggregate</button>
+        <button id="add-computed">+ Computed</button>
+        <button id="add-highlight">+ Highlight</button>
+        <label>Break by <select id="break"></select></label>
+        <label>View <select id="view">
+            <option value="grid">Grid</option>
+            <option value="groupBy">Group By</option>
+            <option value="pivot">Pivot</option>
+        </select></label>
+        <label id="groupdim-wrap" hidden>Group on <select id="group-dim"></select></label>
+        <label id="pivotrow-wrap" hidden>Rows <select id="pivot-row"></select></label>
+        <label id="pivotcol-wrap" hidden>Cols <select id="pivot-col"></select></label>
+        <button id="export">⬇ CSV</button>
+        <label>Saved <select id="saved"></select></label>
+        <button id="save-view">Save view</button>
+        <label id="global-wrap" hidden><input id="save-global" type="checkbox"> as global</label>
+        <button id="delete-saved" disabled>Delete saved</button>
+        <span id="identity" class="chip"></span>
+    </div>
+
+    <div id="filters" class="filters"></div>
+    <div id="aggs" class="filters"></div>
+    <div id="computeds" class="filters"></div>
+    <div id="highlights" class="filters"></div>
+
+    <div id="error" class="error"></div>
+    <table>
+        <thead id="thead"></thead>
+        <tbody id="tbody"></tbody>
+    </table>
+
+    <div class="meta">
+        <span>
+            <button id="prev">&lt;</button>
+            <span id="pageinfo"></span>
+            <button id="next">&gt;</button>
+        </span>
+        <span id="stats"></span>
+        <span id="grand"></span>
+        <span id="ignored" class="warn"></span>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

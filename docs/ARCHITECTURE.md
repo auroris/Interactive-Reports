@@ -69,8 +69,8 @@ whitelist, and eliminates the worst dialect divergence (native PIVOT syntax) ent
 | Project | Responsibility |
 |---|---|
 | `src/InteractiveReport.Core` | State model, validation, expression parser, query composition (SqlKata), execution, schema discovery, highlight evaluation, in-memory pivot, export. No ASP.NET dependencies. |
-| `src/InteractiveReport.AspNetCore` | Endpoint mapping (`MapInteractiveReports`), config-backed definition store, auth integration, JSON protocol shaping, problem+json errors. |
-| `samples/Workbench` | Dev harness: SQLite sample DB + a deliberately plain JS page exercising every engine feature. The living spec for any future real UI. |
+| `src/InteractiveReport.AspNetCore` | Endpoint mapping (`MapInteractiveReports`), config-backed definition store, auth integration, JSON protocol shaping, problem+json errors. `Ui/` holds the packaged product UI (§14), embedded and served by the same mapping. |
+| `samples/Workbench` | Dev harness: SQLite sample DB. `index.html`/`admin.html` host the packaged UI; `plain.html` is the deliberately plain JS page exercising every engine feature — the living spec for the protocol. |
 | `tests/InteractiveReport.Core.Tests` | Composer golden tests (state doc → expected SQL, ×3 dialects), expression parser tests, SQLite end-to-end integration tests. |
 
 Target framework: `net8.0` (Umbraco 13 LTS floor; builds under SDK 8/10).
@@ -195,6 +195,7 @@ Mounted by the host: `app.MapInteractiveReports("/api/reports").RequireAuthoriza
 | `GET/PUT/DELETE /api/reports/saved/{id}` | Load / modify / delete one saved report (matrix in §13). |
 | `GET  /api/reports/admin/saved` | Administrator: every saved report in the system. |
 | `POST /api/reports/{name}/export` | Same state, same gate, no paging → CSV (UTF-8 BOM, label headers), capped at `maxRows` with `X-IR-Truncated` header. XLSX/HTML later. |
+| `GET  /api/reports/ui/{file}` | Packaged UI assets (§14). Anonymous by design; content-hash ETags. |
 
 POST is the primary verb deliberately: state documents outgrow querystrings, and GET puts
 filter values into proxy/server logs. Shareable deep links arrive later as saved-state
@@ -380,7 +381,58 @@ owner reaching for admin-only powers (publish, reassign) gets an explicit 403. G
 reports are shared infrastructure: mutating one is admin-only even for its owner.
 Saved-report loads still pass the underlying report definition's authorization gate.
 
-## 14. Milestones
+## 14. Packaged UI
+
+The product UI is a consumer of the JSON protocol, nothing more — it ships *with* the
+AspNetCore package but the engine never depends on it. Everything the plain Workbench
+harness proves about the protocol, the packaged UI does for real users, styled after
+APEX's Interactive Reports.
+
+**Consumption** (any host page, Umbraco included):
+
+```html
+<script type="module" src="/api/reports/ui/ir.js"></script>
+<interactive-report report="open-orders"></interactive-report>
+
+<script type="module" src="/api/reports/ui/ir-admin.js"></script>
+<interactive-report-admin></interactive-report-admin>
+```
+
+- Custom elements, no build step, no dependencies: plain ES modules embedded in the
+  assembly and served at `{prefix}/ui/{file}` by `MapInteractiveReports`. `base`
+  defaults to the prefix the script was loaded from (attribute overrides). Changing
+  the `report` attribute re-initializes in place.
+- Modules: `ir.js` (element, state doc plumbing, toolbar/menus), `ir-api.js`
+  (fetch + problem+json), `ir-ui.js` (menu/dialog primitives), `ir-render.js`
+  (chips, grid, pager), `ir-dialogs.js` (the Actions dialogs), `ir-admin.js`
+  (admin element), `ir.css`.
+- **Feature surface**: scoped toolbar search (all text columns or one column → filter);
+  Actions menu (Columns shuttle, Filter, Sort, Control Break, Highlight, Aggregate,
+  Compute with token-insert helpers, Group By, Pivot, Save/Save As/Delete/Reset,
+  CSV download); column-header menus (sort/hide/break/filter); settings chips with
+  APEX-style enable/disable checkboxes; break groups with per-column subtotal rows and
+  grand-total rows; row/cell highlights; groupBy/pivot rendering; saved-report select
+  (Primary Report + Global/Private groups); `ignored[]` and problem+json surfaced as
+  notices — validation problems render *inside* the originating dialog, which stays
+  open (apply is optimistic: mutate, re-query, roll back on failure).
+- **Client-only state** (chip disabled flags, `_`-prefixed keys) is stripped at
+  serialization: the server, saved reports, and exports only ever see the canonical
+  state document.
+- **Styling**: light DOM, every rule namespaced `.ir-*` under CSS custom properties
+  (`--ir-accent`, …). `ir.css` auto-links once per document; a host can pre-link its
+  own `<link data-ir-css>` to fully retheme. No Shadow DOM — hosts theme it; popups
+  and dialogs mount on `<body>` and are styled standalone.
+- **Asset endpoint is anonymous** even when the host chains `RequireAuthorization` on
+  the group: the assets are public package code (no data, no secrets), and a
+  session-expired page that cannot load the script cannot even say "sign in". Every
+  data endpoint keeps the full gate. ETags are content hashes (SHA-256 prefix) with
+  `Cache-Control: no-cache` — an assembly-version tag would 304 stale content across
+  rebuilds of the same version.
+- The admin element drives the §13 administrator surface: list everything,
+  publish/unpublish, reassign owner, inspect the stored state document, delete. It
+  simply loses its data (404) for non-administrators and says so.
+
+## 15. Milestones
 
 - **M1 — It's alive** ✅ *(2026-08-04)*: state doc (filters/sorts/paging/search) +
   composer + SQLite execution + schema discovery + Workbench grid over a sample DB.
@@ -400,7 +452,14 @@ Saved-report loads still pass the underlying report definition's authorization g
   passes; hardening (timeouts, caps, logging discipline). *Prep complete 2026-08-05:
   env-gated live-dialect battery (docs/TESTING.md), operator × dialect golden matrix,
   SQL-safety corpus, Oracle BindByName fix, parser recursion guard, Debug-only SQL
-  logging. Awaiting live database runs.*
+  logging. Live battery verified green ×2 dialects 2026-08-05.*
+- **M6 — The real UI** ✅ *(2026-08-05)*: packaged APEX-style widget + saved-report
+  administration widget (§14), embedded-asset serving, Workbench pages rebuilt around
+  them (plain harness preserved as the protocol spec). Verified end-to-end in the
+  browser against the SQLite sample: filters/chips/toggles, header menus, computed
+  columns, highlights, breaks + subtotal/grand rows, groupBy, pivot, scoped search,
+  saved reports (save-as/publish/reassign/state/delete), CSV download, validation
+  problems in-dialog, `ignored[]` notices, per-report policy gate.
 
 ## Appendix: decision log
 
@@ -424,3 +483,10 @@ Saved-report loads still pass the underlying report definition's authorization g
 | CSV: UTF-8 BOM, label headers, X-IR-Truncated header | bare UTF-8, name headers, silent truncation | Excel needs the BOM to detect encoding; users recognize labels, not internal names; silent truncation reads as complete data. |
 | Views share the export pipeline | grid-only export | Exporting "what the view shows" falls out of running the same validated state unpaged — no special cases. |
 | Oracle BindByName via reflection in CommandBuilder | reference ODP.NET from Core | ODP.NET binds by position by default; context params appear first in SQL but are added last, so positional binding silently misbinds. Reflection keeps Core provider-free. |
+| UI: no-build vanilla ES modules as custom elements | React/Vite bundle | No node toolchain in a .NET repo; embeddable in any host (Umbraco: one script tag + one element); the protocol keeps the JS dumb enough that a framework buys little. |
+| UI assets embedded in the AspNetCore assembly, served under the mapped prefix | RCL static web assets | Zero host setup (`UseStaticFiles`/`_content` not required), one mapping call delivers API + UI, works identically in any host. |
+| UI asset endpoint `AllowAnonymous` | inherit group auth | Assets are public package code (readable on any feed); an auth-gated script tag turns "session expired" into a blank region that can't even say "sign in". Data endpoints keep the full gate. |
+| Asset ETags hash content | assembly version tag | Version-tagged ETags 304 stale content across rebuilds of the same version (bitten in dev; would bite ops on patch releases). |
+| Light DOM + `.ir-*` prefix + CSS custom properties | Shadow DOM | Hosts want to theme the region, not fight encapsulation; prefix discipline is enough isolation and keeps the DOM inspectable. |
+| Chip disable-toggles are client-only state, stripped at serialization | protocol-level `disabled` flags | The engine's state document stays canonical (validation, saved reports, exports agree); a toggle is presentation-side convenience. |
+| Save persists only enabled items | persist disabled items too | Round-tripping disabled items would need protocol support; "what you see is what you saved" is predictable. |

@@ -29,6 +29,9 @@ public static class EndpointExtensions
         group.MapPost("/{name}/query", PostQuery);
         group.MapPost("/{name}/export", PostExport);
 
+        // Packaged UI assets. Anonymous even when the host locks the group — see UiEndpoints.
+        group.MapGet("/ui/{file}", UiEndpoints.Serve).AllowAnonymous();
+
         // Identity + saved reports (literal segments win over {name} in ASP.NET routing).
         group.MapGet("/whoami", SavedReportEndpoints.Whoami);
         group.MapGet("/{name}/saved", SavedReportEndpoints.ListForReport);
