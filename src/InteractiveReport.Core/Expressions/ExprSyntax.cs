@@ -26,6 +26,8 @@ internal sealed record BinarySyntax(int Pos, string Op, SyntaxNode Left, SyntaxN
 
 internal sealed record NullTestSyntax(int Pos, SyntaxNode Operand, bool Negated) : SyntaxNode(Pos);
 
+internal sealed record BetweenSyntax(int Pos, SyntaxNode Operand, SyntaxNode Lower, SyntaxNode Upper) : SyntaxNode(Pos);
+
 internal sealed record WhenClauseSyntax(SyntaxNode When, SyntaxNode Then);
 
 /// <summary>Operand null = searched CASE (WHEN are conditions); non-null = simple CASE (WHEN are values).</summary>
@@ -49,7 +51,7 @@ internal sealed class ExprSyntaxParser
 
     private static readonly HashSet<string> Keywords = new(StringComparer.OrdinalIgnoreCase)
     {
-        "CASE", "WHEN", "THEN", "ELSE", "END", "AND", "OR", "NOT", "IS", "NULL",
+        "CASE", "WHEN", "THEN", "ELSE", "END", "AND", "OR", "NOT", "IS", "NULL", "BETWEEN",
     };
 
     // Binary precedence. NOT sits between AND and comparison via ParsePrefix.
@@ -229,6 +231,21 @@ internal sealed class ExprSyntaxParser
                     if (AtKeyword("NOT")) { negated = true; _pos++; }
                     ExpectKeyword("NULL");
                     left = new NullTestSyntax(pos, left, negated);
+                    continue;
+                }
+
+                // BETWEEN binds at comparison precedence; its bounds parse one level
+                // above AND so the connecting AND stays BETWEEN's own, and a trailing
+                // AND falls out of the loop as a logical operator (SQL's grammar).
+                if (AtKeyword("BETWEEN"))
+                {
+                    if (ComparisonPrec < minPrec) break;
+                    var pos = Current.Position;
+                    _pos++;
+                    var lower = ParseBinary(ComparisonPrec + 1);
+                    ExpectKeyword("AND");
+                    var upper = ParseBinary(ComparisonPrec + 1);
+                    left = new BetweenSyntax(pos, left, lower, upper);
                     continue;
                 }
 

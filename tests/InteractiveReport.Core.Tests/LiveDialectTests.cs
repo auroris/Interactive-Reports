@@ -306,6 +306,89 @@ public class LiveDialectTests
     }
 
     [SkippableTheory]
+    [MemberData(nameof(Dialects))]
+    public async Task Date_vocabulary_agrees_across_engines(ReportDialect dialect)
+    {
+        // The decided date design (ARCHITECTURE §8): NOW/TO_DATE/DATE_TRUNC/TO_STRING,
+        // whole-day arithmetic, plain SQL comparisons, inclusive BETWEEN. Bounds are
+        // fixed dates so counts are clock-independent; only c6 needs a sane engine
+        // clock (anything past 2020).
+        var live = LiveDb.For(dialect);
+        var def = live.Definition();
+        def.Name = $"live-date-vocab-{dialect}";
+        def.Sql = "SELECT ORDER_ID, AMOUNT, ORDER_DATE, ORDER_DATE_TEXT FROM IR_TEST_ORDERS";
+
+        var result = await live.Executor.Query(def, new ReportState
+        {
+            Computed =
+            [
+                // Inclusive 2026 window over the native date column: ids 6–10.
+                new ComputedColumn { Id = "c1", Expr = "CASE WHEN ORDER_DATE BETWEEN TO_DATE('2026-01-01') AND TO_DATE('2026-12-31') THEN 1 ELSE 0 END" },
+                // Text→date conversion agrees with the native date at day granularity.
+                new ComputedColumn { Id = "c2", Expr = "CASE WHEN TO_DATE(ORDER_DATE_TEXT) = DATE_TRUNC('DAY', ORDER_DATE) THEN 1 ELSE 0 END" },
+                // Whole-day arithmetic: the shifted date passes the original.
+                new ComputedColumn { Id = "c3", Expr = "CASE WHEN TO_DATE(ORDER_DATE_TEXT) + 1 > ORDER_DATE THEN 1 ELSE 0 END" },
+                // Format translation parity: YYYY-MM equals the ISO text prefix.
+                new ComputedColumn { Id = "c4", Expr = "TO_STRING(ORDER_DATE, 'YYYY-MM')" },
+                // Feb 2026 via month truncation: ids 6, 7, 10.
+                new ComputedColumn { Id = "c5", Expr = "CASE WHEN DATE_TRUNC('MONTH', ORDER_DATE) = TO_DATE('2026-02-01') THEN 1 ELSE 0 END" },
+                // NOW() on the engine clock, exercised through BETWEEN + arithmetic.
+                new ComputedColumn { Id = "c6", Expr = "CASE WHEN NOW() BETWEEN TO_DATE('2020-01-01') AND NOW() + 1 THEN 1 ELSE 0 END" },
+                // NULL keeps its Date type through producers and arithmetic: with a
+                // bare NULL, Oracle typed the sum as NUMBER and Postgres either made
+                // an INTERVAL of it or could not resolve date_trunc at all.
+                new ComputedColumn { Id = "c7", Expr = "CASE WHEN TO_DATE(NULL) + 1 IS NULL AND DATE_TRUNC('DAY', TO_DATE(NULL)) IS NULL THEN 1 ELSE 0 END" },
+            ],
+            Aggregates =
+            [
+                new AggregateRule { Col = "c1", Fn = AggregateFn.Sum },
+                new AggregateRule { Col = "c2", Fn = AggregateFn.Sum },
+                new AggregateRule { Col = "c3", Fn = AggregateFn.Sum },
+                new AggregateRule { Col = "c5", Fn = AggregateFn.Sum },
+                new AggregateRule { Col = "c6", Fn = AggregateFn.Sum },
+                new AggregateRule { Col = "c7", Fn = AggregateFn.Sum },
+            ],
+            Sorts = [new SortRule { Col = "ORDER_ID", Dir = SortDir.Asc }],
+        }, NoParams);
+
+        Assert.Equal(5m, Convert.ToDecimal(result.Aggregates["c1"]["sum"]));
+        Assert.Equal(10m, Convert.ToDecimal(result.Aggregates["c2"]["sum"]));
+        Assert.Equal(10m, Convert.ToDecimal(result.Aggregates["c3"]["sum"]));
+        Assert.Equal(3m, Convert.ToDecimal(result.Aggregates["c5"]["sum"]));
+        Assert.Equal(10m, Convert.ToDecimal(result.Aggregates["c6"]["sum"]));
+        Assert.Equal(10m, Convert.ToDecimal(result.Aggregates["c7"]["sum"]));
+        Assert.All(result.Rows, r =>
+            Assert.Equal(((string)r["ORDER_DATE_TEXT"]!)[..7], (string)r["c4"]!));
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Dialects))]
+    public async Task Definition_timezone_pins_the_session_where_one_exists(ReportDialect dialect)
+    {
+        // def.TimeZone pins the session on engines that have session timezones
+        // (Oracle ALTER SESSION, Postgres SET TIME ZONE) so NOW() follows it; on
+        // SQL Server the configured value is deliberately ignored — the query must
+        // simply run as if the setting were absent.
+        var live = LiveDb.For(dialect);
+        var def = live.Definition();
+        def.Name = $"live-tz-{dialect}";
+        def.TimeZone = "Pacific/Auckland";
+        def.Sql = dialect switch
+        {
+            ReportDialect.Oracle => "SELECT SESSIONTIMEZONE AS TZ FROM DUAL",
+            ReportDialect.Postgres => "SELECT current_setting('TimeZone') AS \"TZ\"",
+            _ => "SELECT ORDER_ID FROM IR_TEST_ORDERS",
+        };
+
+        var result = await live.Executor.Query(def, new ReportState(), NoParams);
+
+        if (dialect == ReportDialect.SqlServer)
+            Assert.Equal(10, result.TotalRows);
+        else
+            Assert.Equal("Pacific/Auckland", (string)result.Rows.Single()["TZ"]!);
+    }
+
+    [SkippableTheory]
     [InlineData(ReportDialect.SqlServer)]
     [InlineData(ReportDialect.Postgres)]
     public async Task Uuid_filters_bind_native_uuid_values(ReportDialect dialect)

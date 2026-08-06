@@ -55,6 +55,25 @@ public sealed record Comparison(string Op, ExprNode Left, ExprNode Right) : Expr
     public override ColumnKind Kind => ColumnKind.Bool;
 }
 
+/// <summary>
+/// x BETWEEN lower AND upper — inclusive at both boundaries, bounds emitted as
+/// written (reversed bounds are not reordered). All three operands share one kind.
+/// </summary>
+public sealed record Between(ExprNode Operand, ExprNode Lower, ExprNode Upper) : ExprNode
+{
+    public override ColumnKind Kind => ColumnKind.Bool;
+}
+
+/// <summary>
+/// date + days / date - days, whole calendar days only (Op is + or -). The binder
+/// admits Days only when its integrality is established; a separate node because
+/// every dialect has its own date-arithmetic idiom.
+/// </summary>
+public sealed record DateAdd(string Op, ExprNode Date, ExprNode Days) : ExprNode
+{
+    public override ColumnKind Kind => ColumnKind.Date;
+}
+
 /// <summary>Op is AND or OR.</summary>
 public sealed record LogicalOp(string Op, ExprNode Left, ExprNode Right) : ExprNode
 {

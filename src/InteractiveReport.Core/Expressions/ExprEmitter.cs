@@ -11,8 +11,10 @@ namespace InteractiveReport.Core.Expressions;
 /// operation is parenthesized — verbose SQL beats precedence surprises.
 ///
 /// Function SQL comes from the registry (ExprFunctions): the emitter knows shapes,
-/// the registry knows names and dialect idioms. CASE/comparisons/IS NULL emit
-/// identically on all three dialects — that is the portable core of the subset.
+/// the registry knows names and dialect idioms. CASE/comparisons/BETWEEN/IS NULL
+/// emit identically on every dialect — the portable core of the subset — except
+/// that SQLite normalizes date comparands (see VisitComparand) and date arithmetic
+/// is per-dialect by nature (see ExprFunctions.EmitDateAdd).
 /// </summary>
 public static class ExprEmitter
 {
@@ -35,6 +37,14 @@ internal sealed class EmitContext(ReportDialect dialect)
 
     public EmitContext Append(string text) { _sb.Append(text); return this; }
     public EmitContext Append(char c) { _sb.Append(c); return this; }
+
+    /// <summary>A '?' placeholder bound to a value we computed (e.g. a translated format mask).</summary>
+    public EmitContext AppendBinding(object value)
+    {
+        _sb.Append('?');
+        _bindings.Add(value);
+        return this;
+    }
 
     public void Visit(ExprNode node)
     {
@@ -78,8 +88,26 @@ internal sealed class EmitContext(ReportDialect dialect)
                 Infix(b.Op, b.Left, b.Right);
                 break;
 
+            case DateAdd d:
+                ExprFunctions.EmitDateAdd(this, d);
+                break;
+
             case Comparison c:
-                Infix(c.Op, c.Left, c.Right);
+                _sb.Append('(');
+                VisitComparand(c.Left);
+                _sb.Append(' ').Append(c.Op).Append(' ');
+                VisitComparand(c.Right);
+                _sb.Append(')');
+                break;
+
+            case Between b:
+                _sb.Append('(');
+                VisitComparand(b.Operand);
+                _sb.Append(" BETWEEN ");
+                VisitComparand(b.Lower);
+                _sb.Append(" AND ");
+                VisitComparand(b.Upper);
+                _sb.Append(')');
                 break;
 
             case LogicalOp l:
@@ -129,7 +157,7 @@ internal sealed class EmitContext(ReportDialect dialect)
     /// </summary>
     private void VisitCondition(ExprNode node)
     {
-        if (node is Comparison or LogicalOp or NotOp or NullTest || Dialect == ReportDialect.Postgres)
+        if (node is Comparison or Between or LogicalOp or NotOp or NullTest || Dialect == ReportDialect.Postgres)
         {
             Visit(node);
             return;
@@ -139,19 +167,42 @@ internal sealed class EmitContext(ReportDialect dialect)
         _sb.Append(" = 1)");
     }
 
+    /// <summary>
+    /// Emit a node in comparison position (comparisons, BETWEEN, simple-CASE
+    /// matching). On SQLite, Date values are ISO text and date-only text sorts
+    /// before its own midnight timestamp, so date operands normalize through
+    /// datetime() — except values from producers that already emit the canonical
+    /// full form (NOW/TO_DATE/DATE_TRUNC and date arithmetic). Everywhere else
+    /// this is a plain Visit.
+    /// </summary>
+    private void VisitComparand(ExprNode node)
+    {
+        if (Dialect != ReportDialect.Sqlite || node.Kind != ColumnKind.Date || IsCanonicalSqliteDate(node))
+        {
+            Visit(node);
+            return;
+        }
+        _sb.Append("datetime(");
+        Visit(node);
+        _sb.Append(')');
+    }
+
+    private static bool IsCanonicalSqliteDate(ExprNode node)
+        => node is DateAdd or FuncCall { Name: "NOW" or "TO_DATE" or "DATE_TRUNC" };
+
     private void EmitCase(CaseWhen c)
     {
         _sb.Append("CASE");
         if (c.Operand is not null)
         {
             _sb.Append(' ');
-            Visit(c.Operand);
+            VisitComparand(c.Operand);
         }
         foreach (var branch in c.Branches)
         {
             _sb.Append(" WHEN ");
             if (c.Operand is null) VisitCondition(branch.When);
-            else Visit(branch.When);
+            else VisitComparand(branch.When);
             _sb.Append(" THEN ");
             Visit(branch.Then);
         }

@@ -288,7 +288,7 @@ export function aggregateDialog(w) {
 
 // --- Compute -----------------------------------------------------------------
 
-const EXPR_FUNCTIONS = "UPPER LOWER TRIM LENGTH SUBSTR CONCAT ROUND ABS COALESCE YEAR MONTH DAY";
+const EXPR_FUNCTIONS = "UPPER LOWER TRIM LENGTH SUBSTR CONCAT ROUND ABS COALESCE YEAR MONTH DAY NOW TO_DATE TO_STRING DATE_TRUNC";
 
 export function computeDialog(w, editIndex) {
     const existing = editIndex !== undefined ? w.doc.computed?.[editIndex] : undefined;

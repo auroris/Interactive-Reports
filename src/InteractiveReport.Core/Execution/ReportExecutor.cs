@@ -37,6 +37,48 @@ public sealed class ReportExecutor
         _logger = logger;
     }
 
+    /// <summary>Create, open, and prepare the session for this definition (timezone pin).</summary>
+    private async Task<DbConnection> OpenConnection(ReportDefinition def, CancellationToken ct)
+    {
+        var conn = _connections.CreateConnection(def.Connection);
+        try
+        {
+            await conn.OpenAsync(ct);
+            await ApplySessionTimeZone(conn, def, ct);
+            return conn;
+        }
+        catch
+        {
+            await conn.DisposeAsync();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Pin the session timezone when the definition specifies one (ARCHITECTURE §8).
+    /// Only Oracle and Postgres have session timezones; on SqlServer and Sqlite a
+    /// configured value is deliberately ignored — their clock is the server's own.
+    /// The value is operator configuration (the same trust level as Sql itself) and
+    /// ALTER SESSION cannot take bind parameters, so it is quoted, not bound.
+    /// </summary>
+    private static async Task ApplySessionTimeZone(DbConnection conn, ReportDefinition def, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(def.TimeZone)) return;
+
+        var tz = def.TimeZone.Trim().Replace("'", "''");
+        var sql = def.Dialect switch
+        {
+            ReportDialect.Oracle => $"ALTER SESSION SET TIME_ZONE = '{tz}'",
+            ReportDialect.Postgres => $"SET TIME ZONE '{tz}'",
+            _ => null,
+        };
+        if (sql is null) return;
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
     public async Task<IReadOnlyList<ColumnModel>> GetSchema(
         ReportDefinition def,
         IReadOnlyDictionary<string, object?> contextParams,
@@ -44,8 +86,7 @@ public sealed class ReportExecutor
     {
         return await _schemaCache.GetOrDiscover(def.Name, async () =>
         {
-            await using var conn = _connections.CreateConnection(def.Connection);
-            await conn.OpenAsync(ct);
+            await using var conn = await OpenConnection(def, ct);
             return await SchemaDiscovery.Discover(conn, def, contextParams, ct);
         });
     }
@@ -86,8 +127,7 @@ public sealed class ReportExecutor
             return new ExportResult(pivot.Columns, pivot.Rows, Truncated: false);
         }
 
-        await using var conn = _connections.CreateConnection(def.Connection);
-        await conn.OpenAsync(ct);
+        await using var conn = await OpenConnection(def, ct);
 
         if (validated.View.Mode == ViewMode.GroupBy)
         {
@@ -119,8 +159,7 @@ public sealed class ReportExecutor
         var composed = QueryComposer.Compose(def, validated);
         var compiler = DialectSupport.GetCompiler(def.Dialect);
 
-        await using var conn = _connections.CreateConnection(def.Connection);
-        await conn.OpenAsync(ct);
+        await using var conn = await OpenConnection(def, ct);
 
         long totalRows;
         await using (var countCmd = CommandBuilder.Build(conn, compiler.Compile(composed.Count), contextParams, def, _logger))
@@ -172,8 +211,7 @@ public sealed class ReportExecutor
         var (page, count) = QueryComposer.ComposeGroupByView(def, validated);
         var compiler = DialectSupport.GetCompiler(def.Dialect);
 
-        await using var conn = _connections.CreateConnection(def.Connection);
-        await conn.OpenAsync(ct);
+        await using var conn = await OpenConnection(def, ct);
 
         long totalGroups;
         await using (var countCmd = CommandBuilder.Build(conn, compiler.Compile(count), contextParams, def, _logger))
@@ -261,9 +299,8 @@ public sealed class ReportExecutor
         var dimCount = rowDims.Count + colDims.Count;
 
         var groups = new List<(object?[] RowKey, object?[] ColKey, long Count, object?[] Values)>();
-        await using (var conn = _connections.CreateConnection(def.Connection))
+        await using (var conn = await OpenConnection(def, ct))
         {
-            await conn.OpenAsync(ct);
             await using var cmd = CommandBuilder.Build(conn, compiler.Compile(source), contextParams, def, _logger);
             await using var reader = await cmd.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct))

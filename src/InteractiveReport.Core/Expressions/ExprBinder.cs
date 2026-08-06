@@ -8,9 +8,9 @@ namespace InteractiveReport.Core.Expressions;
 /// the client's own input, carrying the source position where it helps.
 ///
 /// The type discipline in one paragraph: values are number/text/date (plus Other
-/// for odd provider types); conditions (Bool) arise from comparisons, IS [NOT]
-/// NULL, AND/OR/NOT, and are consumed by searched-CASE WHENs and by NOT/AND/OR —
-/// nowhere else. NULL is a value of every type; its type comes from context
+/// for odd provider types); conditions (Bool) arise from comparisons, BETWEEN,
+/// IS [NOT] NULL, AND/OR/NOT, and are consumed by searched-CASE WHENs and by
+/// NOT/AND/OR — nowhere else. NULL is a value of every type; its type comes from context
 /// (COALESCE/CASE unification), and an expression that is nothing but NULL cannot
 /// be typed and is rejected. Comparing against NULL with '=' is rejected with a
 /// pointer to IS NULL — SQL would silently yield no matches, and silence is the
@@ -29,6 +29,7 @@ internal static class ExprBinder
             UnarySyntax u => BindUnary(u, schema),
             BinarySyntax b => BindBinary(b, schema),
             NullTestSyntax t => BindNullTest(t, schema),
+            BetweenSyntax bt => BindBetween(bt, schema),
             CaseSyntax c => BindCase(c, schema),
             _ => throw new InvalidOperationException($"unhandled syntax node {syntax.GetType().Name}"),
         };
@@ -98,12 +99,88 @@ internal static class ExprBinder
                 RequireConcatable(right, "right of '||'");
                 return new BinaryOp("||", left, right);
 
+            case "+" or "-" when left.Kind == ColumnKind.Date || right.Kind == ColumnKind.Date:
+                return BindDateArithmetic(b, left, right);
+
             default:
                 if (!NumberContextAccepts(left) || !NumberContextAccepts(right))
                     throw new ExprError(
                         $"operator '{b.Op}' requires number operands (got {KindName(left)} and {KindName(right)})");
                 return new BinaryOp(b.Op, left, right);
         }
+    }
+
+    /// <summary>
+    /// date ± days, whole calendar days only. The date stands on the left; the offset
+    /// is a number whose integrality can be established — anything provably fractional
+    /// or merely unprovable is rejected rather than silently truncated per dialect.
+    /// </summary>
+    private static ExprNode BindDateArithmetic(BinarySyntax b, ExprNode left, ExprNode right)
+    {
+        if (left.Kind == ColumnKind.Date && right.Kind == ColumnKind.Date)
+            throw new ExprError(b.Op == "-"
+                ? $"date - date is not supported at position {b.Pos + 1}"
+                : $"two dates cannot be added at position {b.Pos + 1}");
+        if (right.Kind == ColumnKind.Date)
+            throw new ExprError(
+                $"the date goes on the left of '{b.Op}' (number {b.Op} date is not supported) at position {b.Pos + 1}");
+        if (!NumberContextAccepts(right))
+            throw new ExprError(
+                $"date {b.Op} offset must be a number of whole days (got {KindName(right)}) at position {b.Pos + 1}");
+
+        RequireWholeDays(right, b.Pos);
+        return new DateAdd(b.Op, left, right);
+    }
+
+    /// <summary>
+    /// Establish that a day-offset expression is whole: integer literals, integer-typed
+    /// columns, integer-valued functions, and +/-/* combinations of those. Division —
+    /// and anything else whose integrality cannot be established — is rejected.
+    /// NULL passes: a NULL offset yields a NULL date on every dialect.
+    /// </summary>
+    private static void RequireWholeDays(ExprNode node, int pos)
+    {
+        switch (node)
+        {
+            case NullLit:
+                return;
+            case NumberLit n:
+                if (decimal.Truncate(n.Value) != n.Value)
+                    throw new ExprError(
+                        $"date offsets are whole calendar days (got {n.Value}) at position {pos + 1}");
+                return;
+            case ColumnRef c when IsIntegerClrType(c.Column.ClrType):
+                return;
+            case UnaryMinus u:
+                RequireWholeDays(u.Operand, pos);
+                return;
+            case BinaryOp { Op: "+" or "-" or "*" } b:
+                RequireWholeDays(b.Left, pos);
+                RequireWholeDays(b.Right, pos);
+                return;
+            case FuncCall { Name: "YEAR" or "MONTH" or "DAY" or "LENGTH" }:
+                return;
+            case FuncCall { Name: "ROUND", Args.Count: 1 }:
+                return;
+            case FuncCall { Name: "ABS" or "COALESCE" } f:
+                foreach (var arg in f.Args) RequireWholeDays(arg, pos);
+                return;
+            case CaseWhen c:
+                foreach (var branch in c.Branches) RequireWholeDays(branch.Then, pos);
+                if (c.Else is not null) RequireWholeDays(c.Else, pos);
+                return;
+            default:
+                throw new ExprError(
+                    "date offsets are whole calendar days — this offset cannot be established as whole "
+                    + $"(use an integer literal, an integer column, or wrap it in ROUND(…)) at position {pos + 1}");
+        }
+    }
+
+    private static bool IsIntegerClrType(Type t)
+    {
+        t = Nullable.GetUnderlyingType(t) ?? t;
+        return t == typeof(byte) || t == typeof(sbyte) || t == typeof(short) || t == typeof(ushort)
+            || t == typeof(int) || t == typeof(uint) || t == typeof(long) || t == typeof(ulong);
     }
 
     private static ExprNode BindComparison(BinarySyntax b, ExprNode left, ExprNode right)
@@ -118,6 +195,24 @@ internal static class ExprBinder
                 $"'{b.Op}' compares values of the same type (got {KindName(left)} and {KindName(right)}) at position {b.Pos + 1}");
 
         return new Comparison(b.Op, left, right);
+    }
+
+    private static ExprNode BindBetween(BetweenSyntax b, IReadOnlyDictionary<string, ColumnModel> schema)
+    {
+        var operand = Bind(b.Operand, schema);
+        var lower = Bind(b.Lower, schema);
+        var upper = Bind(b.Upper, schema);
+
+        if (operand.Kind == ColumnKind.Bool || lower.Kind == ColumnKind.Bool || upper.Kind == ColumnKind.Bool)
+            throw new ExprError($"BETWEEN cannot compare conditions at position {b.Pos + 1}");
+        if (operand is NullLit || lower is NullLit || upper is NullLit)
+            throw new ExprError(
+                $"'BETWEEN NULL' never matches — use IS NULL or IS NOT NULL at position {b.Pos + 1}");
+        if (operand.Kind != lower.Kind || operand.Kind != upper.Kind)
+            throw new ExprError(
+                $"BETWEEN needs the value and both bounds to share one type (got {KindName(operand)}, {KindName(lower)}, and {KindName(upper)}) at position {b.Pos + 1}");
+
+        return new Between(operand, lower, upper);
     }
 
     private static ExprNode BindNullTest(NullTestSyntax t, IReadOnlyDictionary<string, ColumnModel> schema)
@@ -189,7 +284,13 @@ internal static class ExprBinder
     private static void RequireConcatable(ExprNode node, string where)
     {
         if (node is NullLit) return; // NULL concatenates as empty on every dialect
-        if (node.Kind is not (ColumnKind.Text or ColumnKind.Number or ColumnKind.Date))
+        if (node.Kind == ColumnKind.Date)
+            // Implicit date-to-text follows engine settings (session language,
+            // NLS_DATE_FORMAT, DateStyle) — the one place they would leak into
+            // output, so conversion stays explicit.
+            throw new ExprError(
+                $"{where}: convert the date with TO_STRING(…) first — a bare date renders engine-dependent text");
+        if (node.Kind is not (ColumnKind.Text or ColumnKind.Number))
             throw new ExprError($"{where}: cannot concatenate a {KindName(node)} value");
     }
 

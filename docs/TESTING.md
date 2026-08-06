@@ -31,8 +31,10 @@ dotnet test tests/InteractiveReport.Core.Tests --filter "FullyQualifiedName~Live
 
 **What it does:** on first use per run it **drops and recreates a table named
 `IR_TEST_ORDERS`** in the target database and seeds the canonical 10 rows, then runs
-filters/search/blank semantics/aggregates/breaks/computed columns (including CASE and
-date-part extraction over native and ISO-text dates)/context-param
+filters/search/blank semantics/aggregates/breaks/computed columns (including CASE,
+date-part extraction over native and ISO-text dates, and the date vocabulary —
+NOW/TO_DATE/DATE_TRUNC/TO_STRING, whole-day arithmetic, BETWEEN, and session
+timezone pinning via definition TimeZone)/context-param
 binding/groupBy/pivot/export against it. UUID filter binding runs on SQL Server and
 Postgres (derived uuid columns, no schema change), and the saved-report store corpus
 runs against Postgres in a dedicated `IR_SAVED_REPORTS_TEST` table

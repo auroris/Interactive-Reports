@@ -37,8 +37,11 @@ const FNS_BY_TYPE = {
 };
 // Client-side guess at a computed column's type (drives which operators the filter
 // dialogs offer); the server's binder is the real authority. "THEN '…'" catches
-// CASE expressions that yield text.
-const TEXTY_EXPR = /UPPER|LOWER|TRIM|CONCAT|SUBSTR|\|\||THEN\s*'/i;
+// CASE expressions that yield text. Text wins over date so TO_STRING(NOW()) lands
+// text; CASE … THEN 1 over date conditions guesses date — a wrong but harmless
+// guess, like the ones the text heuristic already makes.
+const TEXTY_EXPR = /UPPER|LOWER|TRIM|CONCAT|SUBSTR|TO_STRING|\|\||THEN\s*'/i;
+const DATEY_EXPR = /NOW\s*\(|TO_DATE|DATE_TRUNC/i;
 
 class InteractiveReportElement extends HTMLElement {
     static observedAttributes = ["report", "base"];
@@ -167,10 +170,17 @@ class InteractiveReportElement extends HTMLElement {
     // --- schema lookups ------------------------------------------------------
 
     pickable() {
+        // The last query result carries the binder's real type for each computed
+        // column; the regex guess only covers columns that haven't run yet (the
+        // guess cannot see that CASE WHEN date-condition THEN 1 yields a number).
+        const served = new Map((this.lastResult?.columns ?? [])
+            .filter(c => c.computed).map(c => [c.name, c.type]));
         const computed = (this.doc?.computed ?? []).map(c => ({
             name: c.id,
             label: c.label ?? c.id,
-            type: TEXTY_EXPR.test(c.expr ?? "") ? "text" : "number",
+            type: served.get(c.id)
+                ?? (TEXTY_EXPR.test(c.expr ?? "") ? "text"
+                    : DATEY_EXPR.test(c.expr ?? "") ? "date" : "number"),
             computed: true,
         }));
         return [...(this.schema?.columns ?? []), ...computed];

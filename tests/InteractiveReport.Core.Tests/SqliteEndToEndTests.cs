@@ -290,6 +290,135 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         Assert.Equal(6m, Convert.ToDecimal(result.Aggregates["c1"]["sum"]));
     }
 
+    // ORDER_DATE is stored (and discovered) as ISO text — the SQLite date story.
+    // TO_DATE gives it the logical Date type; everything downstream is the portable
+    // date vocabulary running on canonical datetime() text.
+    private ReportDefinition DateDefinition
+    {
+        get
+        {
+            var def = Definition;
+            def.Sql = "SELECT ORDER_ID, CUSTOMER, AMOUNT, ORDER_DATE FROM ORDERS";
+            return def;
+        }
+    }
+
+    [Fact]
+    public async Task Date_window_between_counts_2026_orders()
+    {
+        var result = await _executor.Query(DateDefinition, new ReportState
+        {
+            Computed = [new ComputedColumn
+            {
+                Id = "c1",
+                Expr = "CASE WHEN TO_DATE(ORDER_DATE) BETWEEN TO_DATE('2026-01-01') AND TO_DATE('2026-12-31') THEN 1 ELSE 0 END",
+            }],
+            Aggregates = [new AggregateRule { Col = "c1", Fn = AggregateFn.Sum }],
+        }, NoParams);
+
+        Assert.Equal(5m, Convert.ToDecimal(result.Aggregates["c1"]["sum"]));
+    }
+
+    [Fact]
+    public async Task Between_is_inclusive_and_does_not_reorder_date_bounds()
+    {
+        var result = await _executor.Query(DateDefinition, new ReportState
+        {
+            Computed =
+            [
+                new ComputedColumn
+                {
+                    Id = "c1",
+                    Expr = "CASE WHEN TO_DATE(ORDER_DATE) BETWEEN TO_DATE('2026-02-08') AND TO_DATE('2026-02-08') THEN 1 ELSE 0 END",
+                },
+                new ComputedColumn
+                {
+                    Id = "c2",
+                    Expr = "CASE WHEN TO_DATE(ORDER_DATE) BETWEEN TO_DATE('2026-12-31') AND TO_DATE('2026-01-01') THEN 1 ELSE 0 END",
+                },
+            ],
+            Aggregates =
+            [
+                new AggregateRule { Col = "c1", Fn = AggregateFn.Sum },
+                new AggregateRule { Col = "c2", Fn = AggregateFn.Sum },
+            ],
+        }, NoParams);
+
+        Assert.Equal(1m, Convert.ToDecimal(result.Aggregates["c1"]["sum"]));
+        Assert.Equal(0m, Convert.ToDecimal(result.Aggregates["c2"]["sum"]));
+    }
+
+    [Fact]
+    public async Task Date_trunc_equality_finds_the_february_orders()
+    {
+        var result = await _executor.Query(DateDefinition, new ReportState
+        {
+            Computed = [new ComputedColumn
+            {
+                Id = "c1",
+                Expr = "CASE WHEN DATE_TRUNC('MONTH', TO_DATE(ORDER_DATE)) = TO_DATE('2026-02-01') THEN 1 ELSE 0 END",
+            }],
+            Aggregates = [new AggregateRule { Col = "c1", Fn = AggregateFn.Sum }],
+        }, NoParams);
+
+        // Feb 2026: acme llc (02-16), Umbrella (02-08), Tyrell Corp (02-19).
+        Assert.Equal(3m, Convert.ToDecimal(result.Aggregates["c1"]["sum"]));
+    }
+
+    [Fact]
+    public async Task To_string_formats_via_the_portable_tokens()
+    {
+        var result = await _executor.Query(DateDefinition, new ReportState
+        {
+            Computed = [new ComputedColumn { Id = "c1", Expr = "TO_STRING(TO_DATE(ORDER_DATE), 'MM/DD/YYYY')" }],
+            Filters = [Filter("CUSTOMER", FilterOp.Eq, "Globex")],
+        }, NoParams);
+
+        Assert.Equal("07/21/2025", Assert.Single(result.Rows)["c1"]);
+    }
+
+    [Fact]
+    public async Task Date_arithmetic_shifts_whole_days_across_month_ends()
+    {
+        var result = await _executor.Query(DateDefinition, new ReportState
+        {
+            Computed = [new ComputedColumn { Id = "c1", Expr = "TO_STRING(TO_DATE(ORDER_DATE) + 10)" }],
+            Filters = [Filter("CUSTOMER", FilterOp.Eq, "Tyrell Corp")],
+        }, NoParams);
+
+        // 2026-02-19 + 10 crosses the February month end.
+        Assert.Equal("2026-03-01", Assert.Single(result.Rows)["c1"]);
+    }
+
+    [Fact]
+    public async Task Timezone_setting_is_ignored_where_no_session_timezone_exists()
+    {
+        // SQLite has no session timezone: a configured TimeZone is a deliberate
+        // no-op, never an error (ARCHITECTURE §8).
+        var def = Definition;
+        def.TimeZone = "Pacific/Auckland";
+
+        var result = await _executor.Query(def, new ReportState(), NoParams);
+
+        Assert.Equal(10, result.TotalRows);
+    }
+
+    [Fact]
+    public async Task Now_sits_inside_a_sane_window_on_every_row()
+    {
+        var result = await _executor.Query(DateDefinition, new ReportState
+        {
+            Computed = [new ComputedColumn
+            {
+                Id = "c1",
+                Expr = "CASE WHEN NOW() BETWEEN TO_DATE('2020-01-01') AND NOW() + 1 THEN 1 ELSE 0 END",
+            }],
+            Aggregates = [new AggregateRule { Col = "c1", Fn = AggregateFn.Sum }],
+        }, NoParams);
+
+        Assert.Equal(10m, Convert.ToDecimal(result.Aggregates["c1"]["sum"]));
+    }
+
     [Fact]
     public async Task Simple_case_maps_the_operand()
     {
@@ -487,19 +616,20 @@ public sealed class SqliteE2EFixture : IReportConnectionFactory, IDisposable
                 CUSTOMER TEXT NOT NULL,
                 STATUS   TEXT NOT NULL,
                 AMOUNT   NUMERIC NOT NULL,
-                NOTES    TEXT NULL
+                NOTES    TEXT NULL,
+                ORDER_DATE TEXT NOT NULL
             );
-            INSERT INTO ORDERS (CUSTOMER, STATUS, AMOUNT, NOTES) VALUES
-                ('Acme Corp',   'SHIPPED',   9000, 'rush'),
-                ('Globex',      'SHIPPED',   7500, NULL),
-                ('Initech',     'SHIPPED',   5000, ''),
-                ('Acme Corp',   'SHIPPED',   3000, 'fragile'),
-                ('Hooli',       'SHIPPED',   1500, NULL),
-                ('acme llc',    'PENDING',   2000, 'call first'),
-                ('Umbrella',    'PENDING',    800, NULL),
-                ('Stark Ind',   'PENDING',  12000, 'insured'),
-                ('Wayne Ent',   'NEW',        400, 'standard'),
-                ('Tyrell Corp', 'CANCELLED', 6000, 'refunded');
+            INSERT INTO ORDERS (CUSTOMER, STATUS, AMOUNT, NOTES, ORDER_DATE) VALUES
+                ('Acme Corp',   'SHIPPED',   9000, 'rush',       '2025-11-03'),
+                ('Globex',      'SHIPPED',   7500, NULL,         '2025-07-21'),
+                ('Initech',     'SHIPPED',   5000, '',           '2025-03-09'),
+                ('Acme Corp',   'SHIPPED',   3000, 'fragile',    '2025-12-30'),
+                ('Hooli',       'SHIPPED',   1500, NULL,         '2025-05-14'),
+                ('acme llc',    'PENDING',   2000, 'call first', '2026-02-16'),
+                ('Umbrella',    'PENDING',    800, NULL,         '2026-02-08'),
+                ('Stark Ind',   'PENDING',  12000, 'insured',    '2026-06-27'),
+                ('Wayne Ent',   'NEW',        400, 'standard',   '2026-04-01'),
+                ('Tyrell Corp', 'CANCELLED', 6000, 'refunded',   '2026-02-19');
             """;
         cmd.ExecuteNonQuery();
     }

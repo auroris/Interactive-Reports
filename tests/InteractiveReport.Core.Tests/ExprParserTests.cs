@@ -222,4 +222,90 @@ public class ExprParserTests
 
         Assert.Contains("nesting exceeds", Error(expr));
     }
+
+    // --- dates and BETWEEN (ARCHITECTURE §8 date vocabulary) ------------------
+
+    [Fact]
+    public void Date_vocabulary_types_flow()
+    {
+        Assert.Equal(ColumnKind.Date, Parse("NOW()").Kind);
+        Assert.Equal(ColumnKind.Date, Parse("TO_DATE(NOTES)").Kind);            // SQLite date-as-text
+        Assert.Equal(ColumnKind.Date, Parse("TO_DATE(ORDER_DATE)").Kind);       // identity conversion
+        Assert.Equal(ColumnKind.Date, Parse("DATE_TRUNC('month', NOW())").Kind); // unit is case-insensitive
+        Assert.Equal(ColumnKind.Text, Parse("TO_STRING(NOW(), 'YYYY-MM-DD HH24:MI:SS')").Kind);
+        Assert.Equal(ColumnKind.Date, Parse("NOW() - 30").Kind);
+        Assert.Equal(ColumnKind.Date, Parse("DATE_TRUNC('MONTH', NOW()) - 1").Kind);
+    }
+
+    [Fact]
+    public void Date_offsets_accept_provably_whole_expressions()
+    {
+        Assert.Equal(ColumnKind.Date, Parse("NOW() + ORDER_ID").Kind);          // integer-typed column
+        Assert.Equal(ColumnKind.Date, Parse("NOW() - ROUND(AMOUNT)").Kind);     // single-arg ROUND is whole
+        Assert.Equal(ColumnKind.Date, Parse("NOW() + YEAR(ORDER_DATE) * 2").Kind);
+        Assert.Equal(ColumnKind.Date, Parse("NOW() + NULL").Kind);              // NULL offset → NULL date
+    }
+
+    [Fact]
+    public void Between_keeps_its_own_and_and_yields_a_trailing_logical_and()
+    {
+        var ast = Assert.IsType<CaseWhen>(
+            Parse("CASE WHEN ORDER_DATE BETWEEN NOW() - 30 AND NOW() AND AMOUNT > 0 THEN 1 ELSE 0 END"));
+
+        var and = Assert.IsType<LogicalOp>(ast.Branches[0].When);
+        var between = Assert.IsType<Between>(and.Left);
+        Assert.IsType<DateAdd>(between.Lower);
+        Assert.IsType<Comparison>(and.Right);
+    }
+
+    [Fact]
+    public void Between_binds_inside_not_and_before_or()
+    {
+        var ast = Assert.IsType<CaseWhen>(
+            Parse("CASE WHEN NOT AMOUNT BETWEEN 1 AND 2 OR STATUS = 'X' THEN 1 ELSE 0 END"));
+
+        var or = Assert.IsType<LogicalOp>(ast.Branches[0].When);
+        Assert.IsType<Between>(Assert.IsType<NotOp>(or.Left).Operand);
+        Assert.IsType<Comparison>(or.Right);
+    }
+
+    [Fact]
+    public void Between_works_for_numbers_and_text_too()
+    {
+        Assert.Equal(ColumnKind.Number,
+            Parse("CASE WHEN AMOUNT BETWEEN 1000 AND 8000 THEN 1 ELSE 0 END").Kind);
+        Assert.Equal(ColumnKind.Number,
+            Parse("CASE WHEN STATUS BETWEEN 'A' AND 'M' THEN 1 ELSE 0 END").Kind);
+    }
+
+    [Theory]
+    [InlineData("TO_DATE('2026-1-1')", "must be ISO YYYY-MM-DD")]
+    [InlineData("TO_DATE('2025-02-29')", "must be ISO YYYY-MM-DD")]
+    [InlineData("TO_DATE(AMOUNT)", "must be text or a date")]
+    [InlineData("NOW(1)", "NOW takes 0 arguments")]
+    [InlineData("DATE_TRUNC('WEEK', NOW())", "'DAY', 'MONTH', or 'YEAR'")]
+    [InlineData("DATE_TRUNC(NOTES, NOW())", "'DAY', 'MONTH', or 'YEAR'")]
+    [InlineData("DATE_TRUNC('DAY', NOTES)", "convert text with TO_DATE")]
+    [InlineData("TO_STRING(NOTES)", "must be a date")]
+    [InlineData("TO_STRING(NOW(), 'YYYY-QQ')", "TO_STRING format is invalid")]
+    [InlineData("TO_STRING(NOW(), NOTES)", "format must be a string literal")]
+    [InlineData("NOW() + 1.5", "whole calendar days (got 1.5)")]
+    [InlineData("NOW() + AMOUNT", "cannot be established as whole")]
+    [InlineData("NOW() + ORDER_ID / 2", "cannot be established as whole")]
+    [InlineData("NOW() - NOW()", "date - date is not supported")]
+    [InlineData("NOW() + NOW()", "two dates cannot be added")]
+    [InlineData("1 + NOW()", "the date goes on the left")]
+    [InlineData("NOW() * 2", "requires number operands")]
+    [InlineData("NOW() + NOTES", "must be a number of whole days")]
+    [InlineData("ORDER_DATE BETWEEN NOW() AND 1", "share one type")]
+    [InlineData("ORDER_DATE BETWEEN NULL AND NOW()", "use IS NULL")]
+    [InlineData("AMOUNT BETWEEN 1 AND 2", "wrap it in CASE WHEN")]
+    [InlineData("CASE WHEN (AMOUNT > 1) BETWEEN 1 AND 2 THEN 1 END", "BETWEEN cannot compare conditions")]
+    [InlineData("CASE WHEN ORDER_DATE BETWEEN NOW() THEN 1 END", "expected AND")]
+    [InlineData("NOTES || ORDER_DATE", "convert the date with TO_STRING")]
+    [InlineData("CONCAT(NOTES, ORDER_DATE)", "dates go through TO_STRING")]
+    public void Date_and_between_errors_are_precise(string expr, string expectedFragment)
+    {
+        Assert.Contains(expectedFragment, Error(expr));
+    }
 }

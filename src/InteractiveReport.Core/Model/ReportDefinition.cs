@@ -17,6 +17,16 @@ public sealed class ReportDefinition
     public ReportDialect Dialect { get; set; }
 
     /// <summary>
+    /// Optional session timezone (a region name like "Pacific/Auckland" or an offset
+    /// like "+13:00"), pinned when the connection opens on engines that have session
+    /// timezones — Oracle (ALTER SESSION) and Postgres (SET TIME ZONE) — so NOW()
+    /// follows it. Deliberately ignored on SqlServer and Sqlite, whose clock is the
+    /// server's own. Null means the server's setting. Note Oracle pools keep session
+    /// state: definitions sharing a named connection should agree on this value.
+    /// </summary>
+    public string? TimeZone { get; set; }
+
+    /// <summary>
     /// The base SELECT. Composed as a derived table (ir_base), so it must not end with
     /// ORDER BY. Context parameter placeholders use the dialect's native style
     /// (@name on SqlServer/Sqlite, :name on Oracle). Placeholder names matching

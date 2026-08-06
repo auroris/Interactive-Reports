@@ -274,9 +274,10 @@ expr        := or
 or          := and (OR and)*
 and         := not (AND not)*
 not         := NOT not | predicate                 (NOT binds looser than comparisons)
-predicate   := additive ( cmp additive | IS [NOT] NULL )*
+predicate   := additive ( cmp additive | IS [NOT] NULL
+             | BETWEEN additive AND additive )*    (inclusive; bounds never reordered)
 cmp         := '=' | '<>' | '!=' | '<' | '<=' | '>' | '>='     (!= normalizes to <>)
-additive    := term (('+'|'-'|'||') term)*
+additive    := term (('+'|'-'|'||') term)*         (date ± n = whole calendar days)
 term        := factor (('*'|'/') factor)*
 factor      := number | 'string' | NULL | column | func '(' args ')'
              | '(' expr ')' | '-' factor | case
@@ -284,12 +285,13 @@ case        := CASE [expr] (WHEN expr THEN expr)+ [ELSE expr] END
 func        := UPPER | LOWER | TRIM | LENGTH | SUBSTR | CONCAT
              | ROUND | ABS | COALESCE
              | YEAR | MONTH | DAY                  (date part extraction)
+             | NOW | TO_DATE | TO_STRING | DATE_TRUNC
 args        := expr (',' args)*
 ```
 
 **Type discipline.** Values are number/text/date. Conditions (boolean) arise from
-comparisons, `IS [NOT] NULL`, and `AND`/`OR`/`NOT`, and are consumed by searched-CASE
-`WHEN`s and by `NOT`/`AND`/`OR` — nowhere else. A computed column's result must be a
+comparisons, `BETWEEN`, `IS [NOT] NULL`, and `AND`/`OR`/`NOT`, and are consumed by
+searched-CASE `WHEN`s and by `NOT`/`AND`/`OR` — nowhere else. A computed column's result must be a
 value: SQL Server has no scalar boolean, so the portable subset doesn't either (the
 error says to wrap the condition in `CASE WHEN … THEN 1 ELSE 0 END`). Comparisons
 require both operands of the same kind; comparing conditions (chained comparisons) is
@@ -313,6 +315,64 @@ database's view meet at emission, not in the user's face.
   pointing at the searched form with `IS NULL`.
 - `CASE` without `ELSE` yields NULL for unmatched rows (SQL default, allowed).
 
+**Dates** (SQL comparison semantics — there are no `BEFORE`/`AFTER`/`BETWEEN()`
+functions; the operators are the vocabulary):
+- `NOW()` is the engine's current timestamp: session-local where the engine has a
+  session timezone (Oracle `LOCALTIMESTAMP`, Postgres `NOW()`), the server's clock
+  where there is no such concept (`GETDATE()`, SQLite `datetime('now','localtime')`).
+- `TO_DATE(value)` converts canonical ISO `YYYY-MM-DD` text to a date at midnight; a
+  Date input is an identity conversion, which keeps expressions portable when one
+  provider discovers a column as Date and SQLite discovers it as Text. String
+  literals are validated at bind time; column contents are the documented ISO
+  contract — invalid rows become a provider error or NULL. Text is never implicitly
+  a date. Input format masks are deferred (a future second argument would use a
+  portable, validated vocabulary, not native masks).
+- `DATE_TRUNC(unit, date)` returns the start of the unit; the unit is a
+  case-insensitive string **literal**, initially `DAY`/`MONTH`/`YEAR` (WEEK deferred
+  until week-start semantics are defined; QUARTER/HOUR/MINUTE can be added later).
+- `date ± n` moves by **whole calendar days**. The binder requires integrality it
+  can establish — integer literals, integer-typed columns, `YEAR/MONTH/DAY/LENGTH`,
+  one-arg `ROUND`, and `+`/`-`/`*` over those — and rejects everything else
+  (fractional offsets, `n + date`, `date - date`, `*`, `/`).
+- Comparisons and `BETWEEN` (inclusive at both boundaries; reversed bounds are not
+  reordered) use plain SQL semantics on the **complete temporal value** — equality
+  means the full timestamp, and NULL comparisons are SQL-unknown. Calendar-day
+  equality goes through `DATE_TRUNC('DAY', …)`; the timestamp-range idiom is
+  half-open: `d >= DATE_TRUNC('DAY', NOW()) AND d < DATE_TRUNC('DAY', NOW()) + 1`.
+- `TO_STRING(date [, format])` renders text (default `YYYY-MM-DD`; NULL in, NULL
+  out). Formats are a closed portable vocabulary — tokens `YYYY MM DD HH24 MI SS`,
+  separators space `-` `/` `:` `T` — validated at bind, translated per dialect
+  (`FORMAT` with quoted separators / `TO_CHAR` with a double-quoted T / `strftime`),
+  and bound as a parameter, never passed through as native format syntax. On SQL
+  Server the culture is pinned (`'en-US'`) — the session language must not choose
+  digits or calendar. Numeric formatting is a separate future design.
+- Bare dates do not concatenate: `||` and `CONCAT` reject them with a pointer to
+  `TO_STRING`. Implicit date-to-text rendering follows engine settings (session
+  language, `NLS_DATE_FORMAT`, `DateStyle`) — the one place they would leak into
+  report output, so the conversion stays explicit.
+- **Timezone is connection configuration, not expression vocabulary.** The language
+  assumes single-timezone, wall-clock data; date filter values parse the same way
+  (invariant culture, `AssumeLocal`). A definition may set `TimeZone` (a region name
+  or offset, bindable from appsettings): the executor pins the session when it opens
+  the connection — `ALTER SESSION SET TIME_ZONE` on Oracle, `SET TIME ZONE` on
+  Postgres — and `NOW()` then follows it. Unset means the server's own setting, and
+  on engines with no session timezone (SQL Server, SQLite) a configured value is
+  **deliberately ignored** — their clock is the server's/process's, pinned at the OS
+  or service level if at all. Hosts can equally pin via their
+  `IReportConnectionFactory` or connection string (e.g. Npgsql `Timezone=…`). Oracle
+  connection pools keep session state, so definitions sharing a named connection
+  should agree on `TimeZone`. UTC-stored columns and per-user timezones are out of
+  scope — there is deliberately no timezone vocabulary in expressions.
+- Date producers emit **typed NULLs** for literal NULL arguments (`CAST(NULL AS
+  DATETIME2/DATE/TIMESTAMP)`; TO_STRING has the text equivalent): a bare NULL loses
+  the type — Oracle makes `TO_DATE(NULL) + 1` a NUMBER, Postgres an INTERVAL, and
+  Postgres cannot resolve `date_trunc` over an untyped NULL at all.
+- SQLite stores dates as text, so the logical Date type rides on canonical
+  `datetime()` text (`YYYY-MM-DD HH:MM:SS`): every date producer emits that form,
+  and comparison sites (comparisons, BETWEEN, simple-CASE matching) normalize
+  non-producer operands through `datetime()` — date-only text would otherwise sort
+  before its own midnight timestamp.
+
 **Function registry** (`ExprFunctions`): one entry per function — arity, argument
 rules, result-kind inference, per-dialect emitter. Adding a function is adding a row;
 there is no enum and no switches to grow. The registry is the only dialect-specific
@@ -326,13 +386,22 @@ surface outside operators:
 | `ROUND(x,n)` | `ROUND(x,n)` | `ROUND(x,n)` | `ROUND(x,n)` | `ROUND(CAST(x AS NUMERIC), CAST(n AS INT))` |
 | `YEAR(d)` | `YEAR(d)` | `EXTRACT(YEAR FROM d)` | `CAST(strftime('%Y',d) AS INTEGER)` | `EXTRACT(YEAR FROM d)` |
 | `COALESCE` | `COALESCE` | `COALESCE` | `COALESCE` | `COALESCE` |
+| `NOW()` | `GETDATE()` | `LOCALTIMESTAMP` | `datetime('now','localtime')` | `NOW()` |
+| `TO_DATE(x)` (text) | `CAST(x AS DATETIME2)` | `TO_DATE(x,'YYYY-MM-DD')` | `datetime(x)` | `TO_DATE(x,'YYYY-MM-DD')` |
+| `DATE_TRUNC('MONTH',d)` | `CAST(DATEFROMPARTS(YEAR(d),MONTH(d),1) AS DATETIME2)` | `TRUNC(d,'MM')` | `datetime(d,'start of month')` | `DATE_TRUNC('month',d)` |
+| `TO_STRING(d,ƒ)` | `FORMAT(d,ƒ,'en-US')` | `TO_CHAR(d,ƒ)` | `strftime(ƒ,d)` | `TO_CHAR(d,ƒ)` |
+| `d + n` / `d - n` | `DATEADD(DAY,±n,d)` | `(d ± n)` | `datetime(d,(±n)\|\|' days')` | `(d ± n*INTERVAL '1 day')` |
+
+(ƒ is the portable mask translated into that engine's format vocabulary and bound
+as a parameter.)
 
 - The emitter produces SQL fragments **we** wrote, injected via `SelectRaw` with `?`
   bindings for every literal — client text never reaches SQL; only the AST does. The one
   keyword literal is `NULL` itself (ours, not client data). Every binary operation is
   parenthesized.
-- `CASE`, comparisons, `IS NULL`, and `AND/OR/NOT` emit **identically on all three
-  dialects** — they are the portable core; only functions carry dialect idioms.
+- `CASE`, comparisons, `BETWEEN`, `IS NULL`, and `AND/OR/NOT` emit **identically on
+  every dialect** — the portable core; only functions, date arithmetic, and SQLite's
+  date-comparand normalization (above) carry dialect idioms.
 - Semantics notes: concatenation treats NULL as empty everywhere (CONCAT on
   SqlServer/Sqlite/Postgres; Oracle's `||` natively); `YEAR/MONTH/DAY` accept ISO date
   *text* because SQLite date columns discover as text — emitted natively where the
@@ -342,10 +411,9 @@ surface outside operators:
   text in a date-part function is a runtime error on those dialects — ISO is the
   documented contract.
 - Computed columns cannot reference other computed columns (no dependency ordering in v1).
-- Known limitation: no date literals yet, so date columns compare only against date
-  columns — use `YEAR()/MONTH()/DAY()` for date-part conditions, or filters for date
-  ranges. A `DATE '…'` literal with per-dialect emission is the designed extension
-  point.
+- There is no `DATE '…'` literal: `TO_DATE('YYYY-MM-DD')` is the date literal, and its
+  argument is validated at bind time. Date columns compare against `NOW()`, `TO_DATE`,
+  `DATE_TRUNC`, and date arithmetic with plain SQL operators.
 
 ## 9. Dialect strategy
 
@@ -572,3 +640,10 @@ APEX's Interactive Reports.
 | Postgres ROUND emits signature casts | bind precision as int | `round(numeric, integer)` is the only two-arg ROUND Postgres has; casting both arguments in SQL keeps bindings uniform across dialects (goldens: 2 always binds as decimal). |
 | Date parts on ISO text convert at emission (Oracle TO_DATE, Postgres CAST) | dialect-aware binding rules | The portable subset's types stay dialect-free; EXTRACT's strictness is an emission detail. Rejecting text outright would break the SQLite date-as-text story the feature exists for. |
 | Guid filter values bind as Guid | string binding for Other kind | Postgres rejects `uuid = text` outright; "Other" is a family, not a type, so binding consults the discovered CLR type where it matters. Unparseable UUIDs die as precise validation errors, not provider errors. |
+| Dates use SQL comparison operators and BETWEEN | `BEFORE()`/`AFTER()`/`BETWEEN()` functions | No new vocabulary to learn and nothing to mistranslate: `<`/`>=`/BETWEEN already mean the right thing in SQL, and the binder's same-kind rule keeps them typed. `TO_DATE('…')` doubles as the date literal, superseding the planned `DATE '…'`. |
+| Date arithmetic is whole calendar days, integrality established at bind | intervals or fractional days | Whole days cover the reporting cases; "provably integral or rejected" beats each dialect truncating fractions differently and silently. |
+| NOW() is session-local (LOCALTIMESTAMP on Oracle) | UTC everywhere; Oracle SYSDATE | Stored DATE columns are wall time, so UTC would sit an offset away. SYSDATE looks idiomatic but follows the DB host's clock, not the session; LOCALTIMESTAMP honors the session-timezone contract. SQL Server and SQLite have no session timezone — there the server's clock is the only clock. |
+| SQLite logical Date = canonical datetime() text, normalized at comparison sites | native-typed dates; compare raw text | SQLite has no date type — producers emit one canonical text form and comparisons wrap stray operands in datetime(), because date-only text sorts before its own midnight timestamp. Physical storage stays text; the type system stays honest. |
+| TO_STRING formats are a closed token set, translated and bound per dialect | pass native masks through | Native masks don't port (strftime ≠ TO_CHAR ≠ .NET) and raw pass-through would hand client text to the SQL layer. A validated vocabulary translates exactly and the mask still rides as a binding. |
+| Timezone pins at the connection (definition `TimeZone`), not in expressions | AT_TZ()/NOW('UTC') vocabulary; UTC everywhere | A report's clock is a property of the data source, not of each expression: the definition's `TimeZone` pins the session at open, and unset means the server's setting. Engines without a session timezone (SQL Server, SQLite) silently ignore the setting rather than erroring — it requests session behavior that simply doesn't exist there, and their clock follows the host either way. Expression-level vocabulary couldn't fix them portably and would hand a timezone decision to every report author. |
+| Bare dates rejected in concatenation | implicit rendering; auto-wrap in TO_STRING | Implicit date-to-text is the one place engine settings (session language, NLS, DateStyle) would leak into output, and it differs per engine. Rejection matches the language's explicit-conversion rule (TO_DATE inbound, TO_STRING outbound); auto-wrapping would pick a format silently. |
