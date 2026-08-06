@@ -565,21 +565,35 @@ APEX's Interactive Reports.
 
 ```html
 <script type="module" src="/api/reports/ui/ir.js"></script>
-<interactive-report report="open-orders"></interactive-report>
+<interactive-report report="open-orders" api-base="/api/reports"></interactive-report>
 
 <script type="module" src="/api/reports/ui/ir-admin.js"></script>
-<interactive-report-admin></interactive-report-admin>
+<interactive-report-admin api-base="/api/reports"></interactive-report-admin>
 ```
 
-- Custom elements, no build step, no dependencies: plain ES modules embedded in the
-  assembly and served at `{prefix}/ui/{file}` by `MapInteractiveReports`. `base`
-  defaults to the prefix the script was loaded from (attribute overrides). Changing
-  the `report` attribute re-initializes in place.
-- Modules: `ir.js` (element, toolbar/menus), `ir-state.js` (pure normalization,
+- Custom elements with no runtime dependencies: bundled ES modules are embedded in
+  the assembly and served at `{prefix}/ui/{file}` by `MapInteractiveReports`. `base`
+  defaults to the prefix the script was loaded from. The explicit `api-base`
+  attribute overrides that inference; `base` remains its compatibility alias.
+  `report` is an optional preferred report name. Initialization resolves it against
+  `GET {prefix}` (the caller's authorized, uniquely named report catalog); an absent
+  or unavailable preference falls back to the first visible report without probing
+  the unavailable name. If a catalogued preference fails to initialize, the widget
+  tries the remaining visible reports in catalog order. Multiple visible reports
+  produce a toolbar selector.
+  Changing the `report` or API location re-initializes in place. Consumers need no
+  build step.
+- Each element renders into its own shadow root, including menus and dialogs. The
+  stylesheet is compiled into the JavaScript bundle, so host resets and utility
+  classes cannot enter the component and component styles cannot escape onto the
+  host page. Hosts can theme documented `--ir-*` custom properties on the element.
+- Source modules: `ir.js` (element, toolbar/menus), `ir-state.js` (pure normalization,
   serialization, and scoped-search expression construction), `ir-api.js`
   (fetch + problem+json), `ir-ui.js` (menu/dialog primitives), `ir-render.js`
   (chips, grid, pager), `ir-dialogs.js` (the Actions dialogs), `ir-admin.js`
-  (admin element), `ir.css`.
+  (admin element), `ir.css`. `npm run build` uses esbuild to compile the stylesheet
+  and modules into two self-contained entry bundles in `Ui/dist`; these generated
+  assets are committed so a normal .NET build does not require Node.js.
 - **Feature surface**: scoped toolbar search (all text columns or one typed column → expression filter);
   Actions menu (Columns shuttle, Filter, Sort, Control Break, Highlight, Aggregate,
   Compute with token-insert helpers, Group By, Pivot, Save/Save As/Delete/Reset,
@@ -595,10 +609,10 @@ APEX's Interactive Reports.
 - Schema metadata advertises `stateVersion`, expression functions, and aggregate
   functions by column type. Query results include the effective base+computed schema,
   so clients do not duplicate language catalogs or guess computed types.
-- **Styling**: light DOM, every rule namespaced `.ir-*` under CSS custom properties
-  (`--ir-accent`, …). `ir.css` auto-links once per document; a host can pre-link its
-  own `<link data-ir-css>` to fully retheme. No Shadow DOM — hosts theme it; popups
-  and dialogs mount on `<body>` and are styled standalone.
+- **Styling**: shadow DOM isolates every rule, including the bundled styles for
+  popups and dialogs. Deliberate theming crosses the boundary through the supported
+  `--ir-*` custom properties and `::part()` names; ordinary host selectors cannot
+  reach internal controls, and no stylesheet is added to the host document.
 - **Asset endpoint is anonymous** even when the host chains `RequireAuthorization` on
   the group: the assets are public package code (no data, no secrets), and a
   session-expired page that cannot load the script cannot even say "sign in". Every

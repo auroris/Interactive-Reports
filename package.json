@@ -1,8 +1,21 @@
 {
+  "name": "interactive-reports-client",
+  "version": "0.0.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
-    "test": "node --test tests/ui/*.test.js",
-    "test:ui": "node --test tests/ui/*.test.js"
+    "build": "npm run build:client",
+    "build:client": "esbuild src/InteractiveReport.AspNetCore/Ui/ir.js src/InteractiveReport.AspNetCore/Ui/ir-admin.js --bundle --format=esm --target=es2022 --loader:.css=text --minify --sourcemap --entry-names=[name] --outdir=src/InteractiveReport.AspNetCore/Ui/dist",
+    "dev": "npm run build:client -- --watch",
+    "test": "npm run build:client && npm run test:ui",
+    "test:ui": "node --test tests/ui/*.test.js",
+    "verify": "npm test"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1",
+    "happy-dom": "^20.11.1"
   }
 }

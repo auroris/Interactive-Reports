@@ -36,8 +36,11 @@ public sealed partial class ConfigurationReportDefinitionStore : IReportDefiniti
     public ValueTask<IReadOnlyList<ReportDefinition>> List(CancellationToken ct = default)
     {
         var result = new List<ReportDefinition>();
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var (name, def) in _options.CurrentValue.Reports)
         {
+            if (string.IsNullOrWhiteSpace(name) || !names.Add(name))
+                throw new InvalidOperationException("Report names must be non-empty and unique (case-insensitive).");
             var snapshot = Snapshot(name, def);
             Validate(snapshot);
             result.Add(snapshot);
@@ -59,6 +62,8 @@ public sealed partial class ConfigurationReportDefinitionStore : IReportDefiniti
 
     private static void Validate(ReportDefinition def)
     {
+        if (string.IsNullOrWhiteSpace(def.Name))
+            throw new InvalidOperationException("Report name is required.");
         if (string.IsNullOrWhiteSpace(def.Sql))
             throw new InvalidOperationException($"Report '{def.Name}': sql is required.");
         if (string.IsNullOrWhiteSpace(def.Connection))

@@ -14,7 +14,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="Ui\**\*" />
+    <EmbeddedResource Include="Ui\dist\*"
+                      LogicalName="InteractiveReport.AspNetCore.Ui.%(Filename)%(Extension)" />
   </ItemGroup>
 
   <PropertyGroup>

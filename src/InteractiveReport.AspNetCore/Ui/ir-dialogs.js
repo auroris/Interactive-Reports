@@ -111,6 +111,7 @@ export function columnsDialog(w) {
         el("button", { type: "button", class: "ir-btn", title, onclick }, label);
 
     openDialog({
+        owner: w,
         title: "Select Columns",
         width: "34rem",
         build: body => body.append(
@@ -144,6 +145,7 @@ export function filterDialog(w, { editIndex, col } = {}) {
     });
 
     openDialog({
+        owner: w,
         title: editIndex !== undefined ? "Edit Filter" : "Add Filter",
         width: "30rem",
         build: body => body.append(condition),
@@ -170,6 +172,7 @@ export function sortDialog(w) {
     }, { addLabel: "Sort", max: 6 });
 
     openDialog({
+        owner: w,
         title: "Sort",
         width: "26rem",
         build: body => body.append(container, list.addButton,
@@ -189,6 +192,7 @@ export function breakDialog(w) {
     }, { addLabel: "Break Column", max: 3 });
 
     openDialog({
+        owner: w,
         title: "Control Break",
         width: "24rem",
         build: body => body.append(container, list.addButton,
@@ -218,6 +222,7 @@ export function aggregateDialog(w) {
     }, { addLabel: "Aggregate" });
 
     openDialog({
+        owner: w,
         title: "Aggregate",
         width: "28rem",
         build: body => body.append(container, list.addButton,
@@ -239,6 +244,7 @@ export function computeDialog(w, editIndex) {
     });
 
     openDialog({
+        owner: w,
         title: editIndex !== undefined ? "Edit Computed Column" : "Compute Column",
         width: "36rem",
         build: body => body.append(
@@ -288,6 +294,7 @@ export function highlightDialog(w, editIndex) {
     syncScope();
 
     openDialog({
+        owner: w,
         title: editIndex !== undefined ? "Edit Highlight" : "Highlight",
         width: "30rem",
         build: body => body.append(
@@ -359,6 +366,7 @@ export function groupByDialog(w) {
     const values = valueList(w, active?.values);
 
     openDialog({
+        owner: w,
         title: "Group By",
         width: "30rem",
         build: body => body.append(
@@ -383,6 +391,7 @@ export function pivotDialog(w) {
     const values = valueList(w, active?.values);
 
     openDialog({
+        owner: w,
         title: "Pivot",
         width: "30rem",
         build: body => body.append(
@@ -418,6 +427,7 @@ export function saveDialog(w, { asNew }) {
     });
 
     openDialog({
+        owner: w,
         title: updating ? "Save Report" : "Save Report As",
         width: "26rem",
         applyLabel: "Save",

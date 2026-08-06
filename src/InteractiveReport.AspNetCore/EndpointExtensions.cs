@@ -56,8 +56,19 @@ public static class EndpointExtensions
     private static async Task<IResult> ListReports(HttpContext ctx, CancellationToken ct)
     {
         var store = ctx.RequestServices.GetRequiredService<IReportDefinitionStore>();
+        var definitions = await store.List(ct);
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var def in definitions)
+        {
+            if (string.IsNullOrWhiteSpace(def.Name) || !names.Add(def.Name))
+                return Results.Problem(
+                    title: "Invalid report configuration",
+                    detail: "Report names must be non-empty and unique (case-insensitive).",
+                    statusCode: StatusCodes.Status500InternalServerError);
+        }
+
         var visible = new List<ReportSummary>();
-        foreach (var def in await store.List(ct))
+        foreach (var def in definitions)
         {
             if (await ReportRequestAccess.Authorize(def, ctx) is null)
                 visible.Add(new ReportSummary { Name = def.Name, Title = def.Title ?? ColumnModel.Prettify(def.Name) });

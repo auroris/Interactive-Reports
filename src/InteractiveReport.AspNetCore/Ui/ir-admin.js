@@ -6,21 +6,44 @@
 // widget simply loses its data (404) for non-administrators.
 //
 // Attributes:
-//   base — API prefix; defaults to the prefix this script was served from
+//   api-base — API prefix; defaults to the prefix this script was served from
+//   base     — compatibility alias for api-base
 
 import { api } from "./ir-api.js";
-import { el, banner, ensureCss, labeled, openDialog, confirmDialog } from "./ir-ui.js";
+import { el, banner, createWidgetRoot, disposeWidget, labeled, openDialog, confirmDialog } from "./ir-ui.js";
 
 const BASE_DEFAULT = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
 
 class InteractiveReportAdminElement extends HTMLElement {
-    get base() { return this.getAttribute("base") ?? BASE_DEFAULT; }
+    static observedAttributes = ["api-base", "base"];
 
-    connectedCallback() { this.init(); }
+    constructor() {
+        super();
+        const { root, mount } = createWidgetRoot(this);
+        this._root = root;
+        this._mount = mount;
+        this._seq = 0;
+    }
+
+    get apiBase() { return this.getAttribute("api-base") ?? this.getAttribute("base") ?? BASE_DEFAULT; }
+    set apiBase(value) {
+        if (value === null || value === undefined) this.removeAttribute("api-base");
+        else this.setAttribute("api-base", String(value));
+    }
+    get base() { return this.apiBase.replace(/\/+$/, ""); }
+
+    connectedCallback() { this._connected = true; this.init(); }
+    disconnectedCallback() {
+        this._connected = false;
+        ++this._seq;
+        disposeWidget(this);
+    }
+    attributeChangedCallback(_name, oldValue, newValue) {
+        if (this._connected && oldValue !== newValue) this.init();
+    }
 
     async init() {
-        ensureCss(this.base);
-        this.classList.add("ir-root", "ir-admin");
+        const seq = ++this._seq;
         this.rows = [];
         this.whoami = null;
 
@@ -34,30 +57,35 @@ class InteractiveReportAdminElement extends HTMLElement {
             identity: el("span", { class: "ir-admin-count" }),
             errorSlot: el("div", {}),
             transientSlot: el("div", {}),
-            body: el("div", { class: "ir-tablewrap" }),
+            body: el("div", { class: "ir-tablewrap", part: "table-container" }),
         };
-        this.replaceChildren(
-            el("div", { class: "ir-admin-bar" },
+        this._mount.replaceChildren(
+            el("div", { class: "ir-admin-bar", part: "toolbar" },
                 filter,
                 el("button", { type: "button", class: "ir-btn", onclick: () => this.reload() }, "Refresh"),
                 this.els.count,
                 el("span", { class: "ir-spacer" }),
                 this.els.identity),
-            el("div", { class: "ir-notices" }, this.els.errorSlot, this.els.transientSlot),
+            el("div", { class: "ir-notices", part: "notices" }, this.els.errorSlot, this.els.transientSlot),
             this.els.body);
 
         this.whoami = await api(`${this.base}/whoami`).catch(() => null);
+        if (seq !== this._seq || !this.isConnected) return;
         if (this.whoami?.identity)
             this.els.identity.textContent = `Signed in as ${this.whoami.identity}`;
         await this.reload();
     }
 
     async reload() {
+        const seq = this._seq;
         this.els.errorSlot.replaceChildren();
         try {
-            this.rows = await api(`${this.base}/admin/saved`);
+            const rows = await api(`${this.base}/admin/saved`);
+            if (seq !== this._seq || !this.isConnected) return;
+            this.rows = rows;
             this.renderTable();
         } catch (err) {
+            if (seq !== this._seq || !this.isConnected) return;
             const text = err.status === 401 ? "Sign in to administer saved reports."
                 : err.status === 404 ? "Administrator access required. Add your identity to InteractiveReport:Administrators."
                 : err.message;
@@ -110,7 +138,7 @@ class InteractiveReportAdminElement extends HTMLElement {
         if (!trs.length)
             trs.push(el("tr", { class: "ir-empty" }, el("td", { colSpan: 6 }, "No saved reports.")));
 
-        this.els.body.replaceChildren(el("table", { class: "ir-table" },
+        this.els.body.replaceChildren(el("table", { class: "ir-table", part: "table" },
             el("thead", {}, el("tr", {},
                 ...["Report", "Title", "Owner", "Scope", "Modified", ""].map(h => el("th", { scope: "col" }, h)))),
             el("tbody", {}, ...trs)));
@@ -127,6 +155,7 @@ class InteractiveReportAdminElement extends HTMLElement {
     reassign(r) {
         const ownerInp = el("input", { class: "ir-input", type: "text", value: r.owner });
         openDialog({
+            owner: this,
             title: "Reassign Owner",
             width: "26rem",
             applyLabel: "Reassign",
@@ -148,6 +177,7 @@ class InteractiveReportAdminElement extends HTMLElement {
         try {
             const doc = await api(`${this.base}/saved/${encodeURIComponent(r.id)}`);
             openDialog({
+                owner: this,
                 title: `${r.title} — state document`,
                 width: "36rem",
                 build: body => body.append(
@@ -158,7 +188,7 @@ class InteractiveReportAdminElement extends HTMLElement {
 
     async remove(r) {
         const scope = r.isGlobal ? "the GLOBAL report" : `${r.owner}'s report`;
-        if (!await confirmDialog("Delete Saved Report", `Delete ${scope} "${r.title}"? This cannot be undone.`)) return;
+        if (!await confirmDialog(this, "Delete Saved Report", `Delete ${scope} "${r.title}"? This cannot be undone.`)) return;
         try {
             await api(`${this.base}/saved/${encodeURIComponent(r.id)}`, { method: "DELETE" });
             this.notify(`"${r.title}" deleted.`);

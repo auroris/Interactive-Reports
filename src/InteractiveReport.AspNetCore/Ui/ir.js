@@ -6,11 +6,13 @@
 // is canonical; underscore-prefixed working-copy annotations are stripped.
 //
 // Attributes:
-//   report — report definition name (required)
-//   base   — API prefix; defaults to the prefix this script was served from
+//   report   — preferred report definition; falls back to the first report visible
+//              to the caller when missing or unavailable
+//   api-base — API prefix; defaults to the prefix this script was served from
+//   base     — compatibility alias for api-base
 
 import { api, download, saveBlob } from "./ir-api.js";
-import { el, icon, banner, ensureCss, popupMenu, confirmDialog } from "./ir-ui.js";
+import { el, icon, banner, createWidgetRoot, disposeWidget, popupMenu, confirmDialog } from "./ir-ui.js";
 import { renderChips, renderGrid, renderPager } from "./ir-render.js";
 import { normalizeReportState, scopedSearchExpression, serializeReportState } from "./ir-state.js";
 import {
@@ -20,20 +22,37 @@ import {
 
 // …/api/reports/ui/ir.js → …/api/reports
 const BASE_DEFAULT = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+const sameName = (left, right) => typeof left === "string" && typeof right === "string"
+    && left.toUpperCase() === right.toUpperCase();
 
 class InteractiveReportElement extends HTMLElement {
-    static observedAttributes = ["report", "base"];
+    static observedAttributes = ["report", "api-base", "base"];
 
     constructor() {
         super();
+        const { root, mount } = createWidgetRoot(this);
+        this._root = root;
+        this._mount = mount;
         this._seq = 0;
         this._initialized = false;
     }
 
-    get base() { return this.getAttribute("base") ?? BASE_DEFAULT; }
-    get reportName() { return this.getAttribute("report"); }
+    get apiBase() { return this.getAttribute("api-base") ?? this.getAttribute("base") ?? BASE_DEFAULT; }
+    set apiBase(value) {
+        if (value === null || value === undefined) this.removeAttribute("api-base");
+        else this.setAttribute("api-base", String(value));
+    }
+    get base() { return this.apiBase.replace(/\/+$/, ""); }
+    get requestedReportName() { return this.getAttribute("report"); }
+    get reportName() { return this._activeReportName ?? this.requestedReportName; }
 
     connectedCallback() { this.scheduleInit(); }
+    disconnectedCallback() {
+        ++this._seq;
+        this._abort?.abort();
+        this._abort = null;
+        disposeWidget(this);
+    }
     attributeChangedCallback(_name, oldValue, newValue) {
         if (this._initialized && oldValue !== newValue) this.scheduleInit();
     }
@@ -50,12 +69,13 @@ class InteractiveReportElement extends HTMLElement {
         const seq = ++this._seq;
         this._initialized = true;
         this._abort?.abort();
-        ensureCss(this.base);
-        this.classList.add("ir-root");
+        this._abort = null;
 
         this.schema = null;
         this.doc = null;
         this.lastResult = null;
+        this.availableReports = [];
+        this._activeReportName = null;
         this.whoami = null;
         this.savedList = [];
         this.currentSaved = null;
@@ -63,28 +83,85 @@ class InteractiveReportElement extends HTMLElement {
         this.viewMemory = {};
         this.buildSkeleton();
 
-        const name = this.reportName;
-        if (!name) {
-            this.showError(new Error("<interactive-report> needs a report=\"…\" attribute."));
-            return;
-        }
-
         try {
-            const [schema, whoami, saved] = await Promise.all([
-                api(`${this.base}/${encodeURIComponent(name)}/schema`),
+            const [reports, whoami] = await Promise.all([
+                api(this.base),
                 api(`${this.base}/whoami`).catch(() => null),
-                api(`${this.base}/${encodeURIComponent(name)}/saved`).catch(() => []),
             ]);
             if (seq !== this._seq) return;
-            this.schema = schema;
+            this.availableReports = reports;
             this.whoami = whoami;
+            this.refreshReportSelect();
+
+            const requested = this.requestedReportName;
+            const preferred = this.availableReports.find(r => sameName(r.name, requested));
+            const candidates = preferred
+                ? [preferred, ...this.availableReports.filter(r => r !== preferred)]
+                : this.availableReports;
+            if (!candidates.length) {
+                this.showError(new Error("No reports are available for the current user."));
+                return;
+            }
+            for (const candidate of candidates) {
+                if (await this.activateReport(candidate.name, seq, { quiet: true })) return;
+                if (seq !== this._seq) return;
+            }
+            this.showError(new Error("None of the reports available to the current user could be loaded."));
+        } catch (err) {
+            if (err.name !== "AbortError" && seq === this._seq) this.showError(err);
+        }
+    }
+
+    refreshReportSelect() {
+        const { reportSel, reportWrap } = this.els;
+        reportSel.replaceChildren(...this.availableReports.map(r => new Option(r.title, r.name)));
+        reportSel.value = this._activeReportName ?? "";
+        reportWrap.hidden = this.availableReports.length <= 1;
+    }
+
+    async activateReport(name, seq = ++this._seq, { quiet = false } = {}) {
+        const selected = this.availableReports.find(r => sameName(r.name, name));
+        if (!selected || seq !== this._seq) return false;
+
+        this._abort?.abort();
+        this._abort = null;
+        this._activeReportName = selected.name;
+        this.schema = null;
+        this.doc = null;
+        this.lastResult = null;
+        this.savedList = [];
+        this.currentSaved = null;
+        this.searchScopeCol = null;
+        this.viewMemory = {};
+        this.els.search.value = "";
+        this.els.table.replaceChildren();
+        this.els.pager.replaceChildren();
+        this.els.chips.replaceChildren();
+        this.els.chips.hidden = true;
+        this.clearError();
+        this.refreshReportSelect();
+        this.refreshSavedSelect();
+        this._mount.classList.add("ir-busy");
+
+        try {
+            // Schema is the loadability gate. Do not issue saved-state or query
+            // requests for this report until its definition is accessible and valid.
+            const schema = await api(`${this.base}/${encodeURIComponent(selected.name)}/schema`);
+            if (seq !== this._seq) return false;
+            const saved = await api(`${this.base}/${encodeURIComponent(selected.name)}/saved`).catch(() => []);
+            if (seq !== this._seq) return;
+            this.schema = schema;
             this.savedList = saved;
             this.doc = this.normalize(schema.defaultState);
             this.els.search.value = this.doc.search ?? "";
             this.refreshSavedSelect();
-            await this.runQuery();
+            await this.runQuery({ quiet });
+            return seq === this._seq && this.lastResult !== null;
         } catch (err) {
-            if (err.name !== "AbortError" && seq === this._seq) this.showError(err);
+            if (!quiet && err.name !== "AbortError" && seq === this._seq) this.showError(err);
+            return false;
+        } finally {
+            if (seq === this._seq) this._mount.classList.remove("ir-busy");
         }
     }
 
@@ -121,27 +198,34 @@ class InteractiveReportElement extends HTMLElement {
         });
         const savedWrap = el("label", { class: "ir-saved", hidden: true },
             el("span", { class: "ir-saved-label" }, "Saved Report"), savedSel);
+        const reportSel = el("select", {
+            class: "ir-select ir-report-select", part: "report-select",
+            onchange: () => this.activateReport(reportSel.value),
+        });
+        const reportWrap = el("label", { class: "ir-saved", hidden: true },
+            el("span", { class: "ir-saved-label" }, "Report"), reportSel);
 
         this.els = {
-            search, views, savedSel, savedWrap,
+            search, views, reportSel, reportWrap, savedSel, savedWrap,
             errorSlot: el("div", {}),
             transientSlot: el("div", {}),
             ignoredSlot: el("div", {}),
-            chips: el("div", { class: "ir-chips", hidden: true }),
-            table: el("table", { class: "ir-table" }),
-            pager: el("div", { class: "ir-pager" }),
+            chips: el("div", { class: "ir-chips", part: "chips", hidden: true }),
+            table: el("table", { class: "ir-table", part: "table" }),
+            pager: el("div", { class: "ir-pager", part: "pager" }),
         };
 
-        this.replaceChildren(
-            el("div", { class: "ir-toolbar" },
+        this._mount.replaceChildren(
+            el("div", { class: "ir-toolbar", part: "toolbar" },
                 el("div", { class: "ir-search" }, scopeBtn, search, go),
                 views, actionsBtn,
                 el("span", { class: "ir-spacer" }),
+                reportWrap,
                 savedWrap),
             el("div", { class: "ir-busybar" }),
-            el("div", { class: "ir-notices" }, this.els.errorSlot, this.els.transientSlot, this.els.ignoredSlot),
+            el("div", { class: "ir-notices", part: "notices" }, this.els.errorSlot, this.els.transientSlot, this.els.ignoredSlot),
             this.els.chips,
-            el("div", { class: "ir-tablewrap" }, this.els.table),
+            el("div", { class: "ir-tablewrap", part: "table-container" }, this.els.table),
             this.els.pager);
     }
 
@@ -183,7 +267,7 @@ class InteractiveReportElement extends HTMLElement {
     async runQuery(opts = {}) {
         this._abort?.abort();
         const ctrl = this._abort = new AbortController();
-        this.classList.add("ir-busy");
+        this._mount.classList.add("ir-busy");
         try {
             const result = await api(`${this.base}/${encodeURIComponent(this.reportName)}/query`, {
                 method: "POST", body: this.serialize(), signal: ctrl.signal,
@@ -205,7 +289,7 @@ class InteractiveReportElement extends HTMLElement {
             if (!opts.quiet) this.showError(err);
             throw err;
         } finally {
-            if (ctrl === this._abort) this.classList.remove("ir-busy");
+            if (ctrl === this._abort) this._mount.classList.remove("ir-busy");
         }
     }
 
@@ -455,7 +539,7 @@ class InteractiveReportElement extends HTMLElement {
 
     async resetWorkingCopy() {
         const target = this.currentSaved ? `"${this.currentSaved.title}"` : "its default settings";
-        if (!await confirmDialog("Reset", `Restore this report to ${target}? Unsaved changes are lost.`, "Reset")) return;
+        if (!await confirmDialog(this, "Reset", `Restore this report to ${target}? Unsaved changes are lost.`, "Reset")) return;
         if (this.currentSaved) await this.loadSavedById(this.currentSaved.id);
         else this.resetToPrimary();
     }
@@ -481,7 +565,7 @@ class InteractiveReportElement extends HTMLElement {
     async deleteCurrentSaved() {
         const s = this.currentSaved;
         if (!s) return;
-        if (!await confirmDialog("Delete Saved Report", `Delete "${s.title}"? This cannot be undone.`)) return;
+        if (!await confirmDialog(this, "Delete Saved Report", `Delete "${s.title}"? This cannot be undone.`)) return;
         try {
             await api(`${this.base}/saved/${encodeURIComponent(s.id)}`, { method: "DELETE" });
             this.currentSaved = null;

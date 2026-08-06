@@ -41,6 +41,34 @@ public sealed class ConfigurationReportDefinitionStoreTests
         Assert.Equal("ID = 1", configured.DefaultState.Filters![0].Expr);
     }
 
+    [Fact]
+    public async Task List_rejects_case_insensitive_duplicate_report_names()
+    {
+        static ReportDefinition Definition() => new()
+        {
+            Connection = "db",
+            Dialect = ReportDialect.Sqlite,
+            Sql = "select 1 as ID",
+        };
+
+        var options = new InteractiveReportOptions
+        {
+            Reports = new Dictionary<string, ReportDefinition>(StringComparer.Ordinal)
+            {
+                ["orders"] = Definition(),
+                ["ORDERS"] = Definition(),
+            },
+        };
+        using var store = new ConfigurationReportDefinitionStore(
+            new OptionsMonitorStub(options),
+            new SchemaCache());
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await store.List());
+
+        Assert.Contains("unique", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     private sealed class OptionsMonitorStub(InteractiveReportOptions options)
         : IOptionsMonitor<InteractiveReportOptions>
     {

@@ -5,7 +5,7 @@ using Microsoft.Net.Http.Headers;
 namespace InteractiveReport.AspNetCore;
 
 /// <summary>
-/// Serves the packaged UI (ir.js, ir.css, ir-admin.js, …) from embedded resources at
+/// Serves the packaged UI bundles (ir.js, ir-admin.js, and source maps) from embedded resources at
 /// {prefix}/ui/{file}. The asset endpoint is anonymous by design: the files are public
 /// code shipped in the package (anyone can read them on a feed — no data, no secrets),
 /// and a session-expired page that cannot even load the script cannot tell the user to

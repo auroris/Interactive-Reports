@@ -2,11 +2,14 @@
 // Everything renders through createElement/textContent — report data never passes
 // through innerHTML (the only innerHTML below is our own static icon markup).
 
+import cssText from "./ir.css";
+
 export function el(tag, props = {}, ...children) {
     const node = document.createElement(tag);
     for (const [k, v] of Object.entries(props)) {
         if (v === undefined || v === null) continue;
         if (k === "class") node.className = v;
+        else if (k === "part") node.setAttribute("part", v);
         else if (k === "for") node.htmlFor = v;
         else if (k === "dataset") Object.assign(node.dataset, v);
         else if (k === "style") Object.assign(node.style, v);
@@ -18,11 +21,16 @@ export function el(tag, props = {}, ...children) {
     return node;
 }
 
-/// Inject the packaged stylesheet once per document. Hosts that want to override
-/// it can add their own <link data-ir-css> before any widget connects.
-export function ensureCss(base) {
-    if (document.querySelector("link[data-ir-css]")) return;
-    document.head.append(el("link", { rel: "stylesheet", href: `${base}/ui/ir.css`, "data-ir-css": "" }));
+/// Give each widget an isolated rendering boundary. Keeping both the DOM and the
+/// stylesheet in the shadow root prevents host-page resets and utility classes
+/// from leaking in, and prevents the widget's rules from leaking out.
+export function createWidgetRoot(host) {
+    const root = host.attachShadow({ mode: "open" });
+    const style = el("style", { "data-ir-styles": "" });
+    style.textContent = cssText;
+    const mount = el("div", { part: "surface" });
+    root.append(style, mount);
+    return { root, mount };
 }
 
 const ICONS = {
@@ -52,10 +60,21 @@ export function banner(kind, text, onDismiss) {
 // --- popup menus -------------------------------------------------------------
 
 let activePopup = null;
+let activePopupOwner = null;
+const dialogsByOwner = new WeakMap();
 
 export function closePopups() {
     activePopup?.();
     activePopup = null;
+    activePopupOwner = null;
+}
+
+/// Release document-level listeners and transient UI when a host framework
+/// removes a component from the page.
+export function disposeWidget(host) {
+    if (activePopupOwner === host) closePopups();
+    for (const dialog of [...(dialogsByOwner.get(host) ?? [])]) dialog.close();
+    dialogsByOwner.delete(host);
 }
 
 /**
@@ -67,7 +86,10 @@ export function closePopups() {
  */
 export function popupMenu(anchor, items) {
     closePopups();
-    const menu = el("div", { class: "ir-popup", role: "menu" });
+    const menu = el("div", { class: "ir-popup", part: "menu", role: "menu" });
+    const root = anchor.getRootNode();
+    const mount = root instanceof ShadowRoot ? root : document.body;
+    activePopupOwner = root instanceof ShadowRoot ? root.host : null;
 
     for (const item of items) {
         if (item === "-") { menu.append(el("div", { class: "ir-menu-sep", role: "separator" })); continue; }
@@ -87,7 +109,7 @@ export function popupMenu(anchor, items) {
         menu.append(btn);
     }
 
-    document.body.append(menu);
+    mount.append(menu);
 
     // Fixed positioning against the viewport; flip when it would overflow.
     const a = anchor.getBoundingClientRect();
@@ -102,14 +124,17 @@ export function popupMenu(anchor, items) {
     menu.style.top = `${top}px`;
     menu.style.visibility = "";
 
-    const onDocDown = e => { if (!menu.contains(e.target) && e.target !== anchor && !anchor.contains(e.target)) closePopups(); };
+    const onDocDown = e => {
+        const path = e.composedPath?.() ?? [e.target];
+        if (!path.includes(menu) && !path.includes(anchor)) closePopups();
+    };
     const onKey = e => {
         if (e.key === "Escape") { closePopups(); anchor.focus?.(); return; }
         if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "Home" && e.key !== "End") return;
         const focusable = [...menu.querySelectorAll(".ir-menu-item:not([disabled])")];
         if (!focusable.length) return;
         e.preventDefault();
-        const idx = focusable.indexOf(document.activeElement);
+        const idx = focusable.indexOf(root.activeElement ?? document.activeElement);
         const next = e.key === "Home" ? 0
             : e.key === "End" ? focusable.length - 1
             : e.key === "ArrowDown" ? (idx + 1) % focusable.length
@@ -147,19 +172,30 @@ export function popupMenu(anchor, items) {
  * error (ApiError-aware) and stays open on failure. Omit onApply for a plain
  * informational dialog with a single Close button.
  */
-export function openDialog({ title, width, cls, build, applyLabel = "Apply", onApply, destructive = false }) {
+export function openDialog({ owner, title, width, cls, build, applyLabel = "Apply", onApply, destructive = false }) {
     closePopups();
-    const restoreFocus = document.activeElement;
+    const root = owner?.shadowRoot ?? document;
+    const mount = root instanceof ShadowRoot ? root : document.body;
+    const restoreFocus = root.activeElement ?? document.activeElement;
 
     const errorBox = el("div", { class: "ir-dialog-error", hidden: true });
     const body = el("div", { class: "ir-dialog-body" });
+    let ownedDialogs = null;
+    if (owner) {
+        ownedDialogs = dialogsByOwner.get(owner) ?? new Set();
+        dialogsByOwner.set(owner, ownedDialogs);
+    }
+    let closed = false;
 
     const dlg = {
         root: null,
         body,
         close() {
+            if (closed) return;
+            closed = true;
             dlg.root.remove();
             document.removeEventListener("keydown", onKey, true);
+            ownedDialogs?.delete(dlg);
             restoreFocus?.focus?.();
         },
         setError(err) {
@@ -203,8 +239,8 @@ export function openDialog({ title, width, cls, build, applyLabel = "Apply", onA
         onclick: () => dlg.close(),
     }, onApply ? "Cancel" : "Close");
 
-    dlg.root = el("div", { class: "ir-overlay" + (cls ? ` ${cls}` : "") },
-        el("div", { class: "ir-dialog", role: "dialog", "aria-modal": "true", style: width ? { width } : {} },
+    dlg.root = el("div", { class: "ir-overlay" + (cls ? ` ${cls}` : ""), part: "dialog-overlay" },
+        el("div", { class: "ir-dialog", part: "dialog", role: "dialog", "aria-modal": "true", style: width ? { width } : {} },
             el("div", { class: "ir-dialog-title" }, title,
                 el("button", { type: "button", class: "ir-dialog-x", "aria-label": "Close", onclick: () => dlg.close() }, icon("close"))),
             errorBox,
@@ -213,7 +249,8 @@ export function openDialog({ title, width, cls, build, applyLabel = "Apply", onA
 
     const onKey = e => {
         if (e.key === "Escape") { e.stopPropagation(); dlg.close(); return; }
-        if (e.key === "Enter" && applyBtn && e.target.tagName !== "TEXTAREA" && e.target.tagName !== "BUTTON") {
+        const target = e.composedPath?.()[0] ?? e.target;
+        if (e.key === "Enter" && applyBtn && target.tagName !== "TEXTAREA" && target.tagName !== "BUTTON") {
             e.preventDefault();
             applyBtn.click();
             return;
@@ -224,21 +261,24 @@ export function openDialog({ title, width, cls, build, applyLabel = "Apply", onA
             .filter(n => !n.disabled && n.offsetParent !== null);
         if (!focusable.length) return;
         const first = focusable[0], last = focusable[focusable.length - 1];
-        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+        const activeElement = root.activeElement ?? document.activeElement;
+        if (e.shiftKey && activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && activeElement === last) { e.preventDefault(); first.focus(); }
     };
     document.addEventListener("keydown", onKey, true);
 
     build(body, dlg);
-    document.body.append(dlg.root);
+    mount.append(dlg.root);
+    ownedDialogs?.add(dlg);
     (body.querySelector("input, select, textarea") ?? applyBtn ?? cancelBtn).focus();
     return dlg;
 }
 
-export function confirmDialog(title, message, confirmLabel = "Delete") {
+export function confirmDialog(owner, title, message, confirmLabel = "Delete") {
     return new Promise(resolve => {
         let confirmed = false;
         const dlg = openDialog({
+            owner,
             title,
             width: "26rem",
             applyLabel: confirmLabel,
