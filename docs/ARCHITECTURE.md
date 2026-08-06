@@ -333,9 +333,14 @@ surface outside operators:
   parenthesized.
 - `CASE`, comparisons, `IS NULL`, and `AND/OR/NOT` emit **identically on all three
   dialects** — they are the portable core; only functions carry dialect idioms.
-- Semantics notes: concatenation treats NULL as empty on all three dialects (CONCAT on
-  SqlServer/Sqlite; Oracle's `||` natively); `YEAR/MONTH/DAY` accept ISO date *text*
-  because SQLite date columns discover as text.
+- Semantics notes: concatenation treats NULL as empty everywhere (CONCAT on
+  SqlServer/Sqlite/Postgres; Oracle's `||` natively); `YEAR/MONTH/DAY` accept ISO date
+  *text* because SQLite date columns discover as text — emitted natively where the
+  engine converts text itself (SQLite strftime, SQL Server implicit ISO conversion)
+  and with explicit conversions where EXTRACT is strictly typed (Oracle
+  `TO_DATE(SUBSTR(x,1,10),'YYYY-MM-DD')`, Postgres `CAST(x AS TIMESTAMP)`). Non-ISO
+  text in a date-part function is a runtime error on those dialects — ISO is the
+  documented contract.
 - Computed columns cannot reference other computed columns (no dependency ordering in v1).
 - Known limitation: no date literals yet, so date columns compare only against date
   columns — use `YEAR()/MONTH()/DAY()` for date-part conditions, or filters for date
@@ -565,3 +570,5 @@ APEX's Interactive Reports.
 | NULL participates in arithmetic | number-only operands | Consistency: NULL already joined functions, concat, and CASE branches; `AMOUNT + NULL` failing while `CONCAT(NULL, …)` passed was an inconsistency, not a rule. |
 | No date literals in v1 expressions | text-vs-date comparison | Implicit text→date conversion is an NLS/format trap on Oracle; a typed DATE '…' literal is the clean extension point. |
 | Postgres ROUND emits signature casts | bind precision as int | `round(numeric, integer)` is the only two-arg ROUND Postgres has; casting both arguments in SQL keeps bindings uniform across dialects (goldens: 2 always binds as decimal). |
+| Date parts on ISO text convert at emission (Oracle TO_DATE, Postgres CAST) | dialect-aware binding rules | The portable subset's types stay dialect-free; EXTRACT's strictness is an emission detail. Rejecting text outright would break the SQLite date-as-text story the feature exists for. |
+| Guid filter values bind as Guid | string binding for Other kind | Postgres rejects `uuid = text` outright; "Other" is a family, not a type, so binding consults the discovered CLR type where it matters. Unparseable UUIDs die as precise validation errors, not provider errors. |

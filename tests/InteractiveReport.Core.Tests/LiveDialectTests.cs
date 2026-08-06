@@ -273,6 +273,82 @@ public class LiveDialectTests
 
     [SkippableTheory]
     [MemberData(nameof(Dialects))]
+    public async Task Date_parts_extract_from_native_and_iso_text_dates(ReportDialect dialect)
+    {
+        // EXTRACT is strictly typed on Oracle/Postgres: the text column exercises the
+        // per-dialect conversions the emitter wraps around ISO date text.
+        var live = LiveDb.For(dialect);
+        var def = live.Definition();
+        def.Name = $"live-dates-{dialect}";
+        def.Sql = "SELECT ORDER_ID, AMOUNT, ORDER_DATE, ORDER_DATE_TEXT FROM IR_TEST_ORDERS";
+
+        var result = await live.Executor.Query(def, new ReportState
+        {
+            Computed =
+            [
+                new ComputedColumn { Id = "c1", Expr = "YEAR(ORDER_DATE)" },
+                new ComputedColumn { Id = "c2", Expr = "YEAR(ORDER_DATE_TEXT)" },
+                new ComputedColumn { Id = "c3", Expr = "MONTH(ORDER_DATE_TEXT)" },
+                new ComputedColumn { Id = "c4", Expr = "DAY(ORDER_DATE)" },
+            ],
+            Filters = [Filter("c1", FilterOp.Eq, 2026)],
+            Sorts = [new SortRule { Col = "ORDER_ID", Dir = SortDir.Asc }],
+        }, NoParams);
+
+        // 2026 rows: ids 6–10.
+        Assert.Equal(5, result.TotalRows);
+        Assert.All(result.Rows, r =>
+            Assert.Equal(Convert.ToInt32(r["c1"]), Convert.ToInt32(r["c2"])));   // text agrees with native
+        var first = result.Rows[0];                                              // id 6 → 2026-02-16
+        Assert.Equal(6, Convert.ToInt32(first["ORDER_ID"]));
+        Assert.Equal(2, Convert.ToInt32(first["c3"]));
+        Assert.Equal(16, Convert.ToInt32(first["c4"]));
+    }
+
+    [SkippableTheory]
+    [InlineData(ReportDialect.SqlServer)]
+    [InlineData(ReportDialect.Postgres)]
+    public async Task Uuid_filters_bind_native_uuid_values(ReportDialect dialect)
+    {
+        // Postgres rejects uuid = text outright, so the validator binds Guid columns
+        // as Guids. The uuid column is derived deterministically per row so the test
+        // needs no schema change; values are read back and re-sent as the JSON
+        // strings a client would put in the state document.
+        var live = LiveDb.For(dialect);
+        var def = live.Definition();
+        def.Name = $"live-uuid-{dialect}";
+        def.Sql = dialect == ReportDialect.Postgres
+            ? "SELECT ORDER_ID, CUSTOMER, CAST(MD5(CAST(ORDER_ID AS TEXT)) AS UUID) AS ROW_UUID FROM IR_TEST_ORDERS"
+            : "SELECT ORDER_ID, CUSTOMER, CONVERT(UNIQUEIDENTIFIER, HASHBYTES('MD5', CAST(ORDER_ID AS VARCHAR(10)))) AS ROW_UUID FROM IR_TEST_ORDERS";
+
+        var all = await live.Executor.Query(def, new ReportState
+        {
+            Sorts = [new SortRule { Col = "ORDER_ID", Dir = SortDir.Asc }],
+        }, NoParams);
+        var uuidOf = (int index) => ((Guid)all.Rows[index]["ROW_UUID"]!).ToString();
+
+        var eq = await live.Executor.Query(def, new ReportState
+        {
+            Filters = [Filter("ROW_UUID", FilterOp.Eq, uuidOf(0))],
+        }, NoParams);
+        Assert.Equal(1, eq.TotalRows);
+        Assert.Equal(1, Convert.ToInt32(eq.Rows.Single()["ORDER_ID"]));
+
+        var ne = await live.Executor.Query(def, new ReportState
+        {
+            Filters = [Filter("ROW_UUID", FilterOp.Ne, uuidOf(0))],
+        }, NoParams);
+        Assert.Equal(9, ne.TotalRows);
+
+        var inList = await live.Executor.Query(def, new ReportState
+        {
+            Filters = [Filter("ROW_UUID", FilterOp.In, new[] { uuidOf(0), uuidOf(1) })],
+        }, NoParams);
+        Assert.Equal(2, inList.TotalRows);
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Dialects))]
     public async Task Context_params_bind_by_name(ReportDialect dialect)
     {
         // Context param appears FIRST in the SQL but is added LAST by CommandBuilder —
@@ -418,7 +494,9 @@ internal sealed class LiveDb : IReportConnectionFactory
                     CUSTOMER NVARCHAR(100) NOT NULL,
                     STATUS   NVARCHAR(20) NOT NULL,
                     AMOUNT   DECIMAL(12,2) NOT NULL,
-                    NOTES    NVARCHAR(200) NULL
+                    NOTES    NVARCHAR(200) NULL,
+                    ORDER_DATE DATE NOT NULL,
+                    ORDER_DATE_TEXT NVARCHAR(10) NOT NULL
                 )
                 """,
             // Unquoted on purpose: names fold to lowercase, matching the unquoted
@@ -429,7 +507,9 @@ internal sealed class LiveDb : IReportConnectionFactory
                     CUSTOMER VARCHAR(100) NOT NULL,
                     STATUS   VARCHAR(20) NOT NULL,
                     AMOUNT   NUMERIC(12,2) NOT NULL,
-                    NOTES    VARCHAR(200) NULL
+                    NOTES    VARCHAR(200) NULL,
+                    ORDER_DATE DATE NOT NULL,
+                    ORDER_DATE_TEXT VARCHAR(10) NOT NULL
                 )
                 """,
             _ => """
@@ -438,26 +518,29 @@ internal sealed class LiveDb : IReportConnectionFactory
                     CUSTOMER VARCHAR2(100) NOT NULL,
                     STATUS   VARCHAR2(20) NOT NULL,
                     AMOUNT   NUMBER(12,2) NOT NULL,
-                    NOTES    VARCHAR2(200) NULL
+                    NOTES    VARCHAR2(200) NULL,
+                    ORDER_DATE DATE NOT NULL,
+                    ORDER_DATE_TEXT VARCHAR2(10) NOT NULL
                 )
                 """,
         });
 
         // The canonical 10 rows — must match SqliteE2EFixture. On Oracle the ''
         // note becomes NULL at insert, which is exactly the semantic the blank
-        // operator's dialect handling accounts for.
-        var rows = new (int Id, string Customer, string Status, decimal Amount, string? Notes)[]
+        // operator's dialect handling accounts for. ORDER_DATE_TEXT is the same
+        // date as ISO text, for the date-part-on-text expression coverage.
+        var rows = new (int Id, string Customer, string Status, decimal Amount, string? Notes, string Date)[]
         {
-            (1, "Acme Corp", "SHIPPED", 9000m, "rush"),
-            (2, "Globex", "SHIPPED", 7500m, null),
-            (3, "Initech", "SHIPPED", 5000m, ""),
-            (4, "Acme Corp", "SHIPPED", 3000m, "fragile"),
-            (5, "Hooli", "SHIPPED", 1500m, null),
-            (6, "acme llc", "PENDING", 2000m, "call first"),
-            (7, "Umbrella", "PENDING", 800m, null),
-            (8, "Stark Ind", "PENDING", 12000m, "insured"),
-            (9, "Wayne Ent", "NEW", 400m, "standard"),
-            (10, "Tyrell Corp", "CANCELLED", 6000m, "refunded"),
+            (1, "Acme Corp", "SHIPPED", 9000m, "rush", "2025-11-03"),
+            (2, "Globex", "SHIPPED", 7500m, null, "2025-07-21"),
+            (3, "Initech", "SHIPPED", 5000m, "", "2025-03-09"),
+            (4, "Acme Corp", "SHIPPED", 3000m, "fragile", "2025-12-30"),
+            (5, "Hooli", "SHIPPED", 1500m, null, "2025-05-14"),
+            (6, "acme llc", "PENDING", 2000m, "call first", "2026-02-16"),
+            (7, "Umbrella", "PENDING", 800m, null, "2026-02-08"),
+            (8, "Stark Ind", "PENDING", 12000m, "insured", "2026-06-27"),
+            (9, "Wayne Ent", "NEW", 400m, "standard", "2026-04-01"),
+            (10, "Tyrell Corp", "CANCELLED", 6000m, "refunded", "2026-02-19"),
         };
 
         var prefix = _dialect == ReportDialect.SqlServer ? "@" : ":";
@@ -465,13 +548,15 @@ internal sealed class LiveDb : IReportConnectionFactory
         {
             using var cmd = conn.CreateCommand();
             cmd.CommandText =
-                $"INSERT INTO IR_TEST_ORDERS (ORDER_ID, CUSTOMER, STATUS, AMOUNT, NOTES) " +
-                $"VALUES ({prefix}id, {prefix}customer, {prefix}status, {prefix}amount, {prefix}notes)";
+                $"INSERT INTO IR_TEST_ORDERS (ORDER_ID, CUSTOMER, STATUS, AMOUNT, NOTES, ORDER_DATE, ORDER_DATE_TEXT) " +
+                $"VALUES ({prefix}id, {prefix}customer, {prefix}status, {prefix}amount, {prefix}notes, {prefix}orderDate, {prefix}orderDateText)";
             AddParam(cmd, "id", r.Id);
             AddParam(cmd, "customer", r.Customer);
             AddParam(cmd, "status", r.Status);
             AddParam(cmd, "amount", r.Amount);
             AddParam(cmd, "notes", (object?)r.Notes ?? DBNull.Value);
+            AddParam(cmd, "orderDate", DateTime.ParseExact(r.Date, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture));
+            AddParam(cmd, "orderDateText", r.Date);
             cmd.ExecuteNonQuery();
         }
     }

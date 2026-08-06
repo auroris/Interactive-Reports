@@ -31,9 +31,13 @@ dotnet test tests/InteractiveReport.Core.Tests --filter "FullyQualifiedName~Live
 
 **What it does:** on first use per run it **drops and recreates a table named
 `IR_TEST_ORDERS`** in the target database and seeds the canonical 10 rows, then runs
-filters/search/blank semantics/aggregates/breaks/computed columns/context-param
-binding/groupBy/pivot/export against it. Point it at a scratch database, not anything
-you care about.
+filters/search/blank semantics/aggregates/breaks/computed columns (including CASE and
+date-part extraction over native and ISO-text dates)/context-param
+binding/groupBy/pivot/export against it. UUID filter binding runs on SQL Server and
+Postgres (derived uuid columns, no schema change), and the saved-report store corpus
+runs against Postgres in a dedicated `IR_SAVED_REPORTS_TEST` table
+(`PostgresSavedReportStoreTests`). Point it at a scratch database, not anything you
+care about.
 
 Expected numbers are identical on every dialect by design — including the blank-count
 test (4): SQLite/SQL Server/PostgreSQL count 3 NULLs + 1 empty string, while Oracle

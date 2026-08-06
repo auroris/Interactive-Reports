@@ -77,6 +77,19 @@ public class ExprEmitterTests
     }
 
     [Fact]
+    public void Date_parts_on_iso_text_get_explicit_conversions_where_extract_is_strict()
+    {
+        // EXTRACT rejects text on Oracle and Postgres; SQL Server converts ISO text
+        // implicitly and SQLite's strftime takes text natively.
+        Assert.Equal("EXTRACT(YEAR FROM TO_DATE(SUBSTR([NOTES], 1, 10), 'YYYY-MM-DD'))",
+            Emit("YEAR(NOTES)", ReportDialect.Oracle).Sql);
+        Assert.Equal("EXTRACT(MONTH FROM CAST([NOTES] AS TIMESTAMP))",
+            Emit("MONTH(NOTES)", ReportDialect.Postgres).Sql);
+        Assert.Equal("YEAR([NOTES])", Emit("YEAR(NOTES)", ReportDialect.SqlServer).Sql);
+        Assert.Equal("CAST(strftime('%Y', [NOTES]) AS INTEGER)", Emit("YEAR(NOTES)", ReportDialect.Sqlite).Sql);
+    }
+
+    [Fact]
     public void Every_binary_is_parenthesized_and_unary_minus_wraps()
     {
         Assert.Equal("([AMOUNT] + (? * ?))", Emit("AMOUNT + 2 * 3", ReportDialect.Sqlite).Sql);

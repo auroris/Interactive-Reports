@@ -157,4 +157,34 @@ public class OperatorMatrixTests
         Assert.Contains("IS NULL", sql);
         Assert.DoesNotContain(" OR ", sql);
     }
+
+    // "Other" binds by discovered CLR type where it matters: Postgres rejects
+    // uuid = text outright, so Guid columns must carry Guid parameters.
+    [Fact]
+    public void Guid_columns_bind_guid_parameters_not_text()
+    {
+        var schema = OrdersSchema.Append(Col("ROW_UUID", typeof(Guid))).ToList();
+        var def = OrdersDefinition(ReportDialect.Postgres);
+        var one = Guid.NewGuid();
+        var two = Guid.NewGuid();
+
+        ICollection<object?> BindingsFor(FilterRule filter)
+        {
+            var validated = StateValidator.Validate(def, new ReportState { Filters = [filter] }, schema);
+            return DialectSupport.GetCompiler(ReportDialect.Postgres)
+                .Compile(QueryComposer.Compose(def, validated).Page).NamedBindings.Values;
+        }
+
+        Assert.Contains(one, BindingsFor(Filter("ROW_UUID", FilterOp.Eq, one.ToString())).OfType<Guid>());
+        Assert.Equal(2, BindingsFor(Filter("ROW_UUID", FilterOp.In, new[] { one.ToString(), two.ToString() }))
+            .OfType<Guid>().Count());
+
+        // Garbage is a precise validation error here, never a provider error there.
+        var ex = Assert.Throws<ReportValidationException>(() =>
+            StateValidator.Validate(def, new ReportState
+            {
+                Filters = [Filter("ROW_UUID", FilterOp.Eq, "not-a-uuid")],
+            }, schema));
+        Assert.Contains("not valid", ex.Errors.Single().Message);
+    }
 }

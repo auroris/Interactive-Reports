@@ -536,6 +536,16 @@ public static partial class StateValidator
                     break;
 
                 default:
+                    // "Other" is a family, not a type — bind by the discovered CLR type
+                    // where it matters. Postgres rejects uuid = text outright, so Guid
+                    // columns must get Guid parameters (an unparseable string becomes a
+                    // precise validation error here instead of a provider error there).
+                    if ((Nullable.GetUnderlyingType(col.ClrType) ?? col.ClrType) == typeof(Guid))
+                    {
+                        if (el.ValueKind == JsonValueKind.String && Guid.TryParse(el.GetString(), out var guid))
+                            return guid;
+                        break;
+                    }
                     if (el.ValueKind == JsonValueKind.String) return el.GetString()!;
                     if (el.ValueKind == JsonValueKind.Number) return el.GetDecimal();
                     break;

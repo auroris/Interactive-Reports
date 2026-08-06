@@ -193,21 +193,56 @@ internal static class ExprFunctions
 
     private static void EmitDatePart(EmitContext ctx, string part, string strftime, IReadOnlyList<ExprNode> args)
     {
+        // The binder admits ISO date *text* (SQLite date columns discover as text), but
+        // EXTRACT is strictly typed on Oracle and Postgres — a text argument needs an
+        // explicit conversion there. SQL Server converts ISO text implicitly (yyyy-MM-dd
+        // is language-neutral) and SQLite's strftime takes text natively. The format
+        // strings are ours, not client data.
+        var arg = args[0];
+        var textual = arg.Kind == ColumnKind.Text || arg is NullLit;
+
         switch (ctx.Dialect)
         {
             case ReportDialect.SqlServer:
                 EmitPlain(ctx, part, args);
                 break;
 
-            case ReportDialect.Oracle or ReportDialect.Postgres:
+            case ReportDialect.Oracle:
                 ctx.Append("EXTRACT(").Append(part).Append(" FROM ");
-                ctx.Visit(args[0]);
+                if (textual)
+                {
+                    // Date-part extraction only needs the date: the first 10 chars of
+                    // any ISO string, parsed with an explicit mask (never NLS-dependent).
+                    ctx.Append("TO_DATE(SUBSTR(");
+                    ctx.Visit(arg);
+                    ctx.Append(", 1, 10), 'YYYY-MM-DD')");
+                }
+                else
+                {
+                    ctx.Visit(arg);
+                }
+                ctx.Append(')');
+                break;
+
+            case ReportDialect.Postgres:
+                ctx.Append("EXTRACT(").Append(part).Append(" FROM ");
+                if (textual)
+                {
+                    // ISO text, date-only or full timestamp, casts cleanly regardless of DateStyle.
+                    ctx.Append("CAST(");
+                    ctx.Visit(arg);
+                    ctx.Append(" AS TIMESTAMP)");
+                }
+                else
+                {
+                    ctx.Visit(arg);
+                }
                 ctx.Append(')');
                 break;
 
             case ReportDialect.Sqlite:
                 ctx.Append("CAST(strftime('").Append(strftime).Append("', ");
-                ctx.Visit(args[0]);
+                ctx.Visit(arg);
                 ctx.Append(") AS INTEGER)");
                 break;
 
