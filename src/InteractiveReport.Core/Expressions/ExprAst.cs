@@ -3,10 +3,14 @@ using InteractiveReport.Core.Model;
 namespace InteractiveReport.Core.Expressions;
 
 /// <summary>
-/// Typed AST for the computed-column expression language. Only the parser constructs
-/// these — client text never reaches SQL; only this tree does, via ExprEmitter.
-/// Column references resolve against the BASE schema only: computed columns cannot
-/// reference each other (no dependency ordering in v1).
+/// Stage 2 output: the typed AST. Only the binder constructs these — client text
+/// never reaches SQL; only this tree does, via ExprEmitter. Column references
+/// resolve against the BASE schema only: computed columns cannot reference each
+/// other (no dependency ordering in v1).
+///
+/// ColumnKind.Bool is internal to the tree: conditions exist inside CASE/NOT/AND/OR
+/// and never escape as a computed column's result (SQL Server has no scalar
+/// boolean; the portable subset therefore doesn't either).
 /// </summary>
 public abstract record ExprNode
 {
@@ -21,6 +25,12 @@ public sealed record NumberLit(decimal Value) : ExprNode
 public sealed record StringLit(string Value) : ExprNode
 {
     public override ColumnKind Kind => ColumnKind.Text;
+}
+
+/// <summary>The NULL literal. Its kind is contextual and never matters to emission.</summary>
+public sealed record NullLit : ExprNode
+{
+    public override ColumnKind Kind => ColumnKind.Other;
 }
 
 public sealed record ColumnRef(ColumnModel Column) : ExprNode
@@ -39,23 +49,47 @@ public sealed record BinaryOp(string Op, ExprNode Left, ExprNode Right) : ExprNo
     public override ColumnKind Kind => Op == "||" ? ColumnKind.Text : ColumnKind.Number;
 }
 
-public sealed record FuncCall(ExprFn Fn, IReadOnlyList<ExprNode> Args, ColumnKind ResultKind) : ExprNode
+/// <summary>Op is one of = &lt;&gt; &lt; &lt;= &gt; &gt;= (!= is normalized to &lt;&gt; by the lexer).</summary>
+public sealed record Comparison(string Op, ExprNode Left, ExprNode Right) : ExprNode
+{
+    public override ColumnKind Kind => ColumnKind.Bool;
+}
+
+/// <summary>Op is AND or OR.</summary>
+public sealed record LogicalOp(string Op, ExprNode Left, ExprNode Right) : ExprNode
+{
+    public override ColumnKind Kind => ColumnKind.Bool;
+}
+
+public sealed record NotOp(ExprNode Operand) : ExprNode
+{
+    public override ColumnKind Kind => ColumnKind.Bool;
+}
+
+public sealed record NullTest(ExprNode Operand, bool Negated) : ExprNode
+{
+    public override ColumnKind Kind => ColumnKind.Bool;
+}
+
+public sealed record CaseBranch(ExprNode When, ExprNode Then);
+
+/// <summary>
+/// Operand null = searched CASE (branch Whens are conditions); non-null = simple
+/// CASE (branch Whens are values compared to the operand — note SQL equality:
+/// WHEN NULL never matches, which is why the binder rejects it). ResultKind is
+/// inferred by unifying the THEN/ELSE branches, ignoring NULLs.
+/// </summary>
+public sealed record CaseWhen(
+    ExprNode? Operand,
+    IReadOnlyList<CaseBranch> Branches,
+    ExprNode? Else,
+    ColumnKind ResultKind) : ExprNode
 {
     public override ColumnKind Kind => ResultKind;
 }
 
-public enum ExprFn
+/// <summary>Name is the canonical registry key (see ExprFunctions); ResultKind was inferred by the binder.</summary>
+public sealed record FuncCall(string Name, IReadOnlyList<ExprNode> Args, ColumnKind ResultKind) : ExprNode
 {
-    Upper,
-    Lower,
-    Trim,
-    Length,
-    Substr,
-    Concat,
-    Round,
-    Abs,
-    Coalesce,
-    Year,
-    Month,
-    Day,
+    public override ColumnKind Kind => ResultKind;
 }

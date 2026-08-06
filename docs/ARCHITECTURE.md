@@ -259,23 +259,54 @@ provider allows; SQLite runs them sequentially on one connection.
 
 ## 8. Expression language
 
-Small, typed, and closed. Used for computed columns; filter values stay structured (the
+Small, typed, and closed — a **documented portable subset**, not "whatever the target
+database accepts". Used for computed columns; filter values stay structured (the
 `op`/`value` model) and do not use the expression language in v1.
 
+**Pipeline (staged):** text → *syntax* (untyped tree with source positions; lexer +
+recursive descent, binary operators via a Pratt precedence loop) → *bind* (schema +
+function registry → typed AST; all typing rules live here) → *emit* (registry-driven
+per-dialect SQL). The stages are `ExprSyntaxParser` → `ExprBinder` → `ExprEmitter`,
+fronted by the `ExprParser.Parse` facade.
+
 ```
-expr    := term (('+'|'-'|'||') term)*
-term    := factor (('*'|'/') factor)*
-factor  := number | string | column | func '(' args ')' | '(' expr ')' | '-' factor
-func    := UPPER | LOWER | TRIM | LENGTH | SUBSTR | CONCAT
-         | ROUND | ABS | COALESCE
-         | YEAR | MONTH | DAY                     (date part extraction)
-args    := expr (',' expr)*
+expr        := or
+or          := and (OR and)*
+and         := not (AND not)*
+not         := NOT not | predicate                 (NOT binds looser than comparisons)
+predicate   := additive ( cmp additive | IS [NOT] NULL )*
+cmp         := '=' | '<>' | '!=' | '<' | '<=' | '>' | '>='     (!= normalizes to <>)
+additive    := term (('+'|'-'|'||') term)*
+term        := factor (('*'|'/') factor)*
+factor      := number | 'string' | NULL | column | func '(' args ')'
+             | '(' expr ')' | '-' factor | case
+case        := CASE [expr] (WHEN expr THEN expr)+ [ELSE expr] END
+func        := UPPER | LOWER | TRIM | LENGTH | SUBSTR | CONCAT
+             | ROUND | ABS | COALESCE
+             | YEAR | MONTH | DAY                  (date part extraction)
+args        := expr (',' args)*
 ```
 
-- Parsed to an AST with basic type checking (numeric vs text vs date) against discovered
-  column types; type errors are validation errors, not SQL errors.
-- Per-dialect emission via a function map (the only dialect-specific surface outside
-  operators):
+**Type discipline.** Values are number/text/date. Conditions (boolean) arise from
+comparisons, `IS [NOT] NULL`, and `AND`/`OR`/`NOT`, and are consumed by searched-CASE
+`WHEN`s and by `NOT`/`AND`/`OR` — nowhere else. A computed column's result must be a
+value: SQL Server has no scalar boolean, so the portable subset doesn't either (the
+error says to wrap the condition in `CASE WHEN … THEN 1 ELSE 0 END`). Comparisons
+require both operands of the same kind; comparing conditions (chained comparisons) is
+rejected.
+
+**NULL rules** (explicit, because SQL's are silent):
+- `NULL` is a value of every type; its type comes from context. `COALESCE` and CASE
+  branch unification skip NULLs; all-NULL means "cannot infer a type" — an error.
+- `x = NULL` never matches in SQL; the binder rejects it and points at `IS NULL`.
+- Simple `CASE x WHEN …` uses SQL equality, so `WHEN NULL` never matches — rejected,
+  pointing at the searched form with `IS NULL`.
+- `CASE` without `ELSE` yields NULL for unmatched rows (SQL default, allowed).
+
+**Function registry** (`ExprFunctions`): one entry per function — arity, argument
+rules, result-kind inference, per-dialect emitter. Adding a function is adding a row;
+there is no enum and no switches to grow. The registry is the only dialect-specific
+surface outside operators:
 
 | AST | SqlServer | Oracle | Sqlite |
 |---|---|---|---|
@@ -286,13 +317,19 @@ args    := expr (',' expr)*
 | `COALESCE` | `COALESCE` | `COALESCE` | `COALESCE` |
 
 - The emitter produces SQL fragments **we** wrote, injected via `SelectRaw` with `?`
-  bindings for every literal — client text never reaches SQL; only the AST does. Every
-  binary operation is parenthesized.
+  bindings for every literal — client text never reaches SQL; only the AST does. The one
+  keyword literal is `NULL` itself (ours, not client data). Every binary operation is
+  parenthesized.
+- `CASE`, comparisons, `IS NULL`, and `AND/OR/NOT` emit **identically on all three
+  dialects** — they are the portable core; only functions carry dialect idioms.
 - Semantics notes: concatenation treats NULL as empty on all three dialects (CONCAT on
   SqlServer/Sqlite; Oracle's `||` natively); `YEAR/MONTH/DAY` accept ISO date *text*
   because SQLite date columns discover as text.
 - Computed columns cannot reference other computed columns (no dependency ordering in v1).
-- `CASE WHEN` is a known future extension (APEX supports it); excluded from v1 grammar.
+- Known limitation: no date literals yet, so date columns compare only against date
+  columns — use `YEAR()/MONTH()/DAY()` for date-part conditions, or filters for date
+  ranges. A `DATE '…'` literal with per-dialect emission is the designed extension
+  point.
 
 ## 9. Dialect strategy
 
@@ -460,6 +497,12 @@ APEX's Interactive Reports.
   columns, highlights, breaks + subtotal/grand rows, groupBy, pivot, scoped search,
   saved reports (save-as/publish/reassign/state/delete), CSV download, validation
   problems in-dialog, `ignored[]` notices, per-report policy gate.
+- **M7 — Expression core v2** ✅ *(2026-08-06)*: staged pipeline (untyped syntax →
+  binder → registry-driven emitter, §8); searched and simple `CASE`, comparisons,
+  `AND/OR/NOT`, `IS [NOT] NULL`, typed `NULL` with COALESCE/CASE inference; `ExprFn`
+  enum and its switches replaced by the function registry. Existing emissions locked
+  byte-identical by the golden suite; CASE proven end-to-end on SQLite and live
+  against SQL Server + Oracle (battery green ×24, 2026-08-06).
 
 ## Appendix: decision log
 
@@ -490,3 +533,8 @@ APEX's Interactive Reports.
 | Light DOM + `.ir-*` prefix + CSS custom properties | Shadow DOM | Hosts want to theme the region, not fight encapsulation; prefix discipline is enough isolation and keeps the DOM inspectable. |
 | Chip disable-toggles are client-only state, stripped at serialization | protocol-level `disabled` flags | The engine's state document stays canonical (validation, saved reports, exports agree); a toggle is presentation-side convenience. |
 | Save persists only enabled items | persist disabled items too | Round-tripping disabled items would need protocol support; "what you see is what you saved" is predictable. |
+| Expression pipeline staged: untyped syntax → bind → emit | grow the single-pass parser | NULL, CASE result inference, and overloads need types the parser can't know mid-parse; positions survive to the error message; each stage is testable alone. |
+| Function registry (arity/rules/inference/emitters as data) | ExprFn enum + switches | Two switches per function was already drift-prone at 12 functions; a registry row is one place, and the registry doubles as the subset's documentation. |
+| Bool is internal to expressions; computed columns must yield values | allow boolean results | SQL Server has no scalar boolean; the error teaches the portable form (CASE WHEN … THEN 1 ELSE 0 END) instead of failing per-dialect. |
+| `x = NULL` and simple-CASE `WHEN NULL` are rejected | let SQL's null semantics apply | Both silently never match — silence is the one thing a validation layer must never emit; the errors point at IS NULL / searched CASE. |
+| No date literals in v1 expressions | text-vs-date comparison | Implicit text→date conversion is an NLS/format trap on Oracle; a typed DATE '…' literal is the clean extension point. |

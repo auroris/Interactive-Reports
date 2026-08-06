@@ -319,8 +319,15 @@ export function computeDialog(w, editIndex) {
             el("div", { class: "ir-token-group" },
                 el("span", { class: "ir-field-label" }, "Functions"),
                 el("div", {}, ...EXPR_FUNCTIONS.split(" ").map(f => tokenBtn(f, `${f}(`)))),
+            el("div", { class: "ir-token-group" },
+                el("span", { class: "ir-field-label" }, "Conditions"),
+                el("div", {},
+                    tokenBtn("CASE WHEN … END", "CASE WHEN  THEN  ELSE  END"),
+                    tokenBtn("AND", " AND "), tokenBtn("OR", " OR "), tokenBtn("NOT", "NOT "),
+                    tokenBtn("IS NULL", " IS NULL"), tokenBtn("IS NOT NULL", " IS NOT NULL"))),
             el("p", { class: "ir-dialog-note" },
-                "Operators: +  −  *  /  ||   ·   Example: SUBSTR(CUSTOMER, 1, 3) || '…'")),
+                "Operators: +  −  *  /  ||  ·  =  <>  <  <=  >  >=   ·   " +
+                "Example: CASE WHEN AMOUNT > 1000 THEN 'big' ELSE 'small' END")),
         onApply: () => {
             const expr = exprInp.value.trim();
             if (!expr) throw new Error("Enter an expression");

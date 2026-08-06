@@ -81,6 +81,10 @@ public class SqlSafetyTests
     [InlineData("UPPER(CUSTOMER) || (SELECT PASSWORD FROM USERS)")]
     [InlineData("AMOUNT; DELETE FROM ORDERERS")]
     [InlineData("0x1f UNION SELECT * FROM SECRETS")]
+    [InlineData("CASE WHEN 1=1 THEN (SELECT PASSWORD FROM USERS) ELSE 0 END")]
+    [InlineData("CASE WHEN AMOUNT > 0 THEN 1 END)); DROP TABLE ORDERS; --")]
+    [InlineData("1 = 1; DROP TABLE ORDERS")]
+    [InlineData("CASE WHEN EXISTS(SELECT 1 FROM USERS) THEN 1 ELSE 0 END")]
     public void Hostile_expressions_die_in_the_parser(string expr)
     {
         var schema = OrdersSchema.ToDictionary(c => c.Name, StringComparer.OrdinalIgnoreCase);

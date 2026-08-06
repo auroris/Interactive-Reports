@@ -74,4 +74,62 @@ public class ExprEmitterTests
         foreach (var d in new[] { ReportDialect.SqlServer, ReportDialect.Oracle, ReportDialect.Sqlite })
             Assert.Equal("COALESCE([NOTES], ?)", Emit("COALESCE(NOTES, 'n/a')", d).Sql);
     }
+
+    // --- CASE, conditions, NULL: the portable core emits identically everywhere ---
+
+    private static readonly ReportDialect[] AllDialects =
+        [ReportDialect.SqlServer, ReportDialect.Oracle, ReportDialect.Sqlite];
+
+    [Fact]
+    public void Searched_case_emits_identically_on_all_dialects()
+    {
+        foreach (var d in AllDialects)
+        {
+            var (sql, bindings) = Emit("CASE WHEN AMOUNT > 1000 THEN 'big' ELSE 'small' END", d);
+
+            Assert.Equal("CASE WHEN ([AMOUNT] > ?) THEN ? ELSE ? END", sql);
+            Assert.Equal([1000m, "big", "small"], bindings);
+        }
+    }
+
+    [Fact]
+    public void Simple_case_emits_the_operand_form()
+    {
+        foreach (var d in AllDialects)
+            Assert.Equal("CASE [STATUS] WHEN ? THEN ? ELSE ? END",
+                Emit("CASE STATUS WHEN 'S' THEN 1 ELSE 0 END", d).Sql);
+    }
+
+    [Fact]
+    public void Conditions_parenthesize_and_null_literal_is_the_keyword_not_a_binding()
+    {
+        var (sql, bindings) = Emit(
+            "CASE WHEN NOT (NOTES IS NULL) AND AMOUNT >= 10 THEN NULL ELSE AMOUNT END", ReportDialect.Sqlite);
+
+        Assert.Equal("CASE WHEN ((NOT ([NOTES] IS NULL)) AND ([AMOUNT] >= ?)) THEN NULL ELSE [AMOUNT] END", sql);
+        Assert.Equal([10m], bindings);
+    }
+
+    [Fact]
+    public void Bang_not_equal_emits_angle_brackets()
+    {
+        Assert.Equal("CASE WHEN ([STATUS] <> ?) THEN ? ELSE ? END",
+            Emit("CASE WHEN STATUS != 'X' THEN 1 ELSE 0 END", ReportDialect.Sqlite).Sql);
+    }
+
+    [Fact]
+    public void Case_without_else_omits_the_clause()
+    {
+        Assert.Equal("CASE WHEN ([NOTES] IS NOT NULL) THEN UPPER([NOTES]) END",
+            Emit("CASE WHEN NOTES IS NOT NULL THEN UPPER(NOTES) END", ReportDialect.Oracle).Sql);
+    }
+
+    [Fact]
+    public void Dialect_functions_keep_their_idioms_inside_case_conditions()
+    {
+        Assert.Equal("CASE WHEN (LEN([CUSTOMER]) > ?) THEN ? ELSE ? END",
+            Emit("CASE WHEN LENGTH(CUSTOMER) > 5 THEN 1 ELSE 0 END", ReportDialect.SqlServer).Sql);
+        Assert.Equal("CASE WHEN (LENGTH([CUSTOMER]) > ?) THEN ? ELSE ? END",
+            Emit("CASE WHEN LENGTH(CUSTOMER) > 5 THEN 1 ELSE 0 END", ReportDialect.Oracle).Sql);
+    }
 }

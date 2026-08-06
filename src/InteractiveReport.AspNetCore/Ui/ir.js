@@ -35,7 +35,10 @@ const FNS_BY_TYPE = {
     bool: ["count", "countDistinct"],
     other: ["count", "countDistinct"],
 };
-const TEXTY_EXPR = /UPPER|LOWER|TRIM|CONCAT|SUBSTR|\|\|/i;
+// Client-side guess at a computed column's type (drives which operators the filter
+// dialogs offer); the server's binder is the real authority. "THEN '…'" catches
+// CASE expressions that yield text.
+const TEXTY_EXPR = /UPPER|LOWER|TRIM|CONCAT|SUBSTR|\|\||THEN\s*'/i;
 
 class InteractiveReportElement extends HTMLElement {
     static observedAttributes = ["report", "base"];

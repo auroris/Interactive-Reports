@@ -158,6 +158,40 @@ public class LiveDialectTests
 
     [SkippableTheory]
     [MemberData(nameof(Dialects))]
+    public async Task Case_computed_column_filters_and_aggregates(ReportDialect dialect)
+    {
+        var live = LiveDb.For(dialect);
+        var result = await live.Executor.Query(live.Definition(), new ReportState
+        {
+            Computed =
+            [
+                new ComputedColumn
+                {
+                    Id = "c1",
+                    Expr = "CASE WHEN AMOUNT >= 6000 THEN 'BIG' WHEN AMOUNT >= 2000 THEN 'MID' ELSE 'SMALL' END",
+                },
+                new ComputedColumn
+                {
+                    Id = "c2",
+                    Expr = "CASE WHEN NOTES IS NULL OR NOTES = '' THEN 0 ELSE 1 END",
+                },
+            ],
+            Filters = [Filter("c1", FilterOp.Eq, "BIG")],
+            Sorts = [new SortRule { Col = "AMOUNT", Dir = SortDir.Desc }],
+            Aggregates = [new AggregateRule { Col = "c2", Fn = AggregateFn.Sum }],
+        }, NoParams);
+
+        // BIG = amounts ≥ 6000: Stark 12000, Acme 9000, Globex 7500, Tyrell 6000.
+        Assert.Equal(4, result.TotalRows);
+        Assert.All(result.Rows, r => Assert.Equal("BIG", r["c1"]));
+        // Of the BIG rows, those with a real note: insured, rush, refunded
+        // (Globex's NOTES is NULL; the '' arm keeps the expression honest on
+        // dialects where empty string and NULL differ).
+        Assert.Equal(3m, Convert.ToDecimal(result.Aggregates["c2"]["sum"]));
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Dialects))]
     public async Task Context_params_bind_by_name(ReportDialect dialect)
     {
         // Context param appears FIRST in the SQL but is added LAST by CommandBuilder —

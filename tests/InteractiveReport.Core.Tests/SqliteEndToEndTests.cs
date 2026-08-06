@@ -251,6 +251,62 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     }
 
     [Fact]
+    public async Task Case_computed_column_filters_and_sorts_like_any_other()
+    {
+        var result = await _executor.Query(Definition, new ReportState
+        {
+            Computed = [new ComputedColumn
+            {
+                Id = "c1",
+                Label = "Size",
+                Expr = "CASE WHEN AMOUNT >= 6000 THEN 'BIG' WHEN AMOUNT >= 2000 THEN 'MID' ELSE 'SMALL' END",
+            }],
+            Columns = ["CUSTOMER", "AMOUNT", "c1"],
+            Filters = [Filter("c1", FilterOp.Eq, "BIG")],
+            Sorts = [new SortRule { Col = "AMOUNT", Dir = SortDir.Desc }],
+        }, NoParams);
+
+        // BIG = amounts ≥ 6000: Stark 12000, Acme 9000, Globex 7500, Tyrell 6000.
+        Assert.Equal(4, result.TotalRows);
+        Assert.Equal(["Stark Ind", "Acme Corp", "Globex", "Tyrell Corp"],
+            result.Rows.Select(r => (string)r["CUSTOMER"]!));
+        Assert.All(result.Rows, r => Assert.Equal("BIG", r["c1"]));
+    }
+
+    [Fact]
+    public async Task Case_with_null_test_condition_aggregates()
+    {
+        var result = await _executor.Query(Definition, new ReportState
+        {
+            Computed = [new ComputedColumn
+            {
+                Id = "c1",
+                Expr = "CASE WHEN NOTES IS NULL OR NOTES = '' THEN 0 ELSE 1 END",
+            }],
+            Aggregates = [new AggregateRule { Col = "c1", Fn = AggregateFn.Sum }],
+        }, NoParams);
+
+        // Rows with a real note: rush, fragile, call first, insured, standard, refunded.
+        Assert.Equal(6m, Convert.ToDecimal(result.Aggregates["c1"]["sum"]));
+    }
+
+    [Fact]
+    public async Task Simple_case_maps_the_operand()
+    {
+        var result = await _executor.Query(Definition, new ReportState
+        {
+            Computed = [new ComputedColumn
+            {
+                Id = "c1",
+                Expr = "CASE STATUS WHEN 'SHIPPED' THEN 'done' WHEN 'CANCELLED' THEN 'void' ELSE 'open' END",
+            }],
+            Filters = [Filter("CUSTOMER", FilterOp.Eq, "Tyrell Corp")],
+        }, NoParams);
+
+        Assert.Equal("void", Assert.Single(result.Rows)["c1"]);
+    }
+
+    [Fact]
     public async Task Highlights_hit_rows_and_cells_with_sql_parity()
     {
         var result = await _executor.Query(Definition, new ReportState

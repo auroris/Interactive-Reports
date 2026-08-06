@@ -68,7 +68,7 @@ public class ExprParserTests
     [InlineData("", "empty")]
     [InlineData("'abc", "unterminated string")]
     [InlineData("NO_SUCH_COL", "unknown column 'NO_SUCH_COL'")]
-    [InlineData("FOO(1)", "unknown column 'FOO'")]
+    [InlineData("FOO(1)", "unknown function 'FOO'")]
     [InlineData("AMOUNT +", "unexpected end")]
     [InlineData("1 | 2", "single '|'")]
     [InlineData("ROUND(1, 2, 3)", "ROUND takes 1–2 arguments")]
@@ -108,5 +108,101 @@ public class ExprParserTests
     public void Function_names_are_case_insensitive()
     {
         Assert.Equal(ColumnKind.Number, Parse("round(abs(AMOUNT), 2)").Kind);
+    }
+
+    // --- CASE, conditions, NULL ---------------------------------------------
+
+    [Fact]
+    public void Searched_case_infers_its_result_type_from_branches()
+    {
+        var ast = Assert.IsType<CaseWhen>(Parse("CASE WHEN AMOUNT > 1000 THEN 1 ELSE 0 END"));
+
+        Assert.Null(ast.Operand);
+        Assert.Equal(ColumnKind.Number, ast.Kind);
+        var when = Assert.IsType<Comparison>(Assert.Single(ast.Branches).When);
+        Assert.Equal(">", when.Op);
+    }
+
+    [Fact]
+    public void Simple_case_compares_the_operand_and_yields_branch_type()
+    {
+        var ast = Assert.IsType<CaseWhen>(Parse("CASE STATUS WHEN 'SHIPPED' THEN 'done' ELSE 'open' END"));
+
+        Assert.IsType<ColumnRef>(ast.Operand);
+        Assert.Equal(ColumnKind.Text, ast.Kind);
+    }
+
+    [Fact]
+    public void Case_without_else_still_types_from_then_branches()
+    {
+        Assert.Equal(ColumnKind.Number, Parse("CASE WHEN NOTES IS NULL THEN 0 END").Kind);
+    }
+
+    [Fact]
+    public void Null_branches_join_any_type()
+    {
+        Assert.Equal(ColumnKind.Text, Parse("CASE WHEN AMOUNT > 5 THEN NULL ELSE 'x' END").Kind);
+        Assert.Equal(ColumnKind.Text, Parse("COALESCE(NOTES, NULL, 'n/a')").Kind);
+    }
+
+    [Fact]
+    public void Boolean_operators_follow_sql_precedence()
+    {
+        // a AND b OR c parses as (a AND b) OR c; NOT binds tighter than AND.
+        var ast = Assert.IsType<CaseWhen>(
+            Parse("CASE WHEN AMOUNT > 100 AND AMOUNT < 200 OR NOT STATUS = 'X' THEN 1 END"));
+
+        var or = Assert.IsType<LogicalOp>(ast.Branches[0].When);
+        Assert.Equal("OR", or.Op);
+        Assert.Equal("AND", Assert.IsType<LogicalOp>(or.Left).Op);
+        Assert.IsType<Comparison>(Assert.IsType<NotOp>(or.Right).Operand);
+    }
+
+    [Fact]
+    public void Not_equal_spellings_normalize_to_angle_brackets()
+    {
+        var bang = Assert.IsType<CaseWhen>(Parse("CASE WHEN STATUS != 'X' THEN 1 END"));
+        var angle = Assert.IsType<CaseWhen>(Parse("CASE WHEN STATUS <> 'X' THEN 1 END"));
+
+        Assert.Equal("<>", Assert.IsType<Comparison>(bang.Branches[0].When).Op);
+        Assert.Equal("<>", Assert.IsType<Comparison>(angle.Branches[0].When).Op);
+    }
+
+    [Fact]
+    public void Is_not_null_parses_as_a_negated_null_test()
+    {
+        var ast = Assert.IsType<CaseWhen>(Parse("CASE WHEN NOTES IS NOT NULL THEN 1 ELSE 0 END"));
+
+        var test = Assert.IsType<NullTest>(ast.Branches[0].When);
+        Assert.True(test.Negated);
+    }
+
+    [Fact]
+    public void Keywords_are_case_insensitive()
+    {
+        Assert.Equal(ColumnKind.Number,
+            Parse("case when amount > 1 and notes is null then 1 else 0 end").Kind);
+    }
+
+    [Theory]
+    [InlineData("AMOUNT > 1000", "wrap it in CASE WHEN")]
+    [InlineData("NULL", "cannot be just NULL")]
+    [InlineData("CASE WHEN AMOUNT THEN 1 END", "needs a condition")]
+    [InlineData("CASE WHEN AMOUNT > 1 THEN 1 ELSE 'x' END", "same type")]
+    [InlineData("CASE WHEN AMOUNT > 1 THEN NULL END", "every branch is NULL")]
+    [InlineData("CASE WHEN AMOUNT = NULL THEN 1 END", "use IS NULL")]
+    [InlineData("CASE WHEN AMOUNT > 1 > 2 THEN 1 END", "chained comparisons")]
+    [InlineData("CASE WHEN AMOUNT > 'x' THEN 1 END", "compares values of the same type")]
+    [InlineData("CASE STATUS WHEN 5 THEN 1 END", "must match the CASE operand's type")]
+    [InlineData("CASE STATUS WHEN NULL THEN 1 END", "use a searched CASE")]
+    [InlineData("CASE WHEN AMOUNT > 1 THEN 1", "expected END")]
+    [InlineData("CASE WHEN AMOUNT > 1 THEN 1 ELSE 0", "expected END")]
+    [InlineData("UPPER(AMOUNT > 1)", "cannot be a condition")]
+    [InlineData("(AMOUNT > 1) + 2", "'+' requires number operands (got condition and number)")]
+    [InlineData("CASE WHEN NOT AMOUNT THEN 1 END", "NOT requires a condition")]
+    [InlineData("CASE WHEN AMOUNT IS 5 THEN 1 END", "expected NULL")]
+    public void Condition_and_case_errors_are_precise(string expr, string expectedFragment)
+    {
+        Assert.Contains(expectedFragment, Error(expr));
     }
 }
