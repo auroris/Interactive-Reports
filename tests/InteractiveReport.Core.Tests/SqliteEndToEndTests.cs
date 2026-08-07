@@ -43,6 +43,33 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     }
 
     [Fact]
+    public async Task Definition_column_labels_flavor_the_discovered_schema()
+    {
+        var def = Definition;
+        def.ColumnLabels = new() { ["order_id"] = "Order #", ["MISSING_COL"] = "Inert" };
+
+        var schema = await _executor.GetSchema(def, NoParams);
+
+        Assert.Equal("Order #", schema.Lookup["ORDER_ID"].Label);    // matched case-insensitively
+        Assert.Equal("Customer", schema.Lookup["CUSTOMER"].Label);   // unmapped → prettified
+    }
+
+    [Fact]
+    public async Task Friendly_labels_reach_result_columns_and_state_overrides_win()
+    {
+        var def = Definition;
+        def.ColumnLabels = new() { ["AMOUNT"] = "Order Total", ["CUSTOMER"] = "Customer Name" };
+
+        var result = await _executor.Query(def, new ReportState
+        {
+            Labels = new() { ["CUSTOMER"] = "Client" },
+        }, NoParams);
+
+        Assert.Equal("Order Total", result.Columns.Single(c => c.Name == "AMOUNT").Label);
+        Assert.Equal("Client", result.AvailableColumns.Single(c => c.Name == "CUSTOMER").Label);
+    }
+
+    [Fact]
     public async Task Filter_sort_page_end_to_end()
     {
         var result = await _executor.Query(Definition, new ReportState

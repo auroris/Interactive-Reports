@@ -51,7 +51,8 @@ public sealed class SchemaCache
         string Connection,
         ReportDialect Dialect,
         string Sql,
-        string ContextSignature)
+        string ContextSignature,
+        string LabelSignature)
     {
         public static SchemaCacheKey From(ReportDefinition definition) => new(
             definition.Name.ToUpperInvariant(),
@@ -62,6 +63,12 @@ public sealed class SchemaCache
                 "\n",
                 (definition.ContextParams ?? [])
                 .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
-                .Select(pair => $"{pair.Key.ToUpperInvariant()}\0{pair.Value?.Claim}")));
+                .Select(pair => $"{pair.Key.ToUpperInvariant()}\0{pair.Value?.Claim}")),
+            // Friendly labels are baked into the discovered schema, so they key it too.
+            string.Join(
+                "\n",
+                (definition.ColumnLabels ?? [])
+                .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(pair => $"{pair.Key.ToUpperInvariant()}\0{pair.Value}")));
     }
 }

@@ -19,6 +19,7 @@ public static class ReportStateResolver
             Filters = Copy(requested.Filters ?? defaults?.Filters),
             Sorts = Copy(requested.Sorts ?? defaults?.Sorts),
             Columns = Copy(requested.Columns ?? defaults?.Columns),
+            Labels = Copy(requested.Labels ?? defaults?.Labels),
             Computed = Copy(requested.Computed ?? defaults?.Computed),
             Breaks = Copy(requested.Breaks ?? defaults?.Breaks),
             Aggregates = Copy(requested.Aggregates ?? defaults?.Aggregates),
@@ -29,4 +30,7 @@ public static class ReportStateResolver
     }
 
     private static List<T>? Copy<T>(List<T>? values) => values is null ? null : [.. values];
+
+    private static Dictionary<string, string>? Copy(Dictionary<string, string>? values)
+        => values is null ? null : new(values);
 }

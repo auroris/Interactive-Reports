@@ -107,6 +107,25 @@ public sealed partial class ConfigurationReportDefinitionStore : IReportDefiniti
                         $"Report '{def.Name}': context parameter name '{name}' is reserved for composer bindings (p0, p1, ...).");
             }
         }
+
+        if (def.ColumnLabels is not null)
+        {
+            // Unknown column names stay tolerated (schema drift), but a blank or
+            // case-colliding entry is a config mistake worth failing fast on.
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (name, label) in def.ColumnLabels)
+            {
+                if (string.IsNullOrWhiteSpace(name))
+                    throw new InvalidOperationException(
+                        $"Report '{def.Name}': columnLabels contains a blank column name.");
+                if (string.IsNullOrWhiteSpace(label))
+                    throw new InvalidOperationException(
+                        $"Report '{def.Name}': columnLabels['{name}'] must not be blank.");
+                if (!names.Add(name))
+                    throw new InvalidOperationException(
+                        $"Report '{def.Name}': columnLabels contains duplicate column '{name}' (names are case-insensitive).");
+            }
+        }
     }
 
     [GeneratedRegex(@"\bORDER\s+BY\b", RegexOptions.IgnoreCase)]

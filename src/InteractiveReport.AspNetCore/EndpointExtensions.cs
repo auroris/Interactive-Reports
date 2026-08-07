@@ -94,7 +94,9 @@ public static class EndpointExtensions
                 name = def.Name,
                 title = def.Title ?? ColumnModel.Prettify(def.Name),
                 columns = columns.Select(c => new ColumnInfo(c.Name, c.Label, c.KindName, c.IsComputed)),
-                defaultState = def.DefaultState,
+                // No configured default ⇒ synthesize one: an empty state means every
+                // schema column in database order, labels already flavored above.
+                defaultState = def.DefaultState ?? new ReportState(),
                 stateVersion = ReportState.CurrentVersion,
                 capabilities = new
                 {

@@ -18,6 +18,7 @@ import { normalizeReportState, scopedSearchExpression, serializeReportState } fr
 import {
     columnsDialog, filterDialog, sortDialog, breakDialog, aggregateDialog,
     computeDialog, highlightDialog, groupByDialog, pivotDialog, chartDialog, saveDialog,
+    renameDialog,
 } from "./ir-dialogs.js";
 
 // …/api/reports/ui/ir.js → …/api/reports
@@ -493,6 +494,7 @@ class InteractiveReportElement extends HTMLElement {
         popupMenu(anchor, [
             ...sortItems,
             "-",
+            { label: "Rename…", onPick: () => renameDialog(this, col) },
             {
                 label: "Hide Column",
                 disabled: visible.length <= 1,

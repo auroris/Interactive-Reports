@@ -49,6 +49,15 @@ test("serialization preserves explicit clears and removes working fields", () =>
     });
 });
 
+test("label overrides inherit from defaults and an emptied map survives as an explicit clear", () => {
+    const defaults = { labels: { ORDER_ID: "Order #" } };
+    const inherited = normalizeReportState(null, 25, defaults);
+    assert.deepEqual(inherited.labels, { ORDER_ID: "Order #" });
+
+    delete inherited.labels.ORDER_ID;
+    assert.deepEqual(serializeReportState(inherited, 2).labels, {});
+});
+
 test("scoped text search emits an escaped expression rule", () => {
     assert.equal(
         scopedSearchExpression("CUSTOMER", "text", "O'Brien"),

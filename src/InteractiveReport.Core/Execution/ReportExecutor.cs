@@ -44,7 +44,7 @@ public sealed class ReportExecutor
         return await _schemaCache.GetOrDiscover(definition, async () =>
         {
             await using var connection = await _connections.Open(definition, ct);
-            return await SchemaDiscovery.Discover(connection, definition, contextParams, ct);
+            return await SchemaDiscovery.Discover(connection, definition, contextParams, _logger, ct);
         });
     }
 

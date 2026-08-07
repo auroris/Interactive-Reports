@@ -35,7 +35,7 @@ const json = (value, init = {}) => new Response(JSON.stringify(value), {
 });
 
 globalThis.fetch = async (url, options = {}) => {
-    requests.push({ url: String(url), method: options.method ?? "GET" });
+    requests.push({ url: String(url), method: options.method ?? "GET", body: options.body });
     if (String(url) === "/custom-report-api") return json(visibleReports);
     if (String(url).endsWith("/schema")) {
         const name = /\/([^/]+)\/schema$/.exec(String(url))?.[1];
@@ -127,6 +127,47 @@ test("an unavailable preferred report falls back without requesting it", async (
     assert.ok(requests.some(r => r.url === "/custom-report-api/allowed/schema"));
     assert.ok(requests.some(r => r.url === "/custom-report-api/allowed/query"));
     assert.ok(!requests.some(r => r.url.includes("not-allowed")));
+
+    report.remove();
+});
+
+test("renaming a column writes a labels override; clearing it leaves an explicit empty map", async () => {
+    requests.length = 0;
+    visibleReports = [{ name: "orders", title: "Orders" }];
+
+    const report = document.createElement("interactive-report");
+    report.setAttribute("report", "orders");
+    report.setAttribute("api-base", "/custom-report-api");
+    document.body.append(report);
+
+    // Wait on rendered outcomes, never on request counts: requests are recorded
+    // synchronously at click time, long before the response has been rendered.
+    const settle = async condition => {
+        for (let attempt = 0; attempt < 40 && !condition(); attempt++)
+            await new Promise(resolve => setTimeout(resolve, 5));
+    };
+    await settle(() => report.shadowRoot.querySelector("th.ir-th-menu"));
+
+    const rename = async value => {
+        report.shadowRoot.querySelector("th.ir-th-menu").click();
+        [...report.shadowRoot.querySelectorAll(".ir-menu-item")]
+            .find(item => item.textContent.includes("Rename"))
+            .click();
+        const input = report.shadowRoot.querySelector(".ir-dialog input");
+        input.value = value;
+        report.shadowRoot.querySelector(".ir-dialog .ir-btn-primary").click();
+        await settle(() => !report.shadowRoot.querySelector(".ir-dialog"));
+        // Booleans only: a DOM element in a failed assertion makes the reporter
+        // serialize the whole happy-dom graph.
+        assert.equal(!report.shadowRoot.querySelector(".ir-dialog"), true, "the dialog should close on success");
+        return JSON.parse(requests.filter(r => r.url.endsWith("/query")).at(-1).body);
+    };
+
+    assert.deepEqual((await rename("Ticket")).labels, { ID: "Ticket" });
+
+    // Clearing restores the schema heading, but the map stays: an explicit {} must
+    // still override a report default when one exists.
+    assert.deepEqual((await rename("")).labels, {});
 
     report.remove();
 });

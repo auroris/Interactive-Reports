@@ -152,6 +152,52 @@ public class StateValidatorTests
     }
 
     [Fact]
+    public void Label_overrides_rewrite_base_labels_for_everything_downstream()
+    {
+        var result = Validate(new ReportState
+        {
+            Labels = new() { ["amount"] = "  Order Total  ", ["GHOST"] = "Nope", ["NOTES"] = "  " },
+            Aggregates = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum }],
+        });
+
+        Assert.Equal("Order Total", result.Schema.Lookup["AMOUNT"].Label);   // trimmed, key matched case-insensitively
+        Assert.Equal("Order Total", result.SelectColumns.Single(c => c.Name == "AMOUNT").Label);
+        Assert.Equal("Order Total", Assert.Single(result.Aggregates).Column.Label);
+        Assert.Contains(result.Ignored, i => i.Kind == "label" && i.Detail.Contains("GHOST"));
+        Assert.Contains(result.Ignored, i => i.Kind == "label" && i.Detail.Contains("blank label for 'NOTES'"));
+    }
+
+    [Fact]
+    public void Label_override_targeting_a_computed_id_points_at_the_rule()
+    {
+        var result = Validate(new ReportState
+        {
+            Computed = [new ComputedColumn { Id = "c1", Label = "Rule Label", Expr = "AMOUNT * 2" }],
+            Labels = new() { ["c1"] = "Override" },
+        });
+
+        Assert.Contains(result.Ignored, i => i.Kind == "label" && i.Detail.Contains("computed rule"));
+        Assert.Equal("Rule Label", result.Schema.Lookup["c1"].Label);
+    }
+
+    [Fact]
+    public void Default_labels_apply_and_an_explicit_map_replaces_them()
+    {
+        var def = OrdersDefinition(ReportDialect.Sqlite);
+        def.DefaultState = new ReportState { Labels = new() { ["AMOUNT"] = "Suggested" } };
+
+        var inherited = Validate(new ReportState(), def);
+        Assert.Equal("Suggested", inherited.Schema.Lookup["AMOUNT"].Label);
+
+        var replaced = Validate(new ReportState { Labels = new() { ["CUSTOMER"] = "Client" } }, def);
+        Assert.Equal("Amount", replaced.Schema.Lookup["AMOUNT"].Label);      // map replaced wholesale
+        Assert.Equal("Client", replaced.Schema.Lookup["CUSTOMER"].Label);
+
+        var cleared = Validate(new ReportState { Labels = new() }, def);
+        Assert.Equal("Amount", cleared.Schema.Lookup["AMOUNT"].Label);       // {} clears the default
+    }
+
+    [Fact]
     public void Aggregates_validate_and_dedupe()
     {
         var result = Validate(new ReportState

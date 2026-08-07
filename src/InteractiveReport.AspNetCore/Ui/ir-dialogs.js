@@ -134,6 +134,46 @@ export function columnsDialog(w) {
     });
 }
 
+// --- Rename ------------------------------------------------------------------
+
+/// Column headings only: a base column writes doc.labels (kept as an explicit map so
+/// clearing an inherited default sticks); a computed column edits its rule's label.
+/// The expression name never changes — that is always the real column name or id.
+export function renameDialog(w, col) {
+    const computedRule = (w.doc.computed ?? []).find(c => c.id === col);
+    const schemaDefault = computedRule
+        ? computedRule.id
+        : w.schema?.columns?.find(c => c.name === col)?.label ?? col;
+    const input = el("input", {
+        class: "ir-input", type: "text",
+        value: computedRule ? computedRule.label ?? "" : w.doc.labels?.[col] ?? "",
+        placeholder: schemaDefault,
+    });
+
+    openDialog({
+        owner: w,
+        title: "Rename Column",
+        width: "24rem",
+        build: body => body.append(
+            labeled("Column Heading", input),
+            el("p", { class: "ir-dialog-note" },
+                `Changes the heading only — expressions keep using ${col}. Leave blank to restore "${schemaDefault}".`)),
+        onApply: () => {
+            const label = input.value.trim();
+            return w.apply(d => {
+                if (computedRule) {
+                    const rule = (d.computed ?? []).find(c => c.id === col);
+                    if (rule) rule.label = label || rule.id;
+                } else if (!label || label === schemaDefault) {
+                    if (d.labels) delete d.labels[col];
+                } else {
+                    (d.labels ??= {})[col] = label;
+                }
+            });
+        },
+    });
+}
+
 // --- Filter ------------------------------------------------------------------
 
 export function filterDialog(w, { editIndex, col } = {}) {

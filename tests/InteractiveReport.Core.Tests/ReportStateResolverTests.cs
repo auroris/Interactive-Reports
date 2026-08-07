@@ -12,6 +12,7 @@ public sealed class ReportStateResolverTests
         {
             Search = "open",
             Sorts = [new SortRule { Col = "AMOUNT", Dir = SortDir.Desc }],
+            Labels = new() { ["AMOUNT"] = "Order Total" },
             Page = new PageRequest { Index = 3, Size = 75 },
         };
 
@@ -19,8 +20,10 @@ public sealed class ReportStateResolverTests
 
         Assert.Equal("open", resolved.Search);
         Assert.Single(resolved.Sorts!);
+        Assert.Equal("Order Total", resolved.Labels!["AMOUNT"]);
         Assert.Equal(3, resolved.Page!.Index);
         Assert.NotSame(defaults.Sorts, resolved.Sorts);
+        Assert.NotSame(defaults.Labels, resolved.Labels);
     }
 
     [Fact]

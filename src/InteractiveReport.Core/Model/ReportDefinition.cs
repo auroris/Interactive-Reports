@@ -35,6 +35,16 @@ public sealed class ReportDefinition
     public string Sql { get; set; } = "";
 
     /// <summary>
+    /// Column name → friendly display label, for base queries whose column names are
+    /// not presentable. Applied at schema discovery (case-insensitive), so every label
+    /// consumer — grid headers, aggregate labels, CSV headers — sees the friendly name
+    /// while expressions and state keep using the real column name. Entries matching
+    /// no discovered column are inert (logged once), so schema drift cannot break the
+    /// report. Report states may override per column via their own labels map.
+    /// </summary>
+    public Dictionary<string, string>? ColumnLabels { get; set; }
+
+    /// <summary>
     /// Server-resolved parameters (claims by default). Client-supplied values can never
     /// bind to these — they are a separate parameter class from filter values. This is
     /// the row-level security mechanism (the :APP_USER pattern).

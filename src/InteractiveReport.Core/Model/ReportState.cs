@@ -21,6 +21,13 @@ public sealed class ReportState
     /// <summary>Visible columns in display order. Null/empty = all schema columns.</summary>
     public List<string>? Columns { get; set; }
 
+    /// <summary>
+    /// Base-column name → display label overrides, on top of the schema's labels
+    /// (which already carry the definition's columnLabels). Computed columns keep
+    /// their label on the computed rule. Unknown names degrade into ignored[].
+    /// </summary>
+    public Dictionary<string, string>? Labels { get; set; }
+
     public List<ComputedColumn>? Computed { get; set; }
     public List<string>? Breaks { get; set; }
     public List<AggregateRule>? Aggregates { get; set; }

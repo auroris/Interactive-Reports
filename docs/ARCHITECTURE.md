@@ -96,6 +96,7 @@ public interface IReportDefinitionStore
       "connection": "MainDb",
       "dialect": "SqlServer",            // SqlServer | Oracle | Sqlite | Postgres
       "sql": "SELECT o.ORDER_ID, o.CUSTOMER, o.AMOUNT, o.ORDER_DATE FROM ORDERS o WHERE o.SALES_REP = @currentUser",
+      "columnLabels": { "ORDER_ID": "Order #", "CUSTOMER": "Customer Name" },
       "contextParams": { "currentUser": { "claim": "sub" } },
       "authorization": { "policy": "SalesRead" },
       "maxRows": 100000,
@@ -111,6 +112,15 @@ Notes:
   an `IContextParameterResolver` for anything else). Client-supplied values can never bind
   to them — they are a separate parameter class from filter values. This is the
   `:APP_USER` pattern from APEX translated to claims, and it is the row-level security story.
+- `columnLabels` maps real column names (case-insensitively) to friendly display labels
+  for base queries whose column names aren't presentable. It is applied at schema
+  discovery, so every label consumer — grid headers, aggregate labels (`sum(Order #)`),
+  chart/groupBy/pivot metadata, CSV headers — sees the friendly name, while expressions,
+  state documents, and row keys keep using the real column name. Unmapped columns fall
+  back to the prettified name. Entries naming no discovered column are inert (one log
+  warning), so schema drift cannot break the report; blank or case-colliding entries are
+  config errors. The map is the *suggested default*: any report state may override per
+  column (§5 `labels`).
 - Base SQL must not end with `ORDER BY` (breaks subquery wrapping on SQL Server; APEX has
   the same rule). Validated at definition load with a clear error.
 - Definitions version in git and deploy with the app: schema changes and report changes travel together.
@@ -132,6 +142,7 @@ the version 1 column/operator/value filter shape with shared boolean expressions
   ],
   "sorts":  [ { "col": "ORDER_DATE", "dir": "desc" } ],
   "columns": ["ORDER_ID", "CUSTOMER", "AMOUNT", "ORDER_DATE", "c1"],
+  "labels": { "ORDER_ID": "Ticket #" },
   "computed": [
     { "id": "c1", "enabled": true, "label": "Amount w/ Tax",
       "expr": "ROUND(AMOUNT * 1.0825, 2)" }
@@ -158,9 +169,19 @@ styles. `CONTAINS`, `STARTS_WITH`, and `ENDS_WITH` are case-insensitive; `IN_LIS
 provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
 `IS NULL OR col = ''` when empty text should also count.
 - `search` is the toolbar search: OR of `contains` across visible text columns.
+- `labels` overrides display labels per **base** column, on top of the schema's labels
+  (which already carry the definition's `columnLabels`, §4) — the definition suggests,
+  the report decides, exactly as a computed column names itself on its rule. A computed
+  column's label stays on the computed rule; a `labels` key naming one is dropped into
+  `ignored[]` with a pointer, as are unknown names and blank values. Like every state
+  property, a present map replaces the default wholesale and `{}` explicitly clears it.
 - A partial request resolves over `defaultState` once: a missing property inherits,
   while an explicit empty string/list clears the default. `{ "mode": "grid" }`
   explicitly overrides an alternate default view.
+- `GET /{name}/schema` always returns a complete `defaultState`: when the definition
+  configures none, the server synthesizes an empty state — which, by the null-columns
+  rule, means every schema column in database order, labels already flavored by
+  `columnLabels`. A client never invents its own notion of "the default report".
 
 **Aggregate functions (closed set):** `count sum avg min max countDistinct`.
 - `sum/avg` require number columns; `min/max` allow number/date/text; `count/countDistinct`
@@ -517,10 +538,13 @@ as a parameter.)
   (chosen over `Limit(0)`, which SqlKata treats as "no limit"), read
   `DbDataReader.GetColumnSchema()` under `CommandBehavior.SchemaOnly`.
 - Column model: `Name, ClrType, ProviderType, IsNullable, Label` (label defaults to
-  prettified name; definition may override).
+  prettified name; the definition's `columnLabels` overrides it at discovery, matched
+  case-insensitively — see §4).
 - Cached per definition; invalidated on configuration reload (`IOptionsMonitor`) or
-  explicit admin refresh later. Discovery failures surface at startup/first-use as clear
-  errors naming the report — not at user query time.
+  explicit admin refresh later. Because friendly labels are baked into the discovered
+  schema, `columnLabels` participates in the cache key alongside SQL, connection,
+  dialect, and context-parameter shape. Discovery failures surface at startup/first-use
+  as clear errors naming the report — not at user query time.
 - This replaces APEX's data-dictionary knowledge: *the developer's SELECT plus the
   discovered schema is the model.* No semantic-model layer.
 
@@ -630,7 +654,9 @@ APEX's Interactive Reports.
 - **Feature surface**: scoped toolbar search (all text columns or one typed column → expression filter);
   Actions menu (Columns shuttle, Filter, Sort, Control Break, Highlight, Aggregate,
   Compute with token-insert helpers, Group By, Pivot, Chart, Save/Save As/Delete/Reset,
-  CSV download); column-header menus (sort/hide/break/filter); settings chips with
+  CSV download); column-header menus (sort/rename/hide/break/filter — Rename writes a
+  `labels` override for base columns and edits the rule label for computed ones; blank
+  restores the schema default); settings chips with
   APEX-style enable/disable checkboxes for expression rules; break groups with per-column subtotal rows and
   grand-total rows; row/cell highlights; groupBy/pivot rendering; saved-report select
   (Primary Report + Global/Private groups); `ignored[]` and problem+json surfaced as
@@ -720,6 +746,14 @@ APEX's Interactive Reports.
   Chart dialog/chip/view with a lazily loaded tree-shaken Chart.js bundle, chart
   theme tokens, and a canvas description + "View chart data" table for assistive
   tech.
+- **M10 — Friendly names** ✅ *(2026-08-07)*: definition `columnLabels` (real column
+  name → display label, applied at schema discovery and keyed into the schema cache)
+  plus per-state `labels` overrides — additive state field, no version bump. Real
+  names stay the vocabulary of expressions and row keys; labels are presentation
+  everywhere (grid, aggregate labels, views, CSV headers). The schema endpoint now
+  always returns a `defaultState`, synthesizing an empty one — the database's own
+  output, flavored by the mapping — when the definition configures none. Packaged UI
+  gains header-menu Rename with blank-restores-default semantics.
 
 ## Appendix: decision log
 
@@ -770,3 +804,6 @@ APEX's Interactive Reports.
 | TO_STRING formats are a closed token set, translated and bound per dialect | pass native masks through | Native masks don't port (strftime ≠ TO_CHAR ≠ .NET) and raw pass-through would hand client text to the SQL layer. A validated vocabulary translates exactly and the mask still rides as a binding. |
 | Timezone pins at the connection (definition `TimeZone`), not in expressions | AT_TZ()/NOW('UTC') vocabulary; UTC everywhere | A report's clock is a property of the data source, not of each expression: the definition's `TimeZone` pins the session at open, and unset means the server's setting. Engines without a session timezone (SQL Server, SQLite) silently ignore the setting rather than erroring — it requests session behavior that simply doesn't exist there, and their clock follows the host either way. Expression-level vocabulary couldn't fix them portably and would hand a timezone decision to every report author. |
 | Bare dates rejected in concatenation | implicit rendering; auto-wrap in TO_STRING | Implicit date-to-text is the one place engine settings (session language, NLS, DateStyle) would leak into output, and it differs per engine. Rejection matches the language's explicit-conversion rule (TO_DATE inbound, TO_STRING outbound); auto-wrapping would pick a format silently. |
+| Friendly labels live on the definition (`columnLabels`) and overlay per state entry (`labels`) | labels only in `defaultState` | State maps replace wholesale, so suggestions parked in `defaultState.labels` would vanish the moment a report set its own map. At the schema layer the definition's mapping stays underneath every report, and a state overrides only the entries it names — the definition suggests, the report decides. Computed labels stay on their rule: one label, one home. |
+| Unmatched `columnLabels` entries are inert (one log warning) | fail the report; ignore silently | A label is flavor, not a program: schema drift must not take the report down for a caption, but a typo that says nothing is undiscoverable. Blank/case-colliding entries still fail fast — those are config mistakes, not drift. |
+| Schema endpoint synthesizes an empty `defaultState` | nullable `defaultState` | Every client would otherwise invent its own "no default configured" behavior. An empty state already *means* the right thing — all columns, database order — so the server says so explicitly, and the synthesized default picks up `columnLabels` flavor through the schema for free. |
