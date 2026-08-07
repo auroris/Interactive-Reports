@@ -482,4 +482,5 @@ $RECYCLE.BIN/
 *.swp
 
 # Temporary ignore the dist files
-/src/InteractiveReport.AspNetCore/Ui/dist
+src/InteractiveReport.AspNetCore/Ui/dist
+
