@@ -199,6 +199,8 @@
 }
 .ir-chip-label:hover { color: var(--ir-accent); }
 .ir-chip-label b { font-weight: 600; }
+.ir-chip-static { cursor: default; }
+.ir-chip-static:hover { color: var(--ir-text); }
 .ir-chip-x { background: none; border: none; cursor: pointer; color: var(--ir-text-muted); padding: 2px 3px; line-height: 0; }
 .ir-chip-x:hover { color: var(--ir-danger); }
 

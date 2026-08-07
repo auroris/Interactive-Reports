@@ -5,7 +5,7 @@
 import { el } from "../../core/dom.js";
 import { labelOf } from "../schema.js";
 import { formatValue, formatAgg, FN_LABELS, FN_ORDER } from "./format.js";
-import { openHeaderMenu } from "../menus.js";
+import { headerMenuAvailable, openHeaderMenu } from "../menus.js";
 
 export function renderGrid(w, table) {
     const result = w.lastResult;
@@ -29,9 +29,11 @@ export function renderGrid(w, table) {
     // Header. Sort indicators come from the state doc; menus depend on the view mode.
     const sortOrd = new Map((w.doc.sorts ?? []).map((s, i) => [s.col, { dir: s.dir ?? "asc", ord: i + 1 }]));
     const dims = mode === "groupBy" ? new Set(w.doc.view?.groupBy ?? []) : null;
+    const menuAvailable = headerMenuAvailable(w, mode);
     const headRow = el("tr", {});
     for (const col of columns) {
-        const interactive = mode === "grid" || (mode === "groupBy" && dims.has(col.name));
+        const interactive = menuAvailable
+            && (mode === "grid" || (mode === "groupBy" && dims.has(col.name)));
         const s = sortOrd.get(col.name);
         const inner = el("span", { class: "ir-th-inner" }, displayLabel(col));
         if (s) {

@@ -8,7 +8,8 @@
 import { api, apiUrl, defaultApiBase } from "../core/api.js";
 import { banner } from "../core/dom.js";
 import { createWidgetRoot, disposeWidget } from "../core/widget.js";
-import { buildSkeleton } from "./skeleton.js";
+import { applyFeatureChrome, buildSkeleton } from "./skeleton.js";
+import { featureEnabled } from "./schema.js";
 import { normalizeReportState, serializeReportState } from "./state.js";
 import { refreshSavedSelect } from "./saved.js";
 import { renderChips } from "./render/chips.js";
@@ -139,9 +140,12 @@ export class InteractiveReportElement extends HTMLElement {
             // requests for this report until its definition is accessible and valid.
             const schema = await api(apiUrl(this.base, name, "schema"));
             if (seq !== this._seq) return false;
-            const saved = await api(apiUrl(this.base, name, "saved")).catch(() => []);
-            if (seq !== this._seq) return;
             this.schema = schema;
+            applyFeatureChrome(this);
+            const saved = featureEnabled(this, "savedReports")
+                ? await api(apiUrl(this.base, name, "saved")).catch(() => [])
+                : [];
+            if (seq !== this._seq) return;
             this.savedList = saved;
 
             const requestedSaved = this.requestedSavedReportName?.trim();
@@ -316,6 +320,7 @@ export class InteractiveReportElement extends HTMLElement {
     switchView(mode) {
         const current = this.doc.view?.mode ?? "grid";
         if (mode === current) return;
+        if (mode !== "grid" && !featureEnabled(this, mode)) return;
         if (mode === "grid") { this.applyOrBanner(d => { d.view = { mode: "grid" }; }); return; }
         const memory = this.viewMemory[mode];
         if (memory) this.applyOrBanner(d => { d.view = memory; });

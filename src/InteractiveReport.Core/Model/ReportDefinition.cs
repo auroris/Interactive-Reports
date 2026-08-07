@@ -54,6 +54,19 @@ public sealed class ReportDefinition
 
     public ReportAuthorization? Authorization { get; set; }
 
+    /// <summary>
+    /// Whitelist of end-user features (tokens in <see cref="ReportFeatures"/>). Null —
+    /// the default — enables everything. When present, only the listed features exist:
+    /// the client hides the rest of its chrome, and the server refuses the two that
+    /// persist or egress data (download at the export endpoint, savedReports at
+    /// saved-report creation). The other tokens are presentation-level only — the query
+    /// endpoint still accepts any valid state document, because hiding a dialog is not
+    /// a data-security boundary (context params are, §12). Note the JSON config binder
+    /// cannot represent an empty array ([] binds as absent = everything); to lock a
+    /// report down, list the one or two features it should keep.
+    /// </summary>
+    public List<string>? Features { get; set; }
+
     /// <summary>Hard cap on rows any composed query may return (exports included).</summary>
     public int MaxRows { get; set; } = 100_000;
 

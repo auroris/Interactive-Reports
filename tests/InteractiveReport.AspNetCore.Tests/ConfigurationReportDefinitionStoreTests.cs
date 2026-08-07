@@ -113,6 +113,97 @@ public sealed class ConfigurationReportDefinitionStoreTests
         Assert.Contains("duplicate column", error.Message);
     }
 
+    [Theory]
+    [InlineData("teleport", "unknown feature 'teleport'")]
+    [InlineData(" ", "blank entry")]
+    public async Task Invalid_feature_entries_fail_fast(string feature, string expected)
+    {
+        var options = new InteractiveReportOptions();
+        options.Reports["orders"] = new ReportDefinition
+        {
+            Connection = "db",
+            Dialect = ReportDialect.Sqlite,
+            Sql = "select 1 as ID",
+            Features = ["search", feature],
+        };
+        using var store = new ConfigurationReportDefinitionStore(
+            new OptionsMonitorStub(options),
+            new SchemaCache());
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await store.Find("orders"));
+
+        Assert.Contains(expected, error.Message);
+    }
+
+    [Fact]
+    public async Task Case_colliding_feature_entries_fail_fast()
+    {
+        var options = new InteractiveReportOptions();
+        options.Reports["orders"] = new ReportDefinition
+        {
+            Connection = "db",
+            Dialect = ReportDialect.Sqlite,
+            Sql = "select 1 as ID",
+            Features = ["download", "DOWNLOAD"],
+        };
+        using var store = new ConfigurationReportDefinitionStore(
+            new OptionsMonitorStub(options),
+            new SchemaCache());
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await store.Find("orders"));
+
+        Assert.Contains("duplicate entry 'download'", error.Message);
+    }
+
+    [Fact]
+    public async Task Feature_entries_match_case_insensitively_and_resolve_canonically()
+    {
+        var options = new InteractiveReportOptions();
+        options.Reports["orders"] = new ReportDefinition
+        {
+            Connection = "db",
+            Dialect = ReportDialect.Sqlite,
+            Sql = "select 1 as ID",
+            Features = ["SEARCH", "controlbreak"],
+        };
+        using var store = new ConfigurationReportDefinitionStore(
+            new OptionsMonitorStub(options),
+            new SchemaCache());
+
+        var snapshot = await store.Find("orders");
+
+        Assert.NotNull(snapshot);
+        Assert.True(ReportFeatures.IsEnabled(snapshot, ReportFeatures.Search));
+        Assert.True(ReportFeatures.IsEnabled(snapshot, ReportFeatures.ControlBreak));
+        Assert.False(ReportFeatures.IsEnabled(snapshot, ReportFeatures.Download));
+        Assert.Equal(
+            [ReportFeatures.Search, ReportFeatures.ControlBreak],
+            ReportFeatures.Resolve(snapshot));
+    }
+
+    [Fact]
+    public async Task An_absent_feature_list_enables_everything()
+    {
+        var options = new InteractiveReportOptions();
+        options.Reports["orders"] = new ReportDefinition
+        {
+            Connection = "db",
+            Dialect = ReportDialect.Sqlite,
+            Sql = "select 1 as ID",
+        };
+        using var store = new ConfigurationReportDefinitionStore(
+            new OptionsMonitorStub(options),
+            new SchemaCache());
+
+        var snapshot = await store.Find("orders");
+
+        Assert.NotNull(snapshot);
+        Assert.Null(snapshot.Features);
+        Assert.Equal(ReportFeatures.All, ReportFeatures.Resolve(snapshot));
+    }
+
     [Fact]
     public async Task Find_rejects_out_of_range_chart_point_limits()
     {

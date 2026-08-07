@@ -187,6 +187,40 @@ test("saves and reloads a report, then administers its complete lifecycle", asyn
     }
 });
 
+test("a feature-whitelisted report pares the UI down and the server enforces the rest", async ({ page, request }) => {
+    await openWorkbench(page);
+    await runAndWaitForQuery(page, () =>
+        page.locator("interactive-report").evaluate(element => element.setAttribute("report", "orders-kiosk")));
+
+    // search + sort + download survive; views, saved reports, and the rest are gone.
+    await expect(page.getByRole("searchbox", { name: "Search" })).toBeVisible();
+    await expect(page.getByRole("group", { name: "View" })).toBeHidden();
+    await expect(page.getByRole("combobox", { name: "Saved Report" })).toBeHidden();
+    await page.getByRole("button", { name: "Actions", exact: true }).click();
+    await expect(page.getByRole("menuitem")).toHaveText(["Sort…", "Reset", "CSV"]);
+    await page.keyboard.press("Escape");
+
+    // The definition's default filter is visible but locked: no toggle, edit, or remove.
+    await expect(page.locator(".ir-chip")).toHaveCount(1);
+    await expect(page.locator(".ir-chip")).toContainText("AMOUNT > 100");
+    await expect(page.locator(".ir-chip button, .ir-chip input")).toHaveCount(0);
+
+    // Header menus offer only what survived.
+    await page.getByRole("columnheader", { name: "Order #" }).click();
+    await expect(page.getByRole("menuitem")).toHaveText(["Sort Ascending", "Sort Descending"]);
+    await page.keyboard.press("Escape");
+
+    // Server enforcement: saved-report creation is refused, download still works.
+    const denied = await request.post("/api/reports/orders-kiosk/saved", {
+        data: { title: "should not exist", state: {} },
+    });
+    expect(denied.status()).toBe(403);
+
+    const downloadPromise = page.waitForEvent("download");
+    await clickAction(page, "CSV");
+    expect((await downloadPromise).suggestedFilename()).toBe("orders-kiosk.csv");
+});
+
 test.describe("non-administrator", () => {
     test.use({ extraHTTPHeaders: { "X-Workbench-User": "ordinary-user" } });
 

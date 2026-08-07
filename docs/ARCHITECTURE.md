@@ -99,6 +99,7 @@ public interface IReportDefinitionStore
       "columnLabels": { "ORDER_ID": "Order #", "CUSTOMER": "Customer Name" },
       "contextParams": { "currentUser": { "claim": "sub" } },
       "authorization": { "policy": "SalesRead" },
+      "features": [ "search", "filter", "sort", "download" ],
       "maxRows": 100000,
       "defaultPageSize": 50,
       "defaultState": { "sorts": [ { "col": "ORDER_DATE", "dir": "desc" } ] }
@@ -121,6 +122,22 @@ Notes:
   wire — filters, sorts, `labels` keys themselves — uses the real name. Blank or
   case-colliding entries are config errors; entries naming no actual column are simply
   unused display data.
+- `features` is a whitelist of end-user features (APEX's per-action Actions-menu
+  configuration collapsed to a flat token list). Absent means everything;
+  present means exactly what is listed. Known tokens (`ReportFeatures`): `search`,
+  `columns`, `rename`, `filter`, `sort`, `controlBreak`, `highlight`, `aggregate`,
+  `compute`, `groupBy`, `pivot`, `chart`, `savedReports`, `download`. Unknown, blank,
+  or duplicate entries fail fast at definition load. The schema endpoint always sends
+  the resolved effective list; the packaged UI removes the chrome for everything else
+  (menu entries, view buttons, search bar, saved-report select — state a default or
+  saved report already carries still displays, as locked chips). Two tokens are also
+  server-enforced with 403s because they persist or egress data: `download` at the
+  export endpoint and `savedReports` at saved-report creation (existing saved reports
+  stay governed by the §13 matrix so a config change never strands rows). The rest is
+  deliberately presentation-level: the query endpoint accepts any valid state
+  document, because hiding a dialog is not a data boundary — context params (§12) are.
+  Note the JSON config binder reads `[]` as absent; to lock a report down, list the
+  one or two features it should keep.
 - Base SQL must not end with `ORDER BY` (breaks subquery wrapping on SQL Server; APEX has
   the same rule). Validated at definition load with a clear error.
 - Definitions version in git and deploy with the app: schema changes and report changes travel together.
@@ -263,14 +280,14 @@ Mounted by the host: `app.MapInteractiveReports("/api/reports").RequireAuthoriza
 
 | Endpoint | Purpose |
 |---|---|
-| `GET  /api/reports/{name}/schema` | Column metadata + default state + capabilities. |
+| `GET  /api/reports/{name}/schema` | Column metadata + default state + capabilities + resolved feature whitelist (§4). |
 | `POST /api/reports/{name}/query` | Body = state document → page of results. |
 | `GET  /api/reports/whoami` | The caller's canonical identity value (only when `whoamiEnabled`). |
 | `GET  /api/reports/{name}/saved` | Saved reports visible to the caller: globals + their own. |
-| `POST /api/reports/{name}/saved` | Save the posted state under a title (global publish = admin). |
+| `POST /api/reports/{name}/saved` | Save the posted state under a title (global publish = admin). 403 when `savedReports` is not whitelisted (§4). |
 | `GET/PUT/DELETE /api/reports/saved/{id}` | Load / modify / delete one saved report (matrix in §13). |
 | `GET  /api/reports/admin/saved` | Administrator: every saved report in the system. |
-| `POST /api/reports/{name}/export` | Same state, same gate, no paging → CSV (UTF-8 BOM; headers are the posted document's display labels, §5), capped at `maxRows` with `X-IR-Truncated` header. XLSX/HTML later. |
+| `POST /api/reports/{name}/export` | Same state, same gate, no paging → CSV (UTF-8 BOM; headers are the posted document's display labels, §5), capped at `maxRows` with `X-IR-Truncated` header. 403 when `download` is not whitelisted (§4). XLSX/HTML later. |
 | `GET  /api/reports/ui/{file}` | Packaged UI assets (§14). Anonymous by design; content-hash ETags. |
 
 POST is the primary verb deliberately: state documents outgrow querystrings, and GET puts
@@ -691,7 +708,15 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   grand-total rows; row/cell highlights; groupBy/pivot rendering; saved-report select
   (Primary Report + Global/Private groups); `ignored[]` and problem+json surfaced as
   notices — validation problems render *inside* the originating dialog, which stays
-  open (apply is optimistic: mutate, re-query, roll back on failure).
+  open (apply is optimistic: mutate, re-query, roll back on failure). The whole
+  surface is gated by the definition's feature whitelist (§4), which arrives resolved
+  on the schema payload: menu entries vanish with their headings and separators, the
+  search bar / view buttons / Actions button / saved-report select hide when their
+  features (or every entry under them) are gone, header cells stop being clickable
+  when no header-menu entry survives, and chips owned by an absent feature render
+  locked — visible state, no toggle/edit/remove (except leaving a locked view for the
+  grid, which stays possible). Reset remains as long as any doc-mutating feature
+  exists; a missing `features` field (older server) means everything is on.
 - **Chart rendering**: `ir-chart.js` is a third self-contained bundle (Chart.js
   tree-shaken to bar/line/area/pie plus scales, tooltip, legend, filler) that the
   main bundle loads with a runtime-computed dynamic `import()` the first time chart
@@ -788,6 +813,14 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   groupBy/chart metric labels) and gains header-menu Rename — while export, the
   server rendering the user's screen, applies the posted document's labels to headers
   and synthetics via `ValidatedState.WithDisplayLabels`.
+- **M11 — Feature whitelist** ✅ *(2026-08-07)*: per-report `features` whitelist (§4)
+  — fourteen canonical tokens covering the Actions menu, search, views, saved
+  reports, and download; validated fail-fast at definition load, resolved onto the
+  schema payload, and applied by the packaged UI (chrome removal + locked chips).
+  `download` and `savedReports` creation are server-enforced 403s; everything else
+  stays presentation-level by design. Per-column attributes (alignment, format
+  masks, LOVs, per-column sort/filter permissions…) remain the next configuration
+  increment.
 
 ## Appendix: decision log
 
@@ -842,3 +875,6 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 | Report `labels` maps are never validated | ignored[]/errors for unknown or blank entries | The server validates what gates execution; labels gate nothing. Unknown keys are unused display data, exactly as resilient as a saved report is entitled to be. (Config-side `columnLabels` still fail fast on blank/case-colliding entries — config mistakes, not state.) |
 | Export applies the posted document's labels (ingest → `WithDisplayLabels`) | neutral export headers; look up the user's saved report server-side | An export is the server rendering the user's screen, and the active document may never have been saved — the posted document is the only source of truth. One ingestion pipeline resolves labels (request ?? defaultState ?? columnLabels, matching the delivered default report); the export path relabels metadata surfaces only, so composition, row keys, and golden SQL are untouched. |
 | Schema endpoint synthesizes an empty `defaultState` | nullable `defaultState` | Every client would otherwise invent its own "no default configured" behavior. An empty state already *means* the right thing — all columns, database order — and it is also the delivery vehicle: the definition's mapping rides down as its `labels`. |
+| Feature control is a flat whitelist on the definition | APEX-style per-action objects; per-column attribute model | One `features` array covers the lockdown need with one concept; absent = everything keeps existing configs working. The richer per-column attribute model (alignment, masks, LOVs, per-column permissions) layers on later without reshaping this. |
+| Whitelist is presentation-level except `download` and `savedReports` creation | validate posted state docs against the whitelist | Hiding a dialog is not a data boundary — the query endpoint already accepts any valid document, and context params (§12) are the security story. The two enforced tokens are the ones that egress (unpaged export) or persist (saved-report rows); enforcing at creation only keeps existing saved reports manageable after a config change. |
+| Locked chips: state from an absent feature displays read-only | hide the chips; let them stay editable | The chip strip is the doc made visible — hiding active filters would misrepresent the data shown, and editing them would reopen the very dialogs the whitelist removed. Leaving a locked view for the grid stays possible: it abandons the feature rather than using it. |

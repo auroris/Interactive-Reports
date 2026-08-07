@@ -62,6 +62,10 @@ internal static class SavedReportEndpoints
         var def = await store.Find(name, ct);
         if (def is null) return Results.NotFound();
         if (await ReportRequestAccess.Authorize(def, ctx) is { } denied) return denied;
+        // Enforced at creation only: existing saved reports stay governed by the
+        // ownership matrix, so a config change never strands unmanageable rows.
+        if (ReportRequestAccess.RequireFeature(def, ReportFeatures.SavedReports) is { } featureDenied)
+            return featureDenied;
 
         var identity = Identity(ctx);
         if (identity is null) return Results.Unauthorized();

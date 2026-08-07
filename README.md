@@ -17,8 +17,10 @@ once with `npx playwright install chromium`, then run `npm run test:ui`.
 `npm run verify` runs both test layers.
 
 The generated `src/InteractiveReport.AspNetCore/Ui/dist/ir.js`, `ir-admin.js`, and
-`ir-chart.js` files are embedded in the ASP.NET Core assembly. They are checked in so
-consuming and building the .NET projects does not require Node.js. `ir-chart.js` (the
+`ir-chart.js` files are embedded in the ASP.NET Core assembly. Generated bundles are
+deliberately not committed: the release pipeline builds them before packing the .NET
+projects. Package consumers therefore do not require Node.js, while source checkouts
+must run the client build before packing or running the packaged UI. `ir-chart.js` (the
 Chart.js-based chart renderer) is fetched on demand the first time a report enters
 chart view; pages that never chart never load it.
 
@@ -41,6 +43,11 @@ not reach the host page.
 There is no configured-report catalog or report selector. Server authorization still
 applies when the component requests that report's schema, saved reports, queries, and
 exports.
+
+The widget adapts to the definition's `features` whitelist (docs/ARCHITECTURE.md §4):
+menu entries, view buttons, the search bar, and the saved-report select render only
+for whitelisted features, and the server additionally refuses CSV export and
+saved-report creation for reports that do not whitelist `download` / `savedReports`.
 
 `saved-report` is optional. When present, the component finds a visible saved report by
 its title (case-insensitive) and loads it before the first query. The title must identify

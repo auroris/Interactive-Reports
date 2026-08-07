@@ -36,6 +36,18 @@ internal static class ReportRequestAccess
         return null;
     }
 
+    /// <summary>
+    /// Null when the feature is whitelisted. 403 (not 404) because the caller already
+    /// reached an existing, authorized report — only this capability is switched off.
+    /// </summary>
+    public static IResult? RequireFeature(ReportDefinition definition, string feature)
+        => ReportFeatures.IsEnabled(definition, feature)
+            ? null
+            : Results.Problem(
+                title: "Feature disabled",
+                detail: $"'{feature}' is not enabled for this report",
+                statusCode: StatusCodes.Status403Forbidden);
+
     public static async Task<IReadOnlyDictionary<string, object?>> ResolveContextParameters(
         ReportDefinition definition,
         HttpContext context,

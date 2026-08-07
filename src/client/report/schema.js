@@ -32,3 +32,18 @@ export function visibleColumnNames(w) {
     if (w.doc?.columns?.length) return [...w.doc.columns];
     return pickable(w).map(c => c.name);
 }
+
+/// The definition's feature whitelist, resolved server-side and delivered on the
+/// schema payload. A missing list (schema not loaded yet, or an older server that
+/// predates feature configuration) means everything is on.
+export function featureEnabled(w, feature) {
+    const features = w.schema?.features;
+    return !features || features.includes(feature);
+}
+
+/// Whether the working document can diverge at all. Download is the one feature
+/// that never mutates the doc; anything else makes Reset worth offering.
+export function anyMutableFeature(w) {
+    const features = w.schema?.features;
+    return !features || features.some(f => f !== "download");
+}

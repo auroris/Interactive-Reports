@@ -93,6 +93,23 @@ public sealed partial class ConfigurationReportDefinitionStore : IReportDefiniti
             }
         }
 
+        if (def.Features is not null)
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var feature in def.Features)
+            {
+                if (string.IsNullOrWhiteSpace(feature))
+                    throw new InvalidOperationException(
+                        $"Report '{def.Name}': features contains a blank entry.");
+                if (ReportFeatures.Canonical(feature) is not { } canonical)
+                    throw new InvalidOperationException(
+                        $"Report '{def.Name}': unknown feature '{feature}' (known: {string.Join(", ", ReportFeatures.All)}).");
+                if (!seen.Add(canonical))
+                    throw new InvalidOperationException(
+                        $"Report '{def.Name}': features contains duplicate entry '{canonical}'.");
+            }
+        }
+
         if (def.ColumnLabels is not null)
         {
             // Unknown column names stay tolerated (schema drift), but a blank or

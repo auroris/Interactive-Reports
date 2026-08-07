@@ -78,6 +78,9 @@ public static class EndpointExtensions
                     aggregateFunctions = AggregateCatalog.FunctionsByColumnType,
                     chartAggregateFunctions = AggregateCatalog.ChartFunctionsByColumnType,
                 },
+                // Always the resolved effective set (canonical casing/order), so the
+                // client never needs its own copy of the catalog to interpret it.
+                features = ReportFeatures.Resolve(def),
                 limits = new
                 {
                     defaultPageSize = def.DefaultPageSize,
@@ -131,14 +134,18 @@ public static class EndpointExtensions
     /// <summary>
     /// Same state document, same gate, no paging: rows capped at the definition's
     /// MaxRows with truncation signaled via the X-IR-Truncated response header.
+    /// Download is one of the two server-enforced features — it widens egress past
+    /// the page-size caps, so hiding the menu client-side is not enough.
     /// </summary>
     private static Task<IResult> PostExport(string name, HttpContext ctx, CancellationToken ct)
         => ExecuteStateOperation(
             name,
             ctx,
             "export",
-            static context =>
+            static (context, definition) =>
             {
+                if (ReportRequestAccess.RequireFeature(definition, ReportFeatures.Download) is { } disabled)
+                    return disabled;
                 var format = context.Request.Query["format"].FirstOrDefault() ?? "csv";
                 return string.Equals(format, "csv", StringComparison.OrdinalIgnoreCase)
                     ? null
@@ -165,7 +172,7 @@ public static class EndpointExtensions
         string name,
         HttpContext ctx,
         string operationName,
-        Func<HttpContext, IResult?>? preflight,
+        Func<HttpContext, ReportDefinition, IResult?>? preflight,
         StateOperation operation,
         CancellationToken ct)
     {
@@ -173,7 +180,7 @@ public static class EndpointExtensions
         var definition = await store.Find(name, ct);
         if (definition is null) return Results.NotFound();
         if (await ReportRequestAccess.Authorize(definition, ctx) is { } denied) return denied;
-        if (preflight?.Invoke(ctx) is { } rejected) return rejected;
+        if (preflight?.Invoke(ctx, definition) is { } rejected) return rejected;
 
         ReportState state;
         try

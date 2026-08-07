@@ -6,6 +6,7 @@
 import { api, apiUrl } from "../core/api.js";
 import { el } from "../core/dom.js";
 import { confirmDialog } from "../core/dialog.js";
+import { featureEnabled } from "./schema.js";
 
 export function canManageCurrentSaved(w) {
     const s = w.currentSaved;
@@ -25,7 +26,7 @@ export function refreshSavedSelect(w) {
     group("Global", w.savedList.filter(s => s.isGlobal));
     group("Private", w.savedList.filter(s => !s.isGlobal));
     savedSel.value = w.currentSaved?.id ?? "";
-    savedWrap.hidden = w.savedList.length === 0;
+    savedWrap.hidden = w.savedList.length === 0 || !featureEnabled(w, "savedReports");
 }
 
 async function loadSavedList(w) {

@@ -3,9 +3,9 @@ using InteractiveReport.Core.Model;
 namespace InteractiveReport.AspNetCore;
 
 /// <summary>
-/// Bound from the "InteractiveReport" configuration section. Note: config-declared
-/// default states support sorts/columns/page; filters with values belong to saved
-/// states (JSON documents), not to the configuration binder.
+/// Bound from the "InteractiveReport" configuration section. Config-declared default
+/// states bind fully, expression-rule lists included (filters/computed/highlights are
+/// string expressions since the M7 pipeline — the old typed-value caveat is gone).
 /// </summary>
 public sealed class InteractiveReportOptions
 {
