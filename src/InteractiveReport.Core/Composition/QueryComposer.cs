@@ -40,7 +40,14 @@ public static class QueryComposer
             ApplySort(page, sort, def.Dialect);
 
         if (!state.PageAll)
+        {
             page.ForPage(state.PageIndex, state.PageSize);
+            // A single boundary row tells the executor whether the last visible
+            // control-break group continues on the next page. ForPage establishes
+            // the correct offset; replacing only its limit preserves that offset.
+            if (state.Breaks.Count > 0 && state.PageSize < int.MaxValue)
+                page.Limit(state.PageSize + 1);
+        }
 
         return new ComposedQueries(page, count, aggregates, breakTotals);
     }
@@ -52,7 +59,7 @@ public static class QueryComposer
     public static Query BuildFilteredCore(ReportDefinition def, ValidatedState state)
     {
         // Alias without AS: Oracle rejects AS in table aliases (ORA-00933); the bare
-        // form is valid on all three dialects.
+        // form is valid on every supported dialect.
         var inner = new Query().FromRaw($"({def.Sql}) {BaseAlias}");
 
         Query core;
@@ -186,6 +193,9 @@ public static class QueryComposer
         ReportDialect dialect,
         IEnumerable<ValidSort> order)
     {
+        if (values.Any(value => value.Fn == AggregateFn.Median))
+            return BuildRankedAggregates(core, dims, values, dialect, includeRowCount: true, order);
+
         var dimNames = dims.Select(d => d.Name).ToArray();
         var q = core.Clone().Select(dimNames);
         q.SelectRaw("COUNT(*) AS [__rows]");
@@ -199,6 +209,83 @@ public static class QueryComposer
         foreach (var sort in order)
             ApplySort(q, sort, dialect);
         return q;
+    }
+
+    /// <summary>
+    /// Portable continuous median. The inner query ranks non-null values and counts
+    /// them per dimension group; the outer grouped query averages the middle one or
+    /// two positions. This window-plus-group shape works on every supported dialect
+    /// and composes alongside ordinary aggregates without an optional SQLite extension.
+    /// </summary>
+    private static Query BuildRankedAggregates(
+        Query core,
+        IReadOnlyList<ColumnModel> dims,
+        IReadOnlyList<ValidAggregate> values,
+        ReportDialect dialect,
+        bool includeRowCount,
+        IEnumerable<ValidSort> order)
+    {
+        var dimNames = dims.Select(d => d.Name).ToArray();
+        var selectedNames = dimNames
+            .Concat(values.Select(value => value.Column.Name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var usedNames = new HashSet<string>(selectedNames, StringComparer.OrdinalIgnoreCase);
+        var ranked = core.Clone().Select(selectedNames);
+        var partition = dimNames.Length == 0
+            ? ""
+            : $"PARTITION BY {string.Join(", ", dimNames.Select(name => $"[{name}]"))} ";
+        var medianAliases = new Dictionary<int, (string Rank, string Count)>();
+
+        for (var i = 0; i < values.Count; i++)
+        {
+            if (values[i].Fn != AggregateFn.Median) continue;
+            var column = values[i].Column.Name;
+            var rank = UniquePrivateName($"__ir_median_rank_{i}", usedNames);
+            var count = UniquePrivateName($"__ir_median_count_{i}", usedNames);
+            ranked.SelectRaw(
+                $"ROW_NUMBER() OVER ({partition}ORDER BY CASE WHEN [{column}] IS NULL THEN 1 ELSE 0 END, [{column}]) AS [{rank}]");
+            ranked.SelectRaw($"COUNT([{column}]) OVER ({partition.TrimEnd()}) AS [{count}]");
+            medianAliases[i] = (rank, count);
+        }
+
+        var query = new Query().From(ranked.As("ir_ranked_aggregates")).Select(dimNames);
+        if (includeRowCount) query.SelectRaw("COUNT(*) AS [__rows]");
+        for (var i = 0; i < values.Count; i++)
+        {
+            var value = values[i];
+            if (value.Fn != AggregateFn.Median)
+            {
+                query.SelectRaw(
+                    $"{DialectSupport.AggregateExpression(dialect, value.Fn, $"[{value.Column.Name}]")} AS [a{i}]");
+                continue;
+            }
+
+            var aliases = medianAliases[i];
+            var lower = HalfPosition(aliases.Count, 1, dialect);
+            var upper = HalfPosition(aliases.Count, 2, dialect);
+            var candidate =
+                $"CASE WHEN [{aliases.Rank}] IN ({lower}, {upper}) THEN [{value.Column.Name}] END";
+            var median = dialect == ReportDialect.SqlServer
+                ? $"AVG(CAST({candidate} AS FLOAT))"
+                : $"AVG({candidate})";
+            query.SelectRaw($"{median} AS [a{i}]");
+        }
+
+        if (dimNames.Length > 0) query.GroupBy(dimNames);
+        foreach (var sort in order) ApplySort(query, sort, dialect);
+        return query;
+    }
+
+    private static string HalfPosition(string countAlias, int add, ReportDialect dialect)
+        => dialect == ReportDialect.Oracle
+            ? $"FLOOR(([{countAlias}] + {add}) / 2)"
+            : $"(([{countAlias}] + {add}) / 2)";
+
+    private static string UniquePrivateName(string candidate, HashSet<string> used)
+    {
+        while (!used.Add(candidate)) candidate = $"_{candidate}";
+        return candidate;
     }
 
     /// <summary>
@@ -258,6 +345,15 @@ public static class QueryComposer
 
     private static Query BuildAggregates(Query core, ValidatedState state, ReportDialect dialect)
     {
+        if (state.Aggregates.Any(value => value.Fn == AggregateFn.Median))
+            return BuildRankedAggregates(
+                core,
+                [],
+                state.Aggregates,
+                dialect,
+                includeRowCount: false,
+                []);
+
         var q = core.Clone();
         for (var i = 0; i < state.Aggregates.Count; i++)
         {

@@ -143,6 +143,16 @@ public sealed class HighlightRule : ExpressionRule
 {
     public string Id { get; set; } = "";
 
+    /// <summary>Human-readable rule name. Legacy documents fall back to Id.</summary>
+    public string? Name { get; set; }
+
+    /// <summary>
+    /// Positive precedence value. Rules apply from low to high sequence, so the
+    /// higher sequence wins when matching rules set the same property and target.
+    /// Legacy documents derive sequence from their list position.
+    /// </summary>
+    public int? Sequence { get; set; }
+
     /// <summary>"row" or "cell".</summary>
     public string Scope { get; set; } = "row";
 

@@ -30,6 +30,8 @@ public static class DialectSupport
         AggregateFn.Avg => dialect == ReportDialect.SqlServer
             ? $"AVG(CAST({quotedCol} AS FLOAT))"
             : $"AVG({quotedCol})",
+        AggregateFn.Median => throw new InvalidOperationException(
+            "Median requires QueryComposer's ranked aggregate shape."),
         _ => throw new ArgumentOutOfRangeException(nameof(fn), fn, null),
     };
 }

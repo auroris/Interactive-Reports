@@ -4,7 +4,7 @@
 
 import { el } from "../../core/dom.js";
 import { labelOf } from "../schema.js";
-import { formatAgg, formatInteger, hasFraction, FN_LABELS, FN_ORDER } from "./format.js";
+import { formatAgg, formatInteger, hasFraction, parseReportNumber, FN_LABELS, FN_ORDER } from "./format.js";
 import { formatForColumn, renderColumnValue } from "./column-renderers.js";
 import { headerMenuAvailable, openHeaderMenu } from "../menus.js";
 import { columnClasses } from "../classes.js";
@@ -13,7 +13,14 @@ export function renderGrid(w, table) {
     const result = w.lastResult;
     if (!result) { table.replaceChildren(); return; }
     const mode = w.doc.view?.mode ?? "grid";
-    const columns = result.columns;
+    const requestedBreaks = mode === "grid" ? (w.doc.breaks ?? []) : [];
+    const breaks = requestedBreaks.map(name =>
+        result.columns.find(column => column.name.toLowerCase() === name.toLowerCase())?.name ?? name);
+    const breakNames = new Set(breaks);
+    // A control-break dimension lives in the heading, not in every detail row.
+    const columns = mode === "grid"
+        ? result.columns.filter(column => !breakNames.has(column.name))
+        : result.columns;
 
     // Per-column display settings from the doc's formats map. Styles go inline on
     // the cells; highlights are applied later and deliberately win over them.
@@ -70,8 +77,7 @@ export function renderGrid(w, table) {
     }
 
     // Body: data rows with break groups, per-group aggregate rows, highlights.
-    const breaks = mode === "grid" ? (w.doc.breaks ?? []) : [];
-    const keyOf = source => breaks.map(b => String(source[b] ?? "")).join("");
+    const keyOf = source => JSON.stringify(breaks.map(b => source[b] ?? null));
     const totalsByKey = new Map((result.breakTotals ?? []).map(bt => [keyOf(bt.key), bt]));
 
     // Columns whose page values include fractions format uniformly as decimals.
@@ -96,7 +102,7 @@ export function renderGrid(w, table) {
                 const has = aggregates[col.name] && fn in aggregates[col.name];
                 const fmt = formatFor(col);
                 const isCount = fn === "count" || fn === "countDistinct";
-                const aggregateType = isCount || fn === "sum" || fn === "avg" ? "number" : col.type;
+                const aggregateType = isCount || fn === "sum" || fn === "avg" || fn === "median" ? "number" : col.type;
                 const aggregateMask = isCount ? null : fmt?.mask;
                 const td = el("td", {
                     class: classesFor(col, col.type === "number" ? "ir-num" : ""),
@@ -131,7 +137,7 @@ export function renderGrid(w, table) {
                 const bt = totalsByKey.get(key);
                 const label = breaks.map(b => `${labelOf(w, b)}: ${row[b] ?? "(blank)"}`).join("  ·  ");
                 bodyRows.push(el("tr", { class: "ir-break-header" },
-                    el("td", { colSpan: columns.length },
+                    el("td", { colSpan: Math.max(columns.length, 1) },
                         el("span", {}, label),
                         bt ? el("span", { class: "ir-break-count" }, `${formatInteger(bt.rows)} rows`) : null)));
                 currentKey = key;
@@ -162,12 +168,18 @@ export function renderGrid(w, table) {
                 }
             }
         }
-        bodyRows.push(tr);
+        if (columns.length) bodyRows.push(tr);
     }
-    closeGroup();
+    if (!result.breakContinues) closeGroup();
 
-    // Report-level aggregate rows (whole filtered set, never just the page).
-    if (Object.keys(result.aggregates ?? {}).length)
+    // Report-level aggregates describe the whole filtered set, so render them only
+    // where that set logically ends, never at the end of an intermediate page.
+    const total = parseReportNumber(result.totalRows) ?? parseReportNumber(0);
+    const { index = 1, size = 0 } = result.page ?? {};
+    const atLogicalEnd = total.eq(0)
+        || size === 0
+        || (result.rows.length > 0 && parseReportNumber(index).times(size).gte(total));
+    if (atLogicalEnd && Object.keys(result.aggregates ?? {}).length)
         bodyRows.push(...aggRows(result.aggregates, "ir-grand-total"));
 
     if (!result.rows.length)

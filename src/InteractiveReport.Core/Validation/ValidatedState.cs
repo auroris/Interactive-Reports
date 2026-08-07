@@ -183,6 +183,8 @@ public sealed record IncludeRowEffect : RuleEffect;
 
 public sealed record HighlightEffect(
     string Id,
+    string Name,
+    int Sequence,
     HighlightScope Scope,
     ColumnModel? Column,
     string ProjectionName) : RuleEffect;

@@ -173,3 +173,88 @@ test("an All result is one unpaged range with no next page", () => {
     assert.equal(container.querySelector('[aria-label="Next page"]').disabled, true);
     assert.equal(container.querySelector("select"), null);
 });
+
+test("control breaks own their columns and defer subtotal and grand total to logical boundaries", () => {
+    const columns = [
+        { name: "REGION", label: "Region", type: "text" },
+        { name: "AMOUNT", label: "Amount", type: "number" },
+    ];
+    const w = {
+        doc: {
+            view: { mode: "grid" },
+            breaks: ["REGION"],
+            sorts: [],
+            highlights: [],
+            formats: {},
+        },
+        schema: { columns },
+        lastResult: {
+            availableColumns: columns,
+            columns,
+            rows: [{ REGION: "West", AMOUNT: 10 }, { REGION: "West", AMOUNT: 20 }],
+            page: { index: 1, size: 2 },
+            totalRows: 4,
+            aggregates: { AMOUNT: { sum: 100 } },
+            breakTotals: [{ key: { REGION: "West" }, rows: 4, aggregates: { AMOUNT: { sum: 100 } } }],
+            breakContinues: true,
+            highlights: [],
+        },
+    };
+    const table = document.createElement("table");
+
+    renderGrid(w, table);
+
+    assert.deepEqual([...table.querySelectorAll("thead th")].map(cell => cell.textContent), ["Amount"]);
+    assert.equal(table.querySelectorAll("tr.ir-row").length, 2);
+    assert.equal(table.querySelectorAll("tr.ir-row td").length, 2, "the break column is absent from detail rows");
+    assert.equal(table.querySelectorAll("tr.ir-break-total").length, 0, "the group continues");
+    assert.equal(table.querySelectorAll("tr.ir-grand-total").length, 0, "the report continues");
+
+    w.lastResult.page = { index: 2, size: 2 };
+    w.lastResult.breakContinues = false;
+    renderGrid(w, table);
+
+    assert.equal(table.querySelectorAll("tr.ir-break-total").length, 1);
+    assert.equal(table.querySelectorAll("tr.ir-grand-total").length, 1);
+});
+
+test("higher highlight sequences win within a scope and cell scope wins over row scope", () => {
+    const columns = [{ name: "AMOUNT", label: "Amount", type: "number" }];
+    const w = {
+        doc: {
+            view: { mode: "grid" },
+            breaks: [],
+            sorts: [],
+            formats: {},
+            highlights: [
+                { id: "row-low", sequence: 10, style: { bg: "#111111" } },
+                { id: "row-high", sequence: 20, style: { bg: "#222222" } },
+                { id: "cell-low", sequence: 10, style: { bg: "#333333" } },
+                { id: "cell-high", sequence: 20, style: { bg: "#444444" } },
+            ],
+        },
+        schema: { columns },
+        lastResult: {
+            availableColumns: columns,
+            columns,
+            rows: [{ AMOUNT: 10 }],
+            page: { index: 1, size: 10 },
+            totalRows: 1,
+            aggregates: {},
+            breakTotals: [],
+            highlights: [
+                { row: 0, id: "row-low" },
+                { row: 0, id: "row-high" },
+                { row: 0, id: "cell-low", col: "AMOUNT" },
+                { row: 0, id: "cell-high", col: "AMOUNT" },
+            ],
+        },
+    };
+    const table = document.createElement("table");
+
+    renderGrid(w, table);
+
+    const row = table.querySelector("tr.ir-row");
+    assert.equal(row.style.background, "#222222");
+    assert.equal(row.children[0].style.background, "#444444");
+});

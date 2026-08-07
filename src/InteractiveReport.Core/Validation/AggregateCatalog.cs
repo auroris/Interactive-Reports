@@ -11,6 +11,7 @@ public static class AggregateCatalog
     [
         AggregateFn.Sum,
         AggregateFn.Avg,
+        AggregateFn.Median,
         AggregateFn.Min,
         AggregateFn.Max,
         AggregateFn.Count,
@@ -28,7 +29,7 @@ public static class AggregateCatalog
 
     public static bool IsCompatible(ColumnKind kind, AggregateFn function) => function switch
     {
-        AggregateFn.Sum or AggregateFn.Avg => kind == ColumnKind.Number,
+        AggregateFn.Sum or AggregateFn.Avg or AggregateFn.Median => kind == ColumnKind.Number,
         AggregateFn.Min or AggregateFn.Max => kind is ColumnKind.Number or ColumnKind.Date or ColumnKind.Text,
         AggregateFn.Count or AggregateFn.CountDistinct => true,
         _ => false,
@@ -51,7 +52,8 @@ public static class AggregateCatalog
     /// </summary>
     public static bool IsChartCompatible(ColumnKind kind, AggregateFn function) => function switch
     {
-        AggregateFn.Sum or AggregateFn.Avg or AggregateFn.Min or AggregateFn.Max => kind == ColumnKind.Number,
+        AggregateFn.Sum or AggregateFn.Avg or AggregateFn.Median or AggregateFn.Min or AggregateFn.Max
+            => kind == ColumnKind.Number,
         AggregateFn.Count or AggregateFn.CountDistinct => true,
         _ => false,
     };

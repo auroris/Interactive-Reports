@@ -128,6 +128,31 @@ test("sorts with explicit null placement from the Actions dialog", async ({ page
     ]);
 });
 
+test("names highlights and saves their explicit precedence sequence", async ({ page }) => {
+    await openWorkbench(page);
+    await clickAction(page, "Highlight…");
+
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("textbox", { name: "Name" }).fill("Large orders");
+    await dialog.getByRole("spinbutton", { name: "Sequence" }).fill("40");
+    await dialog.getByRole("textbox", { name: "Expression" }).fill("AMOUNT > 5000");
+
+    const response = await runAndWaitForQuery(page, () =>
+        dialog.getByRole("button", { name: "Apply", exact: true }).click());
+    expect(response.request().postDataJSON().highlights).toEqual([
+        {
+            id: "h1",
+            name: "Large orders",
+            sequence: 40,
+            enabled: true,
+            scope: "row",
+            expr: "AMOUNT > 5000",
+            style: { bg: "#fff3cd" },
+        },
+    ]);
+    await expect(page.getByText("Large orders", { exact: false })).toBeVisible();
+});
+
 test("configures an aggregate chart and returns to the data grid", async ({ page }) => {
     await openWorkbench(page);
     await page.getByRole("button", { name: "Chart", exact: true }).click();

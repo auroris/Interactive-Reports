@@ -13,6 +13,7 @@ internal static class HighlightRuleValidator
         List<IgnoredItem> ignored)
     {
         var seenIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenSequences = new HashSet<int>();
         return ExpressionRuleCompiler.Compile<HighlightRule, HighlightEffect>(
             rules,
             maxRules: 50,
@@ -24,6 +25,7 @@ internal static class HighlightRuleValidator
                 index,
                 columns,
                 seenIds,
+                seenSequences,
                 errors,
                 ignored),
             errors);
@@ -34,6 +36,7 @@ internal static class HighlightRuleValidator
         int index,
         IReadOnlyDictionary<string, ColumnModel> columns,
         HashSet<string> seenIds,
+        HashSet<int> seenSequences,
         List<ValidationError> errors,
         List<IgnoredItem> ignored)
     {
@@ -48,6 +51,19 @@ internal static class HighlightRuleValidator
             errors.Add(new ValidationError(path, $"duplicate highlight id '{rule.Id}'"));
             return null;
         }
+
+        var sequence = rule.Sequence ?? ((index + 1) * 10);
+        if (sequence <= 0)
+        {
+            errors.Add(new ValidationError($"{path}.sequence", "highlight sequence must be positive"));
+            return null;
+        }
+        if (!seenSequences.Add(sequence))
+        {
+            errors.Add(new ValidationError($"{path}.sequence", $"duplicate highlight sequence '{sequence}'"));
+            return null;
+        }
+        var name = string.IsNullOrWhiteSpace(rule.Name) ? rule.Id : rule.Name.Trim();
 
         var scope = ParseScope(rule, path, errors);
         if (scope is null) return null;
@@ -71,6 +87,8 @@ internal static class HighlightRuleValidator
 
         return _ => new HighlightEffect(
             rule.Id,
+            name,
+            sequence,
             scope.Value,
             cellColumn,
             ProjectionName(index, columns));

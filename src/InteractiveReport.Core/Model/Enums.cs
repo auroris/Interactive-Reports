@@ -13,6 +13,7 @@ public enum AggregateFn
     Count,
     Sum,
     Avg,
+    Median,
     Min,
     Max,
     CountDistinct,

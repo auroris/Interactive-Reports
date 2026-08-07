@@ -143,6 +143,7 @@ public class LiveDialectTests
             [
                 new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum },
                 new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Avg },
+                new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Median },
                 new AggregateRule { Col = "CUSTOMER", Fn = AggregateFn.CountDistinct },
             ],
         }, NoParams);
@@ -150,6 +151,7 @@ public class LiveDialectTests
         var amount = result.Aggregates["AMOUNT"];
         Assert.Equal(26000m, Convert.ToDecimal(amount["sum"]));
         Assert.Equal(5200m, Convert.ToDecimal(amount["avg"]));   // SqlServer AVG float-cast path
+        Assert.Equal(5000m, Convert.ToDecimal(amount["median"]));
         Assert.Equal(4L, Convert.ToInt64(result.Aggregates["CUSTOMER"]["countDistinct"]));
     }
 

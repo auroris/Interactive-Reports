@@ -18,11 +18,12 @@ public sealed class LanguageCatalogTests
     public void Aggregate_catalog_matches_validator_compatibility()
     {
         Assert.Equal(
-            ["sum", "avg", "min", "max", "count", "countDistinct"],
+            ["sum", "avg", "median", "min", "max", "count", "countDistinct"],
             AggregateCatalog.FunctionsByColumnType["number"]);
         Assert.Equal(
             ["count", "countDistinct"],
             AggregateCatalog.FunctionsByColumnType["bool"]);
         Assert.False(AggregateCatalog.IsCompatible(ColumnKind.Text, AggregateFn.Sum));
+        Assert.False(AggregateCatalog.IsCompatible(ColumnKind.Text, AggregateFn.Median));
     }
 }

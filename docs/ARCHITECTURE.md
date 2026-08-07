@@ -210,7 +210,8 @@ the version 1 column/operator/value filter shape with shared boolean expressions
   "breaks": ["REGION"],
   "aggregates": [ { "col": "AMOUNT", "fn": "sum" } ],
   "highlights": [
-    { "id": "h1", "enabled": true, "scope": "row",
+    { "id": "h1", "name": "Large order", "sequence": 10,
+      "enabled": true, "scope": "row",
       "expr": "ROUND(AMOUNT, 2) > 10000",
       "style": { "bg": "#fff3cd" } }
   ],
@@ -224,8 +225,11 @@ flag and an `expr`. Computed columns must bind to a number, text, or date value;
 and highlights must bind to a true/false condition. All three consume the complete
 expression language in §8. A computed value defines a column, a true filter keeps the
 row, and a true highlight paints its row or target cell.
-Cell highlighting has priority: renderers apply matching row styles first, then cell
-styles. `CONTAINS`, `STARTS_WITH`, and `ENDS_WITH` are case-insensitive; `IN_LIST`
+Each highlight also has a display `name` and positive `sequence`. Within row or cell
+scope, matching rules apply from lower to higher sequence, so the highest sequence wins
+when rules set the same style. Cell highlighting has priority over row highlighting.
+Legacy documents derive the name from `id` and the sequence from list position in
+increments of ten. `CONTAINS`, `STARTS_WITH`, and `ENDS_WITH` are case-insensitive; `IN_LIST`
 provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
 `IS NULL OR col = ''` when empty text should also count.
 - `search` is the toolbar search: OR of `contains` across visible text columns.
@@ -282,15 +286,20 @@ provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
   null-columns rule, means every schema column in database order, flavored by the
   mapping. A client never invents its own notion of "the default report".
 
-**Aggregate functions (closed set):** `count sum avg min max countDistinct`.
-- `sum/avg` require number columns; `min/max` allow number/date/text; `count/countDistinct`
+**Aggregate functions (closed set):** `count sum avg median min max countDistinct`.
+- `sum/avg/median` require number columns; `min/max` allow number/date/text; `count/countDistinct`
   allow anything. `count` counts non-null values of the column (row count is `totalRows`).
 - SQL Server `AVG` gets a float cast (integer AVG truncates there); other dialects native.
+- Median uses a portable ranked derived query: `ROW_NUMBER` orders each dimension's
+  non-null values, `COUNT(value)` locates the middle position(s), and an outer `AVG`
+  produces the continuous median. The shared shape covers report aggregates, break
+  totals, Group By, pivot, and chart metrics without optional database extensions.
 - Control-break columns sort first (a user sort on a break column contributes its
-  direction) and are forced into the selection so renderers can group; break totals mirror
-  the page's group ordering.
-- (`median` deferred: no portable SQL across our three dialects; candidate for in-memory
-  computation later.)
+  direction) and are forced into the selection so renderers can group. The renderer
+  moves them into the break heading rather than repeating them in detail rows. A paged
+  break query reads one private lookahead row: `breakContinues` tells the client to defer
+  a subtotal when the final visible group crosses the page boundary. Grand totals render
+  only at the logical end of the report.
 
 **Computed columns:** ids live in a separate namespace (`c1`, `c2`, …); may not shadow
 schema column names; referenced by id in `columns`, `sorts`, `filters`, `aggregates`,
@@ -377,6 +386,7 @@ ids, not state-in-URL.
   "totalRows": "1423",
   "aggregates": { "AMOUNT": { "sum": "8842210.75" } },
   "breakTotals": [ { "key": { "REGION": "WEST" }, "rows": "310", "aggregates": { "AMOUNT": { "sum": "1200000.00" } } } ],
+  "breakContinues": false,
   "highlights": [ { "row": 3, "id": "h1" } ],
   "ignored": [],
   "elapsedMs": "41"
@@ -385,7 +395,10 @@ ids, not state-in-URL.
 
 Rows as objects (not positional arrays): negligible size at page granularity, much
 friendlier to consume. Aggregates/break totals are computed over the **whole filtered
-set** via the cloned queries — never over the visible page. The adapter serializes CLR
+set** via the cloned queries — never over the visible page. `breakContinues` describes
+only the last visible break group and is false for unpaged results. It lets the renderer
+withhold an otherwise premature subtotal; the grand total is likewise displayed only
+when the current page reaches `totalRows`. The adapter serializes CLR
 `Int64`, `UInt64`, and `Decimal` values as invariant JSON strings, including boxed row
 and aggregate values. JavaScript's JSON parser therefore never rounds them through an
 IEEE-754 double. The `type: "number"` metadata remains authoritative, and the client
@@ -453,8 +466,9 @@ The execution path is split by responsibility rather than view mode:
   definition, row-predicate, and decoration phases explicit.
 - `ExpressionRuleSqlApplicator` translates those typed effects into projection, `WHERE`,
   or private-marker SQL while `QueryComposer` remains responsible for phase ordering.
-- `HighlightEvaluator` consumes database-computed markers, ordering row hits before cell
-  hits. It does not reimplement expression semantics in memory.
+- `HighlightEvaluator` consumes database-computed markers. It orders row hits before
+  cell hits and, within each scope, applies lower sequences before higher sequences.
+  It does not reimplement expression semantics in memory.
 - In the ASP.NET Core adapter, `ReportRequestAccess` owns per-definition authorization and
   server-trusted context parameters. Query and export share one state-request pipeline so
   their validation and sanitized error behavior stay aligned.
@@ -962,6 +976,11 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   Sort dialog exposes Default/First/Last, while header quick-sorts remain Default.
   One schema-bound composer path orders grid pages, break totals, grouped views, and
   grid exports consistently, using native syntax except for SQL Server's null-rank key.
+- **M18 — Aggregate and break boundaries** ✅ *(2026-08-07)*: numeric median uses a
+  portable ranked aggregate shape shared by totals and aggregate views. Highlights gain
+  names and explicit, validated sequence precedence. Control-break dimensions move into
+  headings; a one-row page lookahead defers subtotals for continuing groups, and grand
+  totals render only at the report's logical end.
 
 ## Appendix: decision log
 

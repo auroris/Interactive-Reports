@@ -167,6 +167,16 @@ public sealed class ReportExecutor
             ? []
             : await reader.ReadBreakTotals(composed.BreakTotals, state.Breaks, state.Aggregates, ct);
         var executionRows = (await reader.ReadRows(composed.Page, maxRows: null, ct)).Rows;
+        var breakContinues = false;
+        if (state.Breaks.Count > 0
+            && !state.PageAll
+            && executionRows.Count > state.PageSize)
+        {
+            var boundary = executionRows[state.PageSize];
+            executionRows.RemoveRange(state.PageSize, executionRows.Count - state.PageSize);
+            breakContinues = executionRows.Count > 0
+                && SameBreakKey(executionRows[^1], boundary, state.Breaks);
+        }
         var highlights = state.Rules.Decorations.Count > 0
             ? HighlightEvaluator.Evaluate(state.Rules.Decorations, executionRows)
             : [];
@@ -182,6 +192,7 @@ public sealed class ReportExecutor
             TotalRows = totalRows,
             Aggregates = aggregates,
             BreakTotals = breakTotals,
+            BreakContinues = breakContinues,
             Highlights = highlights,
             Ignored = state.Ignored,
             ElapsedMs = stopwatch.ElapsedMilliseconds,
@@ -287,6 +298,12 @@ public sealed class ReportExecutor
 
     private static bool IsNegative(object? value)
         => value is not null && Convert.ToDouble(value, System.Globalization.CultureInfo.InvariantCulture) < 0;
+
+    private static bool SameBreakKey(
+        IReadOnlyDictionary<string, object?> left,
+        IReadOnlyDictionary<string, object?> right,
+        IReadOnlyList<ColumnModel> breaks)
+        => breaks.All(column => Equals(left[column.Name], right[column.Name]));
 
     private async Task<ReportResult> QueryPivot(
         ReportDefinition definition,

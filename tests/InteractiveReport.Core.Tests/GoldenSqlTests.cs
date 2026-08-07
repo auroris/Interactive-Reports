@@ -243,6 +243,44 @@ public class GoldenSqlTests
         Assert.Contains("AVG(CAST([AMOUNT] AS FLOAT)) AS [a0]", aggregates!.Sql);
     }
 
+    [Theory]
+    [InlineData(ReportDialect.Sqlite)]
+    [InlineData(ReportDialect.SqlServer)]
+    [InlineData(ReportDialect.Oracle)]
+    [InlineData(ReportDialect.Postgres)]
+    public void Median_uses_the_portable_ranked_aggregate_shape(ReportDialect dialect)
+    {
+        var (_, _, aggregates, _) = CompileAll(dialect, new ReportState
+        {
+            Aggregates =
+            [
+                new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum },
+                new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Median },
+            ],
+        });
+
+        Assert.Contains("ROW_NUMBER() OVER", aggregates!.Sql, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("COUNT(", aggregates.Sql, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("__ir_median_rank_1", aggregates.Sql);
+        Assert.Contains("__ir_median_count_1", aggregates.Sql);
+        Assert.Contains("SUM(", aggregates.Sql, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("AVG(", aggregates.Sql, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("AS", aggregates.Sql, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Paged_break_query_fetches_one_boundary_row_without_changing_the_offset()
+    {
+        var (page, _, _, _) = CompileAll(ReportDialect.Sqlite, new ReportState
+        {
+            Breaks = ["STATUS"],
+            Page = new PageRequest { Index = 2, Size = 2 },
+        });
+
+        Assert.EndsWith("LIMIT @p0 OFFSET @p1", page.Sql);
+        Assert.Equal([3, 2L], page.NamedBindings.Values.ToArray());
+    }
+
     [Fact]
     public void Break_totals_group_the_filtered_set_with_row_counts()
     {

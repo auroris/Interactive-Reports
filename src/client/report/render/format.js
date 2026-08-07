@@ -221,8 +221,8 @@ export function formatInteger(value) {
 }
 
 export const FN_LABELS = {
-    sum: "Sum", avg: "Avg", min: "Min", max: "Max",
+    sum: "Sum", avg: "Avg", median: "Median", min: "Min", max: "Max",
     count: "Count", countDistinct: "Count Distinct",
 };
 
-export const FN_ORDER = ["sum", "avg", "min", "max", "count", "countDistinct"];
+export const FN_ORDER = ["sum", "avg", "median", "min", "max", "count", "countDistinct"];

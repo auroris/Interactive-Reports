@@ -434,7 +434,7 @@ public class StateValidatorTests
             [
                 new HighlightRule
                 {
-                    Id = "h1", Scope = "row",
+                    Id = "h1", Name = "Large order", Sequence = 50, Scope = "row",
                     Expr = "AMOUNT > 1000", Style = new HighlightStyle { Bg = "#fff3cd" },
                 },
                 new HighlightRule
@@ -452,6 +452,8 @@ public class StateValidatorTests
 
         var valid = Assert.Single(result.Rules.Decorations);
         Assert.Equal("h1", valid.Effect.Id);
+        Assert.Equal("Large order", valid.Effect.Name);
+        Assert.Equal(50, valid.Effect.Sequence);
         Assert.Single(result.Ignored, i => i.Kind == "highlight");
     }
 
@@ -696,5 +698,16 @@ public class StateValidatorTests
                 Highlights = [new HighlightRule { Id = "h1", Scope = "row", Expr = "AMOUNT > 1" }],
             }));
         Assert.Contains(noColor.Errors, e => e.Path == "highlights[0].style");
+
+        var duplicateSequence = Assert.Throws<ReportValidationException>(() =>
+            Validate(new ReportState
+            {
+                Highlights =
+                [
+                    new HighlightRule { Id = "h1", Sequence = 10, Expr = "AMOUNT > 1", Style = new HighlightStyle { Bg = "red" } },
+                    new HighlightRule { Id = "h2", Sequence = 10, Expr = "AMOUNT > 2", Style = new HighlightStyle { Bg = "blue" } },
+                ],
+            }));
+        Assert.Contains(duplicateSequence.Errors, e => e.Path == "highlights[1].sequence");
     }
 }

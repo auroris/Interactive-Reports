@@ -72,6 +72,20 @@ export function computeDialog(w, editIndex) {
 
 export function highlightDialog(w, editIndex) {
     const existing = editIndex !== undefined ? w.doc.highlights?.[editIndex] : undefined;
+    const rules = w.doc.highlights ?? [];
+    const ids = rules.map(h => (h.id ?? "").toLowerCase());
+    let n = 1;
+    while (ids.includes(`h${n}`.toLowerCase())) n++;
+    const id = existing?.id ?? `h${n}`;
+    const nextSequence = Math.max(0, ...rules.map((h, i) => h.sequence ?? ((i + 1) * 10))) + 10;
+    const nameInp = el("input", {
+        class: "ir-input", type: "text", value: existing?.name ?? existing?.id ?? `Highlight ${n}`,
+        placeholder: "Highlight name",
+    });
+    const sequenceInp = el("input", {
+        class: "ir-input", type: "number", min: 1, step: 1,
+        value: existing?.sequence ?? (editIndex !== undefined ? (editIndex + 1) * 10 : nextSequence),
+    });
 
     const scopeSel = sel([{ value: "row", label: "Row" }, { value: "cell", label: "Cell" }], existing?.scope ?? "row");
     const targetSel = sel(colOptions(w), existing?.col);
@@ -96,7 +110,9 @@ export function highlightDialog(w, editIndex) {
         title: editIndex !== undefined ? "Edit Highlight" : "Highlight",
         width: "30rem",
         build: body => body.append(
-            labeled("Highlight", scopeSel),
+            labeled("Name", nameInp),
+            labeled("Sequence", sequenceInp),
+            labeled("Apply To", scopeSel),
             targetField,
             el("div", { class: "ir-field-label ir-condition-head" }, "When"),
             condition,
@@ -105,12 +121,16 @@ export function highlightDialog(w, editIndex) {
                 el("label", { class: "ir-color-pick" }, fgOn, "Text", fgInp))),
         onApply: () => {
             const expr = condition._read();
+            const name = nameInp.value.trim();
+            if (!name) throw new Error("Enter a highlight name");
+            const sequence = Number(sequenceInp.value);
+            if (!Number.isInteger(sequence) || sequence <= 0)
+                throw new Error("Sequence must be a positive whole number");
             if (!bgOn.checked && !fgOn.checked) throw new Error("Pick a background or text color");
-            const ids = (w.doc.highlights ?? []).map(h => h.id);
-            let n = 1;
-            while (ids.includes(`h${n}`)) n++;
             const rule = {
-                id: existing?.id ?? `h${n}`,
+                id,
+                name,
+                sequence,
                 enabled: existing?.enabled ?? true,
                 scope: scopeSel.value,
                 expr,

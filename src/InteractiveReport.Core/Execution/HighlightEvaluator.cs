@@ -6,8 +6,9 @@ namespace InteractiveReport.Core.Execution;
 
 /// <summary>
 /// Converts database-evaluated highlight projection markers into response hits.
-/// Row hits are emitted before cell hits so presentation layers can apply the
-/// cell style last, giving it deterministic priority over the row style.
+/// Row hits are emitted before cell hits so presentation layers can apply cell
+/// styles last. Within each scope, rules apply from low to high sequence; the
+/// higher sequence therefore wins when two matches set the same property.
 /// </summary>
 public static class HighlightEvaluator
 {
@@ -18,6 +19,7 @@ public static class HighlightEvaluator
         var hits = new List<HighlightHit>();
         var orderedRules = rules
             .OrderBy(rule => rule.Effect.Scope == HighlightScope.Cell ? 1 : 0)
+            .ThenBy(rule => rule.Effect.Sequence)
             .ToList();
 
         for (var r = 0; r < rows.Count; r++)

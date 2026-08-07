@@ -46,11 +46,30 @@ public class HighlightEvaluatorTests
         Assert.Equal(["row", "cell"], hits.Select(hit => hit.Id));
     }
 
+    [Fact]
+    public void Higher_sequence_is_emitted_last_within_the_same_scope()
+    {
+        var rules = new[]
+        {
+            Rule("high", HighlightScope.Row, "__high", sequence: 90),
+            Rule("low", HighlightScope.Row, "__low", sequence: 10),
+        };
+        var rows = new IReadOnlyDictionary<string, object?>[]
+        {
+            new Dictionary<string, object?> { ["__high"] = 1, ["__low"] = 1 },
+        };
+
+        var hits = HighlightEvaluator.Evaluate(rules, rows);
+
+        Assert.Equal(["low", "high"], hits.Select(hit => hit.Id));
+    }
+
     private static CompiledRule<HighlightEffect> Rule(
         string id,
         HighlightScope scope,
         string projection,
-        string? column = null)
+        string? column = null,
+        int sequence = 10)
     {
         var (ast, error) = ExprParser.ParseCondition("1 = 1", new Dictionary<string, ColumnModel>());
         Assert.Null(error);
@@ -58,6 +77,8 @@ public class HighlightEvaluatorTests
             new BoundExpression(ast!),
             new HighlightEffect(
                 id,
+                id,
+                sequence,
                 scope,
                 column is null ? null : TestFixtures.Col(column, typeof(decimal)),
                 projection));

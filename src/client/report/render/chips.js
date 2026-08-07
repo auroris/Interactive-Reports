@@ -101,14 +101,17 @@ export function renderChips(w, container) {
         chips.push(chip({ w, kind: "aggregate", index: i, toggleable: false, colLabel: "Σ", text: `${FN_LABELS[a.fn] ?? a.fn} of ${labelOf(w, a.col)}`, ...lock("aggregate") })));
     (d.computed ?? []).forEach((c, i) =>
         chips.push(chip({ w, kind: "computed", index: i, off: c.enabled === false, colLabel: "ƒ", text: c.label ?? c.id, ...lock("compute") })));
-    (d.highlights ?? []).forEach((h, i) =>
-        chips.push(chip({
-            w, kind: "highlight", index: i, off: h.enabled === false,
-            swatch: h.style?.bg ?? "#fff3a0",
-            colLabel: "Highlight",
-            text: h.expr + (h.scope === "cell" ? ` (${labelOf(w, h.col)} cell)` : " (row)"),
-            ...lock("highlight"),
-        })));
+    (d.highlights ?? [])
+        .map((h, i) => ({ h, i, sequence: h.sequence ?? ((i + 1) * 10) }))
+        .sort((left, right) => left.sequence - right.sequence)
+        .forEach(({ h, i, sequence }) =>
+            chips.push(chip({
+                w, kind: "highlight", index: i, off: h.enabled === false,
+                swatch: h.style?.bg ?? "#fff3a0",
+                colLabel: h.name ?? h.id ?? "Highlight",
+                text: `#${sequence} · ${h.expr}` + (h.scope === "cell" ? ` (${labelOf(w, h.col)} cell)` : " (row)"),
+                ...lock("highlight"),
+            })));
     if (d.view?.mode && d.view.mode !== "grid") {
         // Remove (back to grid) survives the lock — see the header comment.
         const viewLock = featureEnabled(w, d.view.mode) ? {} : { editable: false };

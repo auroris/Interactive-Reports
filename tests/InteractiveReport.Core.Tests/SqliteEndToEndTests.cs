@@ -387,6 +387,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
             [
                 new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum },
                 new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Avg },
+                new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Median },
                 new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Min },
                 new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Max },
             ],
@@ -396,8 +397,29 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         var amount = result.Aggregates["AMOUNT"];
         Assert.Equal(26000m, Convert.ToDecimal(amount["sum"]));  // ...totals over all 5
         Assert.Equal(5200m, Convert.ToDecimal(amount["avg"]));
+        Assert.Equal(5000m, Convert.ToDecimal(amount["median"]));
         Assert.Equal(1500m, Convert.ToDecimal(amount["min"]));
         Assert.Equal(9000m, Convert.ToDecimal(amount["max"]));
+    }
+
+    [Fact]
+    public async Task Median_ignores_nulls_and_averages_the_middle_pair()
+    {
+        var result = await _executor.Query(Definition, new ReportState
+        {
+            Computed =
+            [
+                new ComputedColumn
+                {
+                    Id = "c1",
+                    Expr = "CASE WHEN ORDER_ID = 1 THEN NULL ELSE AMOUNT END",
+                },
+            ],
+            Filters = [Filter("ORDER_ID <= 5")],
+            Aggregates = [new AggregateRule { Col = "c1", Fn = AggregateFn.Median }],
+        }, NoParams);
+
+        Assert.Equal(4000m, Convert.ToDecimal(result.Aggregates["c1"]["median"]));
     }
 
     [Fact]
@@ -418,7 +440,11 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         var result = await _executor.Query(Definition, new ReportState
         {
             Breaks = ["STATUS"],
-            Aggregates = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum }],
+            Aggregates =
+            [
+                new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum },
+                new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Median },
+            ],
         }, NoParams);
 
         Assert.Equal(
@@ -429,9 +455,36 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         Assert.Equal(
             [6000m, 400m, 14800m, 26000m],
             result.BreakTotals.Select(b => Convert.ToDecimal(b.Aggregates["AMOUNT"]["sum"])));
+        Assert.Equal(
+            [6000m, 400m, 2000m, 5000m],
+            result.BreakTotals.Select(b => Convert.ToDecimal(b.Aggregates["AMOUNT"]["median"])));
 
         // Page rows arrive grouped: STATUS sorts first even with no user sort.
         Assert.Equal("CANCELLED", result.Rows[0]["STATUS"]);
+    }
+
+    [Fact]
+    public async Task Break_paging_reports_continuation_without_leaking_the_boundary_row()
+    {
+        var continuing = await _executor.Query(Definition, new ReportState
+        {
+            Breaks = ["STATUS"],
+            Page = new PageRequest { Index = 2, Size = 2 },
+        }, NoParams);
+
+        Assert.Equal(2, continuing.Rows.Count);
+        Assert.All(continuing.Rows, row => Assert.Equal("PENDING", row["STATUS"]));
+        Assert.True(continuing.BreakContinues);
+
+        var final = await _executor.Query(Definition, new ReportState
+        {
+            Breaks = ["STATUS"],
+            Page = new PageRequest { Index = 5, Size = 2 },
+        }, NoParams);
+
+        Assert.Equal(2, final.Rows.Count);
+        Assert.All(final.Rows, row => Assert.Equal("SHIPPED", row["STATUS"]));
+        Assert.False(final.BreakContinues);
     }
 
     [Fact]
@@ -907,6 +960,23 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         Assert.Equal(["SHIPPED", "PENDING", "CANCELLED"], result.Rows.Select(r => (string)r["STATUS"]!));
         Assert.Equal([26000m, 14800m, 6000m], result.Rows.Select(r => Convert.ToDecimal(r["v0"])));
         Assert.All(result.Rows, r => Assert.Equal(2, r.Count));      // the grouped __count never leaks
+    }
+
+    [Fact]
+    public async Task Chart_view_supports_median_metrics()
+    {
+        var result = await _executor.Query(Definition, new ReportState
+        {
+            View = new ViewSpec
+            {
+                Mode = "chart", Type = "bar", Label = "STATUS", Value = "AMOUNT", Fn = AggregateFn.Median,
+            },
+        }, NoParams);
+
+        Assert.Equal(["STATUS", "v0"], result.Columns.Select(c => c.Name));
+        Assert.Equal("median(Amount)", result.Columns[1].Label);
+        Assert.Equal(["CANCELLED", "NEW", "PENDING", "SHIPPED"], result.Rows.Select(r => (string)r["STATUS"]!));
+        Assert.Equal([6000m, 400m, 2000m, 5000m], result.Rows.Select(r => Convert.ToDecimal(r["v0"])));
     }
 
     [Fact]

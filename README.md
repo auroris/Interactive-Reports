@@ -120,6 +120,16 @@ precision arithmetic. Values such as
 are the sole exception: Chart.js requires a JavaScript number, while its accompanying
 data table retains the exact formatted value.
 
+Numeric aggregate pickers include median alongside sum, average, minimum, maximum,
+count, and distinct count. Median uses the same grouped query path for report totals,
+control-break totals, Group By, pivot, and chart metrics on every supported database.
+
+Highlights have a report-facing name and a positive sequence. Matching rules are
+applied from lower to higher sequence, so the highest sequence wins when rules set the
+same style; cell highlights are applied after row highlights. Legacy documents without
+these fields use the rule id as the name and list position in increments of ten as the
+sequence.
+
 ## Embedding the report
 
 The bundle contains the component's styles and renders into a shadow root, so
@@ -156,6 +166,10 @@ and Last are stored on that sort instruction as `nulls: "first"` or `"last"` and
 produce the same placement on every supported database. Default omits the field and
 preserves the database dialect's ordinary ordering behavior. Header-menu quick sorts
 continue to use Default.
+
+Control-break columns render in the break heading instead of repeating in each detail
+row. A subtotal appears only with the logical end of its break group, even when that
+group crosses a page boundary, and grand totals appear only on the report's final page.
 
 `saved-report` is optional. When present, the component finds a visible saved report by
 its title (case-insensitive) and loads it before the first query. The title must identify

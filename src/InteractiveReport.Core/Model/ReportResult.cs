@@ -23,6 +23,12 @@ public sealed class ReportResult
     /// <summary>One entry per break group, ordered like the page rows.</summary>
     public IReadOnlyList<BreakTotal> BreakTotals { get; init; } = [];
 
+    /// <summary>
+    /// True when the final visible row's control-break group continues into the next
+    /// page. Clients must defer that group's subtotal until its logical end.
+    /// </summary>
+    public bool BreakContinues { get; init; }
+
     public IReadOnlyList<HighlightHit> Highlights { get; init; } = [];
 
     /// <summary>
