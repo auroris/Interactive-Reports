@@ -485,3 +485,4 @@ $RECYCLE.BIN/
 playwright-report/
 test-results/
 blob-report/
+/src/InteractiveReport.AspNetCore/Ui/dist
