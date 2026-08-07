@@ -480,3 +480,6 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# Temporary ignore the dist files
+/src/InteractiveReport.AspNetCore/Ui/dist
