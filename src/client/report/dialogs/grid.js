@@ -2,7 +2,7 @@
 
 import { el, labeled, sel } from "../../core/dom.js";
 import { openDialog } from "../../core/dialog.js";
-import { rowList, colOptions, fnSelectFor, DIR_OPTIONS } from "./parts.js";
+import { rowList, colOptions, fnSelectFor, DIR_OPTIONS, NULLS_OPTIONS } from "./parts.js";
 
 const PAGE_LIMITS = [10, 50, 100, 500, 1000];
 
@@ -39,14 +39,22 @@ export function sortDialog(w) {
     const list = rowList(container, w.doc.sorts ?? [], (row, item) => {
         const colSel = sel(colOptions(w, { none: "— Select —" }), item?.col ?? "");
         const dirSel = sel(DIR_OPTIONS, item?.dir ?? "asc");
-        row.append(colSel, dirSel);
-        row._read = () => colSel.value ? { col: colSel.value, dir: dirSel.value } : null;
+        const nullsSel = sel(NULLS_OPTIONS, item?.nulls ?? "");
+        colSel.setAttribute("aria-label", "Column");
+        dirSel.setAttribute("aria-label", "Direction");
+        nullsSel.setAttribute("aria-label", "Null Sorting");
+        row.append(colSel, dirSel, nullsSel);
+        row._read = () => colSel.value ? {
+            col: colSel.value,
+            dir: dirSel.value,
+            ...(nullsSel.value ? { nulls: nullsSel.value } : {}),
+        } : null;
     }, { addLabel: "Sort", max: 6 });
 
     openDialog({
         owner: w,
         title: "Sort",
-        width: "26rem",
+        width: "38rem",
         build: body => body.append(container, list.addButton,
             el("p", { class: "ir-dialog-note" }, "Control-break columns always sort first.")),
         onApply: () => w.apply(d => { d.sorts = list.read(); }),

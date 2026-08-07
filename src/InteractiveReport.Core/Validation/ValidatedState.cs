@@ -158,7 +158,7 @@ public enum ChartSortBy
     Value,
 }
 
-public sealed record ValidSort(ColumnModel Column, SortDir Dir);
+public sealed record ValidSort(ColumnModel Column, SortDir Dir, NullPlacement? Nulls = null);
 
 public sealed record ValidAggregate(ColumnModel Column, AggregateFn Fn);
 

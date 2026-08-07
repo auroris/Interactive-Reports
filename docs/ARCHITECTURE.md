@@ -121,7 +121,7 @@ public interface IReportDefinitionStore
   "state": {
     "v": 2,
     "columns": [ "ORDER_ID", "CUSTOMER", "AMOUNT", "ORDER_DATE" ],
-    "sorts": [ { "col": "ORDER_DATE", "dir": "desc" } ]
+    "sorts": [ { "col": "ORDER_DATE", "dir": "desc", "nulls": "last" } ]
   }
 }
 ```
@@ -190,7 +190,7 @@ the version 1 column/operator/value filter shape with shared boolean expressions
     { "enabled": true, "expr": "IN_LIST(STATUS, 'SHIPPED', 'PENDING')" },
     { "enabled": false, "expr": "AMOUNT > 1000" }
   ],
-  "sorts":  [ { "col": "ORDER_DATE", "dir": "desc" } ],
+  "sorts":  [ { "col": "ORDER_DATE", "dir": "desc", "nulls": "last" } ],
   "columns": ["ORDER_ID", "CUSTOMER", "THUMBNAIL_URL", "AMOUNT", "ORDER_DATE", "c1"],
   "labels": { "ORDER_ID": "Ticket #" },
   "formats": {
@@ -957,6 +957,11 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   Numeric values respect `maxPageSize`; All is the explicit `page.size: 0` protocol
   value and runs grid/Group By without a limit. The footer is navigation-only, and
   export remains unpaged under its separate `maxRows` contract.
+- **M17 — Explicit null sorting** ✅ *(2026-08-07)*: every grid/Group By sort rule
+  may carry additive `nulls: first|last`; absence retains the dialect default. The
+  Sort dialog exposes Default/First/Last, while header quick-sorts remain Default.
+  One schema-bound composer path orders grid pages, break totals, grouped views, and
+  grid exports consistently, using native syntax except for SQL Server's null-rank key.
 
 ## Appendix: decision log
 

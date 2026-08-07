@@ -23,3 +23,9 @@ public enum SortDir
     Asc,
     Desc,
 }
+
+public enum NullPlacement
+{
+    First,
+    Last,
+}

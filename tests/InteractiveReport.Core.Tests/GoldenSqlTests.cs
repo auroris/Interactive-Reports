@@ -274,6 +274,45 @@ public class GoldenSqlTests
         Assert.Contains("ORDER BY \"REGION\" DESC, \"AMOUNT\"", page.Sql);
     }
 
+    [Theory]
+    [InlineData(ReportDialect.Sqlite, "ORDER BY \"NOTES\" DESC NULLS FIRST")]
+    [InlineData(ReportDialect.Postgres, "ORDER BY \"NOTES\" DESC NULLS FIRST")]
+    [InlineData(ReportDialect.Oracle, "ORDER BY \"NOTES\" DESC NULLS FIRST")]
+    [InlineData(ReportDialect.SqlServer, "ORDER BY CASE WHEN [NOTES] IS NULL THEN 0 ELSE 1 END, [NOTES] DESC")]
+    public void Explicit_null_placement_compiles_portably(ReportDialect dialect, string expected)
+    {
+        var (page, _) = Compile(dialect, new ReportState
+        {
+            Sorts =
+            [
+                new SortRule
+                {
+                    Col = "NOTES",
+                    Dir = SortDir.Desc,
+                    Nulls = NullPlacement.First,
+                },
+            ],
+        });
+
+        Assert.Contains(expected, page.Sql);
+    }
+
+    [Fact]
+    public void GroupBy_dimension_sort_keeps_explicit_null_placement()
+    {
+        var def = OrdersDefinition(ReportDialect.Sqlite);
+        var validated = StateValidator.Validate(def, new ReportState
+        {
+            View = new ViewSpec { Mode = "groupBy", GroupBy = ["NOTES"] },
+            Sorts = [new SortRule { Col = "NOTES", Nulls = NullPlacement.Last }],
+        }, OrdersSchema);
+
+        var (page, _) = QueryComposer.ComposeGroupByView(def, validated);
+        var sql = DialectSupport.GetCompiler(ReportDialect.Sqlite).Compile(page).Sql;
+
+        Assert.Contains("ORDER BY \"NOTES\" ASC NULLS LAST", sql);
+    }
+
     [Fact]
     public void Computed_columns_get_a_second_wrap_and_become_ordinary_columns()
     {

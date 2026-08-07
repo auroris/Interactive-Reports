@@ -101,6 +101,33 @@ test("exports the current report state as CSV", async ({ page }) => {
     expect(lines.slice(1).every(line => line.includes('<a class=""ir-cell-link"" href=""/orders/'))).toBe(true);
 });
 
+test("sorts with explicit null placement from the Actions dialog", async ({ page }) => {
+    await openWorkbench(page);
+    await clickAction(page, "Sort…");
+
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("combobox", { name: "Column" }).selectOption("NOTES");
+    await dialog.getByRole("combobox", { name: "Direction" }).selectOption("desc");
+    await dialog.getByRole("combobox", { name: "Null Sorting" }).selectOption("last");
+
+    const response = await runAndWaitForQuery(page, () =>
+        dialog.getByRole("button", { name: "Apply", exact: true }).click());
+    expect(response.request().postDataJSON().sorts).toEqual([
+        { col: "NOTES", dir: "desc", nulls: "last" },
+    ]);
+
+    await clickAction(page, "Sort…");
+    const reopened = page.getByRole("dialog");
+    const nullSorting = reopened.getByRole("combobox", { name: "Null Sorting" });
+    await expect(nullSorting).toHaveValue("last");
+    await nullSorting.selectOption("");
+    const defaultResponse = await runAndWaitForQuery(page, () =>
+        reopened.getByRole("button", { name: "Apply", exact: true }).click());
+    expect(defaultResponse.request().postDataJSON().sorts).toEqual([
+        { col: "NOTES", dir: "desc" },
+    ]);
+});
+
 test("configures an aggregate chart and returns to the data grid", async ({ page }) => {
     await openWorkbench(page);
     await page.getByRole("button", { name: "Chart", exact: true }).click();

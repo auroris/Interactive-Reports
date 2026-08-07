@@ -37,10 +37,7 @@ public static class QueryComposer
             ExpressionRuleSqlApplicator.ApplyDecoration(page, rule, def.Dialect);
 
         foreach (var sort in EffectiveSorts(state))
-        {
-            if (sort.Dir == SortDir.Asc) page.OrderBy(sort.Column.Name);
-            else page.OrderByDesc(sort.Column.Name);
-        }
+            ApplySort(page, sort, def.Dialect);
 
         if (!state.PageAll)
             page.ForPage(state.PageIndex, state.PageSize);
@@ -173,10 +170,7 @@ public static class QueryComposer
         var core = BuildFilteredCore(def, state);
         var q = core.Clone().Select(state.ProjectionColumns.Select(c => c.Name).ToArray());
         foreach (var sort in EffectiveSorts(state))
-        {
-            if (sort.Dir == SortDir.Asc) q.OrderBy(sort.Column.Name);
-            else q.OrderByDesc(sort.Column.Name);
-        }
+            ApplySort(q, sort, def.Dialect);
         return q.Limit(maxRows + 1);
     }
 
@@ -203,11 +197,37 @@ public static class QueryComposer
         q.GroupBy(dimNames);
 
         foreach (var sort in order)
-        {
-            if (sort.Dir == SortDir.Asc) q.OrderBy(sort.Column.Name);
-            else q.OrderByDesc(sort.Column.Name);
-        }
+            ApplySort(q, sort, dialect);
         return q;
+    }
+
+    /// <summary>
+    /// Apply one schema-bound sort. Oracle, Postgres, and supported SQLite versions
+    /// have native NULLS FIRST/LAST syntax. SQL Server needs a leading null-rank key;
+    /// the actual value key retains the requested direction in both cases.
+    /// </summary>
+    private static void ApplySort(Query query, ValidSort sort, ReportDialect dialect)
+    {
+        if (sort.Nulls is null)
+        {
+            if (sort.Dir == SortDir.Asc) query.OrderBy(sort.Column.Name);
+            else query.OrderByDesc(sort.Column.Name);
+            return;
+        }
+
+        var direction = sort.Dir == SortDir.Asc ? "ASC" : "DESC";
+        var placement = sort.Nulls == NullPlacement.First ? "FIRST" : "LAST";
+        if (dialect != ReportDialect.SqlServer)
+        {
+            query.OrderByRaw($"[{sort.Column.Name}] {direction} NULLS {placement}");
+            return;
+        }
+
+        var nullRank = sort.Nulls == NullPlacement.First ? 0 : 1;
+        query.OrderByRaw(
+            $"CASE WHEN [{sort.Column.Name}] IS NULL THEN {nullRank} ELSE {1 - nullRank} END");
+        if (sort.Dir == SortDir.Asc) query.OrderBy(sort.Column.Name);
+        else query.OrderByDesc(sort.Column.Name);
     }
 
     /// <summary>Dimension ordering, honoring a user sort's direction on that dimension.</summary>

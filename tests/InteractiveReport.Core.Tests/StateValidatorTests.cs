@@ -145,11 +145,17 @@ public class StateValidatorTests
 
         var result = Validate(new ReportState
         {
-            Sorts = [new SortRule { Col = "AMOUNT" }, new SortRule { Col = "GONE" }],
+            Sorts =
+            [
+                new SortRule { Col = "AMOUNT", Dir = SortDir.Desc, Nulls = NullPlacement.Last },
+                new SortRule { Col = "GONE" },
+            ],
         }, def);
 
         var sort = Assert.Single(result.Sorts);
         Assert.Equal("AMOUNT", sort.Column.Name);
+        Assert.Equal(SortDir.Desc, sort.Dir);
+        Assert.Equal(NullPlacement.Last, sort.Nulls);
         Assert.Contains(result.Ignored, i => i.Kind == "sort" && i.Detail.Contains("GONE"));
     }
 

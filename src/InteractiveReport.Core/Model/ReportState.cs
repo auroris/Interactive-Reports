@@ -106,6 +106,12 @@ public sealed class SortRule
 {
     public string Col { get; set; } = "";
     public SortDir Dir { get; set; } = SortDir.Asc;
+
+    /// <summary>
+    /// Optional explicit null placement. Null preserves the database dialect's
+    /// existing default; serialized values are "first" and "last".
+    /// </summary>
+    public NullPlacement? Nulls { get; set; }
 }
 
 public sealed class PageRequest

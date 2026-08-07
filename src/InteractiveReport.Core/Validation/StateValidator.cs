@@ -292,7 +292,7 @@ public static class StateValidator
                 continue;
             }
             if (seen.Add(col.Name))
-                result.Add(new ValidSort(col, s.Dir));
+                result.Add(new ValidSort(col, s.Dir, s.Nulls));
         }
         return result;
     }

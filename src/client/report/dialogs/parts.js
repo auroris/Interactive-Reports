@@ -9,6 +9,11 @@ import { pickable, typeOf, fnsFor, expressionFunctions } from "../schema.js";
 import { FN_LABELS } from "../render/format.js";
 
 export const DIR_OPTIONS = [{ value: "asc", label: "Ascending" }, { value: "desc", label: "Descending" }];
+export const NULLS_OPTIONS = [
+    { value: "", label: "Nulls: Default" },
+    { value: "first", label: "Nulls First" },
+    { value: "last", label: "Nulls Last" },
+];
 
 export function colOptions(w, { none } = {}) {
     const opts = pickable(w).map(c => ({ value: c.name, label: c.computed ? `ƒ ${c.label}` : c.label }));

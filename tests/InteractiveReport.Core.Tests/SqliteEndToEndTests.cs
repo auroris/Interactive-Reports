@@ -272,6 +272,38 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     }
 
     [Fact]
+    public async Task Explicit_null_placement_controls_query_and_export_order()
+    {
+        var nullsLast = new ReportState
+        {
+            Sorts =
+            [
+                new SortRule { Col = "NOTES", Nulls = NullPlacement.Last },
+                new SortRule { Col = "ORDER_ID" },
+            ],
+        };
+
+        var query = await _executor.Query(Definition, nullsLast, NoParams);
+        Assert.All(query.Rows.Take(7), row => Assert.NotNull(row["NOTES"]));
+        Assert.All(query.Rows.TakeLast(3), row => Assert.Null(row["NOTES"]));
+
+        var export = await _executor.Export(Definition, nullsLast, NoParams);
+        Assert.All(export.Rows.Take(7), row => Assert.NotNull(row["NOTES"]));
+        Assert.All(export.Rows.TakeLast(3), row => Assert.Null(row["NOTES"]));
+
+        var nullsFirst = await _executor.Query(Definition, new ReportState
+        {
+            Sorts =
+            [
+                new SortRule { Col = "NOTES", Dir = SortDir.Desc, Nulls = NullPlacement.First },
+                new SortRule { Col = "ORDER_ID" },
+            ],
+        }, NoParams);
+        Assert.All(nullsFirst.Rows.Take(3), row => Assert.Null(row["NOTES"]));
+        Assert.All(nullsFirst.Rows.Skip(3), row => Assert.NotNull(row["NOTES"]));
+    }
+
+    [Fact]
     public async Task All_bypasses_query_limits_but_export_still_uses_its_independent_cap()
     {
         var def = Definition;

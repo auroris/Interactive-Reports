@@ -1,4 +1,5 @@
 using System.Text.Json;
+using InteractiveReport.Core.Model;
 
 namespace InteractiveReport.AspNetCore.Tests;
 
@@ -51,6 +52,30 @@ public sealed class IrJsonTests
         Assert.Equal(42, fromNumbers.Signed);
         Assert.Equal(43ul, fromNumbers.Unsigned);
         Assert.Equal(44.5m, fromNumbers.Precise);
+    }
+
+    [Fact]
+    public void Sort_null_placement_uses_camel_case_strings_and_default_is_omitted()
+    {
+        var state = new ReportState
+        {
+            Sorts =
+            [
+                new SortRule { Col = "A", Nulls = NullPlacement.First },
+                new SortRule { Col = "B" },
+            ],
+        };
+
+        var json = JsonSerializer.Serialize(state, IrJson.Options);
+        using var document = JsonDocument.Parse(json);
+        var sorts = document.RootElement.GetProperty("sorts");
+
+        Assert.Equal("first", sorts[0].GetProperty("nulls").GetString());
+        Assert.False(sorts[1].TryGetProperty("nulls", out _));
+
+        var roundTrip = JsonSerializer.Deserialize<ReportState>(json, IrJson.Options)!;
+        Assert.Equal(NullPlacement.First, roundTrip.Sorts![0].Nulls);
+        Assert.Null(roundTrip.Sorts[1].Nulls);
     }
 
     private sealed record WireNumbers(long Signed, ulong Unsigned, decimal Precise);

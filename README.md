@@ -151,6 +151,12 @@ are omitted. All is stored as `page.size: 0` and deliberately returns every matc
 grid row or Group By group without applying `maxRows`. CSV export ignores pagination
 and continues to use its independent `maxRows` cap and truncation header.
 
+Each row in **Actions → Sort** also offers Nulls: Default, First, or Last. First
+and Last are stored on that sort instruction as `nulls: "first"` or `"last"` and
+produce the same placement on every supported database. Default omits the field and
+preserves the database dialect's ordinary ordering behavior. Header-menu quick sorts
+continue to use Default.
+
 `saved-report` is optional. When present, the component finds a visible saved report by
 its title (case-insensitive) and loads it before the first query. The title must identify
 exactly one visible saved report. A missing or ambiguous title loads Primary Report and
