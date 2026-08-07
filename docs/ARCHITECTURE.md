@@ -141,8 +141,10 @@ Notes:
 - `features` is a whitelist of end-user features (APEX's per-action Actions-menu
   configuration collapsed to a flat token list). Absent means everything;
   present means exactly what is listed. Known tokens (`ReportFeatures`): `search`,
-  `columns`, `rename`, `filter`, `sort`, `controlBreak`, `highlight`, `aggregate`,
-  `compute`, `groupBy`, `pivot`, `chart`, `savedReports`, `download`. Unknown, blank,
+  `columns`, `rename`, `columnSettings`, `filter`, `sort`, `controlBreak`, `highlight`,
+  `aggregate`, `compute`, `groupBy`, `pivot`, `chart`, `savedReports`, `download`.
+  (`columnSettings` gates the per-column settings dialog; its visibility checkbox
+  additionally needs `columns`, whose visible-list it writes.) Unknown, blank,
   or duplicate entries fail fast at definition load. The schema endpoint always sends
   the resolved effective list; the packaged UI removes the chrome for everything else
   (menu entries, view buttons, search bar, saved-report select — state a default or
@@ -184,6 +186,7 @@ the version 1 column/operator/value filter shape with shared boolean expressions
   "sorts":  [ { "col": "ORDER_DATE", "dir": "desc" } ],
   "columns": ["ORDER_ID", "CUSTOMER", "AMOUNT", "ORDER_DATE", "c1"],
   "labels": { "ORDER_ID": "Ticket #" },
+  "formats": { "AMOUNT": { "mask": "integer", "align": "center", "bold": true } },
   "computed": [
     { "id": "c1", "enabled": true, "label": "Amount w/ Tax",
       "expr": "ROUND(AMOUNT * 1.0825, 2)" }
@@ -223,6 +226,20 @@ provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
   report the schema endpoint delivers. A computed column still names itself on its
   own rule. Like every state property, a present map replaces the default wholesale
   and `{}` explicitly clears it.
+- `formats` (real column name → `{ mask, align, bold, italic, fg, bg }`) is the
+  second presentation map, written by the Column Settings dialog and following every
+  labels rule: never validated, never gating execution, wholesale-replace with `{}`
+  as the explicit clear, resolvable from the effective primary state so definitions
+  can ship default formatting. Masks are a closed client-side token vocabulary per
+  column type (`integer`/`decimal2`/`decimal4`/`plain` for numbers; `date`/`datetime`/
+  `dateMedium`/`dateLong` for dates); unknown tokens and indigestible values fall
+  through to default rendering — a mask is a lens, never a gate. Styling is the same
+  constrained property set highlights use, deliberately not a CSS class (host classes
+  cannot pierce the shadow root) and not freeform CSS (a style string in a globally
+  published report is an injection surface). Unlike labels the server consumes
+  `formats` nowhere: exports keep raw values, because headers are captions but cells
+  are data — a masked number in a CSV would break the spreadsheet arithmetic the
+  export exists for. Highlight styles win over column styles where both apply.
 - A partial request resolves over the effective primary state once: a configured
   primary file, then inline `defaultState`, then the synthetic empty state. A missing
   property inherits, while an explicit empty string/list clears the default. `{ "mode": "grid" }`
@@ -733,11 +750,18 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   self-contained entry bundles in `Ui/dist`; these generated assets are committed
   so a normal .NET build does not require Node.js.
 - **Feature surface**: scoped toolbar search (all text columns or one typed column → expression filter);
-  Actions menu (Columns shuttle, Filter, Sort, Control Break, Highlight, Aggregate,
+  Actions menu (Columns shuttle, Column Settings, Filter, Sort, Control Break, Highlight, Aggregate,
   Compute with token-insert helpers, Group By, Pivot, Chart, Save/Save As/Delete/Reset,
-  CSV download); column-header menus (sort/rename/hide/break/filter — Rename writes a
+  CSV download); column-header menus (sort/rename/column settings/hide/break/filter — Rename writes a
   `labels` override for base columns and edits the rule label for computed ones; blank
-  restores the schema default); settings chips with
+  restores the schema default). The Column Settings dialog edits one column at a time
+  (edits stage per column, so several columns can be configured in one visit): a
+  Visible checkbox that writes the same `doc.columns` list the shuttle owns
+  (re-shown columns append to the end — no second source of truth), alignment,
+  a per-type format-mask select, bold/italic, text/background colors, and a live
+  preview fed by the column's own data; everything but visibility lands in the
+  doc's `formats` map (§5), applied by the grid renderer to header alignment,
+  cells, and aggregate-row alignment; settings chips with
   APEX-style enable/disable checkboxes for expression rules; break groups with per-column subtotal rows and
   grand-total rows; row/cell highlights; groupBy/pivot rendering; saved-report select
   (Primary Report + Global/Private groups); `ignored[]` and problem+json surfaced as
@@ -862,6 +886,14 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   alternatives share the saved-report API with stable opaque ids and `isReadOnly`
   summaries. File titles precede database titles, mutation is server-refused, Save As
   remains available, and the packaged report/admin clients suppress invalid controls.
+- **M13 — Column settings** ✅ *(2026-08-07)*: per-column presentation via the state
+  document's second map, `formats` (§5) — closed-vocabulary format masks, alignment,
+  bold/italic, text/background colors — plus a Column Settings dialog (feature token
+  `columnSettings`) whose Visible checkbox writes the `doc.columns` list itself.
+  Client-only by design: exports keep raw values (headers are captions, cells are
+  data); definitions ship default formatting through the effective primary state,
+  with no new config surface. Remaining per-column configuration candidates: LOVs,
+  links, help text, per-column sort/filter permissions.
 
 ## Appendix: decision log
 
@@ -920,3 +952,7 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 | Feature control is a flat whitelist on the definition | APEX-style per-action objects; per-column attribute model | One `features` array covers the lockdown need with one concept; absent = everything keeps existing configs working. The richer per-column attribute model (alignment, masks, LOVs, per-column permissions) layers on later without reshaping this. |
 | Whitelist is presentation-level except `download` and `savedReports` creation | validate posted state docs against the whitelist | Hiding a dialog is not a data boundary — the query endpoint already accepts any valid document, and context params (§12) are the security story. The two enforced tokens are the ones that egress (unpaged export) or persist (saved-report rows); enforcing at creation only keeps existing saved reports manageable after a config change. |
 | Locked chips: state from an absent feature displays read-only | hide the chips; let them stay editable | The chip strip is the doc made visible — hiding active filters would misrepresent the data shown, and editing them would reopen the very dialogs the whitelist removed. Leaving a locked view for the grid stays possible: it abandons the feature rather than using it. |
+| Column formatting is a second document map (`formats`), client-consumed only | apply masks server-side; format exported values | Labels proved the shape: presentation maps are never validated and never gate execution. Formats go one step further — the server consumes them nowhere, because a masked value in a CSV is a caption pretending to be data; spreadsheet arithmetic needs the raw number. |
+| Masks are closed per-type tokens (Intl-backed) | freeform mask strings (APEX FML/999G999D99) | Same rule as TO_STRING: a validated vocabulary renders identically everywhere and cannot smuggle anything; unknown tokens fall through to default rendering instead of erroring, because a display mask must never break a report. |
+| Column styling = the highlight property set (align/bold/italic/fg/bg) | CSS class hook; freeform style string | A class can't reach into the shadow root, so it would be dead config; a freeform style string in a globally published saved report is an injection surface (url() exfil, layout escapes). The constrained set already proved itself on highlights, which still win where both apply. |
+| The dialog's Visible checkbox writes `doc.columns` | a per-column `visible` flag in formats | One source of truth: the shuttle, the header Hide, and the checkbox all edit the same list, so they can never disagree; re-shown columns append to the end, matching how a user thinks about "bring it back". |

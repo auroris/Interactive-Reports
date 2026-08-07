@@ -16,6 +16,13 @@ public static class ReportFeatures
     /// <summary>The header-menu Rename… entry (client-side display labels).</summary>
     public const string Rename = "rename";
 
+    /// <summary>
+    /// The Column Settings… dialog (per-column mask, alignment, and styling — the
+    /// state document's formats map). Its visibility checkbox additionally needs
+    /// <see cref="Columns"/>, whose visible-columns list it writes.
+    /// </summary>
+    public const string ColumnSettings = "columnSettings";
+
     public const string Filter = "filter";
     public const string Sort = "sort";
     public const string ControlBreak = "controlBreak";
@@ -38,7 +45,7 @@ public static class ReportFeatures
 
     public static readonly IReadOnlyList<string> All =
     [
-        Search, Columns, Rename, Filter, Sort, ControlBreak, Highlight,
+        Search, Columns, Rename, ColumnSettings, Filter, Sort, ControlBreak, Highlight,
         Aggregate, Compute, GroupBy, Pivot, Chart, SavedReports, Download,
     ];
 

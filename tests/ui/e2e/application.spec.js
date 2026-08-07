@@ -221,6 +221,31 @@ test("a feature-whitelisted report pares the UI down and the server enforces the
     expect((await downloadPromise).suggestedFilename()).toBe("orders-kiosk.csv");
 });
 
+test("column settings restyle a column from the header menu", async ({ page }) => {
+    await openWorkbench(page);
+
+    await page.getByRole("columnheader", { name: "Amount", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Column Settings…", exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toContainText("Column Settings");
+
+    const selects = dialog.locator("select");
+    await expect(selects.nth(0)).toHaveValue("AMOUNT");
+    await selects.nth(1).selectOption("center");
+    await selects.nth(2).selectOption("integer");
+    await dialog.getByRole("checkbox", { name: "Bold" }).check();
+
+    await runAndWaitForQuery(page, () =>
+        dialog.getByRole("button", { name: "Apply", exact: true }).click());
+
+    const amountCell = page.getByRole("table").locator("tbody tr").first().locator("td").nth(4);
+    await expect(amountCell).toHaveText(/^[\d,]+$/);
+    await expect(amountCell).toHaveCSS("text-align", "center");
+    await expect(amountCell).toHaveCSS("font-weight", "600");
+    await expect(page.getByRole("columnheader", { name: "Amount", exact: true }))
+        .toHaveCSS("text-align", "center");
+});
+
 test.describe("non-administrator", () => {
     test.use({ extraHTTPHeaders: { "X-Workbench-User": "ordinary-user" } });
 

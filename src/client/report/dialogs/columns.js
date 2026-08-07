@@ -1,9 +1,12 @@
 // Column presentation dialogs: which columns display and in what order
-// (Select Columns shuttle), and what a column's heading says (Rename).
+// (Select Columns shuttle), what a column's heading says (Rename), and the
+// per-column settings dialog (visibility, alignment, format mask, styling).
 
-import { el, labeled } from "../../core/dom.js";
+import { el, labeled, sel } from "../../core/dom.js";
 import { openDialog } from "../../core/dialog.js";
-import { pickable, visibleColumnNames } from "../schema.js";
+import { featureEnabled, pickable, typeOf, visibleColumnNames } from "../schema.js";
+import { colOptions } from "./parts.js";
+import { formatValue, masksFor } from "../render/format.js";
 
 export function columnsDialog(w) {
     const universe = pickable(w);
@@ -52,6 +55,155 @@ export function columnsDialog(w) {
             const names = [...shown.options].map(o => o.value);
             if (!names.length) throw new Error("Display at least one column");
             return w.apply(d => { d.columns = names; });
+        },
+    });
+}
+
+/// Per-column settings: visibility, alignment, format mask, and constrained inline
+/// styling. Nothing here is a second source of truth — the Visible checkbox writes
+/// the same doc.columns list the shuttle owns (re-shown columns append to the end),
+/// and everything else lives in doc.formats, one compact entry per column. Edits
+/// stage per column, so several columns can be configured in one visit.
+export function columnSettingsDialog(w, initialCol) {
+    const universe = pickable(w);
+    const byName = new Map(universe.map(c => [c.name, c]));
+    const originallyVisible = visibleColumnNames(w).filter(n => byName.has(n));
+    const canHide = featureEnabled(w, "columns");
+    const staged = new Map();
+
+    const colSel = sel(colOptions(w), initialCol ?? originallyVisible[0] ?? universe[0]?.name);
+    const visChk = el("input", { type: "checkbox" });
+    const alignSel = sel([
+        { value: "", label: "Default" },
+        { value: "left", label: "Left" },
+        { value: "center", label: "Center" },
+        { value: "right", label: "Right" },
+    ]);
+    const maskSel = sel([{ value: "", label: "Default" }]);
+    const maskField = labeled("Format Mask", maskSel);
+    const boldChk = el("input", { type: "checkbox" });
+    const italicChk = el("input", { type: "checkbox" });
+    const fgOn = el("input", { type: "checkbox" });
+    const fgInp = el("input", { type: "color", class: "ir-color", value: "#9f1239" });
+    const bgOn = el("input", { type: "checkbox" });
+    const bgInp = el("input", { type: "color", class: "ir-color", value: "#fff3cd" });
+    const preview = el("div", { class: "ir-format-preview" });
+
+    const read = () => ({
+        visible: canHide ? visChk.checked : undefined,
+        mask: maskSel.value || null,
+        align: alignSel.value || null,
+        bold: boldChk.checked,
+        italic: italicChk.checked,
+        fg: fgOn.checked ? fgInp.value : null,
+        bg: bgOn.checked ? bgInp.value : null,
+    });
+
+    const settingsFor = name => {
+        if (staged.has(name)) return staged.get(name);
+        const fmt = w.doc.formats?.[name] ?? {};
+        return {
+            visible: originallyVisible.includes(name),
+            mask: fmt.mask ?? null,
+            align: fmt.align ?? null,
+            bold: !!fmt.bold,
+            italic: !!fmt.italic,
+            fg: fmt.fg ?? null,
+            bg: fmt.bg ?? null,
+        };
+    };
+
+    const sampleFor = (name, type) => {
+        const fromData = w.lastResult?.rows?.map(r => r[name]).find(v => v !== null && v !== undefined);
+        if (fromData !== undefined) return fromData;
+        return type === "number" ? 1234567.891
+            : type === "date" ? "2026-08-07T14:30:00"
+            : type === "bool" ? true
+            : "Sample text";
+    };
+
+    const updatePreview = () => {
+        const name = colSel.value;
+        const type = typeOf(w, name);
+        const s = read();
+        preview.textContent = formatValue(sampleFor(name, type), type, true, s.mask);
+        preview.style.textAlign = s.align ?? (type === "number" ? "right" : "");
+        preview.style.fontWeight = s.bold ? "600" : "";
+        preview.style.fontStyle = s.italic ? "italic" : "";
+        preview.style.color = s.fg ?? "";
+        preview.style.background = s.bg ?? "";
+    };
+
+    let active = colSel.value;
+    const load = name => {
+        const s = settingsFor(name);
+        visChk.checked = s.visible !== false;
+        alignSel.value = s.align ?? "";
+        const masks = masksFor(typeOf(w, name));
+        maskSel.replaceChildren(new Option("Default", ""), ...masks.map(m => new Option(m.label, m.value)));
+        maskSel.value = masks.some(m => m.value === s.mask) ? s.mask : "";
+        maskField.hidden = masks.length === 0;
+        boldChk.checked = s.bold;
+        italicChk.checked = s.italic;
+        fgOn.checked = !!s.fg;
+        if (s.fg) fgInp.value = s.fg;
+        bgOn.checked = !!s.bg;
+        if (s.bg) bgInp.value = s.bg;
+        updatePreview();
+    };
+    colSel.onchange = () => {
+        staged.set(active, read());
+        active = colSel.value;
+        load(active);
+    };
+    for (const control of [visChk, alignSel, maskSel, boldChk, italicChk, fgOn, fgInp, bgOn, bgInp])
+        control.addEventListener("input", updatePreview);
+    load(active);
+
+    openDialog({
+        owner: w,
+        title: "Column Settings",
+        width: "26rem",
+        build: body => body.append(
+            labeled("Column", colSel),
+            canHide ? el("label", { class: "ir-checkline" }, visChk, "Visible") : null,
+            labeled("Alignment", alignSel),
+            maskField,
+            el("div", { class: "ir-checklines" },
+                el("label", { class: "ir-checkline" }, boldChk, "Bold"),
+                el("label", { class: "ir-checkline" }, italicChk, "Italic")),
+            el("div", { class: "ir-colors" },
+                el("label", { class: "ir-color-pick" }, fgOn, "Text", fgInp),
+                el("label", { class: "ir-color-pick" }, bgOn, "Background", bgInp)),
+            labeled("Preview", preview)),
+        onApply: () => {
+            staged.set(active, read());
+
+            let columns = [...originallyVisible];
+            let visibilityChanged = false;
+            if (canHide) {
+                for (const [name, s] of staged) {
+                    const visible = columns.includes(name);
+                    if (s.visible && !visible) { columns.push(name); visibilityChanged = true; }
+                    else if (!s.visible && visible) { columns = columns.filter(n => n !== name); visibilityChanged = true; }
+                }
+                if (!columns.length) throw new Error("Display at least one column");
+            }
+
+            return w.apply(d => {
+                for (const [name, s] of staged) {
+                    const entry = {};
+                    if (s.mask) entry.mask = s.mask;
+                    if (s.align) entry.align = s.align;
+                    if (s.bold) entry.bold = true;
+                    if (s.italic) entry.italic = true;
+                    if (s.fg) entry.fg = s.fg;
+                    if (s.bg) entry.bg = s.bg;
+                    if (Object.keys(entry).length) (d.formats ??= {})[name] = entry;
+                    else if (d.formats) delete d.formats[name];
+                }
+                if (visibilityChanged) d.columns = columns;
+            });
         },
     });
 }

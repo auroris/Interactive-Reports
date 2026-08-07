@@ -432,6 +432,17 @@
 
 .ir-colors { display: flex; gap: 18px; margin-top: 6px; }
 .ir-color-pick { display: flex; align-items: center; gap: 7px; font-size: 12.5px; }
+.ir-checklines { display: flex; gap: 18px; margin-bottom: 12px; }
+.ir-checkline { display: flex; align-items: center; gap: 7px; font-size: 12.5px; margin-bottom: 8px; }
+.ir-checklines .ir-checkline { margin-bottom: 0; }
+.ir-format-preview {
+    border: 1px solid var(--ir-border-light);
+    border-radius: var(--ir-radius);
+    background: var(--ir-bg-soft);
+    padding: 6px 10px;
+    font-size: 13px;
+    min-height: 1.4em;
+}
 .ir-color { width: 36px; height: 24px; padding: 1px; border: 1px solid #c3cbd3; border-radius: var(--ir-radius); background: var(--ir-bg); }
 
 /* --- admin widget ---------------------------------------------------------------- */

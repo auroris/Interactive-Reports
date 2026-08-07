@@ -37,6 +37,36 @@ public sealed class ReportState
     public ViewSpec? View { get; set; }
 
     public PageRequest? Page { get; set; }
+
+    /// <summary>
+    /// Real column name → display formatting (mask, alignment, styling). Presentation
+    /// like <see cref="Labels"/>: never validated, never gating execution. Unlike
+    /// labels the server does not consume it anywhere — a mask is a lens on the value,
+    /// so exports keep raw values (headers are captions and get labels; cells are data).
+    /// </summary>
+    public Dictionary<string, ColumnFormat>? Formats { get; set; }
+}
+
+/// <summary>
+/// Per-column display settings, all optional. Mask tokens are a closed client-side
+/// vocabulary (per column type); style properties are the same constrained set the
+/// highlight rules use — deliberately not a CSS class (host classes cannot pierce
+/// the shadow root) and not freeform CSS (a style string in a globally published
+/// report is an injection surface).
+/// </summary>
+public sealed class ColumnFormat
+{
+    public string? Mask { get; set; }
+
+    /// <summary>"left", "center", or "right"; null = the column type's default.</summary>
+    public string? Align { get; set; }
+
+    public bool? Bold { get; set; }
+    public bool? Italic { get; set; }
+
+    /// <summary>Text / background colors, as in <see cref="HighlightStyle"/>.</summary>
+    public string? Fg { get; set; }
+    public string? Bg { get; set; }
 }
 
 /// <summary>

@@ -26,11 +26,15 @@ public static class ReportStateResolver
             Highlights = Copy(requested.Highlights ?? defaults?.Highlights),
             View = requested.View ?? defaults?.View,
             Page = requested.Page ?? defaults?.Page,
+            Formats = Copy(requested.Formats ?? defaults?.Formats),
         };
     }
 
     private static List<T>? Copy<T>(List<T>? values) => values is null ? null : [.. values];
 
     private static Dictionary<string, string>? Copy(Dictionary<string, string>? values)
+        => values is null ? null : new(values);
+
+    private static Dictionary<string, ColumnFormat>? Copy(Dictionary<string, ColumnFormat>? values)
         => values is null ? null : new(values);
 }

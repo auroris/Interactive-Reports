@@ -54,6 +54,22 @@ public sealed class SchemaDefaultStateTests
     }
 
     [Fact]
+    public void Configured_formats_ride_the_default_state_to_the_client()
+    {
+        var def = Definition();
+        def.DefaultState = new ReportState
+        {
+            Formats = new() { ["ORDER_ID"] = new ColumnFormat { Align = "center", Mask = "integer" } },
+        };
+
+        var state = EndpointExtensions.SchemaDefaultState(def);
+
+        Assert.Equal("center", state.Formats!["ORDER_ID"].Align);
+        Assert.Equal("integer", state.Formats["ORDER_ID"].Mask);
+        Assert.NotSame(def.DefaultState.Formats, state.Formats);
+    }
+
+    [Fact]
     public void Response_shaping_never_mutates_the_definition()
     {
         var def = Definition();

@@ -53,6 +53,29 @@ public sealed class ReportStateResolverTests
     }
 
     [Fact]
+    public void Formats_inherit_override_and_clear_like_labels()
+    {
+        var defaults = new ReportState
+        {
+            Formats = new() { ["AMOUNT"] = new ColumnFormat { Mask = "decimal2", Align = "right" } },
+        };
+
+        var inherited = ReportStateResolver.Resolve(defaults, new ReportState());
+        Assert.Equal("decimal2", inherited.Formats!["AMOUNT"].Mask);
+        Assert.NotSame(defaults.Formats, inherited.Formats);
+
+        var overridden = ReportStateResolver.Resolve(defaults, new ReportState
+        {
+            Formats = new() { ["AMOUNT"] = new ColumnFormat { Bold = true } },
+        });
+        Assert.Null(overridden.Formats!["AMOUNT"].Mask);
+        Assert.True(overridden.Formats["AMOUNT"].Bold);
+
+        var cleared = ReportStateResolver.Resolve(defaults, new ReportState { Formats = new() });
+        Assert.Empty(cleared.Formats!);
+    }
+
+    [Fact]
     public void Explicit_grid_view_overrides_an_alternate_default()
     {
         var defaults = new ReportState { View = new ViewSpec { Mode = "pivot" } };

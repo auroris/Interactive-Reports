@@ -6,7 +6,7 @@
 
 import { popupMenu } from "../core/menu.js";
 import { anyMutableFeature, featureEnabled, visibleColumnNames } from "./schema.js";
-import { columnsDialog, renameDialog } from "./dialogs/columns.js";
+import { columnSettingsDialog, columnsDialog, renameDialog } from "./dialogs/columns.js";
 import { filterDialog, computeDialog, highlightDialog } from "./dialogs/rules.js";
 import { sortDialog, breakDialog, aggregateDialog } from "./dialogs/grid.js";
 import { groupByDialog, pivotDialog, chartDialog } from "./dialogs/view.js";
@@ -16,7 +16,7 @@ import { exportCsv } from "./export.js";
 
 /// Features whose entries live in the grid header menu; if none of them are
 /// whitelisted the header offers nothing and should not open (nor look clickable).
-const HEADER_FEATURES = ["sort", "rename", "columns", "controlBreak", "filter"];
+const HEADER_FEATURES = ["sort", "rename", "columnSettings", "columns", "controlBreak", "filter"];
 
 export function headerMenuAvailable(w, mode) {
     if (mode !== "grid") return featureEnabled(w, "sort");
@@ -34,6 +34,7 @@ export function actionsMenuItems(w) {
     const items = joinSections([
         [
             ...feature("columns", { label: "Columns…", onPick: () => columnsDialog(w) }),
+            ...feature("columnSettings", { label: "Column Settings…", onPick: () => columnSettingsDialog(w) }),
             ...feature("filter", { label: "Filter…", onPick: () => filterDialog(w, {}) }),
             ...feature("sort", { label: "Sort…", onPick: () => sortDialog(w) }),
         ],
@@ -85,6 +86,7 @@ export function openHeaderMenu(w, col, anchor) {
         sortItems,
         [
             ...feature("rename", { label: "Rename…", onPick: () => renameDialog(w, col) }),
+            ...feature("columnSettings", { label: "Column Settings…", onPick: () => columnSettingsDialog(w, col) }),
             ...feature("columns", {
                 label: "Hide Column",
                 disabled: visible.length <= 1,
