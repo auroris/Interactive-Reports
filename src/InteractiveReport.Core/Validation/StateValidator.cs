@@ -121,6 +121,15 @@ public static class StateValidator
                 columns.Add(b);
         }
 
+        var formats = ResolveFormats(resolved.Formats);
+
+        // A renderer may read a different row column than the displayed slot. Keep
+        // those dependencies out of Columns/result metadata, but bind every identifier
+        // through the discovered schema before it reaches query composition.
+        var projectionColumns = view.Mode == ViewMode.Grid
+            ? ResolveRendererColumns(formats, columns, effectiveSchema, ignored)
+            : columns.ToList();
+
         var search = string.IsNullOrWhiteSpace(resolved.Search) ? null : resolved.Search.Trim();
         if (search is not null && !columns.Any(c => c.Kind == ColumnKind.Text))
         {
@@ -140,6 +149,8 @@ public static class StateValidator
             Search = search,
             Sorts = sorts,
             SelectColumns = columns,
+            ProjectionColumns = projectionColumns,
+            Formats = formats,
             Aggregates = aggregates,
             Breaks = breaks,
             View = view,
@@ -187,6 +198,69 @@ public static class StateValidator
                 result.Add(col);
         }
         return result;
+    }
+
+    private static readonly IReadOnlyDictionary<string, ColumnFormat> NoFormats =
+        new Dictionary<string, ColumnFormat>();
+
+    private static IReadOnlyDictionary<string, ColumnFormat> ResolveFormats(
+        Dictionary<string, ColumnFormat>? formats)
+    {
+        if (formats is not { Count: > 0 }) return NoFormats;
+
+        var result = new Dictionary<string, ColumnFormat>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (name, format) in formats)
+        {
+            if (!string.IsNullOrWhiteSpace(name) && format is not null)
+                result[name] = format;
+        }
+        return result;
+    }
+
+    private static List<ColumnModel> ResolveRendererColumns(
+        IReadOnlyDictionary<string, ColumnFormat> formats,
+        IReadOnlyList<ColumnModel> displayed,
+        ReportSchema schema,
+        List<IgnoredItem> ignored)
+    {
+        var result = displayed.ToList();
+        if (formats.Count == 0) return result;
+        var seen = new HashSet<string>(result.Select(c => c.Name), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var column in displayed)
+        {
+            if (!formats.TryGetValue(column.Name, out var format)) continue;
+
+            var renderer = format.DisplayAs?.Trim();
+            if (!string.Equals(renderer, "link", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(renderer, "image", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            Add(format.UrlColumn, "URL", column);
+            if (string.Equals(renderer, "link", StringComparison.OrdinalIgnoreCase))
+                Add(format.TextColumn, "text", column);
+        }
+
+        return result;
+
+        void Add(string? requested, string role, ColumnModel fallback)
+        {
+            if (string.IsNullOrWhiteSpace(requested))
+            {
+                if (seen.Add(fallback.Name)) result.Add(fallback);
+                return;
+            }
+
+            if (!schema.TryGetValue(requested, out var source))
+            {
+                ignored.Add(new IgnoredItem(
+                    "format",
+                    $"renderer for '{fallback.Name}' references unknown {role} column '{requested}'"));
+                return;
+            }
+
+            if (seen.Add(source.Name)) result.Add(source);
+        }
     }
 
     private static (int Index, int Size) ClampPage(PageRequest? page, ReportDefinition def)

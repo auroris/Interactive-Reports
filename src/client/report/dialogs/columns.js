@@ -6,7 +6,8 @@ import { el, labeled, sel } from "../../core/dom.js";
 import { openDialog } from "../../core/dialog.js";
 import { featureEnabled, pickable, typeOf, visibleColumnNames } from "../schema.js";
 import { colOptions } from "./parts.js";
-import { formatValue, masksFor } from "../render/format.js";
+import { masksFor } from "../render/format.js";
+import { renderColumnValue } from "../render/column-renderers.js";
 import { columnClasses } from "../classes.js";
 
 export function columnsDialog(w) {
@@ -74,6 +75,15 @@ export function columnSettingsDialog(w, initialCol) {
 
     const colSel = sel(colOptions(w), initialCol ?? originallyVisible[0] ?? universe[0]?.name);
     const visChk = el("input", { type: "checkbox" });
+    const displayAsSel = sel([
+        { value: "", label: "Text (Default)" },
+        { value: "link", label: "Link" },
+        { value: "image", label: "Image" },
+    ]);
+    const urlColumnSel = sel(colOptions(w));
+    const textColumnSel = sel(colOptions(w));
+    const urlColumnField = labeled("URL Column", urlColumnSel);
+    const textColumnField = labeled("Link Text Column", textColumnSel);
     const alignSel = sel([
         { value: "", label: "Default" },
         { value: "left", label: "Left" },
@@ -94,8 +104,20 @@ export function columnSettingsDialog(w, initialCol) {
     });
     const preview = el("div", { class: "ir-format-preview" });
 
+    for (const [control, label] of [
+        [colSel, "Column"],
+        [displayAsSel, "Display As"],
+        [urlColumnSel, "URL Column"],
+        [textColumnSel, "Link Text Column"],
+        [alignSel, "Alignment"],
+        [maskSel, "Format Mask"],
+    ]) control.setAttribute("aria-label", label);
+
     const read = () => ({
         visible: canHide ? visChk.checked : undefined,
+        displayAs: displayAsSel.value || null,
+        urlColumn: urlColumnSel.value || colSel.value,
+        textColumn: textColumnSel.value || colSel.value,
         mask: maskSel.value || null,
         align: alignSel.value || null,
         bold: boldChk.checked,
@@ -108,8 +130,12 @@ export function columnSettingsDialog(w, initialCol) {
     const settingsFor = name => {
         if (staged.has(name)) return staged.get(name);
         const fmt = w.doc.formats?.[name] ?? {};
+        const displayAs = typeof fmt.displayAs === "string" ? fmt.displayAs.toLowerCase() : "";
         return {
             visible: originallyVisible.includes(name),
+            displayAs: ["link", "image"].includes(displayAs) ? displayAs : null,
+            urlColumn: byName.has(fmt.urlColumn) ? fmt.urlColumn : name,
+            textColumn: byName.has(fmt.textColumn) ? fmt.textColumn : name,
             mask: fmt.mask ?? null,
             align: fmt.align ?? null,
             bold: !!fmt.bold,
@@ -133,7 +159,14 @@ export function columnSettingsDialog(w, initialCol) {
         const name = colSel.value;
         const type = typeOf(w, name);
         const s = read();
-        preview.textContent = formatValue(sampleFor(name, type), type, true, s.mask);
+        const sampleRow = { ...(w.lastResult?.rows?.[0] ?? {}) };
+        if (sampleRow[s.urlColumn] === null || sampleRow[s.urlColumn] === undefined)
+            sampleRow[s.urlColumn] = "https://example.com/example";
+        if (sampleRow[s.textColumn] === null || sampleRow[s.textColumn] === undefined)
+            sampleRow[s.textColumn] = sampleFor(s.textColumn, typeOf(w, s.textColumn));
+        if (sampleRow[name] === null || sampleRow[name] === undefined)
+            sampleRow[name] = sampleFor(name, type);
+        preview.replaceChildren(renderColumnValue(w, sampleRow, { name, type }, true, s));
         preview.style.textAlign = s.align ?? (type === "number" ? "right" : "");
         preview.style.fontWeight = s.bold ? "600" : "";
         preview.style.fontStyle = s.italic ? "italic" : "";
@@ -141,17 +174,24 @@ export function columnSettingsDialog(w, initialCol) {
         preview.style.background = s.bg ?? "";
         preview.className = "ir-format-preview";
         preview.classList.add(...columnClasses(s.classes));
+        urlColumnField.hidden = !s.displayAs;
+        textColumnField.hidden = s.displayAs !== "link";
+        maskField.hidden = masksFor(type).length === 0
+            || s.displayAs === "image"
+            || (s.displayAs === "link" && s.textColumn !== name);
     };
 
     let active = colSel.value;
     const load = name => {
         const s = settingsFor(name);
         visChk.checked = s.visible !== false;
+        displayAsSel.value = s.displayAs ?? "";
+        urlColumnSel.value = s.urlColumn;
+        textColumnSel.value = s.textColumn;
         alignSel.value = s.align ?? "";
         const masks = masksFor(typeOf(w, name));
         maskSel.replaceChildren(new Option("Default", ""), ...masks.map(m => new Option(m.label, m.value)));
         maskSel.value = masks.some(m => m.value === s.mask) ? s.mask : "";
-        maskField.hidden = masks.length === 0;
         boldChk.checked = s.bold;
         italicChk.checked = s.italic;
         fgOn.checked = !!s.fg;
@@ -166,7 +206,8 @@ export function columnSettingsDialog(w, initialCol) {
         active = colSel.value;
         load(active);
     };
-    for (const control of [visChk, alignSel, maskSel, boldChk, italicChk, fgOn, fgInp, bgOn, bgInp, classesInp])
+    for (const control of [visChk, displayAsSel, urlColumnSel, textColumnSel, alignSel, maskSel,
+        boldChk, italicChk, fgOn, fgInp, bgOn, bgInp, classesInp])
         control.addEventListener("input", updatePreview);
     load(active);
 
@@ -177,6 +218,9 @@ export function columnSettingsDialog(w, initialCol) {
         build: body => body.append(
             labeled("Column", colSel),
             canHide ? el("label", { class: "ir-checkline" }, visChk, "Visible") : null,
+            labeled("Display As", displayAsSel),
+            urlColumnField,
+            textColumnField,
             labeled("Alignment", alignSel),
             maskField,
             el("div", { class: "ir-checklines" },
@@ -212,6 +256,11 @@ export function columnSettingsDialog(w, initialCol) {
                     if (s.italic) entry.italic = true;
                     if (s.fg) entry.fg = s.fg;
                     if (s.bg) entry.bg = s.bg;
+                    if (s.displayAs) {
+                        entry.displayAs = s.displayAs;
+                        entry.urlColumn = s.urlColumn || name;
+                        if (s.displayAs === "link") entry.textColumn = s.textColumn || name;
+                    }
                     const classes = columnClasses(s.classes, { strict: true });
                     if (classes.length) entry.classes = classes;
                     if (Object.keys(entry).length) (d.formats ??= {})[name] = entry;

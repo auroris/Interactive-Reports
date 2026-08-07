@@ -1,6 +1,7 @@
 using System.Data.Common;
 using System.Diagnostics;
 using InteractiveReport.Core.Composition;
+using InteractiveReport.Core.Export;
 using InteractiveReport.Core.Model;
 using InteractiveReport.Core.Schema;
 using InteractiveReport.Core.Validation;
@@ -85,8 +86,9 @@ public sealed class ReportExecutor
     /// <summary>
     /// Uses the same validated state without paging, capped at MaxRows. An export is
     /// the server rendering what the user sees, so the ingested document's display
-    /// labels apply here (headers, sum(…) labels, pivot cells) — the posted document
-    /// is the source of truth, since the client's state may never have been saved.
+    /// labels and grid renderers apply here (headers, sum(…) labels, pivot cells,
+    /// link/image HTML) — the posted document is the source of truth, since the
+    /// client's state may never have been saved.
     /// </summary>
     public async Task<ExportResult> Export(
         ReportDefinition definition,
@@ -140,7 +142,7 @@ public sealed class ReportExecutor
         var gridResult = await reader.ReadRows(grid, definition.MaxRows, ct);
         return new ExportResult(
             ReportResultColumns.From(validated.SelectColumns),
-            gridResult.Rows,
+            GridExportRenderer.Render(validated, gridResult.Rows),
             gridResult.Truncated);
     }
 
@@ -168,7 +170,7 @@ public sealed class ReportExecutor
         var highlights = state.Rules.Decorations.Count > 0
             ? HighlightEvaluator.Evaluate(state.Rules.Decorations, executionRows)
             : [];
-        var rows = ReportRowProjector.VisibleColumns(executionRows, state.SelectColumns);
+        var rows = ReportRowProjector.Columns(executionRows, state.ProjectionColumns);
 
         stopwatch.Stop();
         return new ReportResult

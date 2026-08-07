@@ -28,7 +28,7 @@ public static class QueryComposer
         var breakTotals = state.Breaks.Count > 0 ? BuildBreakTotals(core, state, def.Dialect) : null;
 
         var page = core.Clone()
-            .Select(state.SelectColumns.Select(c => c.Name).ToArray());
+            .Select(state.ProjectionColumns.Select(c => c.Name).ToArray());
 
         // Highlights are predicates over the same filtered row source. Project
         // their truth values as private markers so every expression function and
@@ -165,11 +165,11 @@ public static class QueryComposer
         return q.Limit(maxPoints + 1);
     }
 
-    /// <summary>Grid rows for export: selected columns, effective sorts, no paging, capped for truncation detection.</summary>
+    /// <summary>Grid rows for export: display columns plus renderer sources, effective sorts, no paging, capped.</summary>
     public static Query ComposeGridExport(ReportDefinition def, ValidatedState state, int maxRows)
     {
         var core = BuildFilteredCore(def, state);
-        var q = core.Clone().Select(state.SelectColumns.Select(c => c.Name).ToArray());
+        var q = core.Clone().Select(state.ProjectionColumns.Select(c => c.Name).ToArray());
         foreach (var sort in EffectiveSorts(state))
         {
             if (sort.Dir == SortDir.Asc) q.OrderBy(sort.Column.Name);

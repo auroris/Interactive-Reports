@@ -8,7 +8,7 @@ namespace InteractiveReport.Core.Execution;
 /// </summary>
 internal static class ReportRowProjector
 {
-    public static List<IReadOnlyDictionary<string, object?>> VisibleColumns(
+    public static List<IReadOnlyDictionary<string, object?>> Columns(
         IReadOnlyList<IReadOnlyDictionary<string, object?>> rows,
         IReadOnlyList<ColumnModel> columns)
     {

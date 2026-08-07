@@ -14,6 +14,14 @@ public sealed class ValidatedState
     public string? Search { get; init; }
     public required IReadOnlyList<ValidSort> Sorts { get; init; }
     public required IReadOnlyList<ColumnModel> SelectColumns { get; init; }
+
+    /// <summary>
+    /// Grid row projection: displayed columns plus hidden source columns required by
+    /// link/image renderers. Response and export column metadata use SelectColumns;
+    /// export rendering may consume the additional row values.
+    /// </summary>
+    public required IReadOnlyList<ColumnModel> ProjectionColumns { get; init; }
+    public required IReadOnlyDictionary<string, ColumnFormat> Formats { get; init; }
     public required IReadOnlyList<ValidAggregate> Aggregates { get; init; }
     /// <summary>Control-break columns; always members of SelectColumns so renderers can group.</summary>
     public required IReadOnlyList<ColumnModel> Breaks { get; init; }
@@ -60,6 +68,8 @@ public sealed class ValidatedState
             Search = Search,
             Sorts = Sorts,
             SelectColumns = SelectColumns.Select(Relabel).ToList(),
+            ProjectionColumns = ProjectionColumns.Select(Relabel).ToList(),
+            Formats = Formats,
             Aggregates = Aggregates.Select(a => a with { Column = Relabel(a.Column) }).ToList(),
             Breaks = Breaks.Select(Relabel).ToList(),
             View = View with

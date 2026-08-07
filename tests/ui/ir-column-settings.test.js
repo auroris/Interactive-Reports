@@ -34,8 +34,17 @@ const json = value => new Response(JSON.stringify(value), {
 const ALL_COLUMNS = [
     { name: "ID", label: "ID", type: "number" },
     { name: "NAME", label: "Name", type: "text" },
+    { name: "URL", label: "URL", type: "text" },
+    { name: "IMAGE_URL", label: "Image URL", type: "text" },
+    { name: "c1", label: "Computed URL", type: "text", computed: true },
 ];
-const ROW = { ID: 1234.5, NAME: "x" };
+const ROW = {
+    ID: 1234.5,
+    NAME: "Example",
+    URL: "/customers/42",
+    IMAGE_URL: "https://images.example/42.png",
+    c1: "/computed/42",
+};
 
 globalThis.fetch = async (url, options = {}) => {
     requests.push({ url: String(url), method: options.method ?? "GET", body: options.body });
@@ -43,7 +52,11 @@ globalThis.fetch = async (url, options = {}) => {
     if (String(url).endsWith("/schema")) {
         return json({
             stateVersion: 2,
-            defaultState: { page: { index: 1, size: 25 }, view: { mode: "grid" } },
+            defaultState: {
+                columns: ["ID", "NAME"],
+                page: { index: 1, size: 25 },
+                view: { mode: "grid" },
+            },
             limits: { defaultPageSize: 25, maxPageSize: 100 },
             columns: ALL_COLUMNS,
             capabilities: { aggregateFunctions: {}, expressionFunctions: [] },
@@ -57,10 +70,19 @@ globalThis.fetch = async (url, options = {}) => {
         const doc = options.body ? JSON.parse(options.body) : {};
         const visible = doc.columns?.length
             ? ALL_COLUMNS.filter(c => doc.columns.includes(c.name))
-            : ALL_COLUMNS;
+            : ALL_COLUMNS.filter(c => ["ID", "NAME"].includes(c.name));
+        const projected = [...visible];
+        for (const [name, format] of Object.entries(doc.formats ?? {})) {
+            if (!visible.some(c => c.name === name) || !["link", "image"].includes(format.displayAs)) continue;
+            for (const source of [format.urlColumn, format.displayAs === "link" ? format.textColumn : null]) {
+                const column = ALL_COLUMNS.find(c => c.name === source);
+                if (column && !projected.includes(column)) projected.push(column);
+            }
+        }
         return json({
+            availableColumns: ALL_COLUMNS,
             columns: visible,
-            rows: [Object.fromEntries(visible.map(c => [c.name, ROW[c.name]]))],
+            rows: [Object.fromEntries(projected.map(c => [c.name, ROW[c.name]]))],
             page: { index: 1, size: 25 },
             totalRows: 1,
             aggregates: {},
@@ -91,6 +113,10 @@ const clickMenuItem = (report, label) => [...report.shadowRoot.querySelectorAll(
     .find(item => item.textContent.includes(label))
     .click();
 
+const fieldControl = (dialog, label) => [...dialog.querySelectorAll(".ir-field")]
+    .find(field => field.querySelector(":scope > .ir-field-label")?.textContent === label)
+    ?.querySelector("input, select");
+
 const applyDialog = async report => {
     report.shadowRoot.querySelector(".ir-dialog .ir-btn-primary").click();
     await settle(() => !report.shadowRoot.querySelector(".ir-dialog"));
@@ -107,7 +133,9 @@ test("column settings write doc.formats and the grid renders mask, alignment, an
     const dialog = report.shadowRoot.querySelector(".ir-dialog");
     assert.equal(!!dialog, true);
 
-    const [colSel, alignSel, maskSel] = dialog.querySelectorAll("select");
+    const colSel = fieldControl(dialog, "Column");
+    const alignSel = fieldControl(dialog, "Alignment");
+    const maskSel = fieldControl(dialog, "Format Mask");
     assert.equal(colSel.value, "ID", "the invoking column is preselected");
     alignSel.value = "center";
     maskSel.value = "integer";
@@ -139,6 +167,107 @@ test("column settings write doc.formats and the grid renders mask, alignment, an
     assert.equal(th.style.textAlign, "center");
     assert.equal(th.classList.contains("amount-column"), true);
     assert.equal(td.classList.contains("emphasized"), true);
+
+    report.remove();
+});
+
+test("column settings configure a link renderer with hidden URL and visible text columns", async () => {
+    requests.length = 0;
+    const report = await mount("links");
+
+    report.shadowRoot.querySelector("th.ir-th-menu").click();
+    clickMenuItem(report, "Column Settings");
+    const dialog = report.shadowRoot.querySelector(".ir-dialog");
+    const column = fieldControl(dialog, "Column");
+    column.value = "NAME";
+    column.dispatchEvent(new window.Event("change", { bubbles: true }));
+
+    const displayAs = fieldControl(dialog, "Display As");
+    displayAs.value = "link";
+    displayAs.dispatchEvent(new window.Event("input", { bubbles: true }));
+    fieldControl(dialog, "URL Column").value = "URL";
+    fieldControl(dialog, "Link Text Column").value = "NAME";
+
+    const doc = await applyDialog(report);
+    assert.deepEqual(doc.formats, {
+        NAME: { displayAs: "link", urlColumn: "URL", textColumn: "NAME" },
+    });
+
+    const headers = report.shadowRoot.querySelectorAll("th");
+    const link = report.shadowRoot.querySelectorAll("tbody tr td")[1].querySelector("a.ir-cell-link");
+    assert.equal(headers.length, 2, "the URL source remains hidden");
+    assert.equal(link.textContent, "Example");
+    assert.equal(link.getAttribute("href"), "/customers/42");
+
+    report.remove();
+});
+
+test("column settings configure an image renderer", async () => {
+    requests.length = 0;
+    const report = await mount("images");
+
+    report.shadowRoot.querySelector("th.ir-th-menu").click();
+    clickMenuItem(report, "Column Settings");
+    const dialog = report.shadowRoot.querySelector(".ir-dialog");
+    const column = fieldControl(dialog, "Column");
+    column.value = "NAME";
+    column.dispatchEvent(new window.Event("change", { bubbles: true }));
+    const displayAs = fieldControl(dialog, "Display As");
+    displayAs.value = "image";
+    displayAs.dispatchEvent(new window.Event("input", { bubbles: true }));
+    fieldControl(dialog, "URL Column").value = "IMAGE_URL";
+
+    const doc = await applyDialog(report);
+    assert.deepEqual(doc.formats, {
+        NAME: { displayAs: "image", urlColumn: "IMAGE_URL" },
+    });
+
+    const image = report.shadowRoot.querySelectorAll("tbody tr td")[1].querySelector("img.ir-cell-image");
+    assert.equal(image.getAttribute("src"), "https://images.example/42.png");
+    assert.equal(image.getAttribute("alt"), "");
+    assert.equal(report.shadowRoot.querySelectorAll("th").length, 2, "the image URL source remains hidden");
+
+    report.remove();
+});
+
+test("a hidden computed column offers display settings and can source another column renderer", async () => {
+    requests.length = 0;
+    const report = await mount("computed-renderer");
+
+    report.shadowRoot.querySelector(".ir-actionsbtn").click();
+    clickMenuItem(report, "Column Settings");
+    const dialog = report.shadowRoot.querySelector(".ir-dialog");
+    const column = fieldControl(dialog, "Column");
+    const displayAs = fieldControl(dialog, "Display As");
+
+    column.value = "c1";
+    column.dispatchEvent(new window.Event("change", { bubbles: true }));
+    assert.equal(dialog.querySelector('.ir-checkline input[type="checkbox"]').checked, false,
+        "the computed column starts hidden");
+    assert.equal([...column.options].find(option => option.value === "c1").text.startsWith("ƒ "), true,
+        "the dialog identifies the computed column");
+    displayAs.value = "image";
+    displayAs.dispatchEvent(new window.Event("input", { bubbles: true }));
+    fieldControl(dialog, "URL Column").value = "c1";
+
+    column.value = "NAME";
+    column.dispatchEvent(new window.Event("change", { bubbles: true }));
+    displayAs.value = "link";
+    displayAs.dispatchEvent(new window.Event("input", { bubbles: true }));
+    fieldControl(dialog, "URL Column").value = "c1";
+    fieldControl(dialog, "Link Text Column").value = "NAME";
+
+    const doc = await applyDialog(report);
+    assert.deepEqual(doc.columns, ["ID", "NAME"], "the computed source remains hidden");
+    assert.deepEqual(doc.formats, {
+        c1: { displayAs: "image", urlColumn: "c1" },
+        NAME: { displayAs: "link", urlColumn: "c1", textColumn: "NAME" },
+    });
+
+    const link = report.shadowRoot.querySelectorAll("tbody tr td")[1].querySelector("a.ir-cell-link");
+    assert.equal(link.textContent, "Example");
+    assert.equal(link.getAttribute("href"), "/computed/42");
+    assert.equal(report.shadowRoot.querySelectorAll("th").length, 2);
 
     report.remove();
 });

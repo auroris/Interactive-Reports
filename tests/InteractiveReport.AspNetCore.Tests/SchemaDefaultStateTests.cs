@@ -66,6 +66,9 @@ public sealed class SchemaDefaultStateTests
                     Align = "center",
                     Mask = "integer",
                     Classes = ["identifier-column"],
+                    DisplayAs = "link",
+                    UrlColumn = "ORDER_ID",
+                    TextColumn = "ORDER_ID",
                 },
             },
         };
@@ -75,6 +78,9 @@ public sealed class SchemaDefaultStateTests
         Assert.Equal("center", state.Formats!["ORDER_ID"].Align);
         Assert.Equal("integer", state.Formats["ORDER_ID"].Mask);
         Assert.Equal(["identifier-column"], state.Formats["ORDER_ID"].Classes);
+        Assert.Equal("link", state.Formats["ORDER_ID"].DisplayAs);
+        Assert.Equal("ORDER_ID", state.Formats["ORDER_ID"].UrlColumn);
+        Assert.Equal("ORDER_ID", state.Formats["ORDER_ID"].TextColumn);
         Assert.NotSame(def.DefaultState.Formats, state.Formats);
         Assert.NotSame(def.DefaultState.Formats["ORDER_ID"], state.Formats["ORDER_ID"]);
     }

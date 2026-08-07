@@ -152,6 +152,43 @@ public class StateValidatorTests
     }
 
     [Fact]
+    public void Renderer_sources_are_schema_bound_projection_columns_not_display_columns()
+    {
+        var result = Validate(new ReportState
+        {
+            Columns = ["CUSTOMER"],
+            Formats = new()
+            {
+                ["CUSTOMER"] = new ColumnFormat
+                {
+                    DisplayAs = "link",
+                    UrlColumn = "NOTES",
+                    TextColumn = "STATUS",
+                },
+            },
+        });
+
+        Assert.Equal(["CUSTOMER"], result.SelectColumns.Select(c => c.Name));
+        Assert.Equal(["CUSTOMER", "NOTES", "STATUS"], result.ProjectionColumns.Select(c => c.Name));
+    }
+
+    [Fact]
+    public void Unknown_renderer_sources_are_ignored_before_query_composition()
+    {
+        var result = Validate(new ReportState
+        {
+            Columns = ["CUSTOMER"],
+            Formats = new()
+            {
+                ["CUSTOMER"] = new ColumnFormat { DisplayAs = "image", UrlColumn = "GHOST" },
+            },
+        });
+
+        Assert.Equal(["CUSTOMER"], result.ProjectionColumns.Select(c => c.Name));
+        Assert.Contains(result.Ignored, i => i.Kind == "format" && i.Detail.Contains("GHOST"));
+    }
+
+    [Fact]
     public void Labels_resolve_at_ingestion_but_never_touch_query_surfaces()
     {
         // Unknown keys included on purpose: the map is display state, not a program —

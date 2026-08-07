@@ -4,7 +4,8 @@
 
 import { el } from "../../core/dom.js";
 import { labelOf } from "../schema.js";
-import { formatValue, formatAgg, FN_LABELS, FN_ORDER } from "./format.js";
+import { formatAgg, FN_LABELS, FN_ORDER } from "./format.js";
+import { renderColumnValue } from "./column-renderers.js";
 import { headerMenuAvailable, openHeaderMenu } from "../menus.js";
 import { columnClasses } from "../classes.js";
 
@@ -140,7 +141,7 @@ export function renderGrid(w, table) {
                 col.type === "number" ? "ir-num" : "",
                 col.type === "date" ? "ir-date" : "");
             tr.append(el("td", { class: cls, style: formatStyle(fmt) },
-                formatValue(row[col.name], col.type, decimalCols.has(col.name), fmt?.mask)));
+                renderColumnValue(w, row, col, decimalCols.has(col.name), fmt)));
         }
         const rowHits = (hitsByRow.get(r) ?? []).filter(hit => !hit.col);
         const cellHits = (hitsByRow.get(r) ?? []).filter(hit => !!hit.col);

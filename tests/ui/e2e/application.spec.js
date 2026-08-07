@@ -42,6 +42,8 @@ test("loads the configured primary report, queries data, searches, pages, and ch
     const report = page.locator("interactive-report");
     await expect(report.locator('link[data-ir-custom-styles]')).toHaveAttribute("href", "/report-overrides.css");
     await expect(page.getByRole("columnheader", { name: "Amount", exact: true })).toHaveClass(/amount-column/);
+    await expect(page.getByRole("table").locator("tbody a.ir-cell-link").first())
+        .toHaveAttribute("href", /^\/orders\/\d+$/);
     await expect(page.getByText("1 – 50 of 500 rows", { exact: true })).toBeVisible();
 
     await search(page, "Acme Corp");
@@ -81,6 +83,7 @@ test("exports the current report state as CSV", async ({ page }) => {
     expect(lines[0]).toContain("Order #,Customer Name,Region,Status,Amount,Ordered On,Notes,With Tax");
     expect(lines.length).toBeGreaterThan(1);
     expect(lines.slice(1).every(line => line.includes("Acme Corp"))).toBe(true);
+    expect(lines.slice(1).every(line => line.includes('<a class=""ir-cell-link"" href=""/orders/'))).toBe(true);
 });
 
 test("configures an aggregate chart and returns to the data grid", async ({ page }) => {
@@ -232,10 +235,9 @@ test("column settings restyle a column from the header menu", async ({ page }) =
     const dialog = page.getByRole("dialog");
     await expect(dialog).toContainText("Column Settings");
 
-    const selects = dialog.locator("select");
-    await expect(selects.nth(0)).toHaveValue("AMOUNT");
-    await selects.nth(1).selectOption("center");
-    await selects.nth(2).selectOption("integer");
+    await expect(dialog.getByLabel("Column", { exact: true })).toHaveValue("AMOUNT");
+    await dialog.getByLabel("Alignment", { exact: true }).selectOption("center");
+    await dialog.getByLabel("Format Mask", { exact: true }).selectOption("integer");
     await dialog.getByRole("checkbox", { name: "Bold" }).check();
 
     await runAndWaitForQuery(page, () =>

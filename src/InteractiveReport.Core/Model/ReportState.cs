@@ -39,10 +39,10 @@ public sealed class ReportState
     public PageRequest? Page { get; set; }
 
     /// <summary>
-    /// Real column name → display formatting (mask, alignment, styling). Presentation
-    /// like <see cref="Labels"/>: never validated, never gating execution. Unlike
-    /// labels the server does not consume it anywhere — a mask is a lens on the value,
-    /// so exports keep raw values (headers are captions and get labels; cells are data).
+    /// Real column name → display formatting (mask, alignment, styling, renderer).
+    /// Renderer source-column names are schema-checked and projected for grid display;
+    /// the remaining settings are presentation-only. Grid exports keep ordinary values
+    /// raw and serialize link/image cells as the corresponding encoded HTML fragment.
     /// </summary>
     public Dictionary<string, ColumnFormat>? Formats { get; set; }
 }
@@ -72,6 +72,21 @@ public sealed class ColumnFormat
     /// conservative identifier subset and refuses the component's reserved ir- prefix.
     /// </summary>
     public List<string>? Classes { get; set; }
+
+    /// <summary>"link" or "image"; null/unknown values render as ordinary text.</summary>
+    public string? DisplayAs { get; set; }
+
+    /// <summary>
+    /// Row column supplying the URL for link/image renderers. Null selects the
+    /// formatted column itself.
+    /// </summary>
+    public string? UrlColumn { get; set; }
+
+    /// <summary>
+    /// Row column supplying link text. Null selects the formatted column itself.
+    /// Ignored by image and ordinary-text renderers.
+    /// </summary>
+    public string? TextColumn { get; set; }
 }
 
 /// <summary>

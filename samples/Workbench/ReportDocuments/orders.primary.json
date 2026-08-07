@@ -3,6 +3,9 @@
   "primary": true,
   "state": {
     "v": 2,
+    "columns": [
+      "ORDER_ID", "CUSTOMER", "REGION", "STATUS", "AMOUNT", "ORDER_DATE", "NOTES", "c1"
+    ],
     "sorts": [
       { "col": "ORDER_DATE", "dir": "desc" }
     ],
@@ -10,6 +13,11 @@
       { "id": "c1", "label": "With Tax", "expr": "ROUND(AMOUNT * 1.0825, 2)" }
     ],
     "formats": {
+      "ORDER_ID": {
+        "displayAs": "link",
+        "urlColumn": "ORDER_URL",
+        "textColumn": "ORDER_ID"
+      },
       "AMOUNT": { "classes": [ "amount-column" ] },
       "c1": { "classes": [ "amount-column" ] }
     }

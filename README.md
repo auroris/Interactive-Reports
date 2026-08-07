@@ -33,7 +33,7 @@ the host's content root unless absolute:
 "orders": {
   "connection": "MainDb",
   "dialect": "SqlServer",
-  "sql": "SELECT ORDER_ID, CUSTOMER, AMOUNT FROM ORDERS",
+  "sql": "SELECT ORDER_ID, CUSTOMER, CUSTOMER_URL, THUMBNAIL_URL, AMOUNT FROM ORDERS",
   "styleSheet": "/css/orders-report.css",
   "documentFiles": [
     "ReportDocuments/orders.primary.json",
@@ -51,9 +51,18 @@ normal versioned state document:
   "primary": true,
   "state": {
     "v": 2,
-    "columns": [ "ORDER_ID", "CUSTOMER", "AMOUNT" ],
+    "columns": [ "ORDER_ID", "CUSTOMER", "THUMBNAIL_URL", "AMOUNT" ],
     "sorts": [ { "col": "AMOUNT", "dir": "desc" } ],
     "formats": {
+      "CUSTOMER": {
+        "displayAs": "link",
+        "urlColumn": "CUSTOMER_URL",
+        "textColumn": "CUSTOMER"
+      },
+      "THUMBNAIL_URL": {
+        "displayAs": "image",
+        "urlColumn": "THUMBNAIL_URL"
+      },
       "AMOUNT": { "classes": [ "amount-column", "emphasized" ] }
     }
   }
@@ -83,6 +92,17 @@ cells. Tokens begin with a letter or `_`, then use letters, digits, `_`, or `-`;
 component's `ir-` prefix is reserved. Report documents can therefore select
 developer-defined rules but cannot supply CSS or choose a stylesheet URL. The host's
 Content Security Policy still governs stylesheet loading.
+
+Column Settings also offers `Text (Default)`, `Link`, and `Image` display modes.
+A link selects a URL column and a text column; an image selects a URL column. Source
+columns do not have to be visible: the server schema-checks them and includes them only
+in row data required by the grid and CSV renderers. Hidden sources remain absent from
+displayed and exported column metadata. In CSV, a Display As cell contains the encoded
+HTML fragment shown in the browser: `<a class="ir-cell-link">` or
+`<img class="ir-cell-image">`; ordinary cells remain raw values. Relative and HTTP(S)
+URLs are accepted for both renderers;
+links additionally accept `mailto:` and `tel:`. Active or embedded-content schemes
+such as `javascript:` and `data:` render as ordinary text instead.
 
 ## Embedding the report
 

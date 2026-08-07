@@ -49,5 +49,8 @@ public static class ReportStateResolver
                     Fg = entry.Value.Fg,
                     Bg = entry.Value.Bg,
                     Classes = Copy(entry.Value.Classes),
+                    DisplayAs = entry.Value.DisplayAs,
+                    UrlColumn = entry.Value.UrlColumn,
+                    TextColumn = entry.Value.TextColumn,
                 });
 }

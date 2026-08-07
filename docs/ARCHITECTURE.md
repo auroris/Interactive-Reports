@@ -190,9 +190,13 @@ the version 1 column/operator/value filter shape with shared boolean expressions
     { "enabled": false, "expr": "AMOUNT > 1000" }
   ],
   "sorts":  [ { "col": "ORDER_DATE", "dir": "desc" } ],
-  "columns": ["ORDER_ID", "CUSTOMER", "AMOUNT", "ORDER_DATE", "c1"],
+  "columns": ["ORDER_ID", "CUSTOMER", "THUMBNAIL_URL", "AMOUNT", "ORDER_DATE", "c1"],
   "labels": { "ORDER_ID": "Ticket #" },
   "formats": {
+    "CUSTOMER": {
+      "displayAs": "link", "urlColumn": "CUSTOMER_URL", "textColumn": "CUSTOMER"
+    },
+    "THUMBNAIL_URL": { "displayAs": "image", "urlColumn": "THUMBNAIL_URL" },
     "AMOUNT": {
       "mask": "integer", "align": "center", "bold": true,
       "classes": [ "amount-column", "emphasized" ]
@@ -237,9 +241,10 @@ provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
   report the schema endpoint delivers. A computed column still names itself on its
   own rule. Like every state property, a present map replaces the default wholesale
   and `{}` explicitly clears it.
-- `formats` (real column name → `{ mask, align, bold, italic, fg, bg, classes[] }`) is the
+- `formats` (real column name → `{ mask, align, bold, italic, fg, bg, classes[],
+  displayAs, urlColumn, textColumn }`) is the
   second presentation map, written by the Column Settings dialog and following every
-  labels rule: never validated, never gating execution, wholesale-replace with `{}`
+  labels inheritance rule: wholesale-replace with `{}`
   as the explicit clear, resolvable from the effective primary state so definitions
   can ship default formatting. Masks are a closed client-side token vocabulary per
   column type (`integer`/`decimal2`/`decimal4`/`plain` for numbers; `date`/`datetime`/
@@ -249,10 +254,17 @@ provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
   definition's trusted shadow-root `styleSheet`; the client accepts conservative CSS
   identifier tokens, drops malformed/reserved state, and refuses the component's
   `ir-` namespace in the dialog. A report document can select classes but cannot carry
-  CSS or a URL. Unlike labels the server consumes
-  `formats` nowhere: exports keep raw values, because headers are captions but cells
-  are data — a masked number in a CSV would break the spreadsheet arithmetic the
-  export exists for. Highlight styles win over column styles where both apply.
+  CSS or a URL. `displayAs` chooses ordinary text, link, or image rendering. Links
+  identify URL and text source columns; images identify a URL source. The server
+  consumes only those source names: it schema-binds them and adds valid dependencies
+  to the grid row projection without adding them to displayed column metadata. Unknown
+  dependencies become `ignored[]`. The client constructs DOM nodes directly and
+  permits relative/HTTP(S) URLs, plus `mailto:`/`tel:` for links; active-content and
+  embedded-content schemes fall back to text. Grid CSV exports serialize Display As
+  cells to the same encoded `<a class="ir-cell-link">` / `<img class="ir-cell-image">`
+  fragments the browser constructs; ordinary cells stay raw, and hidden renderer
+  sources never become exported columns. Highlight styles win over column styles where
+  both apply.
 - A partial request resolves over the effective primary state once: a configured
   primary file, then inline `defaultState`, then the synthetic empty state. A missing
   property inherits, while an explicit empty string/list clears the default. `{ "mode": "grid" }`
@@ -774,6 +786,7 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   (edits stage per column, so several columns can be configured in one visit): a
   Visible checkbox that writes the same `doc.columns` list the shuttle owns
   (re-shown columns append to the end — no second source of truth), alignment,
+  a display-mode selector (text/link/image) with explicit renderer source columns,
   a per-type format-mask select, bold/italic, text/background colors, validated custom
   CSS classes, and a live
   preview fed by the column's own data; everything but visibility lands in the
@@ -907,15 +920,20 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   document's second map, `formats` (§5) — closed-vocabulary format masks, alignment,
   bold/italic, text/background colors — plus a Column Settings dialog (feature token
   `columnSettings`) whose Visible checkbox writes the `doc.columns` list itself.
-  Client-only by design: exports keep raw values (headers are captions, cells are
-  data); definitions ship default formatting through the effective primary state,
+  Masks and styling remain client-only; definitions ship default formatting through the effective primary state,
   with no new config surface. Remaining per-column configuration candidates: LOVs,
-  links, help text, per-column sort/filter permissions.
+  help text, per-column sort/filter permissions.
 - **M14 — Trusted custom CSS** ✅ *(2026-08-07)*: a definition-owned `styleSheet`
   URL is delivered through schema and linked inside the report's shadow root. Column
   Settings writes validated class tokens to `formats.classes`; the grid applies them
   to headers, cells, and aggregates while filtering malformed and reserved `ir-*`
   state. Reports select application-authored rules but cannot inject CSS or URLs.
+- **M15 — Column renderers** ✅ *(2026-08-07)*: the grid owns a per-column renderer
+  seam with text, link, and image implementations. Column Settings selects the display
+  mode and its URL/text source columns. Hidden dependencies are schema-bound server-side
+  and projected only as renderer inputs. Grid CSV exports use the same encoded HTML
+  fragments as browser cells while leaving ordinary values raw. DOM construction,
+  HTML encoding, and a URL protocol allowlist keep report data out of active-content surfaces.
 
 ## Appendix: decision log
 
@@ -974,7 +992,8 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 | Feature control is a flat whitelist on the definition | APEX-style per-action objects; per-column attribute model | One `features` array covers the lockdown need with one concept; absent = everything keeps existing configs working. The richer per-column attribute model (alignment, masks, LOVs, per-column permissions) layers on later without reshaping this. |
 | Whitelist is presentation-level except `download` and `savedReports` creation | validate posted state docs against the whitelist | Hiding a dialog is not a data boundary — the query endpoint already accepts any valid document, and context params (§12) are the security story. The two enforced tokens are the ones that egress (unpaged export) or persist (saved-report rows); enforcing at creation only keeps existing saved reports manageable after a config change. |
 | Locked chips: state from an absent feature displays read-only | hide the chips; let them stay editable | The chip strip is the doc made visible — hiding active filters would misrepresent the data shown, and editing them would reopen the very dialogs the whitelist removed. Leaving a locked view for the grid stays possible: it abandons the feature rather than using it. |
-| Column formatting is a second document map (`formats`), client-consumed only | apply masks server-side; format exported values | Labels proved the shape: presentation maps are never validated and never gate execution. Formats go one step further — the server consumes them nowhere, because a masked value in a CSV is a caption pretending to be data; spreadsheet arithmetic needs the raw number. |
+| Column formatting is a second document map (`formats`); only renderer source names reach server projection | apply every mask/style server-side | Masks and styles remain client presentation, while link/image dependencies must be schema-bound before entering SQL. Grid CSV exports intentionally serialize those two display modes as browser-like encoded HTML; hidden inputs never become columns. |
 | Masks are closed per-type tokens (Intl-backed) | freeform mask strings (APEX FML/999G999D99) | Same rule as TO_STRING: a validated vocabulary renders identically everywhere and cannot smuggle anything; unknown tokens fall through to default rendering instead of erroring, because a display mask must never break a report. |
 | Column classes select a definition-owned shadow-root stylesheet | freeform style/CSS in report state; page-level classes | The URL and CSS stay application-controlled; saved reports carry only conservative class tokens and cannot select reserved `ir-*` behavior. Page CSS cannot cross the shadow boundary, while freeform report CSS would be an injection surface. |
 | The dialog's Visible checkbox writes `doc.columns` | a per-column `visible` flag in formats | One source of truth: the shuttle, the header Hide, and the checkbox all edit the same list, so they can never disagree; re-shown columns append to the end, matching how a user thinks about "bring it back". |
+| Link/image renderers use explicit source columns | arbitrary HTML or URL/text templates | Column names can be schema-bound and safely projected. Direct DOM construction preserves escaping, and a protocol allowlist blocks active-content URLs without inventing a template language. |

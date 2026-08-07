@@ -64,6 +64,9 @@ public sealed class ReportStateResolverTests
                     Mask = "decimal2",
                     Align = "right",
                     Classes = ["amount-column"],
+                    DisplayAs = "link",
+                    UrlColumn = "NOTES",
+                    TextColumn = "CUSTOMER",
                 },
             },
         };
@@ -74,6 +77,9 @@ public sealed class ReportStateResolverTests
         Assert.NotSame(defaults.Formats["AMOUNT"], inherited.Formats["AMOUNT"]);
         Assert.NotSame(defaults.Formats["AMOUNT"].Classes, inherited.Formats["AMOUNT"].Classes);
         Assert.Equal(["amount-column"], inherited.Formats["AMOUNT"].Classes);
+        Assert.Equal("link", inherited.Formats["AMOUNT"].DisplayAs);
+        Assert.Equal("NOTES", inherited.Formats["AMOUNT"].UrlColumn);
+        Assert.Equal("CUSTOMER", inherited.Formats["AMOUNT"].TextColumn);
 
         var overridden = ReportStateResolver.Resolve(defaults, new ReportState
         {

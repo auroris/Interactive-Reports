@@ -64,6 +64,124 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     }
 
     [Fact]
+    public async Task Grid_rows_include_hidden_renderer_sources_but_metadata_and_exports_do_not()
+    {
+        var state = new ReportState
+        {
+            Columns = ["CUSTOMER"],
+            Formats = new()
+            {
+                ["CUSTOMER"] = new ColumnFormat
+                {
+                    DisplayAs = "link",
+                    UrlColumn = "NOTES",
+                    TextColumn = "CUSTOMER",
+                },
+            },
+        };
+
+        var result = await _executor.Query(Definition, state, NoParams);
+        Assert.Equal(["CUSTOMER"], result.Columns.Select(c => c.Name));
+        Assert.All(result.Rows, row => Assert.Equal(["CUSTOMER", "NOTES"], row.Keys));
+
+        var export = await _executor.Export(Definition, state, NoParams);
+        Assert.Equal(["CUSTOMER"], export.Columns.Select(c => c.Name));
+        Assert.All(export.Rows, row => Assert.Equal(["CUSTOMER"], row.Keys));
+    }
+
+    [Fact]
+    public async Task Hidden_computed_column_can_use_hidden_base_data_and_feed_a_link_renderer()
+    {
+        var state = new ReportState
+        {
+            Computed =
+            [
+                new ComputedColumn
+                {
+                    Id = "c1",
+                    Label = "Order URL",
+                    Expr = "'/orders/' || ORDER_ID",
+                },
+            ],
+            Columns = ["CUSTOMER"],
+            Sorts = [new SortRule { Col = "ORDER_ID" }],
+            Formats = new()
+            {
+                ["CUSTOMER"] = new ColumnFormat
+                {
+                    DisplayAs = "link",
+                    UrlColumn = "c1",
+                    TextColumn = "CUSTOMER",
+                },
+            },
+            Page = new PageRequest { Index = 1, Size = 1 },
+        };
+
+        var result = await _executor.Query(Definition, state, NoParams);
+
+        Assert.Equal(["CUSTOMER"], result.Columns.Select(c => c.Name));
+        Assert.True(result.AvailableColumns.Single(c => c.Name == "c1").Computed);
+        var row = Assert.Single(result.Rows);
+        Assert.Equal(["CUSTOMER", "c1"], row.Keys);
+        Assert.Equal("/orders/1", row["c1"]);
+        Assert.DoesNotContain("ORDER_ID", row.Keys);
+
+        var export = await _executor.Export(Definition, state, NoParams);
+        Assert.Equal(["CUSTOMER"], export.Columns.Select(c => c.Name));
+        Assert.Equal("<a class=\"ir-cell-link\" href=\"/orders/1\">Acme Corp</a>", export.Rows[0]["CUSTOMER"]);
+        Assert.All(export.Rows, exported => Assert.DoesNotContain("c1", exported.Keys));
+    }
+
+    [Fact]
+    public async Task Grid_export_renderers_emit_browser_like_encoded_html()
+    {
+        var state = new ReportState
+        {
+            Computed =
+            [
+                new ComputedColumn { Id = "c1", Expr = "'/orders/' || ORDER_ID || '?a=1&b=2'" },
+                new ComputedColumn { Id = "c2", Expr = "'/images/' || ORDER_ID || '.png?a=1&b=2'" },
+                new ComputedColumn { Id = "c3", Expr = "'<Order & Customer>'" },
+                new ComputedColumn { Id = "c4", Expr = "'javascript:alert(1)'" },
+            ],
+            Columns = ["CUSTOMER", "NOTES", "STATUS"],
+            Filters = [Filter("ORDER_ID = 1")],
+            Formats = new()
+            {
+                ["CUSTOMER"] = new ColumnFormat
+                {
+                    DisplayAs = "link",
+                    UrlColumn = "c1",
+                    TextColumn = "c3",
+                },
+                ["NOTES"] = new ColumnFormat
+                {
+                    DisplayAs = "image",
+                    UrlColumn = "c2",
+                },
+                ["STATUS"] = new ColumnFormat
+                {
+                    DisplayAs = "link",
+                    UrlColumn = "c4",
+                    TextColumn = "c3",
+                },
+            },
+        };
+
+        var export = await _executor.Export(Definition, state, NoParams);
+        var row = Assert.Single(export.Rows);
+
+        Assert.Equal(
+            "<a class=\"ir-cell-link\" href=\"/orders/1?a=1&amp;b=2\">&lt;Order &amp; Customer&gt;</a>",
+            row["CUSTOMER"]);
+        Assert.Equal(
+            "<img class=\"ir-cell-image\" src=\"/images/1.png?a=1&amp;b=2\" alt=\"\" loading=\"lazy\" decoding=\"async\">",
+            row["NOTES"]);
+        Assert.Equal("&lt;Order &amp; Customer&gt;", row["STATUS"]);
+        Assert.Equal(["CUSTOMER", "NOTES", "STATUS"], row.Keys);
+    }
+
+    [Fact]
     public async Task Export_applies_the_documents_labels_because_it_renders_what_the_user_sees()
     {
         var def = Definition;

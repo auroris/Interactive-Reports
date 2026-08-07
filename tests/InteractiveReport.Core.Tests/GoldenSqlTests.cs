@@ -94,6 +94,28 @@ public class GoldenSqlTests
     }
 
     [Fact]
+    public void Grid_query_projects_hidden_renderer_sources_without_display_metadata()
+    {
+        var state = new ReportState
+        {
+            Columns = ["CUSTOMER"],
+            Formats = new()
+            {
+                ["CUSTOMER"] = new ColumnFormat
+                {
+                    DisplayAs = "link",
+                    UrlColumn = "NOTES",
+                    TextColumn = "STATUS",
+                },
+            },
+        };
+
+        var (page, _) = Compile(ReportDialect.Sqlite, state);
+
+        Assert.StartsWith("SELECT \"CUSTOMER\", \"NOTES\", \"STATUS\"", page.Sql);
+    }
+
+    [Fact]
     public void Contains_is_case_insensitive_with_lowered_binding()
     {
         var (page, _) = Compile(ReportDialect.Sqlite, new ReportState
