@@ -216,6 +216,16 @@ the version 1 column/operator/value filter shape with shared boolean expressions
       "style": { "bg": "#fff3cd" } }
   ],
   "view": { "mode": "grid" },
+  "views": {
+    "pivot": {
+      "mode": "pivot", "rows": ["CUSTOMER"], "cols": ["STATUS"],
+      "values": [{ "col": "AMOUNT", "fn": "sum" }]
+    },
+    "chart": {
+      "mode": "chart", "type": "pie", "label": "CUSTOMER",
+      "value": "AMOUNT", "fn": "sum"
+    }
+  },
   "page": { "index": 1, "size": 50 }
 }
 ```
@@ -279,6 +289,11 @@ provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
   primary file, then inline `defaultState`, then the synthetic empty state. A missing
   property inherits, while an explicit empty string/list clears the default. `{ "mode": "grid" }`
   explicitly overrides an alternate default view.
+- `view` is the selected execution mode and, when persisted, the view a saved report
+  opens with. `views` retains the configured `groupBy`, `pivot`, and `chart` specs by
+  mode. Switching replaces `view` from that registry without discarding the other
+  configurations. Only the selected spec is validated and executed; inactive specs
+  and Grid-only settings remain inert until their view is selected.
 - `GET /{name}/schema` always returns a complete `defaultState`, and it is the one
   place friendly names leave the server: a definition's `columnLabels` become the
   default report's `labels` unless the effective primary state carries its own. When
@@ -315,8 +330,9 @@ total rows come from a second source query grouped only by the column dimensions
 `chart` (below). Caps:
 `maxPivotColumns` per definition (default 60), a hard 10,000-group pivot source
 ceiling, and `maxChartPoints` per definition (default 1,000, ceiling 10,000) — all
-surface as precise 400s. Grid-only features (breaks, highlights, grid aggregates,
-non-dim sorts) are noted in `ignored[]` in alternate views, never fatal.
+surface as precise 400s. Grid-only features (columns, breaks, highlights, grid
+aggregates, and unrelated sorts) remain configured but are silent and inert in
+alternate views.
 
 **Chart view** (APEX-style: one chart per report, single metric):
 
@@ -342,8 +358,8 @@ non-dim sorts) are noted in `ignored[]` in alternate views, never fatal.
   data is rejected after query execution with a precise validation error.
 - The chart query runs over the **complete filtered rowset** (computed columns,
   filters, search — never the visible page). Sorting lives inside the spec
-  (`sort.by: label|value`, value sorts tie-break on the label); grid `sorts` are
-  reported in `ignored[]` while chart view is active. `orientation` and the axis
+  (`sort.by: label|value`, value sorts tie-break on the label); Grid sorts remain
+  configured but inactive while Chart is selected. `orientation` and the axis
   titles are presentation carried in state; pie ignores them.
 - The response keeps the generic two-column shape: the label column as itself plus
   the metric (`v0` labeled like `sum(Amount)`, `__count` for bare counts, or the raw
@@ -735,6 +751,10 @@ zero-config to a local SQLite file `App_Data/interactivereport.saved.db`. Each o
 uses one validated configuration snapshot, and auto-creation is tracked per
 connection/dialect/table target so live configuration changes cannot mix query and storage
 targets or inherit stale initialization state.
+Database-backed titles are case-insensitively unique within a report at the endpoint
+boundary. Save As detects a visible editable title, confirms replacement, and issues a
+PUT to its stable id; the server rejects duplicate creates and colliding renames with
+409 even when a different client bypasses that UI.
 
 **Configured documents.** A report definition's `documentFiles` are loaded from the
 host content root, assigned stable opaque `cfg_…` endpoint ids, and exposed through the

@@ -78,5 +78,36 @@ public sealed class IrJsonTests
         Assert.Null(roundTrip.Sorts[1].Nulls);
     }
 
+    [Fact]
+    public void Configured_views_round_trip_independently_from_the_selected_default_view()
+    {
+        var state = new ReportState
+        {
+            View = new ViewSpec
+            {
+                Mode = "pivot", Rows = ["CUSTOMER"], Cols = ["STATUS"],
+            },
+            Views = new()
+            {
+                ["pivot"] = new ViewSpec
+                {
+                    Mode = "pivot", Rows = ["CUSTOMER"], Cols = ["STATUS"],
+                },
+                ["chart"] = new ViewSpec
+                {
+                    Mode = "chart", Type = "pie", Label = "STATUS", Fn = AggregateFn.Count,
+                },
+            },
+        };
+
+        var json = JsonSerializer.Serialize(state, IrJson.Options);
+        var roundTrip = JsonSerializer.Deserialize<ReportState>(json, IrJson.Options)!;
+
+        Assert.Equal("pivot", roundTrip.View!.Mode);
+        Assert.Equal(["CUSTOMER"], roundTrip.Views!["pivot"].Rows);
+        Assert.Equal("pie", roundTrip.Views["chart"].Type);
+        Assert.Equal(AggregateFn.Count, roundTrip.Views["chart"].Fn);
+    }
+
     private sealed record WireNumbers(long Signed, ulong Unsigned, decimal Precise);
 }

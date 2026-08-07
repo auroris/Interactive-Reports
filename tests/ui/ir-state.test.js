@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+    activateReportView,
+    configuredReportView,
     expressionReferencesColumn,
     normalizeReportState,
     removeComputedColumnReferences,
@@ -28,6 +30,32 @@ test("normalization mirrors server default resolution while preserving explicit 
     assert.equal(state.search, "");
     assert.deepEqual(state.filters, []);
     assert.deepEqual(state.sorts, [{ col: "AMOUNT", dir: "desc" }]);
+});
+
+test("configured views survive switching, serialization, and legacy-state normalization", () => {
+    const pivot = {
+        mode: "pivot",
+        rows: ["CUSTOMER"],
+        cols: ["STATUS"],
+        values: [{ col: "AMOUNT", fn: "sum" }],
+    };
+    const state = normalizeReportState({ view: pivot }, 25);
+
+    assert.deepEqual(state.views.pivot, pivot, "a legacy active view enters the registry");
+    activateReportView(state, {
+        mode: "chart", type: "pie", label: "STATUS", fn: "count",
+    });
+    assert.equal(state.view.mode, "chart");
+    assert.deepEqual(configuredReportView(state, "pivot"), pivot);
+
+    activateReportView(state, { mode: "grid" });
+    const saved = serializeReportState(state, 2);
+    assert.deepEqual(saved.view, { mode: "grid" });
+    assert.deepEqual(Object.keys(saved.views).sort(), ["chart", "pivot"]);
+
+    const reloaded = normalizeReportState(saved, 25);
+    assert.equal(configuredReportView(reloaded, "chart").type, "pie");
+    assert.deepEqual(configuredReportView(reloaded, "pivot"), pivot);
 });
 
 test("serialization preserves explicit clears and removes working fields", () => {
@@ -93,6 +121,22 @@ test("computed-column deletion removes every dependent instruction", () => {
             values: [{ col: "c1", fn: "sum" }, { col: "AMOUNT", fn: "sum" }],
             totals: true,
         },
+        views: {
+            pivot: {
+                mode: "pivot",
+                rows: ["CUSTOMER"],
+                cols: ["STATUS"],
+                values: [{ col: "c1", fn: "sum" }],
+            },
+            groupBy: {
+                mode: "groupBy",
+                groupBy: ["REGION"],
+                values: [{ col: "c1", fn: "sum" }],
+            },
+            chart: {
+                mode: "chart", type: "bar", label: "CUSTOMER", value: "c1", fn: "sum",
+            },
+        },
     };
 
     removeComputedColumnReferences(state, "C1");
@@ -115,6 +159,14 @@ test("computed-column deletion removes every dependent instruction", () => {
         cols: ["STATUS"],
         values: [{ col: "AMOUNT", fn: "sum" }],
         totals: true,
+    });
+    assert.deepEqual(state.views, {
+        pivot: {
+            mode: "pivot", rows: ["CUSTOMER"], cols: ["STATUS"], values: [],
+        },
+        groupBy: {
+            mode: "groupBy", groupBy: ["REGION"], values: [],
+        },
     });
 });
 

@@ -34,7 +34,19 @@ public sealed class ReportState
     public List<string>? Breaks { get; set; }
     public List<AggregateRule>? Aggregates { get; set; }
     public List<HighlightRule>? Highlights { get; set; }
+
+    /// <summary>
+    /// The selected view. In a persisted report this is also the view selected when
+    /// the report first opens.
+    /// </summary>
     public ViewSpec? View { get; set; }
+
+    /// <summary>
+    /// Configured alternate views keyed by mode (groupBy, pivot, chart). Only View is
+    /// validated and executed; these inactive definitions are retained so the user can
+    /// switch views without rebuilding them.
+    /// </summary>
+    public Dictionary<string, ViewSpec>? Views { get; set; }
 
     public PageRequest? Page { get; set; }
 

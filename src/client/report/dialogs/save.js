@@ -1,8 +1,8 @@
 // The Save / Save As dialog for saved reports.
 
 import { el, labeled } from "../../core/dom.js";
-import { openDialog } from "../../core/dialog.js";
-import { canManageCurrentSaved, saveReport } from "../saved.js";
+import { confirmDialog, openDialog } from "../../core/dialog.js";
+import { canManageCurrentSaved, canManageSaved, saveReport } from "../saved.js";
 
 export function saveDialog(w, { asNew }) {
     const updating = !asNew && canManageCurrentSaved(w);
@@ -26,9 +26,33 @@ export function saveDialog(w, { asNew }) {
             if (w.whoami?.isAdministrator)
                 body.append(el("label", { class: "ir-checkline" }, globalChk, "Global — visible to everyone with access to this report"));
         },
-        onApply: () => {
+        onApply: async () => {
             const title = titleInp.value.trim();
             if (!title) throw new Error("Enter a name");
+            if (!updating) {
+                const matches = (w.savedList ?? []).filter(saved =>
+                    saved.title?.localeCompare(title, undefined, { sensitivity: "accent" }) === 0);
+                if (matches.length > 1)
+                    throw new Error(`Several saved reports are named "${title}". Delete the duplicate before replacing one.`);
+                if (matches.length === 1) {
+                    const target = matches[0];
+                    if (!canManageSaved(w, target))
+                        throw new Error(`"${title}" already exists and cannot be replaced. Choose another name.`);
+                    const replace = await confirmDialog(
+                        w,
+                        "Replace Saved Report",
+                        `Replace "${target.title}"? Its saved settings will be overwritten.`,
+                        "Replace");
+                    if (!replace) return false;
+                    await saveReport(w, {
+                        title: target.title,
+                        isGlobal: target.isGlobal,
+                        asNew: false,
+                        target,
+                    });
+                    return;
+                }
+            }
             return saveReport(w, {
                 title,
                 isGlobal: w.whoami?.isAdministrator ? globalChk.checked : false,

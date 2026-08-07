@@ -98,6 +98,8 @@ internal static class SavedReportEndpoints
             return AdminRequired("publishing a global report requires an administrator");
         if (ConfiguredTitleExists(Documents(ctx).List(def), request.Title!))
             return ConfiguredTitleConflict(request.Title!);
+        if (await SavedTitleExists(ctx, def.Name, request.Title!, exceptId: null, ct))
+            return SavedTitleConflict(request.Title!);
 
         var report = new SavedReport
         {
@@ -184,6 +186,9 @@ internal static class SavedReportEndpoints
             if (TitleError(request.Title) is { } titleError) return titleError;
             if (ConfiguredTitleExists(Documents(ctx).List(report.ReportName), request.Title))
                 return ConfiguredTitleConflict(request.Title);
+            if (!string.Equals(report.Title, request.Title.Trim(), StringComparison.OrdinalIgnoreCase)
+                && await SavedTitleExists(ctx, report.ReportName, request.Title, report.Id, ct))
+                return SavedTitleConflict(request.Title);
             report.Title = request.Title.Trim();
         }
         if (request.State is not null)
@@ -342,6 +347,8 @@ internal static class SavedReportEndpoints
             return BadRequest("Malformed report document", "state is required");
         if (ConfiguredTitleExists(Documents(ctx).List(definition), document.Title!))
             return ConfiguredTitleConflict(document.Title!);
+        if (await SavedTitleExists(ctx, definition.Name, document.Title!, exceptId: null, ct))
+            return SavedTitleConflict(document.Title!);
 
         try
         {
@@ -439,10 +446,27 @@ internal static class SavedReportEndpoints
         => documents.Any(document => !document.Primary
             && string.Equals(document.Title, title.Trim(), StringComparison.OrdinalIgnoreCase));
 
+    private static async Task<bool> SavedTitleExists(
+        HttpContext ctx,
+        string reportName,
+        string title,
+        string? exceptId,
+        CancellationToken ct)
+        => (await SavedStore(ctx).ListAll(ct)).Any(report =>
+            !string.Equals(report.Id, exceptId, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(report.ReportName, reportName, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(report.Title, title.Trim(), StringComparison.OrdinalIgnoreCase));
+
     private static IResult ConfiguredTitleConflict(string title)
         => Results.Problem(
             title: "Configured report title",
             detail: $"'{title.Trim()}' is supplied by a read-only configured report document; choose another title.",
+            statusCode: StatusCodes.Status409Conflict);
+
+    private static IResult SavedTitleConflict(string title)
+        => Results.Problem(
+            title: "Saved report title",
+            detail: $"A saved report named '{title.Trim()}' already exists. Replace it if it is available to you, or choose another title.",
             statusCode: StatusCodes.Status409Conflict);
 
     private static async Task<IResult> ReadOnlyConfiguredResult(

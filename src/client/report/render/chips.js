@@ -35,14 +35,6 @@ function chipRemove(w, kind, index) {
         const column = w.doc.computed?.[index]?.id;
         if (!column) return;
         w.apply(d => removeComputedColumnReferences(d, column))
-            .then(() => {
-                for (const [mode, view] of Object.entries(w.viewMemory ?? {})) {
-                    const holder = { view: structuredClone(view) };
-                    removeComputedColumnReferences(holder, column);
-                    if (holder.view?.mode === mode) w.viewMemory[mode] = holder.view;
-                    else delete w.viewMemory[mode];
-                }
-            })
             .catch(err => w.showError(err));
         return;
     }

@@ -1,9 +1,10 @@
 // View-mode dialogs: Group By, Pivot, and Chart. Each applies a full view spec
-// to the doc and records it in the widget's viewMemory so the toolbar can
-// switch back to the mode without re-asking.
+// to the doc and records it in the persisted view registry so the toolbar can
+// switch back to the mode without re-asking, including after a saved-report reload.
 
 import { el, labeled, sel } from "../../core/dom.js";
 import { openDialog } from "../../core/dialog.js";
+import { activateReportView, configuredReportView } from "../state.js";
 import { pickable, typeOf, chartFnsFor } from "../schema.js";
 import { rowList, colOptions, fnSelectFor, DIR_OPTIONS } from "./parts.js";
 import { FN_LABELS } from "../render/format.js";
@@ -40,7 +41,7 @@ function valueList(w, initial) {
 }
 
 export function groupByDialog(w) {
-    const active = w.doc.view?.mode === "groupBy" ? w.doc.view : w.viewMemory.groupBy;
+    const active = configuredReportView(w.doc, "groupBy");
     const dims = dimList(w, active?.groupBy, { addLabel: "Group Column", max: 3 });
     const values = valueList(w, active?.values);
 
@@ -58,13 +59,13 @@ export function groupByDialog(w) {
             const groupBy = [...new Set(dims.list.read())];
             if (!groupBy.length) throw new Error("Pick at least one group column");
             const spec = { mode: "groupBy", groupBy, values: values.list.read() };
-            return w.apply(d => { d.view = spec; }).then(() => { w.viewMemory.groupBy = spec; });
+            return w.apply(d => activateReportView(d, spec));
         },
     });
 }
 
 export function pivotDialog(w) {
-    const active = w.doc.view?.mode === "pivot" ? w.doc.view : w.viewMemory.pivot;
+    const active = configuredReportView(w.doc, "pivot");
     const rows = dimList(w, active?.rows, { addLabel: "Row Column", max: 2 });
     const cols = dimList(w, active?.cols, { addLabel: "Column", max: 2 });
     const values = valueList(w, active?.values);
@@ -89,7 +90,7 @@ export function pivotDialog(w) {
             if (!rowDims.length || !colDims.length) throw new Error("Pick at least one row column and one distinct column heading");
             const spec = { mode: "pivot", rows: rowDims, cols: colDims, values: values.list.read() };
             if (totalsInp.checked) spec.totals = true;
-            return w.apply(d => { d.view = spec; }).then(() => { w.viewMemory.pivot = spec; });
+            return w.apply(d => activateReportView(d, spec));
         },
     });
 }
@@ -104,7 +105,7 @@ const CHART_TYPES = [
 ];
 
 export function chartDialog(w) {
-    const active = w.doc.view?.mode === "chart" ? w.doc.view : w.viewMemory.chart;
+    const active = configuredReportView(w.doc, "chart");
     const chartable = pickable(w).filter(c => c.type !== "other");
 
     const typeSel = sel(CHART_TYPES, active?.type ?? "bar");
@@ -192,7 +193,7 @@ export function chartDialog(w) {
                 if (labelTitleInp.value.trim()) spec.labelAxisTitle = labelTitleInp.value.trim();
                 if (valueTitleInp.value.trim()) spec.valueAxisTitle = valueTitleInp.value.trim();
             }
-            return w.apply(d => { d.view = spec; }).then(() => { w.viewMemory.chart = spec; });
+            return w.apply(d => activateReportView(d, spec));
         },
     });
 }

@@ -69,8 +69,8 @@ export function openDialog({ owner, title, width, cls, build, applyLabel = "Appl
                 const buttons = dlg.root.querySelectorAll(".ir-dialog-footer button");
                 buttons.forEach(b => b.disabled = true);
                 try {
-                    await onApply(dlg);
-                    dlg.close();
+                    const applied = await onApply(dlg);
+                    if (applied !== false) dlg.close();
                 } catch (err) {
                     dlg.setError(err);
                 } finally {

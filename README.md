@@ -150,6 +150,16 @@ cells, so averages, medians, distinct counts, and null handling remain correct. 
 does not synthesize a right-side total column, which may require report-specific rules
 such as excluding cancelled orders.
 
+A saved report retains every configured view. Grid, Group By, Pivot, and Chart can be
+switched without rebuilding their settings; the view selected when the report is saved
+is the one it opens with. Only the selected view is validated and executed. Settings
+belonging to inactive views remain available without producing ignored-setting notices
+or validation failures.
+
+Save updates the selected saved report. Save As creates a new report when its name is
+unused; when the name matches an editable report, it asks for confirmation and replaces
+that report instead. Saved-report titles are case-insensitively unique per report.
+
 Highlights have a report-facing name and a positive sequence. Matching rules are
 applied from lower to higher sequence, so the highest sequence wins when rules set the
 same style; cell highlights are applied after row highlights. Legacy documents without

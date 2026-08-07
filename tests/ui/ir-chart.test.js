@@ -70,7 +70,7 @@ globalThis.fetch = async (url, options = {}) => {
                 totalRows: 3,
                 aggregates: {},
                 highlights: [],
-                ignored: [{ kind: "view", detail: "chart view orders by its own chart sort; sorts are ignored" }],
+                ignored: [],
             });
         }
         return json({
@@ -127,6 +127,7 @@ test("chart view renders behind the dialog with an accessible data table, and gr
     }, "the chart query to apply");
     const sent = JSON.parse(requests.at(-1).body);
     assert.deepEqual(sent.view, { mode: "chart", type: "pie", label: "STATUS", fn: "count", sort: { by: "label", dir: "asc" } });
+    assert.deepEqual(sent.views.chart, sent.view);
 
     // The chart region replaces the grid: canvas described for AT + the data table.
     await until(() => root.querySelector(".ir-chart-canvas"), "the chart region to render");
@@ -154,7 +155,7 @@ test("chart view renders behind the dialog with an accessible data table, and gr
     assert.equal(root.querySelector(".ir-chartwrap").children.length, 0, "chart content should be disposed");
     assert.ok(root.querySelector(".ir-table tbody tr"), "grid rows should render again");
 
-    // The chart config survives in view memory: switching back skips the dialog.
+    // The chart config survives in report state: switching back skips the dialog.
     root.querySelector('.ir-viewbtn[data-mode="chart"]').click();
     await until(() => JSON.parse(requests.at(-1).body).view?.mode === "chart", "the remembered chart query");
     assert.equal(root.querySelector(".ir-dialog"), null, "no dialog when view memory holds a chart");

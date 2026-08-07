@@ -95,11 +95,24 @@ public sealed class ReportStateResolverTests
     [Fact]
     public void Explicit_grid_view_overrides_an_alternate_default()
     {
-        var defaults = new ReportState { View = new ViewSpec { Mode = "pivot" } };
+        var defaults = new ReportState
+        {
+            View = new ViewSpec { Mode = "pivot", Rows = ["CUSTOMER"], Cols = ["STATUS"] },
+            Views = new()
+            {
+                ["pivot"] = new ViewSpec { Mode = "pivot", Rows = ["CUSTOMER"], Cols = ["STATUS"] },
+                ["chart"] = new ViewSpec { Mode = "chart", Type = "pie", Label = "STATUS", Fn = AggregateFn.Count },
+            },
+        };
         var request = new ReportState { View = new ViewSpec { Mode = "grid" } };
 
         var resolved = ReportStateResolver.Resolve(defaults, request);
 
         Assert.Equal("grid", resolved.View!.Mode);
+        Assert.Equal(["CUSTOMER"], resolved.Views!["pivot"].Rows);
+        Assert.Equal("pie", resolved.Views["chart"].Type);
+        Assert.NotSame(defaults.View, resolved.View);
+        Assert.NotSame(defaults.Views, resolved.Views);
+        Assert.NotSame(defaults.Views["pivot"], resolved.Views["pivot"]);
     }
 }

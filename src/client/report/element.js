@@ -10,7 +10,12 @@ import { banner } from "../core/dom.js";
 import { createWidgetRoot, disposeWidget, setCustomStyleSheet } from "../core/widget.js";
 import { applyFeatureChrome, buildSkeleton } from "./skeleton.js";
 import { featureEnabled } from "./schema.js";
-import { normalizeReportState, serializeReportState } from "./state.js";
+import {
+    activateReportView,
+    configuredReportView,
+    normalizeReportState,
+    serializeReportState,
+} from "./state.js";
 import { refreshSavedSelect } from "./saved.js";
 import { renderChips } from "./render/chips.js";
 import { renderGrid } from "./render/grid.js";
@@ -80,7 +85,6 @@ export class InteractiveReportElement extends HTMLElement {
         this.savedList = [];
         this.currentSaved = null;
         this.searchScopeCol = null;
-        this.viewMemory = {};
     }
 
     clearReportView() {
@@ -211,8 +215,6 @@ export class InteractiveReportElement extends HTMLElement {
             if (ctrl !== this._abort) return;
             this.lastResult = result;
             this.clearError();
-            if (this.doc.view?.mode && this.doc.view.mode !== "grid")
-                this.viewMemory[this.doc.view.mode] = this.doc.view;
             renderChips(this, this.els.chips);
             this.renderView();
             renderPager(this, this.els.pager);
@@ -323,9 +325,9 @@ export class InteractiveReportElement extends HTMLElement {
         const current = this.doc.view?.mode ?? "grid";
         if (mode === current) return;
         if (mode !== "grid" && !featureEnabled(this, mode)) return;
-        if (mode === "grid") { this.applyOrBanner(d => { d.view = { mode: "grid" }; }); return; }
-        const memory = this.viewMemory[mode];
-        if (memory) this.applyOrBanner(d => { d.view = memory; });
+        if (mode === "grid") { this.applyOrBanner(d => activateReportView(d, { mode: "grid" })); return; }
+        const configured = configuredReportView(this.doc, mode);
+        if (configured) this.applyOrBanner(d => activateReportView(d, configured));
         else openViewDialog(this, mode);
     }
 }

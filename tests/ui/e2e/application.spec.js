@@ -222,6 +222,74 @@ test("adds correctly aggregated total rows to a pivot without a right-side total
     await expect(page.getByRole("columnheader", { name: "Total", exact: true })).toHaveCount(0);
 });
 
+test("a saved report retains its grid, pivot, and chart configurations with pivot as its default", async ({ page, request }) => {
+    const title = `views-${randomUUID()}`;
+    let savedId;
+
+    try {
+        await openWorkbench(page);
+
+        await page.getByRole("button", { name: "Chart", exact: true }).click();
+        let dialog = page.getByRole("dialog");
+        let selects = dialog.locator("select");
+        await selects.nth(1).selectOption("STATUS");
+        await selects.nth(3).selectOption("AMOUNT");
+        await selects.nth(2).selectOption("sum");
+        await runAndWaitForQuery(page, () =>
+            dialog.getByRole("button", { name: "Apply", exact: true }).click());
+
+        await page.getByRole("button", { name: "Pivot", exact: true }).click();
+        dialog = page.getByRole("dialog");
+        selects = dialog.locator("select");
+        await selects.nth(0).selectOption("CUSTOMER");
+        await selects.nth(1).selectOption("STATUS");
+        await dialog.getByRole("button", { name: "+ Value", exact: true }).click();
+        selects = dialog.locator("select");
+        await selects.nth(3).selectOption("AMOUNT");
+        await selects.nth(2).selectOption("sum");
+        const pivotResponse = await runAndWaitForQuery(page, () =>
+            dialog.getByRole("button", { name: "Apply", exact: true }).click());
+        const configured = pivotResponse.request().postDataJSON();
+        expect(configured.view.mode).toBe("pivot");
+        expect(configured.views.chart.mode).toBe("chart");
+        expect(configured.views.pivot).toEqual(configured.view);
+
+        await clickAction(page, "Save As…");
+        const saveDialog = page.getByRole("dialog");
+        await saveDialog.getByPlaceholder("Saved report name").fill(title);
+        const saveResponsePromise = page.waitForResponse(response =>
+            response.request().method() === "POST"
+            && new URL(response.url()).pathname === "/api/reports/orders/saved");
+        await saveDialog.getByRole("button", { name: "Save", exact: true }).click();
+        const saveResponse = await saveResponsePromise;
+        savedId = (await saveResponse.json()).id;
+        const savedState = saveResponse.request().postDataJSON().state;
+        expect(savedState.view.mode).toBe("pivot");
+        expect(Object.keys(savedState.views).sort()).toEqual(["chart", "pivot"]);
+
+        await runAndWaitForQuery(page, () =>
+            page.getByRole("button", { name: "Grid", exact: true }).click());
+        const chartResponse = await runAndWaitForQuery(page, () =>
+            page.getByRole("button", { name: "Chart", exact: true }).click());
+        expect(chartResponse.request().postDataJSON().view.mode).toBe("chart");
+        await expect(page.getByRole("dialog")).toHaveCount(0);
+
+        await page.reload();
+        await expect(page.getByRole("table")).toBeVisible();
+        const loadResponse = await runAndWaitForQuery(page, () =>
+            page.getByRole("combobox", { name: "Saved Report" }).selectOption(savedId));
+        expect(loadResponse.request().postDataJSON().view.mode).toBe("pivot");
+        await expect(page.getByRole("button", { name: "Pivot", exact: true })).toHaveClass(/ir-active/);
+
+        const reloadedChart = await runAndWaitForQuery(page, () =>
+            page.getByRole("button", { name: "Chart", exact: true }).click());
+        expect(reloadedChart.request().postDataJSON().view.mode).toBe("chart");
+        await expect(page.getByRole("dialog")).toHaveCount(0);
+    } finally {
+        if (savedId) await request.delete(`/api/reports/saved/${savedId}`);
+    }
+});
+
 test("deleting a computed column also deletes its references", async ({ page }) => {
     await openWorkbench(page);
 
@@ -235,6 +303,54 @@ test("deleting a computed column also deletes its references", async ({ page }) 
     expect(state.columns).not.toContain("c1");
     expect(state.formats).not.toHaveProperty("c1");
     await expect(page.getByText(/unknown column 'c1'/)).toHaveCount(0);
+});
+
+test("Save As confirms and replaces an existing report instead of creating a duplicate", async ({ page, request }) => {
+    const title = `replace-${randomUUID()}`;
+
+    try {
+        await openWorkbench(page);
+        await clickAction(page, "Save As…");
+        let dialog = page.getByRole("dialog");
+        await dialog.getByPlaceholder("Saved report name").fill(title);
+        const createPromise = page.waitForResponse(response =>
+            response.request().method() === "POST"
+            && new URL(response.url()).pathname === "/api/reports/orders/saved");
+        await dialog.getByRole("button", { name: "Save", exact: true }).click();
+        const created = await createPromise;
+        const savedId = (await created.json()).id;
+
+        await runAndWaitForQuery(page, () =>
+            page.getByRole("combobox", { name: "Saved Report" }).selectOption(""));
+        await search(page, "Acme Corp");
+
+        await clickAction(page, "Save As…");
+        dialog = page.getByRole("dialog");
+        await dialog.getByPlaceholder("Saved report name").fill(title.toUpperCase());
+        await dialog.getByRole("button", { name: "Save", exact: true }).click();
+
+        const confirmation = page.locator(".ir-dialog").filter({ hasText: "Replace Saved Report" });
+        await expect(confirmation).toContainText(`Replace "${title}"?`);
+        const replacePromise = page.waitForResponse(response =>
+            response.request().method() === "PUT"
+            && new URL(response.url()).pathname === `/api/reports/saved/${savedId}`);
+        await confirmation.getByRole("button", { name: "Replace", exact: true }).click();
+        const replaced = await replacePromise;
+        expect(replaced.request().postDataJSON().state.search).toBe("Acme Corp");
+
+        const visible = await request.get("/api/reports/orders/saved");
+        const matches = (await visible.json()).filter(report =>
+            report.title.toLocaleLowerCase() === title.toLocaleLowerCase());
+        expect(matches).toHaveLength(1);
+        expect(matches[0].id).toBe(savedId);
+    } finally {
+        const visible = await request.get("/api/reports/orders/saved");
+        if (visible.ok()) {
+            for (const report of await visible.json())
+                if (report.title.toLocaleLowerCase() === title.toLocaleLowerCase())
+                    await request.delete(`/api/reports/saved/${report.id}`);
+        }
+    }
 });
 
 test("saves and reloads a report, then administers its complete lifecycle", async ({ page, request }) => {

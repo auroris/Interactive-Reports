@@ -1135,7 +1135,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     }
 
     [Fact]
-    public async Task Chart_ignores_grid_sorts_with_a_notice()
+    public async Task Chart_silently_leaves_grid_sorts_inactive()
     {
         var result = await _executor.Query(Definition, new ReportState
         {
@@ -1143,7 +1143,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
             View = new ViewSpec { Mode = "chart", Type = "bar", Label = "STATUS", Fn = AggregateFn.Count },
         }, NoParams);
 
-        Assert.Contains(result.Ignored, i => i.Kind == "view" && i.Detail.Contains("chart sort"));
+        Assert.Empty(result.Ignored);
         Assert.Equal(
             ["CANCELLED", "NEW", "PENDING", "SHIPPED"],              // chart's own label sort, not the grid sort
             result.Rows.Select(r => (string)r["STATUS"]!));

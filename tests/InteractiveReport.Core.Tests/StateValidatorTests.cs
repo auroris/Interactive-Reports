@@ -458,7 +458,7 @@ public class StateValidatorTests
     }
 
     [Fact]
-    public void GroupBy_view_validates_dims_and_moves_grid_features_to_ignored()
+    public void GroupBy_view_validates_its_own_settings_and_silently_leaves_grid_settings_inactive()
     {
         var result = Validate(new ReportState
         {
@@ -481,11 +481,12 @@ public class StateValidatorTests
         var sort = Assert.Single(result.Sorts);                       // non-dim sort dropped
         Assert.Equal(("REGION", SortDir.Desc), (sort.Column.Name, sort.Dir));
         Assert.Contains(result.Ignored, i => i.Detail.Contains("unknown groupBy column 'GHOST'"));
-        Assert.Contains(result.Ignored, i => i.Detail.Contains("control breaks"));
+        Assert.DoesNotContain(result.Ignored, i => i.Detail.Contains("control breaks"));
+        Assert.DoesNotContain(result.Ignored, i => i.Detail.Contains("non-grouped"));
     }
 
     [Fact]
-    public void Chart_view_validates_and_moves_grid_features_to_ignored()
+    public void Chart_view_validates_its_own_settings_and_silently_leaves_grid_settings_inactive()
     {
         var result = Validate(new ReportState
         {
@@ -519,7 +520,48 @@ public class StateValidatorTests
         Assert.Empty(result.Breaks);
         Assert.Empty(result.Aggregates);
         Assert.Empty(result.Sorts);
-        Assert.Contains(result.Ignored, i => i.Kind == "view" && i.Detail.Contains("chart sort"));
+        Assert.DoesNotContain(result.Ignored, i => i.Kind == "view");
+    }
+
+    [Fact]
+    public void Inactive_grid_rules_and_inactive_view_definitions_are_not_validated()
+    {
+        var result = Validate(new ReportState
+        {
+            View = new ViewSpec
+            {
+                Mode = "pivot",
+                Rows = ["CUSTOMER"],
+                Cols = ["STATUS"],
+                Values = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum }],
+            },
+            Views = new()
+            {
+                ["chart"] = new ViewSpec
+                {
+                    Mode = "chart", Type = "donut", Label = "MISSING", Value = "GHOST",
+                },
+            },
+            Columns = ["CUSTOMER", "REMOVED_GRID_COLUMN"],
+            Sorts = [new SortRule { Col = "REMOVED_GRID_COLUMN" }],
+            Breaks = ["REMOVED_GRID_COLUMN"],
+            Aggregates = [new AggregateRule { Col = "REMOVED_GRID_COLUMN", Fn = AggregateFn.Sum }],
+            Highlights =
+            [
+                new HighlightRule
+                {
+                    Id = "h1", Scope = "cell", Col = "REMOVED_GRID_COLUMN",
+                    Expr = "REMOVED_GRID_COLUMN > 1", Style = new HighlightStyle { Bg = "red" },
+                },
+            ],
+        });
+
+        Assert.Equal(ViewMode.Pivot, result.View.Mode);
+        Assert.Empty(result.Sorts);
+        Assert.Empty(result.Breaks);
+        Assert.Empty(result.Aggregates);
+        Assert.Empty(result.Rules.Decorations);
+        Assert.Empty(result.Ignored);
     }
 
     [Fact]

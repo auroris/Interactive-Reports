@@ -55,62 +55,48 @@ public static class StateValidator
             ExpressionRequirement.Predicate,
             prepareEffect: static (_, _) => _ => new IncludeRowEffect(),
             errors);
-        var sorts = ValidateSorts(resolved.Sorts, effectiveSchema, ignored);
-        var columns = ValidateColumns(resolved.Columns, effectiveSchema, ignored);
-        var aggregates = AggregateRuleValidator.Validate(
-            resolved.Aggregates,
-            "aggregates",
-            effectiveSchema.Lookup,
-            errors,
-            ignored);
-        var breaks = ValidateBreaks(resolved.Breaks, effectiveSchema, ignored);
-        var highlights = HighlightRuleValidator.Validate(
-            resolved.Highlights,
-            effectiveSchema.Lookup,
-            errors,
-            ignored);
         var view = ViewSpecValidator.Validate(
             resolved.View,
             effectiveSchema.Lookup,
             errors,
             ignored);
 
-        if (view.Mode != ViewMode.Grid)
-        {
-            // Alternate views present aggregated rows; grid-only features are noted, not fatal.
-            if (breaks.Count > 0)
-            {
-                ignored.Add(new IgnoredItem("view", "control breaks apply to the grid view only"));
-                breaks = [];
-            }
-            if (highlights.Count > 0)
-            {
-                ignored.Add(new IgnoredItem("view", "highlights apply to the grid view only"));
-                highlights = [];
-            }
-            if (aggregates.Count > 0)
-            {
-                ignored.Add(new IgnoredItem("view", "grid aggregates are ignored in alternate views (use view.values)"));
-                aggregates = [];
-            }
+        // A report retains independent settings for all of its views. Bind only the
+        // settings the active execution mode consumes; an inactive Grid configuration
+        // must neither fail nor produce ignored-setting notices while Pivot or Chart
+        // is selected.
+        var gridMode = view.Mode == ViewMode.Grid;
+        var inactive = new List<IgnoredItem>();
+        var columns = ValidateColumns(
+            resolved.Columns,
+            effectiveSchema,
+            gridMode ? ignored : inactive);
+        var sorts = view.Mode is ViewMode.Grid or ViewMode.GroupBy
+            ? ValidateSorts(resolved.Sorts, effectiveSchema, gridMode ? ignored : inactive)
+            : [];
+        var aggregates = gridMode
+            ? AggregateRuleValidator.Validate(
+                resolved.Aggregates,
+                "aggregates",
+                effectiveSchema.Lookup,
+                errors,
+                ignored)
+            : [];
+        var breaks = gridMode
+            ? ValidateBreaks(resolved.Breaks, effectiveSchema, ignored)
+            : [];
+        var highlights = gridMode
+            ? HighlightRuleValidator.Validate(
+                resolved.Highlights,
+                effectiveSchema.Lookup,
+                errors,
+                ignored)
+            : [];
 
-            if (view.Mode == ViewMode.GroupBy)
-            {
-                var dims = new HashSet<string>(view.GroupBy.Select(g => g.Name), StringComparer.OrdinalIgnoreCase);
-                var kept = sorts.Where(s => dims.Contains(s.Column.Name)).ToList();
-                if (kept.Count != sorts.Count)
-                    ignored.Add(new IgnoredItem("view", "sorts on non-grouped columns are ignored in groupBy view"));
-                sorts = kept;
-            }
-            else if (view.Mode == ViewMode.Chart && sorts.Count > 0)
-            {
-                ignored.Add(new IgnoredItem("view", "chart view orders by its own chart sort; sorts are ignored"));
-                sorts = [];
-            }
-            else if (view.Mode == ViewMode.Pivot && sorts.Count > 0)
-            {
-                sorts = [];
-            }
+        if (view.Mode == ViewMode.GroupBy)
+        {
+            var dims = new HashSet<string>(view.GroupBy.Select(g => g.Name), StringComparer.OrdinalIgnoreCase);
+            sorts = sorts.Where(s => dims.Contains(s.Column.Name)).ToList();
         }
 
         // Break columns must be selected — renderers group page rows by their values.

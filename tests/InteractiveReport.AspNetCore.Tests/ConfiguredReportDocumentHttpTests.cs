@@ -200,6 +200,40 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Database_saved_report_titles_are_unique_and_updates_keep_their_own_title()
+    {
+        using var firstResponse = await _client.PostAsync(
+            $"/api/reports/{ReportName}/saved",
+            JsonContent.Create(new { title = "Customer Totals", state = new { v = 2 } }));
+        Assert.Equal(HttpStatusCode.Created, firstResponse.StatusCode);
+        var first = await ReadJson(firstResponse);
+
+        using var duplicate = await _client.PostAsync(
+            $"/api/reports/{ReportName}/saved",
+            JsonContent.Create(new { title = "customer totals", state = new { v = 2 } }));
+        Assert.Equal(HttpStatusCode.Conflict, duplicate.StatusCode);
+
+        using var duplicateImport = await _client.PostAsync(
+            $"/api/reports/admin/{ReportName}/documents",
+            JsonContent.Create(new { title = "CUSTOMER TOTALS", state = new { v = 2 } }));
+        Assert.Equal(HttpStatusCode.Conflict, duplicateImport.StatusCode);
+
+        using var sameTitleUpdate = await _client.PutAsJsonAsync(
+            $"/api/reports/saved/{first.GetProperty("id").GetString()}",
+            new { title = "CUSTOMER TOTALS", state = new { v = 2, search = "updated" } });
+        Assert.Equal(HttpStatusCode.OK, sameTitleUpdate.StatusCode);
+
+        using var secondResponse = await _client.PostAsync(
+            $"/api/reports/{ReportName}/saved",
+            JsonContent.Create(new { title = "Other", state = new { v = 2 } }));
+        var second = await ReadJson(secondResponse);
+        using var collidingRename = await _client.PutAsJsonAsync(
+            $"/api/reports/saved/{second.GetProperty("id").GetString()}",
+            new { title = "Customer Totals" });
+        Assert.Equal(HttpStatusCode.Conflict, collidingRename.StatusCode);
+    }
+
+    [Fact]
     public async Task Administrator_can_download_a_canonical_configured_report_document()
     {
         var admin = await GetJson("/api/reports/admin/saved");

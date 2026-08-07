@@ -9,7 +9,10 @@ import { confirmDialog } from "../core/dialog.js";
 import { featureEnabled } from "./schema.js";
 
 export function canManageCurrentSaved(w) {
-    const s = w.currentSaved;
+    return canManageSaved(w, w.currentSaved);
+}
+
+export function canManageSaved(w, s) {
     if (!s) return false;
     return !s.isReadOnly && (w.whoami?.isAdministrator || (s.mine && !s.isGlobal));
 }
@@ -61,16 +64,18 @@ export async function resetWorkingCopy(w) {
     else resetToPrimary(w);
 }
 
-export async function saveReport(w, { title, isGlobal, asNew }) {
+export async function saveReport(w, { title, isGlobal, asNew, target = null }) {
     const state = w.serialize();
     if (asNew) {
         w.currentSaved = await api(w.reportUrl("saved"), {
             method: "POST", body: { title, state, isGlobal },
         });
     } else {
+        const saved = target ?? w.currentSaved;
+        if (!saved) throw new Error("Select a saved report to replace");
         const body = { title, state };
         if (w.whoami?.isAdministrator) body.isGlobal = isGlobal;
-        w.currentSaved = await api(apiUrl(w.base, "saved", w.currentSaved.id), {
+        w.currentSaved = await api(apiUrl(w.base, "saved", saved.id), {
             method: "PUT", body,
         });
     }

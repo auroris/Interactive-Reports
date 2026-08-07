@@ -7,6 +7,9 @@ export function normalizeReportState(raw, defaultPageSize = 50, defaults = null)
         if (value !== null && value !== undefined) state[key] = value;
     state.filters ??= [];
     state.sorts ??= [];
+    if (!state.views || typeof state.views !== "object" || Array.isArray(state.views)) state.views = {};
+    const mode = state.view?.mode;
+    if (mode && mode !== "grid") state.views[mode] = structuredClone(state.view);
     state.page = { index: 1, size: state.page?.size ?? defaultPageSize };
     return state;
 }
@@ -26,6 +29,23 @@ export function serializeReportState(source, stateVersion) {
     };
 
     return { ...walk(source), v: stateVersion };
+}
+
+/// Select a view without losing any other configured view. The selected view is
+/// also the one a saved report opens with, while views retains the configurations
+/// the toolbar can switch back to.
+export function activateReportView(state, specification) {
+    const selected = structuredClone(specification ?? { mode: "grid" });
+    state.view = selected;
+    if (selected.mode && selected.mode !== "grid") {
+        state.views ??= {};
+        state.views[selected.mode] = structuredClone(selected);
+    }
+    return state;
+}
+
+export function configuredReportView(state, mode) {
+    return state?.view?.mode === mode ? state.view : state?.views?.[mode];
 }
 
 const sameColumn = (left, right) => typeof left === "string" && typeof right === "string"
@@ -95,19 +115,30 @@ export function removeComputedColumnReferences(state, column) {
         }
     }
 
-    const view = state.view;
-    if (!view || view.mode === "grid") return state;
-    view.values = withoutColumnRule(view.values);
-    if (view.mode === "groupBy") {
-        view.groupBy = withoutName(view.groupBy);
-        if (!view.groupBy?.length) state.view = { mode: "grid" };
-    } else if (view.mode === "pivot") {
-        view.rows = withoutName(view.rows);
-        view.cols = withoutName(view.cols);
-        if (!view.rows?.length || !view.cols?.length) state.view = { mode: "grid" };
-    } else if (view.mode === "chart"
-        && (sameColumn(view.label, column) || sameColumn(view.value, column))) {
-        state.view = { mode: "grid" };
+    const cleanView = view => {
+        if (!view || view.mode === "grid") return view;
+        if (Array.isArray(view.values)) view.values = withoutColumnRule(view.values);
+        if (view.mode === "groupBy") {
+            view.groupBy = withoutName(view.groupBy);
+            return view.groupBy?.length ? view : null;
+        }
+        if (view.mode === "pivot") {
+            view.rows = withoutName(view.rows);
+            view.cols = withoutName(view.cols);
+            return view.rows?.length && view.cols?.length ? view : null;
+        }
+        if (view.mode === "chart"
+            && (sameColumn(view.label, column) || sameColumn(view.value, column))) return null;
+        return view;
+    };
+
+    state.view = cleanView(state.view) ?? { mode: "grid" };
+    if (state.views && typeof state.views === "object") {
+        for (const [mode, configured] of Object.entries(state.views)) {
+            const cleaned = cleanView(configured);
+            if (cleaned?.mode === mode) state.views[mode] = cleaned;
+            else delete state.views[mode];
+        }
     }
     return state;
 }
