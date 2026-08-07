@@ -43,7 +43,9 @@ globalThis.fetch = async (url, options = {}) => {
             return json({ title: "Report unavailable" }, { status: 503 });
         return json({
             stateVersion: 2,
-            defaultState: { page: { index: 1, size: 25 }, view: { mode: "grid" } },
+            // labels here mirror the server contract: friendly names reach the client
+            // only as part of the default report; column metadata stays neutral.
+            defaultState: { page: { index: 1, size: 25 }, view: { mode: "grid" }, labels: { ID: "Ident" } },
             limits: { defaultPageSize: 25, maxPageSize: 100 },
             columns: [{ name: "ID", label: "ID", type: "number" }],
             capabilities: { aggregateFunctions: {}, expressionFunctions: [] },
@@ -131,7 +133,7 @@ test("an unavailable preferred report falls back without requesting it", async (
     report.remove();
 });
 
-test("renaming a column writes a labels override; clearing it leaves an explicit empty map", async () => {
+test("labels resolve client-side: default report seeds them, rename overrides, clearing restores", async () => {
     requests.length = 0;
     visibleReports = [{ name: "orders", title: "Orders" }];
 
@@ -146,7 +148,12 @@ test("renaming a column writes a labels override; clearing it leaves an explicit
         for (let attempt = 0; attempt < 40 && !condition(); attempt++)
             await new Promise(resolve => setTimeout(resolve, 5));
     };
-    await settle(() => report.shadowRoot.querySelector("th.ir-th-menu"));
+    const headerText = () => report.shadowRoot.querySelector("th.ir-th-menu")?.textContent.trim();
+
+    // The server sent neutral column metadata (label "ID"); the friendly name
+    // arrived only inside defaultState.labels and is applied by the client.
+    await settle(() => headerText() === "Ident");
+    assert.equal(headerText(), "Ident", "the default report's labels should drive the header");
 
     const rename = async value => {
         report.shadowRoot.querySelector("th.ir-th-menu").click();
@@ -164,10 +171,12 @@ test("renaming a column writes a labels override; clearing it leaves an explicit
     };
 
     assert.deepEqual((await rename("Ticket")).labels, { ID: "Ticket" });
+    assert.equal(headerText(), "Ticket", "the override should render without server involvement");
 
-    // Clearing restores the schema heading, but the map stays: an explicit {} must
-    // still override a report default when one exists.
+    // Clearing drops the entry — display falls back to the server's neutral label —
+    // but the map itself stays: an explicit {} still overrides a report default.
     assert.deepEqual((await rename("")).labels, {});
+    assert.equal(headerText(), "ID");
 
     report.remove();
 });

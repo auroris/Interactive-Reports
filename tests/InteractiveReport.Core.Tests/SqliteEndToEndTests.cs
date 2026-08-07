@@ -43,30 +43,24 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     }
 
     [Fact]
-    public async Task Definition_column_labels_flavor_the_discovered_schema()
+    public async Task Friendly_names_never_touch_discovery_or_results()
     {
+        // columnLabels is configuration the schema endpoint hands to the client;
+        // the engine's schema and result metadata stay on server-derived labels,
+        // and a state's labels map is opaque display state.
         var def = Definition;
-        def.ColumnLabels = new() { ["order_id"] = "Order #", ["MISSING_COL"] = "Inert" };
+        def.ColumnLabels = new() { ["ORDER_ID"] = "Order #" };
 
         var schema = await _executor.GetSchema(def, NoParams);
-
-        Assert.Equal("Order #", schema.Lookup["ORDER_ID"].Label);    // matched case-insensitively
-        Assert.Equal("Customer", schema.Lookup["CUSTOMER"].Label);   // unmapped → prettified
-    }
-
-    [Fact]
-    public async Task Friendly_labels_reach_result_columns_and_state_overrides_win()
-    {
-        var def = Definition;
-        def.ColumnLabels = new() { ["AMOUNT"] = "Order Total", ["CUSTOMER"] = "Customer Name" };
+        Assert.Equal("Order Id", schema.Lookup["ORDER_ID"].Label);
 
         var result = await _executor.Query(def, new ReportState
         {
-            Labels = new() { ["CUSTOMER"] = "Client" },
+            Labels = new() { ["CUSTOMER"] = "Client", ["GHOST"] = "Opaque" },
         }, NoParams);
 
-        Assert.Equal("Order Total", result.Columns.Single(c => c.Name == "AMOUNT").Label);
-        Assert.Equal("Client", result.AvailableColumns.Single(c => c.Name == "CUSTOMER").Label);
+        Assert.Equal("Customer", result.AvailableColumns.Single(c => c.Name == "CUSTOMER").Label);
+        Assert.Empty(result.Ignored);
     }
 
     [Fact]

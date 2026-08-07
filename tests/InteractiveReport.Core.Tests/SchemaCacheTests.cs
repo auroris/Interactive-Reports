@@ -31,29 +31,6 @@ public sealed class SchemaCacheTests
     }
 
     [Fact]
-    public async Task Changed_column_labels_key_a_fresh_discovery()
-    {
-        var cache = new SchemaCache();
-        var definition = TestFixtures.OrdersDefinition(ReportDialect.Sqlite);
-        var discoveries = 0;
-
-        Task<ReportSchema> Discover()
-        {
-            discoveries++;
-            return Task.FromResult(ReportSchema.Create(definition.Name, TestFixtures.OrdersSchema));
-        }
-
-        await cache.GetOrDiscover(definition, Discover);
-        definition.ColumnLabels = new() { ["ORDER_ID"] = "Order #" };
-        await cache.GetOrDiscover(definition, Discover);
-        definition.ColumnLabels["ORDER_ID"] = "Ticket";
-        await cache.GetOrDiscover(definition, Discover);
-        await cache.GetOrDiscover(definition, Discover);
-
-        Assert.Equal(3, discoveries);
-    }
-
-    [Fact]
     public async Task Failed_discovery_is_evicted_for_retry()
     {
         var cache = new SchemaCache();

@@ -94,9 +94,7 @@ public static class EndpointExtensions
                 name = def.Name,
                 title = def.Title ?? ColumnModel.Prettify(def.Name),
                 columns = columns.Select(c => new ColumnInfo(c.Name, c.Label, c.KindName, c.IsComputed)),
-                // No configured default ⇒ synthesize one: an empty state means every
-                // schema column in database order, labels already flavored above.
-                defaultState = def.DefaultState ?? new ReportState(),
+                defaultState = SchemaDefaultState(def),
                 stateVersion = ReportState.CurrentVersion,
                 capabilities = new
                 {
@@ -121,6 +119,23 @@ public static class EndpointExtensions
         {
             return ServerError(ctx, def.Name, "schema discovery", ex);
         }
+    }
+
+    /// <summary>
+    /// The default report the schema endpoint sends down — always complete, never null.
+    /// An unconfigured DefaultState synthesizes to an empty state (every schema column
+    /// in database order), and this is the one place friendly names leave the server:
+    /// the definition's columnLabels become the default report's labels unless the
+    /// configured state carries its own. The server never applies labels itself.
+    /// </summary>
+    internal static ReportState SchemaDefaultState(ReportDefinition def)
+    {
+        // Resolve against an empty request to get a detached copy — the store's
+        // definition (and its DefaultState) must not be mutated by response shaping.
+        var state = ReportStateResolver.Resolve(def.DefaultState, new ReportState());
+        if (state.Labels is null && def.ColumnLabels is not null)
+            state.Labels = new(def.ColumnLabels);
+        return state;
     }
 
     private static Task<IResult> PostQuery(string name, HttpContext ctx, CancellationToken ct)

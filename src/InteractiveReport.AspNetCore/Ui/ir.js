@@ -250,8 +250,14 @@ class InteractiveReportElement extends HTMLElement {
 
     // --- schema lookups ------------------------------------------------------
 
+    /// Server column metadata with the report's own display labels applied. Labels
+    /// are client-side presentation: the server sends real names and neutral labels;
+    /// doc.labels (seeded from the definition via the default report) wins here.
     pickable() {
-        return this.lastResult?.availableColumns ?? this.schema?.columns ?? [];
+        const columns = this.lastResult?.availableColumns ?? this.schema?.columns ?? [];
+        const labels = this.doc?.labels;
+        if (!labels) return columns;
+        return columns.map(c => labels[c.name] ? { ...c, label: labels[c.name] } : c);
     }
 
     typeOf(name) { return this.pickable().find(c => c.name === name)?.type ?? "other"; }

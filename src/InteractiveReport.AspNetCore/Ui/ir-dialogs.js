@@ -280,7 +280,9 @@ export function computeDialog(w, editIndex) {
         initial: existing?.expr,
         placeholder: "e.g. ROUND(AMOUNT * 1.0825, 2)",
         result: "value",
-        columns: w.schema.columns,
+        // Base columns only (computed cannot reference computed), with the report's
+        // display labels on the buttons; inserted tokens are always the real names.
+        columns: w.pickable().filter(c => !c.computed),
     });
 
     openDialog({

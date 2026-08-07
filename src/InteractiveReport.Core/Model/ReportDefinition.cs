@@ -36,11 +36,11 @@ public sealed class ReportDefinition
 
     /// <summary>
     /// Column name → friendly display label, for base queries whose column names are
-    /// not presentable. Applied at schema discovery (case-insensitive), so every label
-    /// consumer — grid headers, aggregate labels, CSV headers — sees the friendly name
-    /// while expressions and state keep using the real column name. Entries matching
-    /// no discovered column are inert (logged once), so schema drift cannot break the
-    /// report. Report states may override per column via their own labels map.
+    /// not presentable. Friendly names are client-side presentation: the server never
+    /// applies this map to its schema or results — it only delivers it to the client
+    /// as the labels of the default report the schema endpoint sends down (a configured
+    /// DefaultState with its own labels wins). Reports override from there; column
+    /// references crossing the wire always use the real name.
     /// </summary>
     public Dictionary<string, string>? ColumnLabels { get; set; }
 

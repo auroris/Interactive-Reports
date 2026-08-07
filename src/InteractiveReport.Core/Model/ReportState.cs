@@ -22,9 +22,11 @@ public sealed class ReportState
     public List<string>? Columns { get; set; }
 
     /// <summary>
-    /// Base-column name → display label overrides, on top of the schema's labels
-    /// (which already carry the definition's columnLabels). Computed columns keep
-    /// their label on the computed rule. Unknown names degrade into ignored[].
+    /// Real column name → display label. Client-side presentation only: the server
+    /// stores and round-trips this map (saved reports, default-state resolution) but
+    /// never interprets it — execution, validation, and result metadata see real
+    /// names and server-derived labels. Computed columns keep their label on the
+    /// computed rule.
     /// </summary>
     public Dictionary<string, string>? Labels { get; set; }
 

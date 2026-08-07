@@ -112,6 +112,19 @@ export function renderGrid(w, table) {
     const mode = w.doc.view?.mode ?? "grid";
     const columns = result.columns;
 
+    // Labels resolve client-side: the report's own labels first, then the server's
+    // neutral label. GroupBy metric columns (v0…) are synthetic, so their server label
+    // embeds the raw column label — rebuild it from the view spec the client authored.
+    const displayLabel = col => {
+        const override = w.doc.labels?.[col.name];
+        if (override) return override;
+        const metric = mode === "groupBy" ? /^v(\d+)$/.exec(col.name) : null;
+        const spec = metric && !(w.doc.view?.groupBy ?? []).includes(col.name)
+            ? w.doc.view?.values?.[Number(metric[1])]
+            : null;
+        return spec ? `${spec.fn}(${w.labelOf(spec.col)})` : col.label;
+    };
+
     // Header. Sort indicators come from the state doc; menus depend on the view mode.
     const sortOrd = new Map((w.doc.sorts ?? []).map((s, i) => [s.col, { dir: s.dir ?? "asc", ord: i + 1 }]));
     const dims = mode === "groupBy" ? new Set(w.doc.view?.groupBy ?? []) : null;
@@ -119,7 +132,7 @@ export function renderGrid(w, table) {
     for (const col of columns) {
         const interactive = mode === "grid" || (mode === "groupBy" && dims.has(col.name));
         const s = sortOrd.get(col.name);
-        const inner = el("span", { class: "ir-th-inner" }, col.label);
+        const inner = el("span", { class: "ir-th-inner" }, displayLabel(col));
         if (s) {
             inner.append(el("span", { class: "ir-sort-dir", "aria-hidden": "true" }, s.dir === "desc" ? "▼" : "▲"));
             if ((w.doc.sorts ?? []).length > 1) inner.append(el("span", { class: "ir-sort-ord" }, String(s.ord)));
@@ -268,13 +281,19 @@ export function renderChartView(w, container, chartModule) {
     const decimal = result.rows.some(r =>
         typeof r[valueCol.name] === "number" && !Number.isInteger(r[valueCol.name]));
 
+    // The metric column is synthetic (v0/__count) when aggregated, so its server
+    // label embeds the raw column label — rebuild it from the chart spec instead.
+    const metricLabel = view.fn
+        ? (view.value ? `${view.fn}(${w.labelOf(view.value)})` : "Count")
+        : w.labelOf(valueCol.name);
+
     const description =
         `${CHART_TYPE_LABELS[view.type] ?? "Chart"} chart of ${chartSummary(w, view)}. ${labels.length} data points.`;
     const canvas = el("canvas", { class: "ir-chart-canvas", role: "img", "aria-label": description });
     const table = el("table", { class: "ir-table ir-chart-table" },
         el("thead", {}, el("tr", {},
-            el("th", { scope: "col" }, labelCol.label),
-            el("th", { scope: "col", class: "ir-num" }, valueCol.label))),
+            el("th", { scope: "col" }, w.labelOf(labelCol.name)),
+            el("th", { scope: "col", class: "ir-num" }, metricLabel))),
         el("tbody", {}, ...result.rows.map((r, i) => el("tr", {},
             el("td", {}, labels[i]),
             el("td", { class: "ir-num" }, formatValue(r[valueCol.name], valueCol.type, decimal))))));
@@ -294,7 +313,7 @@ export function renderChartView(w, container, chartModule) {
         horizontal: view.orientation === "horizontal",
         labels,
         values,
-        metricLabel: valueCol.label,
+        metricLabel,
         labelAxisTitle: view.labelAxisTitle ?? null,
         valueAxisTitle: view.valueAxisTitle ?? null,
     });

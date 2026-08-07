@@ -32,9 +32,8 @@ public static class StateValidator
         var ignored = new List<IgnoredItem>();
         var resolved = ReportStateResolver.Resolve(def.DefaultState, state);
 
-        // Label overrides rewrite the base schema up front so every downstream
-        // consumer — selection, aggregates, views, export headers — sees them.
-        schema = ApplyLabelOverrides(def.Name, schema, resolved, ignored);
+        // resolved.Labels is deliberately not consulted: display labels are client-side
+        // presentation. The engine validates only what it executes.
 
         // Computed columns validate first against the BASE schema, then join the
         // effective schema — everything after this line treats them as ordinary columns.
@@ -144,53 +143,6 @@ public static class StateValidator
             PageSize = pageSize,
             Ignored = ignored,
         };
-    }
-
-    /// <summary>
-    /// Returns the base schema with the state's label overrides applied. Overrides
-    /// target base columns only — a computed column's label lives on its rule —
-    /// and unknown or blank entries degrade into ignored[] like other structural state.
-    /// </summary>
-    private static ReportSchema ApplyLabelOverrides(
-        string reportName,
-        ReportSchema schema,
-        ReportState resolved,
-        List<IgnoredItem> ignored)
-    {
-        if (resolved.Labels is not { Count: > 0 } labels) return schema;
-
-        var overrides = new Dictionary<string, string>(labels.Count, StringComparer.OrdinalIgnoreCase);
-        foreach (var (name, label) in labels)
-        {
-            if (!schema.TryGetValue(name, out var column))
-            {
-                var detail = resolved.Computed?.Any(c => string.Equals(c.Id, name, StringComparison.OrdinalIgnoreCase)) == true
-                    ? $"'{name}' is a computed column — set its label on the computed rule"
-                    : $"unknown column '{name}'";
-                ignored.Add(new IgnoredItem("label", detail));
-                continue;
-            }
-            if (string.IsNullOrWhiteSpace(label))
-            {
-                ignored.Add(new IgnoredItem("label", $"blank label for '{column.Name}'"));
-                continue;
-            }
-            overrides[column.Name] = label.Trim();
-        }
-
-        if (overrides.Count == 0) return schema;
-
-        return ReportSchema.Create(reportName, schema.Columns.Select(column =>
-            overrides.TryGetValue(column.Name, out var label)
-                ? new ColumnModel
-                {
-                    Name = column.Name,
-                    Label = label,
-                    ClrType = column.ClrType,
-                    IsNullable = column.IsNullable,
-                    IsComputed = column.IsComputed,
-                }
-                : column));
     }
 
     private static List<ColumnModel> ValidateBreaks(
