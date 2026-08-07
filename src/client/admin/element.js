@@ -118,18 +118,26 @@ export class InteractiveReportAdminElement extends HTMLElement {
             type: "button", class: "ir-linkbtn" + (danger ? " ir-linkbtn-danger" : ""), onclick,
         }, label);
 
-        const trs = rows.map(r => el("tr", { class: "ir-row" },
-            el("td", {}, r.reportName),
-            el("td", {}, r.title),
-            el("td", {}, r.owner),
-            el("td", {}, el("span", { class: "ir-badge " + (r.isGlobal ? "ir-badge-global" : "ir-badge-private") },
-                r.isGlobal ? "Global" : "Private")),
-            el("td", { class: "ir-date" }, formatUtc(r.modifiedUtc)),
-            el("td", { class: "ir-actions-cell" },
-                linkBtn(r.isGlobal ? "Unpublish" : "Publish", () => this.setGlobal(r, !r.isGlobal)),
-                " · ", linkBtn("Reassign…", () => this.reassign(r)),
-                " · ", linkBtn("State", () => this.viewState(r)),
-                " · ", linkBtn("Delete…", () => this.remove(r), true))));
+        const trs = rows.map(r => {
+            const actions = r.isReadOnly
+                ? [linkBtn("State", () => this.viewState(r))]
+                : [
+                    linkBtn(r.isGlobal ? "Unpublish" : "Publish", () => this.setGlobal(r, !r.isGlobal)),
+                    " · ", linkBtn("Reassign…", () => this.reassign(r)),
+                    " · ", linkBtn("State", () => this.viewState(r)),
+                    " · ", linkBtn("Delete…", () => this.remove(r), true),
+                ];
+            const scope = r.isReadOnly ? "Read only" : r.isGlobal ? "Global" : "Private";
+            return el("tr", { class: "ir-row" },
+                el("td", {}, r.reportName),
+                el("td", {}, r.title),
+                el("td", {}, r.owner),
+                el("td", {}, el("span", {
+                    class: "ir-badge " + (r.isGlobal ? "ir-badge-global" : "ir-badge-private"),
+                }, scope)),
+                el("td", { class: "ir-date" }, formatUtc(r.modifiedUtc)),
+                el("td", { class: "ir-actions-cell" }, ...actions));
+        });
 
         if (!trs.length)
             trs.push(el("tr", { class: "ir-empty" }, el("td", { colSpan: 6 }, "No saved reports.")));

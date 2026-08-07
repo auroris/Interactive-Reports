@@ -26,6 +26,7 @@ Object.assign(globalThis, browserGlobals);
 const requests = [];
 let savedReports = [];
 let savedDocuments = new Map();
+let whoami = { identity: "test-user" };
 const json = (value, init = {}) => new Response(JSON.stringify(value), {
     status: init.status ?? 200,
     headers: { "Content-Type": "application/json" },
@@ -44,7 +45,7 @@ globalThis.fetch = async (url, options = {}) => {
             capabilities: { aggregateFunctions: {}, expressionFunctions: [] },
         });
     }
-    if (String(url).endsWith("/whoami")) return json({ identity: "test-user" });
+    if (String(url).endsWith("/whoami")) return json(whoami);
     if (String(url).endsWith("/saved")) return json(savedReports);
     const savedId = /\/saved\/([^/]+)$/.exec(String(url))?.[1];
     if (savedId && savedDocuments.has(savedId)) return json(savedDocuments.get(savedId));
@@ -218,6 +219,40 @@ test("saved-report loads a uniquely named saved report before the initial query"
     assert.equal(JSON.parse(queries[0].body).search, "Acme");
 
     report.remove();
+    savedReports = [];
+    savedDocuments = new Map();
+});
+
+test("a read-only saved report never offers Save or Delete, even to an administrator", async () => {
+    requests.length = 0;
+    whoami = { identity: "test-user", isAdministrator: true };
+    savedReports = [{
+        id: "configured-1", reportName: "orders", title: "Configured View",
+        isGlobal: true, owner: null, mine: false, isReadOnly: true,
+    }];
+    savedDocuments = new Map([["configured-1", {
+        summary: savedReports[0],
+        state: { page: { index: 1, size: 25 }, view: { mode: "grid" } },
+    }]]);
+
+    const report = document.createElement("interactive-report");
+    report.setAttribute("report", "orders");
+    report.setAttribute("saved-report", "Configured View");
+    report.setAttribute("api-base", "/custom-report-api");
+    document.body.append(report);
+
+    for (let attempt = 0; attempt < 40 && !requests.some(r => r.url.endsWith("/orders/query")); attempt++)
+        await new Promise(resolve => setTimeout(resolve, 5));
+
+    report.shadowRoot.querySelector(".ir-actionsbtn").click();
+    const labels = [...report.shadowRoot.querySelectorAll(".ir-popup .ir-menu-item")]
+        .map(item => item.textContent.trim());
+    assert.equal(labels.includes("Save As…"), true);
+    assert.equal(labels.includes("Save"), false);
+    assert.equal(labels.includes("Delete…"), false);
+
+    report.remove();
+    whoami = { identity: "test-user" };
     savedReports = [];
     savedDocuments = new Map();
 });

@@ -53,7 +53,18 @@ internal static class SavedReportEndpoints
 
         var identity = Identity(ctx);
         var saved = await SavedStore(ctx).ListVisible(def.Name, identity, ct);
-        return Results.Json(saved.Select(r => Summary(r, identity)), IrJson.Options);
+        var configured = Documents(ctx).List(def).Where(document => !document.Primary).ToArray();
+        var configuredTitles = configured.Select(document => document.Title)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        // A checked-in document is authoritative for its title. Existing database
+        // rows remain available to administrators for rename/delete, but do not make
+        // the end-user selector ambiguous.
+        return Results.Json(
+            configured.Select(Summary).Concat(
+                saved.Where(report => !configuredTitles.Contains(report.Title))
+                    .Select(report => Summary(report, identity))),
+            IrJson.Options);
     }
 
     internal static async Task<IResult> Save(string name, HttpContext ctx, CancellationToken ct)
@@ -84,6 +95,8 @@ internal static class SavedReportEndpoints
         if (request!.State is null) return BadRequest("Malformed save request", "state is required");
         if (request.IsGlobal && !IsAdmin(ctx))
             return AdminRequired("publishing a global report requires an administrator");
+        if (ConfiguredTitleExists(Documents(ctx).List(def), request.Title!))
+            return ConfiguredTitleConflict(request.Title!);
 
         var report = new SavedReport
         {
@@ -101,6 +114,20 @@ internal static class SavedReportEndpoints
 
     internal static async Task<IResult> Load(string id, HttpContext ctx, CancellationToken ct)
     {
+        if (Documents(ctx).Find(id) is { } configured)
+        {
+            var definition = await ctx.RequestServices.GetRequiredService<IReportDefinitionStore>()
+                .Find(configured.ReportName, ct);
+            if (definition is null) return Results.NotFound();
+            if (await ReportRequestAccess.Authorize(definition, ctx) is { } configuredDenied)
+                return configuredDenied;
+            return Results.Json(new
+            {
+                summary = Summary(configured),
+                state = configured.State,
+            }, IrJson.Options);
+        }
+
         var report = await SavedStore(ctx).Get(id, ct);
         if (report is null) return Results.NotFound();
 
@@ -123,6 +150,9 @@ internal static class SavedReportEndpoints
 
     internal static async Task<IResult> Update(string id, HttpContext ctx, CancellationToken ct)
     {
+        if (Documents(ctx).Find(id) is { } configured)
+            return await ReadOnlyConfiguredResult(configured, ctx, ct);
+
         var savedStore = SavedStore(ctx);
         var report = await savedStore.Get(id, ct);
         if (report is null) return Results.NotFound();
@@ -151,6 +181,8 @@ internal static class SavedReportEndpoints
         if (request.Title is not null)
         {
             if (TitleError(request.Title) is { } titleError) return titleError;
+            if (ConfiguredTitleExists(Documents(ctx).List(report.ReportName), request.Title))
+                return ConfiguredTitleConflict(request.Title);
             report.Title = request.Title.Trim();
         }
         if (request.State is not null)
@@ -171,6 +203,9 @@ internal static class SavedReportEndpoints
 
     internal static async Task<IResult> Delete(string id, HttpContext ctx, CancellationToken ct)
     {
+        if (Documents(ctx).Find(id) is { } configured)
+            return await ReadOnlyConfiguredResult(configured, ctx, ct);
+
         var savedStore = SavedStore(ctx);
         var report = await savedStore.Get(id, ct);
         if (report is null) return Results.NotFound();
@@ -194,7 +229,8 @@ internal static class SavedReportEndpoints
 
         var identity = Identity(ctx);
         var all = await SavedStore(ctx).ListAll(ct);
-        return Results.Json(all.Select(r => Summary(r, identity)), IrJson.Options);
+        var configured = Documents(ctx).ListAll().Where(document => !document.Primary).Select(Summary);
+        return Results.Json(configured.Concat(all.Select(report => Summary(report, identity))), IrJson.Options);
     }
 
     // --- helpers -------------------------------------------------------------
@@ -204,6 +240,9 @@ internal static class SavedReportEndpoints
 
     private static ISavedReportStore SavedStore(HttpContext ctx)
         => ctx.RequestServices.GetRequiredService<ISavedReportStore>();
+
+    private static ConfiguredReportDocumentStore Documents(HttpContext ctx)
+        => ctx.RequestServices.GetRequiredService<ConfiguredReportDocumentStore>();
 
     private static string? Identity(HttpContext ctx)
     {
@@ -217,16 +256,52 @@ internal static class SavedReportEndpoints
         return ReportIdentity.IsAdministrator(ctx.User, opts.IdentityClaim, opts.Administrators);
     }
 
-    private static object Summary(SavedReport r, string? caller) => new
+    private static SavedReportSummary Summary(SavedReport report, string? caller) => new(
+        report.Id,
+        report.ReportName,
+        report.Title,
+        report.IsGlobal,
+        report.Owner,
+        SavedReportAccessPolicy.IsOwner(report, caller),
+        IsReadOnly: false,
+        report.ModifiedUtc);
+
+    private static SavedReportSummary Summary(ConfiguredReportDocument document) => new(
+        document.Id,
+        document.ReportName,
+        document.Title,
+        IsGlobal: true,
+        Owner: null,
+        Mine: false,
+        IsReadOnly: true,
+        document.ModifiedUtc);
+
+    private static bool ConfiguredTitleExists(
+        IEnumerable<ConfiguredReportDocument> documents,
+        string title)
+        => documents.Any(document => !document.Primary
+            && string.Equals(document.Title, title.Trim(), StringComparison.OrdinalIgnoreCase));
+
+    private static IResult ConfiguredTitleConflict(string title)
+        => Results.Problem(
+            title: "Configured report title",
+            detail: $"'{title.Trim()}' is supplied by a read-only configured report document; choose another title.",
+            statusCode: StatusCodes.Status409Conflict);
+
+    private static async Task<IResult> ReadOnlyConfiguredResult(
+        ConfiguredReportDocument document,
+        HttpContext ctx,
+        CancellationToken ct)
     {
-        id = r.Id,
-        reportName = r.ReportName,
-        title = r.Title,
-        isGlobal = r.IsGlobal,
-        owner = r.Owner,
-        mine = SavedReportAccessPolicy.IsOwner(r, caller),
-        modifiedUtc = r.ModifiedUtc,
-    };
+        var definition = await ctx.RequestServices.GetRequiredService<IReportDefinitionStore>()
+            .Find(document.ReportName, ct);
+        if (definition is null) return Results.NotFound();
+        if (await ReportRequestAccess.Authorize(definition, ctx) is { } denied) return denied;
+        return Results.Problem(
+            title: "Read-only report",
+            detail: "Configured report documents cannot be updated or deleted. Use Save As to create an editable copy.",
+            statusCode: StatusCodes.Status403Forbidden);
+    }
 
     private static IResult? TitleError(string? title)
         => string.IsNullOrWhiteSpace(title) || title.Trim().Length > 200
@@ -262,3 +337,13 @@ internal sealed class UpdateSavedReportRequest
     public bool? IsGlobal { get; set; }
     public string? Owner { get; set; }
 }
+
+internal sealed record SavedReportSummary(
+    string Id,
+    string ReportName,
+    string Title,
+    bool IsGlobal,
+    string? Owner,
+    bool Mine,
+    bool IsReadOnly,
+    DateTime ModifiedUtc);

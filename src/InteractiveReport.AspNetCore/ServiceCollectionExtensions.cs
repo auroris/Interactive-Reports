@@ -36,6 +36,7 @@ public static class ServiceCollectionExtensions
         };
 
         services.AddSingleton<SchemaCache>();
+        services.AddSingleton<ConfiguredReportDocumentStore>();
         services.AddSingleton<IReportDefinitionStore, ConfigurationReportDefinitionStore>();
         services.AddSingleton<IReportConnectionFactory>(sp => new DelegateConnectionFactory(builder.Connections, sp));
         services.AddSingleton<ReportExecutor>();

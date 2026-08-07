@@ -1,0 +1,13 @@
+{
+  "title": "Primary Report",
+  "primary": true,
+  "state": {
+    "v": 2,
+    "sorts": [
+      { "col": "ORDER_DATE", "dir": "desc" }
+    ],
+    "computed": [
+      { "id": "c1", "label": "With Tax", "expr": "ROUND(AMOUNT * 1.0825, 2)" }
+    ]
+  }
+}

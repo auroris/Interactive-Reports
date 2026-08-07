@@ -24,6 +24,46 @@ must run the client build before packing or running the packaged UI. `ir-chart.j
 Chart.js-based chart renderer) is fetched on demand the first time a report enters
 chart view; pages that never chart never load it.
 
+## Configured report documents
+
+A report definition can reference source-controlled documents. Paths are relative to
+the host's content root unless absolute:
+
+```json
+"orders": {
+  "connection": "MainDb",
+  "dialect": "SqlServer",
+  "sql": "SELECT ORDER_ID, CUSTOMER, AMOUNT FROM ORDERS",
+  "documentFiles": [
+    "ReportDocuments/orders.primary.json",
+    "ReportDocuments/orders.finance.json"
+  ]
+}
+```
+
+Each file contains its selector title, whether it supplies Primary Report, and the
+normal versioned state document:
+
+```json
+{
+  "title": "Primary Report",
+  "primary": true,
+  "state": {
+    "v": 2,
+    "columns": [ "ORDER_ID", "CUSTOMER", "AMOUNT" ],
+    "sorts": [ { "col": "AMOUNT", "dir": "desc" } ]
+  }
+}
+```
+
+At most one file may be primary. It overrides the inline `defaultState` and synthetic
+default; other files appear as global saved reports. Configured documents are always
+read-only, including for report administrators, although Save As can create an editable
+database copy under another title. A configured title takes precedence over an existing
+database report with the same title, and new title collisions are rejected. Ensure the
+host project copies these files to its build and publish output; the Workbench project
+shows one way to do that.
+
 ## Embedding the report
 
 The bundle contains the component's styles and renders into a shadow root, so

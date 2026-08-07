@@ -38,7 +38,7 @@ public sealed class ReportDefinition
     /// Column name → friendly display label, for base queries whose column names are
     /// not presentable. Never applied to the engine's schema or query results: it is
     /// delivered to the client as the labels of the default report the schema endpoint
-    /// sends down (a configured DefaultState with its own labels wins), and it plays
+    /// sends down (an effective primary state with its own labels wins), and it plays
     /// the same default-report role as the bottom layer of document-label resolution
     /// at ingestion, so an unlabeled export matches an untouched client. Column
     /// references crossing the wire always use the real name.
@@ -88,6 +88,14 @@ public sealed class ReportDefinition
 
     /// <summary>The developer's default view (APEX "Primary Report").</summary>
     public ReportState? DefaultState { get; set; }
+
+    /// <summary>
+    /// Report-document JSON files, resolved relative to the host content root unless
+    /// absolute. A file marked primary replaces <see cref="DefaultState"/>; the other
+    /// files are exposed as global, read-only saved reports. Configured documents take
+    /// precedence over database reports with the same title.
+    /// </summary>
+    public List<string>? DocumentFiles { get; set; }
 }
 
 public sealed class ContextParamSpec

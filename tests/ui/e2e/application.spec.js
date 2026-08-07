@@ -29,7 +29,7 @@ async function search(page, value) {
     await runAndWaitForQuery(page, () => page.getByRole("button", { name: "Go", exact: true }).click());
 }
 
-test("loads the synthetic default report, queries data, searches, pages, and changes the configured report", async ({ page }) => {
+test("loads the configured primary report, queries data, searches, pages, and changes reports", async ({ page }) => {
     await openWorkbench(page);
 
     const catalogResponse = await page.request.get("/api/reports");

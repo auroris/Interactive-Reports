@@ -15,11 +15,21 @@ namespace InteractiveReport.AspNetCore;
 public sealed partial class ConfigurationReportDefinitionStore : IReportDefinitionStore, IDisposable
 {
     private readonly IOptionsMonitor<InteractiveReportOptions> _options;
+    private readonly ConfiguredReportDocumentStore? _documents;
     private readonly IDisposable? _reloadSubscription;
 
-    public ConfigurationReportDefinitionStore(IOptionsMonitor<InteractiveReportOptions> options, SchemaCache schemaCache)
+    internal ConfigurationReportDefinitionStore(IOptionsMonitor<InteractiveReportOptions> options, SchemaCache schemaCache)
+        : this(options, schemaCache, documents: null!)
+    {
+    }
+
+    public ConfigurationReportDefinitionStore(
+        IOptionsMonitor<InteractiveReportOptions> options,
+        SchemaCache schemaCache,
+        ConfiguredReportDocumentStore documents)
     {
         _options = options;
+        _documents = documents;
         _reloadSubscription = options.OnChange(_ => schemaCache.Clear());
     }
 
@@ -30,6 +40,9 @@ public sealed partial class ConfigurationReportDefinitionStore : IReportDefiniti
 
         var snapshot = Snapshot(name, def);
         Validate(snapshot);
+        var primary = _documents?.List(snapshot).SingleOrDefault(document => document.Primary);
+        if (primary is not null)
+            snapshot.DefaultState = primary.State;
         return ValueTask.FromResult<ReportDefinition?>(snapshot);
     }
 
@@ -126,6 +139,20 @@ public sealed partial class ConfigurationReportDefinitionStore : IReportDefiniti
                 if (!names.Add(name))
                     throw new InvalidOperationException(
                         $"Report '{def.Name}': columnLabels contains duplicate column '{name}' (names are case-insensitive).");
+            }
+        }
+
+        if (def.DocumentFiles is not null)
+        {
+            var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var path in def.DocumentFiles)
+            {
+                if (string.IsNullOrWhiteSpace(path))
+                    throw new InvalidOperationException(
+                        $"Report '{def.Name}': documentFiles contains a blank path.");
+                if (!paths.Add(path.Trim()))
+                    throw new InvalidOperationException(
+                        $"Report '{def.Name}': documentFiles contains duplicate path '{path}'.");
             }
         }
     }

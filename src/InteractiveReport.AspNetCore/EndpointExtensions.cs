@@ -102,9 +102,9 @@ public static class EndpointExtensions
 
     /// <summary>
     /// The default report the schema endpoint sends down — always complete, never null.
-    /// An unconfigured DefaultState synthesizes to an empty state (every schema column
-    /// in database order), and the definition's columnLabels become the default
-    /// report's labels unless the configured state carries its own. Query responses
+    /// An unconfigured effective primary synthesizes to an empty state (every schema
+    /// column in database order), and the definition's columnLabels become the default
+    /// report's labels unless the effective state carries its own. Query responses
     /// never apply labels; the document ingestion pipeline mirrors this same layering
     /// so exports render what an equivalent client displays.
     /// </summary>

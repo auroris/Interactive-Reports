@@ -11,7 +11,7 @@ import { featureEnabled } from "./schema.js";
 export function canManageCurrentSaved(w) {
     const s = w.currentSaved;
     if (!s) return false;
-    return w.whoami?.isAdministrator || (s.mine && !s.isGlobal);
+    return !s.isReadOnly && (w.whoami?.isAdministrator || (s.mine && !s.isGlobal));
 }
 
 export function refreshSavedSelect(w) {

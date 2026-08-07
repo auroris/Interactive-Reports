@@ -99,11 +99,27 @@ public interface IReportDefinitionStore
       "columnLabels": { "ORDER_ID": "Order #", "CUSTOMER": "Customer Name" },
       "contextParams": { "currentUser": { "claim": "sub" } },
       "authorization": { "policy": "SalesRead" },
-      "features": [ "search", "filter", "sort", "download" ],
+      "features": [ "search", "filter", "sort", "savedReports", "download" ],
       "maxRows": 100000,
       "defaultPageSize": 50,
-      "defaultState": { "sorts": [ { "col": "ORDER_DATE", "dir": "desc" } ] }
+      "documentFiles": [
+        "ReportDocuments/open-orders.primary.json",
+        "ReportDocuments/open-orders.finance.json"
+      ]
     }
+  }
+}
+```
+
+```json
+// ReportDocuments/open-orders.primary.json
+{
+  "title": "Primary Report",
+  "primary": true,
+  "state": {
+    "v": 2,
+    "columns": [ "ORDER_ID", "CUSTOMER", "AMOUNT", "ORDER_DATE" ],
+    "sorts": [ { "col": "ORDER_DATE", "dir": "desc" } ]
   }
 }
 ```
@@ -140,6 +156,14 @@ Notes:
   one or two features it should keep.
 - Base SQL must not end with `ORDER BY` (breaks subquery wrapping on SQL Server; APEX has
   the same rule). Validated at definition load with a clear error.
+- `documentFiles` paths are relative to the host content root unless absolute. Each
+  file is a `{ title, primary, state }` envelope around the ordinary versioned state
+  document. At most one may be primary; it replaces the legacy inline `defaultState`
+  and the synthetic fallback. Non-primary files join the saved-report selector as
+  global read-only documents. They shadow database reports by case-insensitive title;
+  the administrator list retains shadowed rows so they can be renamed or removed.
+  PUT/DELETE of a configured document return 403, while Save As remains available.
+  Hosts must include the referenced files in their build/publish output.
 - Definitions version in git and deploy with the app: schema changes and report changes travel together.
 
 ## 5. Report state document
@@ -195,17 +219,18 @@ provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
   rendering the user's screen, and the posted document's labels apply to its headers
   and synthetic labels (the active document may never have been saved, so nothing can
   be looked up server-side). Ingestion resolves labels once for every path — request
-  `??` defaultState `??` the definition's `columnLabels` — mirroring the default
+  `??` effective primary state `??` the definition's `columnLabels` — mirroring the default
   report the schema endpoint delivers. A computed column still names itself on its
   own rule. Like every state property, a present map replaces the default wholesale
   and `{}` explicitly clears it.
-- A partial request resolves over `defaultState` once: a missing property inherits,
-  while an explicit empty string/list clears the default. `{ "mode": "grid" }`
+- A partial request resolves over the effective primary state once: a configured
+  primary file, then inline `defaultState`, then the synthetic empty state. A missing
+  property inherits, while an explicit empty string/list clears the default. `{ "mode": "grid" }`
   explicitly overrides an alternate default view.
 - `GET /{name}/schema` always returns a complete `defaultState`, and it is the one
   place friendly names leave the server: a definition's `columnLabels` become the
-  default report's `labels` unless the configured state carries its own. When no
-  default is configured the server synthesizes an empty state — which, by the
+  default report's `labels` unless the effective primary state carries its own. When
+  no default is configured the server synthesizes an empty state — which, by the
   null-columns rule, means every schema column in database order, flavored by the
   mapping. A client never invents its own notion of "the default report".
 
@@ -283,9 +308,9 @@ Mounted by the host: `app.MapInteractiveReports("/api/reports").RequireAuthoriza
 | `GET  /api/reports/{name}/schema` | Column metadata + default state + capabilities + resolved feature whitelist (§4). |
 | `POST /api/reports/{name}/query` | Body = state document → page of results. |
 | `GET  /api/reports/whoami` | The caller's canonical identity value (only when `whoamiEnabled`). |
-| `GET  /api/reports/{name}/saved` | Saved reports visible to the caller: globals + their own. |
+| `GET  /api/reports/{name}/saved` | Visible reports: configured read-only alternatives + database globals + the caller's own. Configured titles win. |
 | `POST /api/reports/{name}/saved` | Save the posted state under a title (global publish = admin). 403 when `savedReports` is not whitelisted (§4). |
-| `GET/PUT/DELETE /api/reports/saved/{id}` | Load / modify / delete one saved report (matrix in §13). |
+| `GET/PUT/DELETE /api/reports/saved/{id}` | Load / modify / delete one report document (matrix in §13; configured documents reject mutation). |
 | `GET  /api/reports/admin/saved` | Administrator: every saved report in the system. |
 | `POST /api/reports/{name}/export` | Same state, same gate, no paging → CSV (UTF-8 BOM; headers are the posted document's display labels, §5), capped at `maxRows` with `X-IR-Truncated` header. 403 when `download` is not whitelisted (§4). XLSX/HTML later. |
 | `GET  /api/reports/ui/{file}` | Packaged UI assets (§14). Anonymous by design; content-hash ETags. |
@@ -329,7 +354,7 @@ resolve definition (store)                         404 if absent
 → resolve context params (claims/resolver)
 → ingest document (one pipeline, query + export):
     discover/fetch cached schema
-    resolve doc over defaultState (labels: … ?? columnLabels)
+    resolve doc over effective primary state (labels: … ?? columnLabels)
     validate against schema + enums                400 problem+json (precise)
     compile enabled expression rules               typed definition/predicate/decoration plan
 → [export only] apply document display labels      metadata surfaces; names/SQL untouched
@@ -632,6 +657,14 @@ uses one validated configuration snapshot, and auto-creation is tracked per
 connection/dialect/table target so live configuration changes cannot mix query and storage
 targets or inherit stale initialization state.
 
+**Configured documents.** A report definition's `documentFiles` are loaded from the
+host content root, assigned stable opaque `cfg_…` endpoint ids, and exposed through the
+same summaries and load endpoint as database reports. Summaries carry `isReadOnly`;
+database rows report `false`, configured files `true`. The UI uses that generic
+capability without needing file-origin knowledge. File length and last-write timestamp
+invalidate the parsed cache. A non-primary configured title shadows a database title in
+the end-user list and blocks creation/rename to that title; the admin list shows both.
+
 **Authorization matrix** (enforced at the endpoint layer; the store is dumb):
 
 | Actor | May |
@@ -639,6 +672,7 @@ targets or inherit stale initialization state.
 | Owner (private) | read, update title/state, delete |
 | Anyone with report access | read globals for that report |
 | Administrator | everything: list all, publish/unpublish global, reassign owner, update/delete any |
+| Anyone, including administrators (configured file) | read and Save As; never update/delete the configured source |
 
 Denials hide existence (404) except where the caller provably knows the resource — an
 owner reaching for admin-only powers (publish, reassign) gets an explicit 403. Global
@@ -805,7 +839,8 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 - **M10 — Friendly names** ✅ *(2026-08-07)*: client-side display names over a unified
   document flow. A definition's `columnLabels` and a state's `labels` map (additive
   field, no version bump) carry real column name → display label; the schema endpoint
-  always returns a complete `defaultState` (synthesized when unconfigured) whose
+  always returns a complete effective `defaultState` (configured file, inline state,
+  or synthetic fallback) whose
   labels deliver the mapping to the client. Document ingestion is one pipeline
   (`ReportExecutor.IngestDocument` → `StateValidator`) that resolves labels for every
   path; query surfaces stay on neutral server labels — the packaged UI resolves
@@ -821,6 +856,12 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   stays presentation-level by design. Per-column attributes (alignment, format
   masks, LOVs, per-column sort/filter permissions…) remain the next configuration
   increment.
+- **M12 — Source-controlled report documents** ✅ *(2026-08-07)*: per-definition
+  `documentFiles` load `{ title, primary, state }` envelopes from the host content
+  root. A configured primary participates in the same default-resolution pipeline;
+  alternatives share the saved-report API with stable opaque ids and `isReadOnly`
+  summaries. File titles precede database titles, mutation is server-refused, Save As
+  remains available, and the packaged report/admin clients suppress invalid controls.
 
 ## Appendix: decision log
 
@@ -838,6 +879,7 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 | Saved-report ids are text GUIDs | identity/sequence columns | One DDL shape across SQLite/SqlServer/Oracle; no sequence plumbing. |
 | Timestamps as ISO text, flags as 0/1 | native per-dialect types | Uniform semantics and sorting across dialects for an engine-internal table. |
 | Global mutations admin-only, even for the owner | owner-managed globals | A published report is shared infrastructure; publishing and unpublishing are curation acts. |
+| Configured report files use the saved-report protocol with `isReadOnly` | separate configured-report API or expose file origin | One selector and load path keeps the document model coherent. Generic mutability is what clients need; the storage source remains a server concern. |
 | Microsoft.Data.Sqlite dependency in the AspNetCore package | host-supplied providers only | The zero-config default saved-report store must work with no host setup; report-data connections remain host-supplied. |
 | Decimal parameters bind as double on SQLite | decimal-as-TEXT (provider default) | The provider's TEXT binding breaks comparisons against affinity-less expressions (computed columns) via SQLite's cross-type ordering; double is SQLite's native numeric storage, so the conversion is faithful to the engine. |
 | Pivot caps: 60 column groups (configurable) + hard 10k source groups | unbounded pivot | An unbounded pivot is a memory/usability grenade; the caps surface as precise 400s telling the user what to change. |
