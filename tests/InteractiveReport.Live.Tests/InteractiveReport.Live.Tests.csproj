@@ -24,12 +24,18 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\InteractiveReport.AspNetCore\InteractiveReport.AspNetCore.csproj" />
     <ProjectReference Include="..\..\src\InteractiveReport.Core\InteractiveReport.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
   <ItemGroup>
     <Compile Include="..\InteractiveReport.Core.Tests\SavedReportStoreCorpus.cs" Link="SavedReportStoreCorpus.cs" />
     <Compile Include="..\InteractiveReport.Core.Tests\TestFixtures.cs" Link="TestFixtures.cs" />
+    <Compile Include="..\Shared\PersistenceHttpScenario.cs" Link="PersistenceHttpScenario.cs" />
   </ItemGroup>
 
 </Project>

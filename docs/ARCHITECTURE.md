@@ -661,13 +661,29 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   stylesheet is compiled into the JavaScript bundle, so host resets and utility
   classes cannot enter the component and component styles cannot escape onto the
   host page. Hosts can theme documented `--ir-*` custom properties on the element.
-- Source modules live in `Ui/src`: `ir.js` (element, toolbar/menus), `ir-state.js` (pure normalization,
-  serialization, and scoped-search expression construction), `ir-api.js`
-  (fetch + problem+json), `ir-ui.js` (menu/dialog primitives), `ir-render.js`
-  (chips, grid, pager), `ir-dialogs.js` (the Actions dialogs), `ir-admin.js`
-  (admin element), `ir.css`. `npm run build` uses esbuild to compile the stylesheet
-  and modules into three self-contained entry bundles in `Ui/dist`; these generated
-  assets are committed so a normal .NET build does not require Node.js.
+- Source modules live in `Ui/src`, organized by concern. The root holds only the
+  three bundle entries (`ir.js`, `ir-admin.js`, `ir-chart.js` — thin registration/
+  re-export files whose basenames fix the `Ui/dist` output names) and the shared
+  `ir.css`. `core/` is widget-agnostic plumbing: `api.js` (fetch + problem+json +
+  served-prefix inference), `dom.js` (element builder, icons, banners, form
+  helpers), `menu.js` (popup menus), `dialog.js` (modal dialogs), `widget.js`
+  (shadow-root mount/teardown, compiles in `ir.css`). `report/` is the report
+  widget: `element.js` (the custom element — state-document lifecycle: build,
+  POST, route the response; exposes `doc`/`els`/`apply`/`runQuery`/notices as the
+  surface its feature modules call), `state.js` (pure normalization,
+  serialization, scoped-search expression construction), `schema.js` (column
+  metadata + label resolution), `skeleton.js` (toolbar/frame), `search.js`,
+  `menus.js` (Actions + header menus), `saved.js` (saved-report management),
+  `export.js`, plus `render/` (`format.js`, `chips.js`, `grid.js`,
+  `chart-view.js`, `pager.js`) and `dialogs/` (`parts.js` shared building blocks,
+  `columns.js`, `rules.js` — the expression-rule dialogs mirroring the server's
+  unified rule pipeline, `grid.js`, `view.js`, `save.js`). `admin/element.js` is
+  the admin widget; `chart/` (`theme.js`, `render.js`) backs the chart bundle.
+  Feature modules are free functions over the widget instance `w` — nothing
+  imports the element class except its entry, so the graph stays acyclic.
+  `npm run build` uses esbuild to compile the stylesheet and modules into three
+  self-contained entry bundles in `Ui/dist`; these generated assets are committed
+  so a normal .NET build does not require Node.js.
 - **Feature surface**: scoped toolbar search (all text columns or one typed column → expression filter);
   Actions menu (Columns shuttle, Filter, Sort, Control Break, Highlight, Aggregate,
   Compute with token-insert helpers, Group By, Pivot, Chart, Save/Save As/Delete/Reset,

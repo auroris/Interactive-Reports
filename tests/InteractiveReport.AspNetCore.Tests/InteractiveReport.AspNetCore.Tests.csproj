@@ -23,4 +23,12 @@
     <ProjectReference Include="..\..\src\InteractiveReport.AspNetCore\InteractiveReport.AspNetCore.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Shared\PersistenceHttpScenario.cs" Link="PersistenceHttpScenario.cs" />
+  </ItemGroup>
+
 </Project>

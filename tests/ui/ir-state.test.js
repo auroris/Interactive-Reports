@@ -4,7 +4,7 @@ import {
     normalizeReportState,
     scopedSearchExpression,
     serializeReportState,
-} from "../../src/InteractiveReport.AspNetCore/Ui/src/ir-state.js";
+} from "../../src/InteractiveReport.AspNetCore/Ui/src/report/state.js";
 
 test("normalization clones input and resets only the page index", () => {
     const input = { filters: [{ expr: "AMOUNT > 1" }], page: { index: 9, size: 75 } };

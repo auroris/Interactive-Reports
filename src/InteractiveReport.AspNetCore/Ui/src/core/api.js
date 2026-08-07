@@ -1,6 +1,12 @@
 // Fetch layer for the report protocol: problem+json aware, JSON in/out, blob export.
 // Shared by the report widget (ir.js) and the admin widget (ir-admin.js).
 
+/// Default API prefix for a widget with no api-base attribute: the prefix this
+/// script was served from. …/api/reports/ui/ir.js → …/api/reports
+export function defaultApiBase() {
+    return new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+}
+
 export function apiUrl(base, ...segments) {
     const prefix = String(base).replace(/\/+$/, "");
     if (!segments.length) return prefix;

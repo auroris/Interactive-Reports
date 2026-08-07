@@ -11,7 +11,12 @@ The Core and ASP.NET test projects run with zero infrastructure (SQLite in-memor
 Coverage: composer goldens ×4 dialects, the row-condition corpus × dialect matrix, expression
 parser/emitter, the shared computed/filter/highlight rule plan (including disabled-rule
 elision), validator rules, SQL-safety corpus, saved-report store, CSV writer, and
-end-to-end engine passes.
+end-to-end engine passes. The ASP.NET suite also starts a real local server over a clean
+file-backed SQLite report database. It obtains the synthetic default report document
+from the schema endpoint, queries and saves that exact document under a random title,
+restarts the server, and loads it again. It first proves that zero-configuration saved
+reports use a separate `App_Data/interactivereport.saved.db`, then points saved-report
+persistence at the report database and repeats the restart/load check.
 
 `npm test` builds the packaged client and runs the fast DOM-level unit suite with
 Node.js and happy-dom.
@@ -50,15 +55,24 @@ dotnet test tests/InteractiveReport.Live.Tests
 ```
 
 **What it does:** on first use per run it **drops and recreates a table named
-`IR_TEST_ORDERS`** in the target database and seeds the canonical 10 rows, then runs
+`IR_TEST_ORDERS`** in each target database and seeds the canonical 10 rows, then runs
 expression filters and highlights/search/explicit null-or-empty conditions/aggregates/breaks/computed columns (including CASE,
 date-part extraction over native and ISO-text dates, and the date vocabulary —
 NOW/TO_DATE/DATE_TRUNC/TO_STRING, whole-day arithmetic, BETWEEN, and session
 timezone pinning via definition TimeZone)/context-param
-binding/groupBy/pivot/export against it, and the saved-report store corpus
-runs against Postgres in a dedicated `IR_SAVED_REPORTS_TEST` table
-(`PostgresSavedReportStoreTests`). Point it at a scratch database, not anything you
-care about.
+binding/groupBy/pivot/export against it.
+
+The server-level persistence scenario also runs against every configured live dialect.
+For each database it starts the ASP.NET host over `SELECT * FROM IR_TEST_ORDERS`, obtains
+the application's synthetic `defaultState`, queries and saves that exact document under
+a random title, restarts, and loads it. The first pass proves that the default store is a
+separate local SQLite file and does not create a persistence table in the report
+database. The second pass configures a random saved-report table in the report database
+and repeats the restart/load check. Random live tables are removed after the test.
+
+Finally, the complete saved-report create/list/update/delete contract runs against SQL
+Server, Oracle, and PostgreSQL in a dedicated `IR_SAVED_REPORTS_TEST` table. Point the
+environment variables at scratch databases, not anything you care about.
 
 Expected numbers are identical on every dialect by design, including the explicit
 `NOTES IS NULL OR NOTES = ''` condition (4): SQLite/SQL Server/PostgreSQL count three

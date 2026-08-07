@@ -10,7 +10,7 @@
     network (192.168.56.x is unreachable from outside this machine).
 .PARAMETER Filter
     Optional dotnet test --filter expression. Empty runs the full live battery,
-    including the PostgreSQL saved-report corpus.
+    including server-level persistence and the saved-report corpus on all dialects.
 #>
 [CmdletBinding()]
 param(

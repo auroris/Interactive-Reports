@@ -1,0 +1,144 @@
+// The grid: header with sort indicators and per-column menus, data rows with
+// control-break groups and per-group aggregate rows, highlights, grand totals.
+// Pure DOM out of the widget's state — no fetching in here.
+
+import { el } from "../../core/dom.js";
+import { labelOf } from "../schema.js";
+import { formatValue, formatAgg, FN_LABELS, FN_ORDER } from "./format.js";
+import { openHeaderMenu } from "../menus.js";
+
+export function renderGrid(w, table) {
+    const result = w.lastResult;
+    if (!result) { table.replaceChildren(); return; }
+    const mode = w.doc.view?.mode ?? "grid";
+    const columns = result.columns;
+
+    // Labels resolve client-side: the report's own labels first, then the server's
+    // neutral label. GroupBy metric columns (v0…) are synthetic, so their server label
+    // embeds the raw column label — rebuild it from the view spec the client authored.
+    const displayLabel = col => {
+        const override = w.doc.labels?.[col.name];
+        if (override) return override;
+        const metric = mode === "groupBy" ? /^v(\d+)$/.exec(col.name) : null;
+        const spec = metric && !(w.doc.view?.groupBy ?? []).includes(col.name)
+            ? w.doc.view?.values?.[Number(metric[1])]
+            : null;
+        return spec ? `${spec.fn}(${labelOf(w, spec.col)})` : col.label;
+    };
+
+    // Header. Sort indicators come from the state doc; menus depend on the view mode.
+    const sortOrd = new Map((w.doc.sorts ?? []).map((s, i) => [s.col, { dir: s.dir ?? "asc", ord: i + 1 }]));
+    const dims = mode === "groupBy" ? new Set(w.doc.view?.groupBy ?? []) : null;
+    const headRow = el("tr", {});
+    for (const col of columns) {
+        const interactive = mode === "grid" || (mode === "groupBy" && dims.has(col.name));
+        const s = sortOrd.get(col.name);
+        const inner = el("span", { class: "ir-th-inner" }, displayLabel(col));
+        if (s) {
+            inner.append(el("span", { class: "ir-sort-dir", "aria-hidden": "true" }, s.dir === "desc" ? "▼" : "▲"));
+            if ((w.doc.sorts ?? []).length > 1) inner.append(el("span", { class: "ir-sort-ord" }, String(s.ord)));
+        }
+        const th = el("th", {
+            class: (col.type === "number" ? "ir-num " : "") + (interactive ? "ir-th-menu" : ""),
+            scope: "col",
+            "aria-sort": s ? (s.dir === "desc" ? "descending" : "ascending") : undefined,
+        }, inner);
+        if (interactive) th.onclick = () => openHeaderMenu(w, col.name, th);
+        headRow.append(th);
+    }
+
+    // Body: data rows with break groups, per-group aggregate rows, highlights.
+    const breaks = mode === "grid" ? (w.doc.breaks ?? []) : [];
+    const keyOf = source => breaks.map(b => String(source[b] ?? "")).join("");
+    const totalsByKey = new Map((result.breakTotals ?? []).map(bt => [keyOf(bt.key), bt]));
+
+    // Columns whose page values include fractions format uniformly as decimals.
+    const decimalCols = new Set(columns
+        .filter(c => c.type === "number"
+            && result.rows.some(r => typeof r[c.name] === "number" && !Number.isInteger(r[c.name])))
+        .map(c => c.name));
+
+    const styleById = new Map((w.doc.highlights ?? []).map(h => [h.id, h.style ?? {}]));
+    const hitsByRow = new Map();
+    for (const h of result.highlights ?? []) {
+        if (!hitsByRow.has(h.row)) hitsByRow.set(h.row, []);
+        hitsByRow.get(h.row).push(h);
+    }
+
+    const aggRows = (aggregates, cls) => {
+        const rows = [];
+        const fns = FN_ORDER.filter(fn => Object.values(aggregates ?? {}).some(byFn => fn in byFn));
+        for (const fn of fns) {
+            const tr = el("tr", { class: cls });
+            columns.forEach((col, idx) => {
+                const has = aggregates[col.name] && fn in aggregates[col.name];
+                const td = el("td", { class: col.type === "number" ? "ir-num" : "" });
+                if (idx === 0) {
+                    td.append(el("span", { class: "ir-agg-fn" }, `${FN_LABELS[fn] ?? fn}:`));
+                    if (has) td.append(" ", formatAgg(aggregates[col.name][fn]));
+                } else if (has) {
+                    td.textContent = formatAgg(aggregates[col.name][fn]);
+                }
+                tr.append(td);
+            });
+            rows.push(tr);
+        }
+        return rows;
+    };
+
+    const bodyRows = [];
+    let currentKey = null;
+    const closeGroup = () => {
+        if (currentKey === null) return;
+        const bt = totalsByKey.get(currentKey);
+        if (bt && Object.keys(bt.aggregates ?? {}).length) bodyRows.push(...aggRows(bt.aggregates, "ir-break-total"));
+    };
+
+    for (const [r, row] of result.rows.entries()) {
+        if (breaks.length) {
+            const key = keyOf(row);
+            if (key !== currentKey) {
+                closeGroup();
+                const bt = totalsByKey.get(key);
+                const label = breaks.map(b => `${labelOf(w, b)}: ${row[b] ?? "(blank)"}`).join("  ·  ");
+                bodyRows.push(el("tr", { class: "ir-break-header" },
+                    el("td", { colSpan: columns.length },
+                        el("span", {}, label),
+                        bt ? el("span", { class: "ir-break-count" }, `${Number(bt.rows).toLocaleString()} rows`) : null)));
+                currentKey = key;
+            }
+        }
+        const tr = el("tr", { class: "ir-row" });
+        for (const col of columns) {
+            const cls = [col.type === "number" ? "ir-num" : "", col.type === "date" ? "ir-date" : ""].join(" ").trim();
+            tr.append(el("td", { class: cls || undefined }, formatValue(row[col.name], col.type, decimalCols.has(col.name))));
+        }
+        const rowHits = (hitsByRow.get(r) ?? []).filter(hit => !hit.col);
+        const cellHits = (hitsByRow.get(r) ?? []).filter(hit => !!hit.col);
+        for (const hit of [...rowHits, ...cellHits]) {
+            const style = styleById.get(hit.id) ?? {};
+            if (!hit.col) {
+                if (style.bg) tr.style.background = style.bg;
+                if (style.fg) tr.style.color = style.fg;
+            } else {
+                const idx = columns.findIndex(c => c.name === hit.col);
+                if (idx >= 0) {
+                    if (style.bg) tr.children[idx].style.background = style.bg;
+                    if (style.fg) tr.children[idx].style.color = style.fg;
+                }
+            }
+        }
+        bodyRows.push(tr);
+    }
+    closeGroup();
+
+    // Report-level aggregate rows (whole filtered set, never just the page).
+    if (Object.keys(result.aggregates ?? {}).length)
+        bodyRows.push(...aggRows(result.aggregates, "ir-grand-total"));
+
+    if (!result.rows.length)
+        bodyRows.push(el("tr", { class: "ir-empty" },
+            el("td", { colSpan: Math.max(columns.length, 1) }, "No data found.")));
+
+    table.replaceChildren(el("thead", {}, headRow), el("tbody", {}, ...bodyRows));
+}
