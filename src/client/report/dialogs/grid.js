@@ -1,8 +1,38 @@
-// Grid-shaping dialogs: sort order, control breaks, and aggregate rows.
+// Grid-shaping dialogs: pagination, sort order, control breaks, and aggregate rows.
 
-import { el, sel } from "../../core/dom.js";
+import { el, labeled, sel } from "../../core/dom.js";
 import { openDialog } from "../../core/dialog.js";
 import { rowList, colOptions, fnSelectFor, DIR_OPTIONS } from "./parts.js";
+
+const PAGE_LIMITS = [10, 50, 100, 500, 1000];
+
+export function paginationDialog(w) {
+    const current = w.lastResult?.page?.size ?? w.doc.page?.size ?? w.schema?.limits?.defaultPageSize ?? 50;
+    const max = w.schema?.limits?.maxPageSize ?? 1000;
+    const numeric = PAGE_LIMITS.filter(size => size <= max);
+    // Preserve a developer-defined/default size that is outside the APEX choices.
+    // It remains selectable until the user deliberately replaces it.
+    if (current > 0 && current <= max && !numeric.includes(current)) numeric.push(current);
+    numeric.sort((a, b) => a - b);
+    const limit = sel([
+        ...numeric.map(size => ({ value: String(size), label: String(size) })),
+        { value: "0", label: "All" },
+    ], String(current));
+    limit.setAttribute("aria-label", "Limit");
+
+    openDialog({
+        owner: w,
+        title: "Pagination",
+        width: "20rem",
+        build: body => body.append(
+            labeled("Limit", limit),
+            el("p", { class: "ir-dialog-note" }, "All returns every matching row in one page.")),
+        onApply: () => w.apply(d => {
+            d.page ??= { index: 1, size: current };
+            d.page.size = Number(limit.value);
+        }),
+    });
+}
 
 export function sortDialog(w) {
     const container = el("div", {});

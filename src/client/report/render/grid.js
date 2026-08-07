@@ -4,8 +4,8 @@
 
 import { el } from "../../core/dom.js";
 import { labelOf } from "../schema.js";
-import { formatAgg, FN_LABELS, FN_ORDER } from "./format.js";
-import { renderColumnValue } from "./column-renderers.js";
+import { formatAgg, formatInteger, hasFraction, FN_LABELS, FN_ORDER } from "./format.js";
+import { formatForColumn, renderColumnValue } from "./column-renderers.js";
 import { headerMenuAvailable, openHeaderMenu } from "../menus.js";
 import { columnClasses } from "../classes.js";
 
@@ -17,10 +17,10 @@ export function renderGrid(w, table) {
 
     // Per-column display settings from the doc's formats map. Styles go inline on
     // the cells; highlights are applied later and deliberately win over them.
-    const formats = w.doc.formats ?? {};
-    const classesFor = (name, ...builtIn) => [...builtIn, ...columnClasses(formats[name]?.classes)]
+    const formatFor = col => formatForColumn(w, col);
+    const classesFor = (col, ...builtIn) => [...builtIn, ...columnClasses(formatFor(col)?.classes)]
         .filter(Boolean).join(" ") || undefined;
-    const alignStyle = name => formats[name]?.align ? { textAlign: formats[name].align } : undefined;
+    const alignStyle = col => formatFor(col)?.align ? { textAlign: formatFor(col).align } : undefined;
     const formatStyle = fmt => {
         if (!fmt) return undefined;
         const style = {};
@@ -60,9 +60,9 @@ export function renderGrid(w, table) {
             if ((w.doc.sorts ?? []).length > 1) inner.append(el("span", { class: "ir-sort-ord" }, String(s.ord)));
         }
         const th = el("th", {
-            class: classesFor(col.name, col.type === "number" ? "ir-num" : "", interactive ? "ir-th-menu" : ""),
+            class: classesFor(col, col.type === "number" ? "ir-num" : "", interactive ? "ir-th-menu" : ""),
             scope: "col",
-            style: alignStyle(col.name),
+            style: alignStyle(col),
             "aria-sort": s ? (s.dir === "desc" ? "descending" : "ascending") : undefined,
         }, inner);
         if (interactive) th.onclick = () => openHeaderMenu(w, col.name, th);
@@ -77,7 +77,7 @@ export function renderGrid(w, table) {
     // Columns whose page values include fractions format uniformly as decimals.
     const decimalCols = new Set(columns
         .filter(c => c.type === "number"
-            && result.rows.some(r => typeof r[c.name] === "number" && !Number.isInteger(r[c.name])))
+            && result.rows.some(r => hasFraction(r[c.name])))
         .map(c => c.name));
 
     const styleById = new Map((w.doc.highlights ?? []).map(h => [h.id, h.style ?? {}]));
@@ -94,15 +94,19 @@ export function renderGrid(w, table) {
             const tr = el("tr", { class: cls });
             columns.forEach((col, idx) => {
                 const has = aggregates[col.name] && fn in aggregates[col.name];
+                const fmt = formatFor(col);
+                const isCount = fn === "count" || fn === "countDistinct";
+                const aggregateType = isCount || fn === "sum" || fn === "avg" ? "number" : col.type;
+                const aggregateMask = isCount ? null : fmt?.mask;
                 const td = el("td", {
-                    class: classesFor(col.name, col.type === "number" ? "ir-num" : ""),
-                    style: alignStyle(col.name),
+                    class: classesFor(col, col.type === "number" ? "ir-num" : ""),
+                    style: alignStyle(col),
                 });
                 if (idx === 0) {
                     td.append(el("span", { class: "ir-agg-fn" }, `${FN_LABELS[fn] ?? fn}:`));
-                    if (has) td.append(" ", formatAgg(aggregates[col.name][fn]));
+                    if (has) td.append(" ", formatAgg(aggregates[col.name][fn], aggregateType, aggregateMask));
                 } else if (has) {
-                    td.textContent = formatAgg(aggregates[col.name][fn]);
+                    td.textContent = formatAgg(aggregates[col.name][fn], aggregateType, aggregateMask);
                 }
                 tr.append(td);
             });
@@ -129,19 +133,19 @@ export function renderGrid(w, table) {
                 bodyRows.push(el("tr", { class: "ir-break-header" },
                     el("td", { colSpan: columns.length },
                         el("span", {}, label),
-                        bt ? el("span", { class: "ir-break-count" }, `${Number(bt.rows).toLocaleString()} rows`) : null)));
+                        bt ? el("span", { class: "ir-break-count" }, `${formatInteger(bt.rows)} rows`) : null)));
                 currentKey = key;
             }
         }
         const tr = el("tr", { class: "ir-row" });
         for (const col of columns) {
-            const fmt = formats[col.name];
+            const fmt = formatFor(col);
             const cls = classesFor(
-                col.name,
+                col,
                 col.type === "number" ? "ir-num" : "",
                 col.type === "date" ? "ir-date" : "");
             tr.append(el("td", { class: cls, style: formatStyle(fmt) },
-                renderColumnValue(w, row, col, decimalCols.has(col.name), fmt)));
+                renderColumnValue(w, row, col, decimalCols.has(col.name), fmt, mode === "grid")));
         }
         const rowHits = (hitsByRow.get(r) ?? []).filter(hit => !hit.col);
         const cellHits = (hitsByRow.get(r) ?? []).filter(hit => !!hit.col);

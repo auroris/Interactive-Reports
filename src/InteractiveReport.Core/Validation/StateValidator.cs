@@ -137,7 +137,7 @@ public static class StateValidator
             search = null;
         }
 
-        var (pageIndex, pageSize) = ClampPage(resolved.Page, def);
+        var (pageIndex, pageSize, pageAll) = ClampPage(resolved.Page, def);
 
         if (errors.Count > 0)
             throw new ReportValidationException(errors);
@@ -156,6 +156,7 @@ public static class StateValidator
             View = view,
             PageIndex = pageIndex,
             PageSize = pageSize,
+            PageAll = pageAll,
             Ignored = ignored,
             Labels = labels,
         };
@@ -263,12 +264,15 @@ public static class StateValidator
         }
     }
 
-    private static (int Index, int Size) ClampPage(PageRequest? page, ReportDefinition def)
+    private static (int Index, int Size, bool All) ClampPage(PageRequest? page, ReportDefinition def)
     {
         var size = page?.Size ?? def.DefaultPageSize;
+        if (size == 0)
+            return (1, 0, true);
+
         size = Math.Clamp(size, 1, def.MaxPageSize);
         var index = Math.Max(1, page?.Index ?? 1);
-        return (index, size);
+        return (index, size, false);
     }
 
     private static List<ValidSort> ValidateSorts(

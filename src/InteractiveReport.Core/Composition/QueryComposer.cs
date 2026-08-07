@@ -42,7 +42,8 @@ public static class QueryComposer
             else page.OrderByDesc(sort.Column.Name);
         }
 
-        page.ForPage(state.PageIndex, state.PageSize);
+        if (!state.PageAll)
+            page.ForPage(state.PageIndex, state.PageSize);
 
         return new ComposedQueries(page, count, aggregates, breakTotals);
     }
@@ -92,7 +93,8 @@ public static class QueryComposer
         var dims = state.View.GroupBy;
 
         var page = BuildGrouped(core, dims, state.View.Values, def.Dialect, DimSorts(dims, state.Sorts));
-        page.ForPage(state.PageIndex, state.PageSize);
+        if (!state.PageAll)
+            page.ForPage(state.PageIndex, state.PageSize);
 
         var groups = core.Clone().Select(dims.Select(d => d.Name).ToArray()).GroupBy(dims.Select(d => d.Name).ToArray());
         var count = new Query().From(groups.As("ir_groups")).AsCount();

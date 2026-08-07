@@ -94,6 +94,22 @@ public class GoldenSqlTests
     }
 
     [Fact]
+    public void All_rows_omits_limit_and_offset_from_the_grid_query()
+    {
+        var state = new ReportState
+        {
+            Sorts = [new SortRule { Col = "ORDER_ID" }],
+            Page = new PageRequest { Index = 7, Size = 0 },
+        };
+
+        var (page, _) = Compile(ReportDialect.Sqlite, state);
+
+        Assert.DoesNotContain("LIMIT", page.Sql, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("OFFSET", page.Sql, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(page.NamedBindings);
+    }
+
+    [Fact]
     public void Grid_query_projects_hidden_renderer_sources_without_display_metadata()
     {
         var state = new ReportState
@@ -326,6 +342,22 @@ public class GoldenSqlTests
         Assert.StartsWith("SELECT COUNT(*)", countSql);
         Assert.Contains("GROUP BY \"REGION\"", countSql);
         Assert.Contains("\"ir_groups\"", countSql);
+    }
+
+    [Fact]
+    public void All_groups_omits_limit_and_offset_from_the_group_query()
+    {
+        var def = OrdersDefinition(ReportDialect.Sqlite);
+        var validated = StateValidator.Validate(def, new ReportState
+        {
+            View = new ViewSpec { Mode = "groupBy", GroupBy = ["REGION"] },
+            Page = new PageRequest { Index = 7, Size = 0 },
+        }, OrdersSchema);
+        var (page, _) = QueryComposer.ComposeGroupByView(def, validated);
+
+        var sql = DialectSupport.GetCompiler(ReportDialect.Sqlite).Compile(page).Sql;
+        Assert.DoesNotContain("LIMIT", sql, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("OFFSET", sql, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

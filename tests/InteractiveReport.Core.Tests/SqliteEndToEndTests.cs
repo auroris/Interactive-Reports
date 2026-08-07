@@ -182,6 +182,31 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     }
 
     [Fact]
+    public async Task Grid_export_link_text_uses_the_source_columns_mask()
+    {
+        var export = await _executor.Export(Definition, new ReportState
+        {
+            Computed = [new ComputedColumn { Id = "c1", Expr = "'/orders/' || ORDER_ID" }],
+            Columns = ["CUSTOMER"],
+            Filters = [Filter("ORDER_ID = 1")],
+            Formats = new()
+            {
+                ["CUSTOMER"] = new ColumnFormat
+                {
+                    DisplayAs = "link",
+                    UrlColumn = "c1",
+                    TextColumn = "AMOUNT",
+                },
+                ["AMOUNT"] = new ColumnFormat { Mask = "currency:USD" },
+            },
+        }, NoParams);
+
+        Assert.Equal(
+            "<a class=\"ir-cell-link\" href=\"/orders/1\">$9,000.00</a>",
+            Assert.Single(export.Rows)["CUSTOMER"]);
+    }
+
+    [Fact]
     public async Task Export_applies_the_documents_labels_because_it_renders_what_the_user_sees()
     {
         var def = Definition;
@@ -244,6 +269,31 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         Assert.Equal(5, result.TotalRows);
         Assert.Equal(2, result.Rows.Count);
         Assert.Equal([3000m, 1500m], result.Rows.Select(r => Convert.ToDecimal(r["AMOUNT"])));
+    }
+
+    [Fact]
+    public async Task All_bypasses_query_limits_but_export_still_uses_its_independent_cap()
+    {
+        var def = Definition;
+        def.MaxRows = 3;
+        def.MaxPageSize = 3;
+        def.DefaultPageSize = 3;
+        var state = new ReportState
+        {
+            Sorts = [new SortRule { Col = "ORDER_ID" }],
+            Page = new PageRequest { Index = 8, Size = 0 },
+        };
+
+        var query = await _executor.Query(def, state, NoParams);
+
+        Assert.Equal(10, query.TotalRows);
+        Assert.Equal(10, query.Rows.Count);
+        Assert.Equal(1, query.Page.Index);
+        Assert.Equal(0, query.Page.Size);
+
+        var export = await _executor.Export(def, state, NoParams);
+        Assert.True(export.Truncated);
+        Assert.Equal(3, export.Rows.Count);
     }
 
     [Fact]
@@ -686,6 +736,8 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         Assert.Equal(4, result.TotalRows);
         Assert.Equal(["STATUS", "__count", "v0"], result.Columns.Select(c => c.Name));
         Assert.Equal("sum(Amount)", result.Columns[2].Label);
+        Assert.Null(result.Columns[1].FormatSource);
+        Assert.Equal("AMOUNT", result.Columns[2].FormatSource);
         Assert.Equal(["CANCELLED", "NEW", "PENDING", "SHIPPED"], result.Rows.Select(r => (string)r["STATUS"]!));
         Assert.Equal([1L, 1L, 3L, 5L], result.Rows.Select(r => Convert.ToInt64(r["__count"])));
         Assert.Equal([6000m, 400m, 14800m, 26000m], result.Rows.Select(r => Convert.ToDecimal(r["v0"])));
@@ -723,6 +775,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         Assert.Equal(9, result.TotalRows);
         Assert.Equal(5, result.Columns.Count);
         Assert.Equal(["CANCELLED", "NEW", "PENDING", "SHIPPED"], result.Columns.Skip(1).Select(c => c.Label));
+        Assert.All(result.Columns.Skip(1), column => Assert.Equal("AMOUNT", column.FormatSource));
 
         var acme = result.Rows.Single(r => (string?)r["CUSTOMER"] == "Acme Corp");
         Assert.Equal(12000m, Convert.ToDecimal(acme["p3_0"]));       // SHIPPED: 9000 + 3000
@@ -739,6 +792,17 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
 
         var acme = result.Rows.Single(r => (string?)r["CUSTOMER"] == "Acme Corp");
         Assert.Equal(2L, Convert.ToInt64(acme["p3_0"]));             // two SHIPPED orders
+        Assert.All(result.Columns.Skip(1), column => Assert.Null(column.FormatSource));
+
+        var explicitCount = await _executor.Query(Definition, new ReportState
+        {
+            View = new ViewSpec
+            {
+                Mode = "pivot", Rows = ["CUSTOMER"], Cols = ["STATUS"],
+                Values = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Count }],
+            },
+        }, NoParams);
+        Assert.All(explicitCount.Columns.Skip(1), column => Assert.Null(column.FormatSource));
     }
 
     [Fact]
@@ -806,6 +870,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         Assert.Equal(["STATUS", "v0"], result.Columns.Select(c => c.Name));
         Assert.Equal("sum(Amount)", result.Columns[1].Label);
         Assert.Equal("number", result.Columns[1].Type);
+        Assert.Equal("AMOUNT", result.Columns[1].FormatSource);
         Assert.Equal(3, result.TotalRows);
         Assert.Equal(["SHIPPED", "PENDING", "CANCELLED"], result.Rows.Select(r => (string)r["STATUS"]!));
         Assert.Equal([26000m, 14800m, 6000m], result.Rows.Select(r => Convert.ToDecimal(r["v0"])));
@@ -842,6 +907,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         }, NoParams);
 
         Assert.Equal(["v0", "v0_metric"], result.Columns.Select(c => c.Name));
+        Assert.Equal("AMOUNT", result.Columns[1].FormatSource);
         Assert.Equal(["CANCELLED", "NEW", "PENDING", "SHIPPED"], result.Rows.Select(r => (string)r["v0"]!));
         Assert.Equal([6000m, 400m, 14800m, 26000m], result.Rows.Select(r => Convert.ToDecimal(r["v0_metric"])));
     }
@@ -891,6 +957,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
 
         Assert.Equal(5, result.TotalRows);
         Assert.Equal(["ORDER_DATE", "AMOUNT"], result.Columns.Select(c => c.Name));
+        Assert.Equal("AMOUNT", result.Columns[1].FormatSource);
         Assert.Equal(
             [5000m, 7500m, 9000m, 6000m, 12000m],                    // label (date-text) ascending
             result.Rows.Select(r => Convert.ToDecimal(r["AMOUNT"])));
@@ -905,6 +972,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         }, NoParams);
 
         Assert.Equal(["AMOUNT", "AMOUNT_metric"], result.Columns.Select(c => c.Name));
+        Assert.Equal("AMOUNT", result.Columns[1].FormatSource);
         Assert.All(result.Rows, row =>
             Assert.Equal(Convert.ToDecimal(row["AMOUNT"]), Convert.ToDecimal(row["AMOUNT_metric"])));
     }
@@ -923,6 +991,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         }, NoParams);
 
         Assert.Equal("sum(Doubled)", result.Columns[1].Label);
+        Assert.Equal("c2", result.Columns[1].FormatSource);
         Assert.Equal(["BIG", "SMALL"], result.Rows.Select(r => (string)r["c1"]!));
         Assert.Equal([69000m, 25400m], result.Rows.Select(r => Convert.ToDecimal(r["v0"])));
     }

@@ -292,8 +292,6 @@
 .ir-pager-left { display: inline-flex; align-items: center; gap: 8px; }
 .ir-page-btn { padding: 2px 9px; font-size: 14px; line-height: 1.2; }
 .ir-page-info { min-width: 8rem; text-align: center; }
-.ir-pagesize-wrap { margin-left: 10px; display: inline-flex; align-items: center; gap: 5px; }
-.ir-pagesize { padding: 2px 4px; font-size: 12px; }
 
 /* --- popup menus ---------------------------------------------------------------- */
 

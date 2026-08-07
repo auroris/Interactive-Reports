@@ -340,7 +340,7 @@ public sealed class ReportExecutor
         => new(connection, compiler, contextParams, definition, _logger);
 
     private static PageRequest Page(ValidatedState state)
-        => new() { Index = state.PageIndex, Size = state.PageSize };
+        => new() { Index = state.PageIndex, Size = state.PageAll ? 0 : state.PageSize };
 }
 
 /// <summary>Unpaged export payload; Truncated means MaxRows was hit and rows were cut there.</summary>

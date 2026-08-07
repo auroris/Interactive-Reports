@@ -4,7 +4,8 @@
 
 import { el } from "../../core/dom.js";
 import { labelOf } from "../schema.js";
-import { formatValue, FN_LABELS } from "./format.js";
+import { hasFraction, FN_LABELS } from "./format.js";
+import { formatForColumn, renderTextValue } from "./column-renderers.js";
 
 const CHART_TYPE_LABELS = { bar: "Bar", line: "Line", area: "Line with Area", pie: "Pie" };
 
@@ -32,22 +33,29 @@ export function renderChartView(w, container, chartModule) {
     }
 
     const [labelCol, valueCol] = result.columns;
+    const labelFormat = formatForColumn(w, labelCol);
+    const valueFormat = formatForColumn(w, valueCol);
     const labels = result.rows.map(r => {
         const value = r[labelCol.name];
-        return value === null || value === undefined ? "(blank)" : formatValue(value, labelCol.type);
+        return value === null || value === undefined
+            ? "(blank)"
+            : renderTextValue(w, r, labelCol, hasFraction(value), labelFormat);
     });
     const values = result.rows.map(r => {
         const value = r[valueCol.name];
-        return value === null || value === undefined ? null : Number(value);
+        if (value === null || value === undefined) return null;
+        // Chart.js ultimately needs an IEEE-754 coordinate. Conversion happens only
+        // at that pixel boundary; the response and accessible data table stay exact.
+        const coordinate = Number(value);
+        return Number.isFinite(coordinate) ? coordinate : null;
     });
-    const decimal = result.rows.some(r =>
-        typeof r[valueCol.name] === "number" && !Number.isInteger(r[valueCol.name]));
+    const decimal = result.rows.some(r => hasFraction(r[valueCol.name]));
 
     // The metric column is synthetic (v0/__count) when aggregated, so its server
     // label embeds the raw column label — rebuild it from the chart spec instead.
     const metricLabel = view.fn
         ? (view.value ? `${view.fn}(${labelOf(w, view.value)})` : "Count")
-        : labelOf(w, valueCol.name);
+        : labelOf(w, valueCol.formatSource ?? valueCol.name);
 
     const description =
         `${CHART_TYPE_LABELS[view.type] ?? "Chart"} chart of ${chartSummary(w, view)}. ${labels.length} data points.`;
@@ -58,7 +66,7 @@ export function renderChartView(w, container, chartModule) {
             el("th", { scope: "col", class: "ir-num" }, metricLabel))),
         el("tbody", {}, ...result.rows.map((r, i) => el("tr", {},
             el("td", {}, labels[i]),
-            el("td", { class: "ir-num" }, formatValue(r[valueCol.name], valueCol.type, decimal))))));
+            el("td", { class: "ir-num" }, renderTextValue(w, r, valueCol, decimal, valueFormat))))));
 
     container.replaceChildren(
         el("div", { class: "ir-chart-region" }, canvas),

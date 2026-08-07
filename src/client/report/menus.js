@@ -8,7 +8,7 @@ import { popupMenu } from "../core/menu.js";
 import { anyMutableFeature, featureEnabled, visibleColumnNames } from "./schema.js";
 import { columnSettingsDialog, columnsDialog, renameDialog } from "./dialogs/columns.js";
 import { filterDialog, computeDialog, highlightDialog } from "./dialogs/rules.js";
-import { sortDialog, breakDialog, aggregateDialog } from "./dialogs/grid.js";
+import { paginationDialog, sortDialog, breakDialog, aggregateDialog } from "./dialogs/grid.js";
 import { groupByDialog, pivotDialog, chartDialog } from "./dialogs/view.js";
 import { saveDialog } from "./dialogs/save.js";
 import { canManageCurrentSaved, deleteCurrentSaved, resetWorkingCopy } from "./saved.js";
@@ -37,6 +37,11 @@ export function actionsMenuItems(w) {
             ...feature("columnSettings", { label: "Column Settings…", onPick: () => columnSettingsDialog(w) }),
             ...feature("filter", { label: "Filter…", onPick: () => filterDialog(w, {}) }),
             ...feature("sort", { label: "Sort…", onPick: () => sortDialog(w) }),
+            ...feature("pagination", {
+                label: "Pagination…",
+                disabled: !["grid", "groupBy"].includes(w.doc?.view?.mode ?? "grid"),
+                onPick: () => paginationDialog(w),
+            }),
         ],
         [
             ...feature("controlBreak", { label: "Control Break…", onPick: () => breakDialog(w) }),

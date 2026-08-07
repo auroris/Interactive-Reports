@@ -53,7 +53,12 @@ internal static class PivotTableBuilder
                 var type = values.Count == 0
                     ? "number"
                     : ReportResultColumns.AggregateType(values[valueIndex]);
-                columns.Add(new ColumnInfo($"p{keyIndex}_{valueIndex}", label, type, false));
+                columns.Add(new ColumnInfo($"p{keyIndex}_{valueIndex}", label, type, false)
+                {
+                    FormatSource = values.Count == 0
+                        ? null
+                        : ReportResultColumns.FormatSource(values[valueIndex]),
+                });
             }
         }
 

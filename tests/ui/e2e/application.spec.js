@@ -29,7 +29,7 @@ async function search(page, value) {
     await runAndWaitForQuery(page, () => page.getByRole("button", { name: "Go", exact: true }).click());
 }
 
-test("loads the configured primary report, queries data, searches, pages, and changes reports", async ({ page }) => {
+test("loads the configured primary report, queries data, paginates from Actions, and changes reports", async ({ page }) => {
     await openWorkbench(page);
 
     const catalogResponse = await page.request.get("/api/reports");
@@ -52,14 +52,29 @@ test("loads the configured primary report, queries data, searches, pages, and ch
     await expect.poll(() => filteredRows.evaluateAll(rows =>
         rows.every(row => row.textContent.includes("Acme Corp")))).toBe(true);
 
+    await clickAction(page, "Pagination…");
+    let dialog = page.getByRole("dialog");
+    const limit = dialog.getByRole("combobox", { name: "Limit" });
+    await expect(limit.locator("option")).toHaveText(["10", "50", "100", "500", "1000", "All"]);
+    await limit.selectOption("10");
     await runAndWaitForQuery(page, () =>
-        page.getByRole("combobox", { name: "Rows per page" }).selectOption("15"));
-    await expect(filteredRows).toHaveCount(15);
-    await expect(page.getByText(/^1 – 15 of \d+ rows$/)).toBeVisible();
+        dialog.getByRole("button", { name: "Apply", exact: true }).click());
+    await expect(filteredRows).toHaveCount(10);
+    await expect(page.getByText(/^1 – 10 of \d+ rows$/)).toBeVisible();
 
     await runAndWaitForQuery(page, () =>
         page.getByRole("button", { name: "Next page" }).click());
-    await expect(page.getByText(/^16 – 30 of \d+ rows$/)).toBeVisible();
+    await expect(page.getByText(/^11 – 20 of \d+ rows$/)).toBeVisible();
+
+    await clickAction(page, "Pagination…");
+    dialog = page.getByRole("dialog");
+    await dialog.getByRole("combobox", { name: "Limit" }).selectOption("0");
+    const allResponse = await runAndWaitForQuery(page, () =>
+        dialog.getByRole("button", { name: "Apply", exact: true }).click());
+    const allResult = await allResponse.json();
+    expect(allResult.page).toEqual({ index: 1, size: 0 });
+    expect(allResult.rows).toHaveLength(Number(allResult.totalRows));
+    await expect(page.getByRole("button", { name: "Next page" })).toBeDisabled();
 
     await runAndWaitForQuery(page, () =>
         page.locator("interactive-report").evaluate(element => element.setAttribute("report", "order-feed")));

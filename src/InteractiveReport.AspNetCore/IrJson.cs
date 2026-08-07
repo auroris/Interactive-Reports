@@ -12,7 +12,13 @@ public static class IrJson
 {
     public static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)
     {
-        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+        Converters =
+        {
+            new JsonStringEnumConverter(JsonNamingPolicy.CamelCase),
+            new Int64StringJsonConverter(),
+            new UInt64StringJsonConverter(),
+            new DecimalStringJsonConverter(),
+        },
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 }

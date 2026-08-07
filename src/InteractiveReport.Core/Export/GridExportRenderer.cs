@@ -63,17 +63,21 @@ internal static class GridExportRenderer
         if (string.Equals(renderer, "image", StringComparison.OrdinalIgnoreCase))
         {
             if (!IsAllowedUrl(url, image: true))
-                return WebUtility.HtmlEncode(FormatGridValue(value, column, decimalColumn, format.Mask));
+                return WebUtility.HtmlEncode(RenderText(value, column, decimalColumn, format.Mask));
             return $"<img class=\"ir-cell-image\" src=\"{WebUtility.HtmlEncode(url)}\" alt=\"\" loading=\"lazy\" decoding=\"async\">";
         }
 
         var textColumn = SourceColumn(state, format.TextColumn, column);
         row.TryGetValue(textColumn.Name, out var textValue);
-        var text = FormatGridValue(
+        state.Formats.TryGetValue(textColumn.Name, out var textFormat);
+        if (textColumn.Name.Equals(column.Name, StringComparison.OrdinalIgnoreCase)) textFormat = format;
+        var text = RenderText(
             textValue,
             textColumn,
-            textColumn.Name.Equals(column.Name, StringComparison.OrdinalIgnoreCase) && decimalColumn,
-            textColumn.Name.Equals(column.Name, StringComparison.OrdinalIgnoreCase) ? format.Mask : null);
+            textColumn.Name.Equals(column.Name, StringComparison.OrdinalIgnoreCase)
+                ? decimalColumn
+                : HasFraction(textValue),
+            textFormat?.Mask);
 
         if (!IsAllowedUrl(url, image: false)) return WebUtility.HtmlEncode(text);
         if (text.Length == 0) text = url;
@@ -107,7 +111,11 @@ internal static class GridExportRenderer
         return Uri.TryCreate(value, UriKind.Relative, out _);
     }
 
-    private static string FormatGridValue(
+    /// <summary>
+    /// Server counterpart of the browser's base text renderer. CSV only invokes it
+    /// when a Display As cell needs text inside HTML; ordinary CSV scalars remain raw.
+    /// </summary>
+    private static string RenderText(
         object? value,
         ColumnModel column,
         bool decimalColumn,
@@ -117,14 +125,7 @@ internal static class GridExportRenderer
 
         if (column.Kind == ColumnKind.Number && TryDecimal(value, out var number))
         {
-            var masked = mask switch
-            {
-                "integer" => Math.Floor(number + 0.5m).ToString("N0", CultureInfo.InvariantCulture),
-                "decimal2" => number.ToString("N2", CultureInfo.InvariantCulture),
-                "decimal4" => number.ToString("N4", CultureInfo.InvariantCulture),
-                "plain" => number.ToString("F2", CultureInfo.InvariantCulture),
-                _ => null,
-            };
+            var masked = FormatNumberMask(number, mask);
             if (masked is not null) return masked;
             if (!decimalColumn && decimal.Truncate(number) == number)
                 return number.ToString("0", CultureInfo.InvariantCulture);
@@ -137,8 +138,13 @@ internal static class GridExportRenderer
             {
                 "date" => date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
                 "datetime" => date.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture),
+                "datetimeSeconds" => date.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
+                "time" => date.ToString("h:mm tt", CultureInfo.InvariantCulture),
+                "timeSeconds" => date.ToString("h:mm:ss tt", CultureInfo.InvariantCulture),
                 "dateMedium" => date.ToString("MMM d, yyyy", CultureInfo.InvariantCulture),
                 "dateLong" => date.ToString("MMMM d, yyyy", CultureInfo.InvariantCulture),
+                "dateTimeMedium" => date.ToString("MMM d, yyyy, h:mm tt", CultureInfo.InvariantCulture),
+                "dateTimeLong" => date.ToString("MMMM d, yyyy, h:mm:ss tt", CultureInfo.InvariantCulture),
                 _ => date.TimeOfDay == TimeSpan.Zero
                     ? date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
                     : date.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
@@ -151,6 +157,64 @@ internal static class GridExportRenderer
             IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture) ?? "",
             _ => value.ToString() ?? "",
         };
+    }
+
+    private static string? FormatNumberMask(decimal number, string? mask)
+    {
+        var digits = mask switch
+        {
+            "integer" => 0,
+            "decimal1" => 1,
+            "decimal2" => 2,
+            "decimal3" => 3,
+            "decimal4" => 4,
+            _ => -1,
+        };
+        if (digits >= 0)
+            return decimal.Round(number, digits, MidpointRounding.AwayFromZero)
+                .ToString($"N{digits}", CultureInfo.InvariantCulture);
+        if (mask == "plain")
+            return decimal.Round(number, 2, MidpointRounding.AwayFromZero)
+                .ToString("F2", CultureInfo.InvariantCulture);
+
+        if (mask is not null && mask.StartsWith("currency:", StringComparison.Ordinal))
+        {
+            var currency = mask[9..];
+            var (symbol, currencyDigits) = currency switch
+            {
+                "CAD" => ("CA$", 2),
+                "USD" => ("$", 2),
+                "EUR" => ("€", 2),
+                "GBP" => ("£", 2),
+                "JPY" => ("¥", 0),
+                _ => ((string?)null, 0),
+            };
+            if (symbol is not null)
+            {
+                var formatted = decimal.Round(number, currencyDigits, MidpointRounding.AwayFromZero)
+                    .ToString($"N{currencyDigits}", CultureInfo.InvariantCulture);
+                return formatted.StartsWith("-", StringComparison.Ordinal)
+                    ? $"-{symbol}{formatted[1..]}"
+                    : $"{symbol}{formatted}";
+            }
+        }
+
+        if (mask is { Length: 8 } && mask.StartsWith("percent", StringComparison.Ordinal)
+            && mask[7] is >= '0' and <= '2')
+        {
+            try
+            {
+                var percentDigits = mask[7] - '0';
+                return decimal.Round(number * 100m, percentDigits, MidpointRounding.AwayFromZero)
+                    .ToString($"N{percentDigits}", CultureInfo.InvariantCulture) + "%";
+            }
+            catch (OverflowException)
+            {
+                return null;
+            }
+        }
+
+        return null;
     }
 
     private static string RawString(object? value) => value switch
@@ -184,6 +248,18 @@ internal static class GridExportRenderer
         if (value is DateTime typed)
         {
             date = typed;
+            return true;
+        }
+        if (value is DateTimeOffset offset)
+        {
+            // Match the browser formatter: display the session-local wall-clock
+            // components carried in the value, not the server process timezone.
+            date = offset.DateTime;
+            return true;
+        }
+        if (value is DateOnly dateOnly)
+        {
+            date = dateOnly.ToDateTime(TimeOnly.MinValue);
             return true;
         }
         return DateTime.TryParse(

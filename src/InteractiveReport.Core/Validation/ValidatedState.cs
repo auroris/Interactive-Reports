@@ -27,7 +27,9 @@ public sealed class ValidatedState
     public required IReadOnlyList<ColumnModel> Breaks { get; init; }
     public required ValidView View { get; init; }
     public required int PageIndex { get; init; }
+    /// <summary>Effective SQL page size; ignored when PageAll is true.</summary>
     public required int PageSize { get; init; }
+    public required bool PageAll { get; init; }
     public required IReadOnlyList<IgnoredItem> Ignored { get; init; }
 
     /// <summary>
@@ -88,6 +90,7 @@ public sealed class ValidatedState
             },
             PageIndex = PageIndex,
             PageSize = PageSize,
+            PageAll = PageAll,
             Ignored = Ignored,
             Labels = Labels,
         };

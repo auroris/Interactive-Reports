@@ -137,6 +137,9 @@ test("column settings write doc.formats and the grid renders mask, alignment, an
     const alignSel = fieldControl(dialog, "Alignment");
     const maskSel = fieldControl(dialog, "Format Mask");
     assert.equal(colSel.value, "ID", "the invoking column is preselected");
+    assert.ok([...maskSel.options].some(option => option.value === "currency:CAD"));
+    assert.ok([...maskSel.options].some(option => option.value === "percent2"));
+    assert.ok([...maskSel.options].some(option => option.value === "decimal3"));
     alignSel.value = "center";
     maskSel.value = "integer";
     maskSel.dispatchEvent(new window.Event("input", { bubbles: true }));

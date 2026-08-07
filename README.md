@@ -63,7 +63,7 @@ normal versioned state document:
         "displayAs": "image",
         "urlColumn": "THUMBNAIL_URL"
       },
-      "AMOUNT": { "classes": [ "amount-column", "emphasized" ] }
+      "AMOUNT": { "mask": "currency:CAD", "classes": [ "amount-column", "emphasized" ] }
     }
   }
 }
@@ -104,6 +104,22 @@ URLs are accepted for both renderers;
 links additionally accept `mailto:` and `tel:`. Active or embedded-content schemes
 such as `javascript:` and `data:` render as ordinary text instead.
 
+Number masks cover grouped integers and one through four fixed decimal places,
+invariant two-place decimals, CAD/USD/EUR/GBP/JPY currency, and zero through two-place
+percentages. Date masks cover ISO dates and date-times, localized medium/long dates,
+localized times, and localized medium/long date-times. The same scalar formatter is
+used by text cells, link text, aggregates, group and pivot values, and the chart's
+accessible data table. A synthetic group/pivot/chart metric inherits the format of its
+source column; count-only metrics have no source format.
+
+Query JSON carries CLR `Int64`, `UInt64`, and `Decimal` values as invariant strings.
+The column metadata still identifies them as numbers, and the client parses, rounds,
+groups, and masks every number-like column value through bundled `big.js` arbitrary-
+precision arithmetic. Values such as
+`9007199254740993` therefore do not lose a digit in JavaScript. Chart pixel coordinates
+are the sole exception: Chart.js requires a JavaScript number, while its accompanying
+data table retains the exact formatted value.
+
 ## Embedding the report
 
 The bundle contains the component's styles and renders into a shadow root, so
@@ -128,6 +144,12 @@ The widget adapts to the definition's `features` whitelist (docs/ARCHITECTURE.md
 menu entries, view buttons, the search bar, and the saved-report select render only
 for whitelisted features, and the server additionally refuses CSV export and
 saved-report creation for reports that do not whitelist `download` / `savedReports`.
+
+Page size is configured through **Actions → Pagination**. The standard choices are
+10, 50, 100, 500, 1000, and All; numeric choices above a definition's `maxPageSize`
+are omitted. All is stored as `page.size: 0` and deliberately returns every matching
+grid row or Group By group without applying `maxRows`. CSV export ignores pagination
+and continues to use its independent `maxRows` cap and truncation header.
 
 `saved-report` is optional. When present, the component finds a visible saved report by
 its title (case-insensitive) and loads it before the first query. The title must identify

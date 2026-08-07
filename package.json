@@ -20,5 +20,8 @@
     "chart.js": "^4.5.1",
     "esbuild": "^0.28.1",
     "happy-dom": "^20.11.1"
+  },
+  "dependencies": {
+    "big.js": "7.0.1"
   }
 }

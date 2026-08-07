@@ -99,9 +99,10 @@ public interface IReportDefinitionStore
       "columnLabels": { "ORDER_ID": "Order #", "CUSTOMER": "Customer Name" },
       "contextParams": { "currentUser": { "claim": "sub" } },
       "authorization": { "policy": "SalesRead" },
-      "features": [ "search", "filter", "sort", "savedReports", "download" ],
+      "features": [ "search", "filter", "sort", "pagination", "savedReports", "download" ],
       "maxRows": 100000,
       "defaultPageSize": 50,
+      "maxPageSize": 1000,
       "styleSheet": "/css/open-orders.css",
       "documentFiles": [
         "ReportDocuments/open-orders.primary.json",
@@ -142,7 +143,7 @@ Notes:
 - `features` is a whitelist of end-user features (APEX's per-action Actions-menu
   configuration collapsed to a flat token list). Absent means everything;
   present means exactly what is listed. Known tokens (`ReportFeatures`): `search`,
-  `columns`, `rename`, `columnSettings`, `filter`, `sort`, `controlBreak`, `highlight`,
+  `columns`, `rename`, `columnSettings`, `filter`, `sort`, `pagination`, `controlBreak`, `highlight`,
   `aggregate`, `compute`, `groupBy`, `pivot`, `chart`, `savedReports`, `download`.
   (`columnSettings` gates the per-column settings dialog; its visibility checkbox
   additionally needs `columns`, whose visible-list it writes.) Unknown, blank,
@@ -247,8 +248,10 @@ provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
   labels inheritance rule: wholesale-replace with `{}`
   as the explicit clear, resolvable from the effective primary state so definitions
   can ship default formatting. Masks are a closed client-side token vocabulary per
-  column type (`integer`/`decimal2`/`decimal4`/`plain` for numbers; `date`/`datetime`/
-  `dateMedium`/`dateLong` for dates); unknown tokens and indigestible values fall
+  column type (`integer`, `decimal1`…`decimal4`, `plain`, `currency:CAD|USD|EUR|GBP|JPY`,
+  and `percent0`…`percent2` for numbers; `date`, `datetime`, `datetimeSeconds`, `time`,
+  `timeSeconds`, `dateMedium`, `dateLong`, `dateTimeMedium`, and `dateTimeLong` for
+  dates); unknown tokens and indigestible values fall
   through to default rendering — a mask is a lens, never a gate. Inline styling is the
   same constrained property set highlights use. `classes` selects rules from the
   definition's trusted shadow-root `styleSheet`; the client accepts conservative CSS
@@ -264,7 +267,10 @@ provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
   cells to the same encoded `<a class="ir-cell-link">` / `<img class="ir-cell-image">`
   fragments the browser constructs; ordinary cells stay raw, and hidden renderer
   sources never become exported columns. Highlight styles win over column styles where
-  both apply.
+  both apply. Text is the base renderer and owns masks; link text composes the base
+  renderer, including the selected text source column's own mask. Group, pivot, and
+  chart metric metadata carry `formatSource`, so a synthetic `v0`/`pN_M` result uses
+  its source column's mask and style without treating aggregate values as links/images.
 - A partial request resolves over the effective primary state once: a configured
   primary file, then inline `defaultState`, then the synthetic empty state. A missing
   property inherits, while an explicit empty string/list clears the default. `{ "mode": "grid" }`
@@ -365,21 +371,29 @@ ids, not state-in-URL.
 
 ```json
 {
-  "columns": [ { "name": "AMOUNT", "label": "Amount", "type": "decimal", "computed": false } ],
-  "rows": [ { "ORDER_ID": 1042, "CUSTOMER": "Acme", "AMOUNT": 1234.50, "ORDER_DATE": "2026-07-30" } ],
+  "columns": [ { "name": "AMOUNT", "label": "Amount", "type": "number", "computed": false } ],
+  "rows": [ { "ORDER_ID": "9007199254740993", "CUSTOMER": "Acme", "AMOUNT": "1234.50", "ORDER_DATE": "2026-07-30" } ],
   "page": { "index": 1, "size": 50 },
-  "totalRows": 1423,
-  "aggregates": { "AMOUNT": { "sum": 8842210.75 } },
-  "breakTotals": [ { "key": { "REGION": "WEST" }, "rows": 310, "aggregates": { "AMOUNT": { "sum": 1200000.00 } } } ],
+  "totalRows": "1423",
+  "aggregates": { "AMOUNT": { "sum": "8842210.75" } },
+  "breakTotals": [ { "key": { "REGION": "WEST" }, "rows": "310", "aggregates": { "AMOUNT": { "sum": "1200000.00" } } } ],
   "highlights": [ { "row": 3, "id": "h1" } ],
   "ignored": [],
-  "elapsedMs": 41
+  "elapsedMs": "41"
 }
 ```
 
 Rows as objects (not positional arrays): negligible size at page granularity, much
 friendlier to consume. Aggregates/break totals are computed over the **whole filtered
-set** via the cloned queries — never over the visible page.
+set** via the cloned queries — never over the visible page. The adapter serializes CLR
+`Int64`, `UInt64`, and `Decimal` values as invariant JSON strings, including boxed row
+and aggregate values. JavaScript's JSON parser therefore never rounds them through an
+IEEE-754 double. The `type: "number"` metadata remains authoritative, and the client
+feeds both exact strings and legacy JSON numbers into the bundled `big.js` path for
+comparison, scaling, and rounding. Ordinary 32-bit integers and floating-point values
+remain JSON numbers on the wire. `BigInt` is used only to hand an already-rounded exact
+integer to `Intl.NumberFormat` for locale grouping. Chart.js coordinates are converted to
+`Number` only at the chart pixel boundary; the accessible chart-data table stays exact.
 
 **Errors:** RFC 7807 `application/problem+json`, sanitized. Database and compiler
 exceptions are caught, logged server-side with a correlation id, and returned as a
@@ -654,8 +668,12 @@ as a parameter.)
 - `IReportConnectionFactory` (host-registered): named connection → open `DbConnection`.
   Hosts should point report connections at a **read-only database principal** — the
   engine only ever SELECTs, but the principal should make that a guarantee, not a habit.
-- `maxRows` (per definition): hard cap composed into every query (`page.size` is clamped;
-  exports clamp to `maxRows`). A response flag indicates truncation.
+- Positive `page.size` values are clamped to `maxPageSize` (default 1000). The
+  allow-listed value `0` means **All** and deliberately composes no page limit or
+  offset for grid and Group By queries. CSV export ignores pagination altogether and
+  retains its independent `maxRows` cap and truncation signal.
+- `maxRows` (per definition): hard cap for exports. It does not cap the explicit
+  **All** pagination choice.
 - Command timeout per definition (default modest, e.g. 30s); `CancellationToken` flows
   from the HTTP request so abandoned browsers stop occupying the database.
 - Logging: SQL text at Debug only; parameter *values* never logged above Debug;
@@ -903,7 +921,7 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   server rendering the user's screen, applies the posted document's labels to headers
   and synthetics via `ValidatedState.WithDisplayLabels`.
 - **M11 — Feature whitelist** ✅ *(2026-08-07)*: per-report `features` whitelist (§4)
-  — fifteen canonical tokens covering the Actions menu, search, views, saved
+  — sixteen canonical tokens covering the Actions menu, search, views, saved
   reports, and download; validated fail-fast at definition load, resolved onto the
   schema payload, and applied by the packaged UI (chrome removal + locked chips).
   `download` and `savedReports` creation are server-enforced 403s; everything else
@@ -934,6 +952,11 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   and projected only as renderer inputs. Grid CSV exports use the same encoded HTML
   fragments as browser cells while leaving ordinary values raw. DOM construction,
   HTML encoding, and a URL protocol allowlist keep report data out of active-content surfaces.
+- **M16 — Actions pagination** ✅ *(2026-08-07)*: Actions → Pagination owns the
+  report document's page limit with APEX choices 10, 50, 100, 500, 1000, and All.
+  Numeric values respect `maxPageSize`; All is the explicit `page.size: 0` protocol
+  value and runs grid/Group By without a limit. The footer is navigation-only, and
+  export remains unpaged under its separate `maxRows` contract.
 
 ## Appendix: decision log
 
@@ -992,8 +1015,9 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 | Feature control is a flat whitelist on the definition | APEX-style per-action objects; per-column attribute model | One `features` array covers the lockdown need with one concept; absent = everything keeps existing configs working. The richer per-column attribute model (alignment, masks, LOVs, per-column permissions) layers on later without reshaping this. |
 | Whitelist is presentation-level except `download` and `savedReports` creation | validate posted state docs against the whitelist | Hiding a dialog is not a data boundary — the query endpoint already accepts any valid document, and context params (§12) are the security story. The two enforced tokens are the ones that egress (unpaged export) or persist (saved-report rows); enforcing at creation only keeps existing saved reports manageable after a config change. |
 | Locked chips: state from an absent feature displays read-only | hide the chips; let them stay editable | The chip strip is the doc made visible — hiding active filters would misrepresent the data shown, and editing them would reopen the very dialogs the whitelist removed. Leaving a locked view for the grid stays possible: it abandons the feature rather than using it. |
-| Column formatting is a second document map (`formats`); only renderer source names reach server projection | apply every mask/style server-side | Masks and styles remain client presentation, while link/image dependencies must be schema-bound before entering SQL. Grid CSV exports intentionally serialize those two display modes as browser-like encoded HTML; hidden inputs never become columns. |
-| Masks are closed per-type tokens (Intl-backed) | freeform mask strings (APEX FML/999G999D99) | Same rule as TO_STRING: a validated vocabulary renders identically everywhere and cannot smuggle anything; unknown tokens fall through to default rendering instead of erroring, because a display mask must never break a report. |
+| Column formatting is a second document map (`formats`); only renderer source names reach server projection | apply every mask/style server-side | Masks and styles remain client presentation, while link/image dependencies must be schema-bound before entering SQL. One base text renderer owns scalar masks; link/image compose it, and synthetic metric metadata retains its format source. Grid CSV exports intentionally serialize Display As modes as browser-like encoded HTML; hidden inputs never become columns. |
+| Masks are closed per-type tokens (Intl-backed) | freeform mask strings (APEX FML/999G999D99) | Same rule as TO_STRING: a portable vocabulary has stable meaning while `Intl` supplies the user's separators, symbols, and ordering; it cannot smuggle anything. Unknown tokens fall through to default rendering instead of erroring, because a display mask must never break a report. |
+| Int64/UInt64/Decimal travel as invariant JSON strings; all numeric columns use bundled `big.js` | send every numeric database value as a JSON number; maintain separate integer/decimal formatters | JavaScript parses JSON numbers as IEEE-754 doubles. Typed metadata retains numeric behavior, while one arbitrary-precision path handles parsing, comparison, scaling, and rounding without silent digit loss. |
 | Column classes select a definition-owned shadow-root stylesheet | freeform style/CSS in report state; page-level classes | The URL and CSS stay application-controlled; saved reports carry only conservative class tokens and cannot select reserved `ir-*` behavior. Page CSS cannot cross the shadow boundary, while freeform report CSS would be an injection surface. |
 | The dialog's Visible checkbox writes `doc.columns` | a per-column `visible` flag in formats | One source of truth: the shuttle, the header Hide, and the checkbox all edit the same list, so they can never disagree; re-shown columns append to the end, matching how a user thinks about "bring it back". |
 | Link/image renderers use explicit source columns | arbitrary HTML or URL/text templates | Column names can be schema-bound and safely projected. Direct DOM construction preserves escaping, and a protocol allowlist blocks active-content URLs without inventing a template language. |

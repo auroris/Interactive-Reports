@@ -2,8 +2,8 @@
 // become DOM properties through el(), and URL protocols pass through a small allowlist.
 
 import { el } from "../../core/dom.js";
-import { pickable, typeOf } from "../schema.js";
-import { formatValue } from "./format.js";
+import { columnOf, pickable } from "../schema.js";
+import { formatValue, hasFraction } from "./format.js";
 
 const LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:", "tel:"]);
 const IMAGE_PROTOCOLS = new Set(["http:", "https:"]);
@@ -29,17 +29,41 @@ const sourceName = (w, format, property, fallback) => {
     return pickable(w).find(column => column.name.toLowerCase() === requested.toLowerCase())?.name ?? requested;
 };
 
-function textValue(w, row, col, decimal, format) {
+export function formatForColumn(w, col) {
+    const formats = w.doc.formats ?? {};
+    const requested = String(col.formatSource ?? col.name).toLowerCase();
+    const key = Object.keys(formats).find(name => name.toLowerCase() === requested);
+    return key ? formats[key] : null;
+}
+
+function sourceColumn(w, name, fallback) {
+    return columnOf(w, name) ?? (name === fallback.name ? fallback : { name, type: "other" });
+}
+
+export function renderTextValue(w, row, col, decimal = false, format = null) {
+    const effective = format ?? formatForColumn(w, col);
+    return formatValue(row[col.name], col.type, decimal, effective?.mask);
+}
+
+function linkTextValue(w, row, col, decimal, format) {
     const name = sourceName(w, format, "textColumn", col.name);
-    const mask = name === col.name ? format?.mask : null;
-    return formatValue(row[name], typeOf(w, name), name === col.name && decimal, mask);
+    const source = sourceColumn(w, name, col);
+    const sourceFormat = name.toLowerCase() === col.name.toLowerCase()
+        ? format
+        : formatForColumn(w, source);
+    return renderTextValue(
+        w,
+        row,
+        source,
+        name.toLowerCase() === col.name.toLowerCase() ? decimal : hasFraction(row[name]),
+        sourceFormat);
 }
 
 const renderers = {
     link(w, row, col, decimal, format) {
         const urlName = sourceName(w, format, "urlColumn", col.name);
         const href = safeRendererUrl(row[urlName], "link");
-        const text = textValue(w, row, col, decimal, format);
+        const text = linkTextValue(w, row, col, decimal, format);
         if (!href) return text;
         return el("a", { class: "ir-cell-link", href }, text || String(row[urlName]));
     },
@@ -47,7 +71,7 @@ const renderers = {
     image(w, row, col, decimal, format) {
         const urlName = sourceName(w, format, "urlColumn", col.name);
         const src = safeRendererUrl(row[urlName], "image");
-        if (!src) return formatValue(row[col.name], col.type, decimal, format?.mask);
+        if (!src) return renderTextValue(w, row, col, decimal, format);
         return el("img", {
             class: "ir-cell-image",
             src,
@@ -58,11 +82,15 @@ const renderers = {
     },
 };
 
-export function renderColumnValue(w, row, col, decimal = false, format = null) {
-    const effective = format ?? w.doc.formats?.[col.name];
+/// Every cell enters here. Text is the base renderer and owns all scalar mask
+/// handling; link/image optionally compose it instead of maintaining a parallel
+/// formatting path. Synthetic aggregate columns set formatSource in their metadata
+/// and call this with display renderers disabled.
+export function renderColumnValue(w, row, col, decimal = false, format = null, allowDisplayAs = true) {
+    const effective = format ?? formatForColumn(w, col);
     const name = typeof effective?.displayAs === "string" ? effective.displayAs.toLowerCase() : "";
-    const renderer = renderers[name];
+    const renderer = allowDisplayAs ? renderers[name] : null;
     return renderer
         ? renderer(w, row, col, decimal, effective)
-        : formatValue(row[col.name], col.type, decimal, effective?.mask);
+        : renderTextValue(w, row, col, decimal, effective);
 }

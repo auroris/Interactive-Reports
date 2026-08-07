@@ -12,8 +12,13 @@ export function pickable(w) {
     return columns.map(c => labels[c.name] ? { ...c, label: labels[c.name] } : c);
 }
 
-export function typeOf(w, name) { return pickable(w).find(c => c.name === name)?.type ?? "other"; }
-export function labelOf(w, name) { return pickable(w).find(c => c.name === name)?.label ?? name; }
+export function columnOf(w, name) {
+    const requested = String(name ?? "").toLowerCase();
+    return pickable(w).find(c => c.name.toLowerCase() === requested) ?? null;
+}
+
+export function typeOf(w, name) { return columnOf(w, name)?.type ?? "other"; }
+export function labelOf(w, name) { return columnOf(w, name)?.label ?? name; }
 
 export function fnsFor(w, type) {
     const catalog = w.schema?.capabilities?.aggregateFunctions ?? {};

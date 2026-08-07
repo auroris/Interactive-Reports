@@ -34,7 +34,16 @@ public sealed class ReportResult
     public long ElapsedMs { get; init; }
 }
 
-public sealed record ColumnInfo(string Name, string Label, string Type, bool Computed);
+public sealed record ColumnInfo(string Name, string Label, string Type, bool Computed)
+{
+    /// <summary>
+    /// Source report column whose presentation mask applies to this result column.
+    /// Null means <see cref="Name"/>. Group, pivot, and aggregated chart metrics use
+    /// synthetic protocol names, so retaining this identity lets every view pass
+    /// through the same display formatter.
+    /// </summary>
+    public string? FormatSource { get; init; }
+}
 
 /// <summary>Totals for one control-break group: the break-column values, row count, and per-column aggregates.</summary>
 public sealed record BreakTotal(

@@ -1,0 +1,57 @@
+using System.Text.Json;
+
+namespace InteractiveReport.AspNetCore.Tests;
+
+public sealed class IrJsonTests
+{
+    [Fact]
+    public void Int64_uint64_and_decimal_values_are_exact_strings_on_the_wire()
+    {
+        var payload = new
+        {
+            signed = long.MaxValue,
+            unsigned = ulong.MaxValue,
+            precise = 79228162514264337593543950335m,
+            scale = 12345678901234567890.123456789m,
+            ordinary = 42,
+            boxed = new Dictionary<string, object?>
+            {
+                ["long"] = 9007199254740993L,
+                ["decimal"] = 999999999999999999.999999999m,
+            },
+        };
+
+        var json = JsonSerializer.Serialize(payload, IrJson.Options);
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+
+        Assert.Equal(JsonValueKind.String, root.GetProperty("signed").ValueKind);
+        Assert.Equal("9223372036854775807", root.GetProperty("signed").GetString());
+        Assert.Equal("18446744073709551615", root.GetProperty("unsigned").GetString());
+        Assert.Equal("79228162514264337593543950335", root.GetProperty("precise").GetString());
+        Assert.Equal("12345678901234567890.123456789", root.GetProperty("scale").GetString());
+        Assert.Equal(JsonValueKind.Number, root.GetProperty("ordinary").ValueKind);
+        Assert.Equal("9007199254740993", root.GetProperty("boxed").GetProperty("long").GetString());
+        Assert.Equal("999999999999999999.999999999", root.GetProperty("boxed").GetProperty("decimal").GetString());
+    }
+
+    [Fact]
+    public void Exact_number_converters_accept_legacy_json_numbers_and_new_strings()
+    {
+        var fromStrings = JsonSerializer.Deserialize<WireNumbers>(
+            """{"signed":"9223372036854775807","unsigned":"18446744073709551615","precise":"0.1234567890123456789012345678"}""",
+            IrJson.Options)!;
+        var fromNumbers = JsonSerializer.Deserialize<WireNumbers>(
+            """{"signed":42,"unsigned":43,"precise":44.5}""",
+            IrJson.Options)!;
+
+        Assert.Equal(long.MaxValue, fromStrings.Signed);
+        Assert.Equal(ulong.MaxValue, fromStrings.Unsigned);
+        Assert.Equal(0.1234567890123456789012345678m, fromStrings.Precise);
+        Assert.Equal(42, fromNumbers.Signed);
+        Assert.Equal(43ul, fromNumbers.Unsigned);
+        Assert.Equal(44.5m, fromNumbers.Precise);
+    }
+
+    private sealed record WireNumbers(long Signed, ulong Unsigned, decimal Precise);
+}

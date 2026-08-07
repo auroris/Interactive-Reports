@@ -123,6 +123,7 @@ test("a schema without a features field (older server) leaves everything on", as
     report.shadowRoot.querySelector(".ir-actionsbtn").click();
     const labels = menuLabels(report);
     assert.equal(labels.includes("Columns…"), true);
+    assert.equal(labels.includes("Pagination…"), true);
     assert.equal(labels.includes("Save As…"), true);
     assert.equal(labels.includes("CSV"), true);
 

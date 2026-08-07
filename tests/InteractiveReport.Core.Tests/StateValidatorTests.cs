@@ -99,7 +99,18 @@ public class StateValidatorTests
         var result = Validate(new ReportState { Page = new PageRequest { Index = -3, Size = 99999 } });
 
         Assert.Equal(1, result.PageIndex);
-        Assert.Equal(500, result.PageSize);
+        Assert.Equal(1000, result.PageSize);
+        Assert.False(result.PageAll);
+    }
+
+    [Fact]
+    public void Page_size_zero_is_the_allow_list_value_for_all_rows()
+    {
+        var result = Validate(new ReportState { Page = new PageRequest { Index = 9, Size = 0 } });
+
+        Assert.Equal(1, result.PageIndex);
+        Assert.Equal(0, result.PageSize);
+        Assert.True(result.PageAll);
     }
 
     [Fact]

@@ -25,6 +25,7 @@ public static class ReportFeatures
 
     public const string Filter = "filter";
     public const string Sort = "sort";
+    public const string Pagination = "pagination";
     public const string ControlBreak = "controlBreak";
     public const string Highlight = "highlight";
     public const string Aggregate = "aggregate";
@@ -45,7 +46,7 @@ public static class ReportFeatures
 
     public static readonly IReadOnlyList<string> All =
     [
-        Search, Columns, Rename, ColumnSettings, Filter, Sort, ControlBreak, Highlight,
+        Search, Columns, Rename, ColumnSettings, Filter, Sort, Pagination, ControlBreak, Highlight,
         Aggregate, Compute, GroupBy, Pivot, Chart, SavedReports, Download,
     ];
 

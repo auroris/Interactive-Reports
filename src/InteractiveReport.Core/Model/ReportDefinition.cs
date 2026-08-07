@@ -67,12 +67,15 @@ public sealed class ReportDefinition
     /// </summary>
     public List<string>? Features { get; set; }
 
-    /// <summary>Hard cap on rows any composed query may return (exports included).</summary>
+    /// <summary>
+    /// Hard export cap and upper bound for numeric page-size configuration. The
+    /// explicit All page choice is deliberately unbounded.
+    /// </summary>
     public int MaxRows { get; set; } = 100_000;
 
     public int DefaultPageSize { get; set; } = 50;
 
-    public int MaxPageSize { get; set; } = 500;
+    public int MaxPageSize { get; set; } = 1000;
 
     /// <summary>Cap on distinct pivot-column combinations the pivot view may produce.</summary>
     public int MaxPivotColumns { get; set; } = 60;

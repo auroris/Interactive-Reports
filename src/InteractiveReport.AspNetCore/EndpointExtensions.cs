@@ -135,8 +135,8 @@ public static class EndpointExtensions
     /// <summary>
     /// Same state document, same gate, no paging: rows capped at the definition's
     /// MaxRows with truncation signaled via the X-IR-Truncated response header.
-    /// Download is one of the two server-enforced features — it widens egress past
-    /// the page-size caps, so hiding the menu client-side is not enough.
+    /// Download is one of the two server-enforced features because it creates an
+    /// external artifact; hiding the menu client-side is not enough.
     /// </summary>
     private static Task<IResult> PostExport(string name, HttpContext ctx, CancellationToken ct)
         => ExecuteStateOperation(

@@ -48,7 +48,7 @@ public sealed class ReportState
 }
 
 /// <summary>
-/// Per-column display settings, all optional. Mask tokens are a closed client-side
+/// Per-column display settings, all optional. Mask tokens are a closed protocol
 /// vocabulary (per column type); style properties are the same constrained set the
 /// highlight rules use. Classes select rules from the report definition's trusted
 /// shadow-root stylesheet; report state can never supply CSS or a stylesheet URL.
@@ -113,6 +113,10 @@ public sealed class PageRequest
     /// <summary>1-based.</summary>
     public int Index { get; set; } = 1;
 
+    /// <summary>
+    /// Rows per page. Zero is the explicit allow-listed value for every matching row
+    /// in one unpaged result; positive values are clamped to MaxPageSize.
+    /// </summary>
     public int Size { get; set; } = 50;
 }
 

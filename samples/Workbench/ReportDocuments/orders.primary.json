@@ -18,8 +18,8 @@
         "urlColumn": "ORDER_URL",
         "textColumn": "ORDER_ID"
       },
-      "AMOUNT": { "classes": [ "amount-column" ] },
-      "c1": { "classes": [ "amount-column" ] }
+      "AMOUNT": { "mask": "currency:CAD", "classes": [ "amount-column" ] },
+      "c1": { "mask": "currency:CAD", "classes": [ "amount-column" ] }
     }
   }
 }

@@ -31,7 +31,8 @@ internal static class ReportResultColumns
         var label = new ColumnInfo(chart.Label.Name, chart.Label.Label, chart.Label.KindName, chart.Label.IsComputed);
         var metric = chart switch
         {
-            { Fn: null } => new ColumnInfo(chart.Value!.Name, chart.Value.Label, chart.Value.KindName, chart.Value.IsComputed),
+            { Fn: null } => new ColumnInfo(chart.Value!.Name, chart.Value.Label, chart.Value.KindName, chart.Value.IsComputed)
+                { FormatSource = chart.Value.Name },
             { Value: null } => new ColumnInfo("__count", "Count", "number", false),
             { Fn: { } fn, Value: { } value } => ForAggregate(new ValidAggregate(value, fn), "v0"),
         };
@@ -41,7 +42,17 @@ internal static class ReportResultColumns
     }
 
     public static ColumnInfo ForAggregate(ValidAggregate aggregate, string name)
-        => new(name, AggregateLabel(aggregate), AggregateType(aggregate), false);
+        => new(name, AggregateLabel(aggregate), AggregateType(aggregate), false)
+        {
+            // A count is a dimensionless row quantity, not a value expressed in
+            // the source column's currency/percentage/date format.
+            FormatSource = FormatSource(aggregate),
+        };
+
+    public static string? FormatSource(ValidAggregate aggregate)
+        => aggregate.Fn is AggregateFn.Count or AggregateFn.CountDistinct
+            ? null
+            : aggregate.Column.Name;
 
     public static string AggregateLabel(ValidAggregate aggregate)
         => $"{AggregateName(aggregate.Fn)}({aggregate.Column.Label})";
