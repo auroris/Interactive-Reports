@@ -29,11 +29,13 @@ async function search(page, value) {
     await runAndWaitForQuery(page, () => page.getByRole("button", { name: "Go", exact: true }).click());
 }
 
-test("loads the synthetic default report, queries data, searches, pages, and switches reports", async ({ page }) => {
+test("loads the synthetic default report, queries data, searches, pages, and changes the configured report", async ({ page }) => {
     await openWorkbench(page);
 
+    const catalogResponse = await page.request.get("/api/reports");
+    expect(catalogResponse.status()).toBe(404);
     await expect(page.locator("#identity")).toHaveText("workbench-dev · admin");
-    await expect(page.getByRole("combobox", { name: "Report", exact: true })).toHaveValue("orders");
+    await expect(page.getByRole("combobox", { name: "Report", exact: true })).toHaveCount(0);
     await expect(page.getByRole("columnheader")).toHaveText([
         "Order #", "Customer Name", "Region", "Status", "Amount", "Ordered On▼", "Notes", "With Tax",
     ]);
@@ -55,7 +57,7 @@ test("loads the synthetic default report, queries data, searches, pages, and swi
     await expect(page.getByText(/^16 – 30 of \d+ rows$/)).toBeVisible();
 
     await runAndWaitForQuery(page, () =>
-        page.getByRole("combobox", { name: "Report", exact: true }).selectOption("order-feed"));
+        page.locator("interactive-report").evaluate(element => element.setAttribute("report", "order-feed")));
     await expect(page.getByRole("columnheader")).toHaveText(["Order #", "Customer", "Amount"]);
     await expect(page.getByRole("searchbox", { name: "Search" })).toHaveValue("");
     await expect(page.getByText("1 – 50 of 500 rows", { exact: true })).toBeVisible();
@@ -130,8 +132,10 @@ test("saves and reloads a report, then administers its complete lifecycle", asyn
         await search(page, "Globex");
         await runAndWaitForQuery(page, () => savedSelect.selectOption(""));
         await expect(page.getByRole("searchbox", { name: "Search" })).toHaveValue("");
-        await runAndWaitForQuery(page, () => savedSelect.selectOption(savedId));
+        await runAndWaitForQuery(page, () => page.locator("interactive-report").evaluate(
+            (element, savedReport) => element.setAttribute("saved-report", savedReport), title));
         await expect(page.getByRole("searchbox", { name: "Search" })).toHaveValue("Acme Corp");
+        await expect(savedSelect).toHaveValue(savedId);
 
         await page.reload();
         await expect(page.getByRole("table")).toBeVisible();
@@ -186,11 +190,12 @@ test("saves and reloads a report, then administers its complete lifecycle", asyn
 test.describe("non-administrator", () => {
     test.use({ extraHTTPHeaders: { "X-Workbench-User": "ordinary-user" } });
 
-    test("sees only authorized reports and receives a precise admin denial", async ({ page }) => {
+    test("cannot probe a protected report and receives a precise admin denial", async ({ page }) => {
         await openWorkbench(page);
         await expect(page.locator("#identity")).toHaveText("ordinary-user");
-        await expect(page.getByRole("combobox", { name: "Report", exact: true })
-            .locator('option[value="regional-summary"]')).toHaveCount(0);
+        await expect(page.getByRole("combobox", { name: "Report", exact: true })).toHaveCount(0);
+        const protectedResponse = await page.request.get("/api/reports/regional-summary/schema");
+        expect(protectedResponse.status()).toBe(404);
 
         await page.goto("/admin.html");
         await expect(page.getByText(

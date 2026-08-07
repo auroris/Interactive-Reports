@@ -7,10 +7,10 @@
 // registers the element.
 //
 // Attributes:
-//   report   — preferred report definition; falls back to the first report visible
-//              to the caller when missing or unavailable
-//   api-base — API prefix; defaults to the prefix this script was served from
-//   base     — compatibility alias for api-base
+//   report       — required report definition name
+//   saved-report — optional saved-report title to load initially
+//   api-base     — API prefix; defaults to the prefix this script was served from
+//   base         — compatibility alias for api-base
 
 import { InteractiveReportElement } from "./report/element.js";
 

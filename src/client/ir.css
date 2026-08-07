@@ -127,7 +127,7 @@
 
 .ir-saved { display: inline-flex; align-items: center; gap: 6px; }
 .ir-saved-label { font-size: 12px; color: var(--ir-text-muted); }
-.ir-saved-select, .ir-report-select { max-width: 16rem; }
+.ir-saved-select { max-width: 16rem; }
 
 /* --- busy bar ---------------------------------------------------------------- */
 

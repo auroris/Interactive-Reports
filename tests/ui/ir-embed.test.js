@@ -24,11 +24,8 @@ const browserGlobals = {
 Object.assign(globalThis, browserGlobals);
 
 const requests = [];
-let visibleReports = [
-    { name: "orders", title: "Orders" },
-    { name: "inventory", title: "Inventory" },
-];
-let unloadableReports = new Set();
+let savedReports = [];
+let savedDocuments = new Map();
 const json = (value, init = {}) => new Response(JSON.stringify(value), {
     status: init.status ?? 200,
     headers: { "Content-Type": "application/json" },
@@ -36,11 +33,7 @@ const json = (value, init = {}) => new Response(JSON.stringify(value), {
 
 globalThis.fetch = async (url, options = {}) => {
     requests.push({ url: String(url), method: options.method ?? "GET", body: options.body });
-    if (String(url) === "/custom-report-api") return json(visibleReports);
     if (String(url).endsWith("/schema")) {
-        const name = /\/([^/]+)\/schema$/.exec(String(url))?.[1];
-        if (unloadableReports.has(name))
-            return json({ title: "Report unavailable" }, { status: 503 });
         return json({
             stateVersion: 2,
             // labels here mirror the server contract: friendly names reach the client
@@ -52,7 +45,9 @@ globalThis.fetch = async (url, options = {}) => {
         });
     }
     if (String(url).endsWith("/whoami")) return json({ identity: "test-user" });
-    if (String(url).endsWith("/saved")) return json([]);
+    if (String(url).endsWith("/saved")) return json(savedReports);
+    const savedId = /\/saved\/([^/]+)$/.exec(String(url))?.[1];
+    if (savedId && savedDocuments.has(savedId)) return json(savedDocuments.get(savedId));
     if (String(url).endsWith("/query")) {
         return json({
             columns: [{ name: "ID", label: "ID", type: "number" }],
@@ -87,12 +82,12 @@ test("the report is style-isolated and uses its explicit API base", async () => 
     assert.ok(report.shadowRoot.querySelector(".ir-toolbar"), "the report UI should render in the shadow root");
     assert.equal(report.shadowRoot.querySelector(".ir-toolbar").getAttribute("part"), "toolbar");
     assert.equal(report.shadowRoot.querySelector(".ir-table").getAttribute("part"), "table");
-    assert.equal(report.shadowRoot.querySelector(".ir-report-select").value, "orders");
-    assert.equal(report.shadowRoot.querySelector(".ir-report-select").closest("label").hidden, false);
+    assert.equal(report.shadowRoot.querySelector(".ir-report-select"), null);
     assert.equal(document.querySelector("link[data-ir-css]"), null, "the bundle should not inject global CSS");
     assert.equal(document.querySelector(".ir-toolbar"), null, "internal elements should not leak into the host DOM");
     assert.equal(report.apiBase, "/custom-report-api/");
-    assert.ok(requests.every(r => r.url === "/custom-report-api" || r.url.startsWith("/custom-report-api/")));
+    assert.ok(requests.every(r => r.url.startsWith("/custom-report-api/")));
+    assert.ok(!requests.some(r => r.url === "/custom-report-api"), "the report catalog endpoint must not be requested");
     assert.ok(requests.some(r => r.url === "/custom-report-api/orders/schema"));
     assert.ok(
         requests.some(r => r.url === "/custom-report-api/orders/query" && r.method === "POST"),
@@ -112,30 +107,45 @@ test("the report is style-isolated and uses its explicit API base", async () => 
     assert.equal(report.shadowRoot.querySelector(".ir-dialog"), null, "transient UI should be disposed on unmount");
 });
 
-test("an unavailable preferred report falls back without requesting it", async () => {
+test("the configured report is loaded directly and can be changed through its attribute", async () => {
     requests.length = 0;
-    visibleReports = [{ name: "allowed", title: "Allowed Report" }];
 
     const report = document.createElement("interactive-report");
-    report.setAttribute("report", "not-allowed");
+    report.setAttribute("report", "orders");
     report.setAttribute("api-base", "/custom-report-api");
     document.body.append(report);
 
-    for (let attempt = 0; attempt < 20 && !requests.some(r => r.url.endsWith("/allowed/query")); attempt++)
+    for (let attempt = 0; attempt < 20 && !requests.some(r => r.url.endsWith("/orders/query")); attempt++)
         await new Promise(resolve => setTimeout(resolve, 1));
 
-    assert.equal(report.reportName, "allowed");
-    assert.equal(report.shadowRoot.querySelector(".ir-report-select").value, "allowed");
-    assert.ok(requests.some(r => r.url === "/custom-report-api/allowed/schema"));
-    assert.ok(requests.some(r => r.url === "/custom-report-api/allowed/query"));
-    assert.ok(!requests.some(r => r.url.includes("not-allowed")));
+    report.setAttribute("report", "order-feed");
+    for (let attempt = 0; attempt < 20 && !requests.some(r => r.url.endsWith("/order-feed/query")); attempt++)
+        await new Promise(resolve => setTimeout(resolve, 1));
+
+    assert.equal(report.reportName, "order-feed");
+    assert.ok(requests.some(r => r.url === "/custom-report-api/order-feed/schema"));
+    assert.ok(requests.some(r => r.url === "/custom-report-api/order-feed/query"));
+    assert.ok(!requests.some(r => r.url === "/custom-report-api"));
+
+    report.remove();
+});
+
+test("a report attribute is required", async () => {
+    requests.length = 0;
+
+    const report = document.createElement("interactive-report");
+    report.setAttribute("api-base", "/custom-report-api");
+    document.body.append(report);
+    await new Promise(resolve => setTimeout(resolve, 1));
+
+    assert.match(report.shadowRoot.querySelector(".ir-banner-error").textContent, /requires a non-empty report attribute/i);
+    assert.equal(requests.length, 0);
 
     report.remove();
 });
 
 test("labels resolve client-side: default report seeds them, rename overrides, clearing restores", async () => {
     requests.length = 0;
-    visibleReports = [{ name: "orders", title: "Orders" }];
 
     const report = document.createElement("interactive-report");
     report.setAttribute("report", "orders");
@@ -181,28 +191,33 @@ test("labels resolve client-side: default report seeds them, rename overrides, c
     report.remove();
 });
 
-test("a visible preferred report that cannot initialize falls back to another visible report", async () => {
+test("saved-report loads a uniquely named saved report before the initial query", async () => {
     requests.length = 0;
-    visibleReports = [
-        { name: "broken", title: "Broken Report" },
-        { name: "allowed", title: "Allowed Report" },
-    ];
-    unloadableReports = new Set(["broken"]);
+    savedReports = [{
+        id: "saved-1", reportName: "orders", title: "My Default",
+        isGlobal: false, owner: "test-user", mine: true,
+    }];
+    savedDocuments = new Map([["saved-1", {
+        summary: savedReports[0],
+        state: { search: "Acme", page: { index: 1, size: 25 }, view: { mode: "grid" } },
+    }]]);
 
     const report = document.createElement("interactive-report");
-    report.setAttribute("report", "broken");
+    report.setAttribute("report", "orders");
+    report.setAttribute("saved-report", "my default");
     report.setAttribute("api-base", "/custom-report-api");
     document.body.append(report);
 
-    for (let attempt = 0; attempt < 20 && !requests.some(r => r.url.endsWith("/allowed/query")); attempt++)
+    for (let attempt = 0; attempt < 20 && !requests.some(r => r.url.endsWith("/orders/query")); attempt++)
         await new Promise(resolve => setTimeout(resolve, 1));
 
-    assert.equal(report.reportName, "allowed");
-    assert.ok(requests.some(r => r.url === "/custom-report-api/broken/schema"));
-    assert.ok(!requests.some(r => r.url === "/custom-report-api/broken/saved"));
-    assert.ok(!requests.some(r => r.url === "/custom-report-api/broken/query"));
-    assert.ok(requests.some(r => r.url === "/custom-report-api/allowed/query"));
+    assert.equal(report.shadowRoot.querySelector(".ir-saved-select").value, "saved-1");
+    assert.ok(requests.some(r => r.url === "/custom-report-api/saved/saved-1"));
+    const queries = requests.filter(r => r.url === "/custom-report-api/orders/query");
+    assert.equal(queries.length, 1, "the primary report should not be queried first");
+    assert.equal(JSON.parse(queries[0].body).search, "Acme");
 
     report.remove();
-    unloadableReports = new Set();
+    savedReports = [];
+    savedDocuments = new Map();
 });

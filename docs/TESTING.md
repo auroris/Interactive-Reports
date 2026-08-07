@@ -34,7 +34,7 @@ npm run test:ui
 The configuration starts `samples/Workbench` on `http://127.0.0.1:5042`, reuses a
 compatible local server outside CI, and retains traces and screenshots on failure. The
 full-application suite covers the synthetic default report, live querying, search,
-paging, report switching, CSV download, aggregate chart rendering, saved-report
+paging, report-attribute changes, CSV download, aggregate chart rendering, saved-report
 save/reload across a page refresh, the administration lifecycle, and non-administrator
 authorization. Saved-report test data uses random names and is removed even when an
 assertion fails.

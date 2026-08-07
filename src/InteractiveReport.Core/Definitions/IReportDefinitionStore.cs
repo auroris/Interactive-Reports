@@ -9,10 +9,4 @@ namespace InteractiveReport.Core.Definitions;
 public interface IReportDefinitionStore
 {
     ValueTask<ReportDefinition?> Find(string name, CancellationToken ct = default);
-
-    /// <summary>
-    /// All definitions; names must be non-empty and case-insensitively unique. Callers
-    /// apply authorization filtering before exposure.
-    /// </summary>
-    ValueTask<IReadOnlyList<ReportDefinition>> List(CancellationToken ct = default);
 }

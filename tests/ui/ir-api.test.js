@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { apiUrl } from "../../src/InteractiveReport.AspNetCore/Ui/src/core/api.js";
+import { apiUrl } from "../../src/client/core/api.js";
 
 test("API URLs normalize the base and encode every path segment", () => {
     assert.equal(

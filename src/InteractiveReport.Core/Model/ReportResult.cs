@@ -45,9 +45,3 @@ public sealed record BreakTotal(
 public sealed record HighlightHit(int Row, string Id, string? Col);
 
 public sealed record IgnoredItem(string Kind, string Detail);
-
-public sealed class ReportSummary
-{
-    public required string Name { get; init; }
-    public required string Title { get; init; }
-}

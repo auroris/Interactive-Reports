@@ -2,9 +2,9 @@ import { build, context } from "esbuild";
 
 const options = {
     entryPoints: [
-        "src/InteractiveReport.AspNetCore/Ui/src/ir.js",
-        "src/InteractiveReport.AspNetCore/Ui/src/ir-admin.js",
-        "src/InteractiveReport.AspNetCore/Ui/src/ir-chart.js",
+        "src/client/ir.js",
+        "src/client/ir-admin.js",
+        "src/client/ir-chart.js",
     ],
     outdir: "src/InteractiveReport.AspNetCore/Ui/dist",
     bundle: true,

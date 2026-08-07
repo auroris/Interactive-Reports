@@ -24,7 +24,7 @@ export default defineConfig({
     ],
     webServer: {
         command: "dotnet run --no-launch-profile --project samples/Workbench --urls http://127.0.0.1:5042",
-        url: `${baseURL}/api/reports`,
+        url: `${baseURL}/api/reports/ui/ir.js`,
         reuseExistingServer: false,
         timeout: 120_000,
         env: {

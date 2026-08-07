@@ -2,9 +2,9 @@
 
 ## Client build
 
-The client-side source is in `src/InteractiveReport.AspNetCore/Ui/src`; generated
-browser assets live beside it in `Ui/dist`. Install the
-toolchain and create the browser bundles with:
+The client-side source is in `src/client`; generated browser assets are written to
+`src/InteractiveReport.AspNetCore/Ui/dist` for embedding by the server project. Install
+the toolchain and create the browser bundles with:
 
 ```sh
 npm ci
@@ -16,11 +16,11 @@ DOM unit tests. Browser automation is configured with Playwright; install Chromi
 once with `npx playwright install chromium`, then run `npm run test:ui`.
 `npm run verify` runs both test layers.
 
-The generated `Ui/dist/ir.js`, `Ui/dist/ir-admin.js`, and `Ui/dist/ir-chart.js`
-files are embedded in the ASP.NET Core assembly. They are checked in so consuming
-and building the .NET projects does not require Node.js. `ir-chart.js` (the
-Chart.js-based chart renderer) is fetched on demand the first time a report
-enters chart view; pages that never chart never load it.
+The generated `src/InteractiveReport.AspNetCore/Ui/dist/ir.js`, `ir-admin.js`, and
+`ir-chart.js` files are embedded in the ASP.NET Core assembly. They are checked in so
+consuming and building the .NET projects does not require Node.js. `ir-chart.js` (the
+Chart.js-based chart renderer) is fetched on demand the first time a report enters
+chart view; pages that never chart never load it.
 
 ## Embedding the report
 
@@ -32,17 +32,20 @@ not reach the host page.
 <script type="module" src="/assets/ir.js"></script>
 <interactive-report
   report="open-orders"
+  saved-report="My Open Orders"
   api-base="/api/reports">
 </interactive-report>
 ```
 
-`report` is a preferred initial report, not an authorization bypass. The component
-first reads the caller's authorized report list. It loads the named report only when
-present; otherwise it falls back to the first visible report without requesting the
-unavailable name. If a visible preferred report fails during schema or initial-query
-loading, initialization continues through the remaining visible reports. When several
-reports are visible, the toolbar exposes a report selector. The attribute may be
-omitted to select the first visible report directly.
+`report` is required and is the only report-definition name the component requests.
+There is no configured-report catalog or report selector. Server authorization still
+applies when the component requests that report's schema, saved reports, queries, and
+exports.
+
+`saved-report` is optional. When present, the component finds a visible saved report by
+its title (case-insensitive) and loads it before the first query. The title must identify
+exactly one visible saved report. A missing or ambiguous title loads Primary Report and
+shows a warning. Omit the attribute to start from Primary Report.
 
 `api-base` may be a relative path or an absolute URL. If it is omitted, the
 component infers the API prefix from the script URL. The older `base` attribute
@@ -68,6 +71,6 @@ The supported theme properties are `--ir-accent`, `--ir-accent-soft`,
 `--ir-radius`, `--ir-font`, and `--ir-font-size`, plus the chart tokens
 `--ir-chart-1` … `--ir-chart-8` (categorical palette; slot 1 is also the
 single-series color), `--ir-chart-grid`, and `--ir-chart-text`. The supported
-structural parts are `surface`, `toolbar`, `report-select`, `notices`, `chips`,
+structural parts are `surface`, `toolbar`, `notices`, `chips`,
 `table-container`, `chart-container`, `table`, `pager`, `menu`,
 `dialog-overlay`, and `dialog`.

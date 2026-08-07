@@ -1,5 +1,5 @@
-// The widget's static frame: toolbar (search, view buttons, Actions, report and
-// saved-report selects), notice slots, chip strip, table, chart container, and
+// The widget's static frame: toolbar (search, view buttons, Actions, and the
+// saved-report select), notice slots, chip strip, table, chart container, and
 // pager. Builds w.els — the fixed set of mount points every renderer targets —
 // and wires toolbar events to the widget and its feature modules.
 
@@ -42,15 +42,8 @@ export function buildSkeleton(w) {
     });
     const savedWrap = el("label", { class: "ir-saved", hidden: true },
         el("span", { class: "ir-saved-label" }, "Saved Report"), savedSel);
-    const reportSel = el("select", {
-        class: "ir-select ir-report-select", part: "report-select",
-        onchange: () => w.activateReport(reportSel.value),
-    });
-    const reportWrap = el("label", { class: "ir-saved", hidden: true },
-        el("span", { class: "ir-saved-label" }, "Report"), reportSel);
-
     w.els = {
-        search, views, reportSel, reportWrap, savedSel, savedWrap,
+        search, views, savedSel, savedWrap,
         errorSlot: el("div", {}),
         transientSlot: el("div", {}),
         ignoredSlot: el("div", {}),
@@ -66,7 +59,6 @@ export function buildSkeleton(w) {
             el("div", { class: "ir-search" }, scopeBtn, search, go),
             views, actionsBtn,
             el("span", { class: "ir-spacer" }),
-            reportWrap,
             savedWrap),
         el("div", { class: "ir-busybar" }),
         el("div", { class: "ir-notices", part: "notices" }, w.els.errorSlot, w.els.transientSlot, w.els.ignoredSlot),

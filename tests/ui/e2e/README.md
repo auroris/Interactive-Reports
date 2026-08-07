@@ -9,8 +9,8 @@ The test server always starts as a fresh process and redirects saved reports to
 `test-results/ui/workbench-saved.db`. Browser runs therefore neither reuse an
 incompatible developer server nor modify `samples/Workbench/App_Data`.
 
-`application.spec.js` covers report discovery, the synthetic default document, query,
-search, paging, report switching, CSV export, saved-report persistence, administration,
+`application.spec.js` covers direct report configuration, the synthetic default document,
+query, search, paging, report-attribute changes, CSV export, saved-report persistence, administration,
 and non-administrator authorization. Saved reports use random names and are removed in
 `finally` blocks, allowing the suite to run against an existing developer Workbench.
 

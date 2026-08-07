@@ -33,7 +33,6 @@ public static class EndpointExtensions
         string prefix = "/api/reports")
     {
         var group = endpoints.MapGroup(prefix);
-        group.MapGet("", ListReports);
         group.MapGet("/{name}/schema", GetSchema);
         group.MapPost("/{name}/query", PostQuery);
         group.MapPost("/{name}/export", PostExport);
@@ -51,29 +50,6 @@ public static class EndpointExtensions
         group.MapGet("/admin/saved", SavedReportEndpoints.AdminListAll);
 
         return group;
-    }
-
-    private static async Task<IResult> ListReports(HttpContext ctx, CancellationToken ct)
-    {
-        var store = ctx.RequestServices.GetRequiredService<IReportDefinitionStore>();
-        var definitions = await store.List(ct);
-        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var def in definitions)
-        {
-            if (string.IsNullOrWhiteSpace(def.Name) || !names.Add(def.Name))
-                return Results.Problem(
-                    title: "Invalid report configuration",
-                    detail: "Report names must be non-empty and unique (case-insensitive).",
-                    statusCode: StatusCodes.Status500InternalServerError);
-        }
-
-        var visible = new List<ReportSummary>();
-        foreach (var def in definitions)
-        {
-            if (await ReportRequestAccess.Authorize(def, ctx) is null)
-                visible.Add(new ReportSummary { Name = def.Name, Title = def.Title ?? ColumnModel.Prettify(def.Name) });
-        }
-        return Results.Json(visible, IrJson.Options);
     }
 
     private static async Task<IResult> GetSchema(string name, HttpContext ctx, CancellationToken ct)

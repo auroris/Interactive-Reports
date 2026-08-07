@@ -69,7 +69,8 @@ still avoiding the worst dialect divergence (native PIVOT syntax) entirely.
 | Project | Responsibility |
 |---|---|
 | `src/InteractiveReport.Core` | State model, validation, expression parser, query composition (SqlKata), execution, schema discovery, highlight evaluation, in-memory pivot, export. No ASP.NET dependencies. |
-| `src/InteractiveReport.AspNetCore` | Endpoint mapping (`MapInteractiveReports`), config-backed definition store, auth integration, JSON protocol shaping, problem+json errors. `Ui/src` holds the product UI source and `Ui/dist` its packaged assets (§14), embedded and served by the same mapping. |
+| `src/InteractiveReport.AspNetCore` | Endpoint mapping (`MapInteractiveReports`), config-backed definition store, auth integration, JSON protocol shaping, problem+json errors. `Ui/dist` holds the generated client assets (§14), embedded and served by the same mapping. |
+| `src/client` | Product UI source modules and the three browser-bundle entry points. |
 | `samples/Workbench` | Dev harness: SQLite sample DB. `index.html` and `admin.html` host the packaged report and administration elements. |
 | `tests/InteractiveReport.Core.Tests` | Composer golden tests (state doc → expected SQL, ×4 dialects), expression parser tests, SQLite end-to-end integration tests. |
 
@@ -84,7 +85,6 @@ exist later without touching the engine:
 public interface IReportDefinitionStore
 {
     ValueTask<ReportDefinition?> Find(string name, CancellationToken ct);
-    ValueTask<IReadOnlyList<ReportSummary>> List(CancellationToken ct); // for authz-filtered listing
 }
 ```
 
@@ -263,7 +263,6 @@ Mounted by the host: `app.MapInteractiveReports("/api/reports").RequireAuthoriza
 
 | Endpoint | Purpose |
 |---|---|
-| `GET  /api/reports` | List reports the caller is authorized to see (name, title). |
 | `GET  /api/reports/{name}/schema` | Column metadata + default state + capabilities. |
 | `POST /api/reports/{name}/query` | Body = state document → page of results. |
 | `GET  /api/reports/whoami` | The caller's canonical identity value (only when `whoamiEnabled`). |
@@ -587,8 +586,8 @@ Layered, default-deny:
    host already has (Umbraco members, cookies, OIDC). The engine has no auth mechanism of
    its own — deliberately.
 2. **Per-report policy** — `authorization.policy` / `roles` in the definition, checked via
-   `IAuthorizationService` before composition. Reports absent from `GET /api/reports` if
-   the caller fails the check.
+   `IAuthorizationService` before composition. A failed authenticated request is returned
+   as 404 so it does not disclose whether the named report exists.
 3. **Default-deny** — no authorization block ⇒ authenticated-only. Anonymous requires
    explicit `"allowAnonymous": true`. The lazy path is the safe path.
 4. **Row-level security** — server-resolved `contextParams` (§4).
@@ -649,19 +648,17 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   the assembly and served at `{prefix}/ui/{file}` by `MapInteractiveReports`. `base`
   defaults to the prefix the script was loaded from. The explicit `api-base`
   attribute overrides that inference; `base` remains its compatibility alias.
-  `report` is an optional preferred report name. Initialization resolves it against
-  `GET {prefix}` (the caller's authorized, uniquely named report catalog); an absent
-  or unavailable preference falls back to the first visible report without probing
-  the unavailable name. If a catalogued preference fails to initialize, the widget
-  tries the remaining visible reports in catalog order. Multiple visible reports
-  produce a toolbar selector.
-  Changing the `report` or API location re-initializes in place. Consumers need no
-  build step.
+  `report` is required and is requested directly; no report catalog or report selector
+  is exposed. The optional `saved-report` attribute selects an initially loaded saved
+  report by case-insensitive title. Exactly one visible saved report must match;
+  otherwise the widget loads Primary Report and displays a warning. Changing `report`,
+  `saved-report`, or the API location re-initializes in place. Consumers need no build
+  step.
 - Each element renders into its own shadow root, including menus and dialogs. The
   stylesheet is compiled into the JavaScript bundle, so host resets and utility
   classes cannot enter the component and component styles cannot escape onto the
   host page. Hosts can theme documented `--ir-*` custom properties on the element.
-- Source modules live in `Ui/src`, organized by concern. The root holds only the
+- Source modules live in `src/client`, organized by concern. The root holds only the
   three bundle entries (`ir.js`, `ir-admin.js`, `ir-chart.js` — thin registration/
   re-export files whose basenames fix the `Ui/dist` output names) and the shared
   `ir.css`. `core/` is widget-agnostic plumbing: `api.js` (fetch + problem+json +

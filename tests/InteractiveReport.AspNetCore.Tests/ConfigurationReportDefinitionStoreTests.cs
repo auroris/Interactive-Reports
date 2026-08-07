@@ -42,34 +42,6 @@ public sealed class ConfigurationReportDefinitionStoreTests
     }
 
     [Fact]
-    public async Task List_rejects_case_insensitive_duplicate_report_names()
-    {
-        static ReportDefinition Definition() => new()
-        {
-            Connection = "db",
-            Dialect = ReportDialect.Sqlite,
-            Sql = "select 1 as ID",
-        };
-
-        var options = new InteractiveReportOptions
-        {
-            Reports = new Dictionary<string, ReportDefinition>(StringComparer.Ordinal)
-            {
-                ["orders"] = Definition(),
-                ["ORDERS"] = Definition(),
-            },
-        };
-        using var store = new ConfigurationReportDefinitionStore(
-            new OptionsMonitorStub(options),
-            new SchemaCache());
-
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(
-            async () => await store.List());
-
-        Assert.Contains("unique", error.Message, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
     public async Task Column_labels_round_trip_the_snapshot_with_key_casing_intact()
     {
         var configured = new ReportDefinition

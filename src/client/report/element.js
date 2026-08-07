@@ -30,7 +30,7 @@ const loadChartModule = () =>
         .catch(err => { chartModulePromise = undefined; throw err; });
 
 export class InteractiveReportElement extends HTMLElement {
-    static observedAttributes = ["report", "api-base", "base"];
+    static observedAttributes = ["report", "saved-report", "api-base", "base"];
 
     constructor() {
         super();
@@ -48,6 +48,7 @@ export class InteractiveReportElement extends HTMLElement {
     }
     get base() { return this.apiBase.replace(/\/+$/, ""); }
     get requestedReportName() { return this.getAttribute("report"); }
+    get requestedSavedReportName() { return this.getAttribute("saved-report"); }
     get reportName() { return this._activeReportName ?? this.requestedReportName; }
 
     connectedCallback() { this.scheduleInit(); }
@@ -101,73 +102,70 @@ export class InteractiveReportElement extends HTMLElement {
         this.destroyChart();
 
         this.resetReportContext();
-        this.availableReports = [];
         this._activeReportName = null;
         this.whoami = null;
         buildSkeleton(this);
 
-        try {
-            const [reports, whoami] = await Promise.all([
-                api(this.base),
-                api(`${this.base}/whoami`).catch(() => null),
-            ]);
-            if (seq !== this._seq) return;
-            this.availableReports = reports;
-            this.whoami = whoami;
-            this.refreshReportSelect();
+        const requested = this.requestedReportName?.trim();
+        if (!requested) {
+            this.showError(new Error("The interactive-report element requires a non-empty report attribute."));
+            return;
+        }
 
-            const requested = this.requestedReportName;
-            const preferred = this.availableReports.find(r => sameName(r.name, requested));
-            const candidates = preferred
-                ? [preferred, ...this.availableReports.filter(r => r !== preferred)]
-                : this.availableReports;
-            if (!candidates.length) {
-                this.showError(new Error("No reports are available for the current user."));
-                return;
-            }
-            for (const candidate of candidates) {
-                if (await this.activateReport(candidate.name, seq, { quiet: true })) return;
-                if (seq !== this._seq) return;
-            }
-            this.showError(new Error("None of the reports available to the current user could be loaded."));
+        try {
+            const whoami = await api(`${this.base}/whoami`).catch(() => null);
+            if (seq !== this._seq) return;
+            this.whoami = whoami;
+            await this.activateReport(requested, seq);
         } catch (err) {
             if (err.name !== "AbortError" && seq === this._seq) this.showError(err);
         }
     }
 
-    refreshReportSelect() {
-        const { reportSel, reportWrap } = this.els;
-        reportSel.replaceChildren(...this.availableReports.map(r => new Option(r.title, r.name)));
-        reportSel.value = this._activeReportName ?? "";
-        reportWrap.hidden = this.availableReports.length <= 1;
-    }
-
     async activateReport(name, seq = ++this._seq, { quiet = false } = {}) {
-        const selected = this.availableReports.find(r => sameName(r.name, name));
-        if (!selected || seq !== this._seq) return false;
+        name = name?.trim();
+        if (!name || seq !== this._seq) return false;
 
         this._abort?.abort();
         this._abort = null;
         this.resetReportContext();
-        this._activeReportName = selected.name;
+        this._activeReportName = name;
         this.clearReportView();
-        this.refreshReportSelect();
         refreshSavedSelect(this);
         this._mount.classList.add("ir-busy");
 
         try {
             // Schema is the loadability gate. Do not issue saved-state or query
             // requests for this report until its definition is accessible and valid.
-            const schema = await api(apiUrl(this.base, selected.name, "schema"));
+            const schema = await api(apiUrl(this.base, name, "schema"));
             if (seq !== this._seq) return false;
-            const saved = await api(apiUrl(this.base, selected.name, "saved")).catch(() => []);
+            const saved = await api(apiUrl(this.base, name, "saved")).catch(() => []);
             if (seq !== this._seq) return;
             this.schema = schema;
             this.savedList = saved;
-            this.doc = this.normalize(schema.defaultState);
+
+            const requestedSaved = this.requestedSavedReportName?.trim();
+            const savedMatches = requestedSaved
+                ? saved.filter(candidate => sameName(candidate.title, requestedSaved))
+                : [];
+            let savedWarning;
+            if (savedMatches.length === 1) {
+                const docResponse = await api(apiUrl(this.base, "saved", savedMatches[0].id));
+                if (seq !== this._seq) return false;
+                this.currentSaved = docResponse.summary;
+                this.doc = this.normalize(docResponse.state);
+            } else {
+                this.doc = this.normalize(schema.defaultState);
+                if (requestedSaved) {
+                    savedWarning = savedMatches.length === 0
+                        ? `Saved report "${requestedSaved}" is not available; loaded Primary Report.`
+                        : `Saved report name "${requestedSaved}" is ambiguous; loaded Primary Report.`;
+                }
+            }
             this.els.search.value = this.doc.search ?? "";
             refreshSavedSelect(this);
             await this.runQuery({ quiet });
+            if (savedWarning) this.notify(savedWarning, "warn");
             return seq === this._seq && this.lastResult !== null;
         } catch (err) {
             if (!quiet && err.name !== "AbortError" && seq === this._seq) this.showError(err);
