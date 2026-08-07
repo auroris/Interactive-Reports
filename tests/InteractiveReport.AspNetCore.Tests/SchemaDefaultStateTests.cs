@@ -59,14 +59,24 @@ public sealed class SchemaDefaultStateTests
         var def = Definition();
         def.DefaultState = new ReportState
         {
-            Formats = new() { ["ORDER_ID"] = new ColumnFormat { Align = "center", Mask = "integer" } },
+            Formats = new()
+            {
+                ["ORDER_ID"] = new ColumnFormat
+                {
+                    Align = "center",
+                    Mask = "integer",
+                    Classes = ["identifier-column"],
+                },
+            },
         };
 
         var state = EndpointExtensions.SchemaDefaultState(def);
 
         Assert.Equal("center", state.Formats!["ORDER_ID"].Align);
         Assert.Equal("integer", state.Formats["ORDER_ID"].Mask);
+        Assert.Equal(["identifier-column"], state.Formats["ORDER_ID"].Classes);
         Assert.NotSame(def.DefaultState.Formats, state.Formats);
+        Assert.NotSame(def.DefaultState.Formats["ORDER_ID"], state.Formats["ORDER_ID"]);
     }
 
     [Fact]

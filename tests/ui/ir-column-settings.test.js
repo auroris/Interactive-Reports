@@ -114,12 +114,22 @@ test("column settings write doc.formats and the grid renders mask, alignment, an
     maskSel.dispatchEvent(new window.Event("input", { bubbles: true }));
     const boldChk = dialog.querySelectorAll('input[type="checkbox"]')[1];
     boldChk.checked = true;
+    const classesInp = dialog.querySelector('input[type="text"]');
+    classesInp.value = "amount-column emphasized";
+    classesInp.dispatchEvent(new window.Event("input", { bubbles: true }));
 
     assert.equal(dialog.querySelector(".ir-format-preview").textContent, "1,235",
         "the preview shows the masked sample value");
+    assert.equal(dialog.querySelector(".ir-format-preview").classList.contains("amount-column"), true,
+        "custom classes participate in the live preview");
 
     const doc = await applyDialog(report);
-    assert.deepEqual(doc.formats, { ID: { mask: "integer", align: "center", bold: true } });
+    assert.deepEqual(doc.formats, {
+        ID: {
+            mask: "integer", align: "center", bold: true,
+            classes: ["amount-column", "emphasized"],
+        },
+    });
 
     const th = report.shadowRoot.querySelector("th");
     const td = report.shadowRoot.querySelector("tbody tr td");
@@ -127,6 +137,27 @@ test("column settings write doc.formats and the grid renders mask, alignment, an
     assert.equal(td.style.textAlign, "center");
     assert.equal(td.style.fontWeight, "600");
     assert.equal(th.style.textAlign, "center");
+    assert.equal(th.classList.contains("amount-column"), true);
+    assert.equal(td.classList.contains("emphasized"), true);
+
+    report.remove();
+});
+
+test("column settings reject component-reserved CSS classes", async () => {
+    requests.length = 0;
+    const report = await mount("orders");
+
+    report.shadowRoot.querySelector("th.ir-th-menu").click();
+    clickMenuItem(report, "Column Settings");
+    const dialog = report.shadowRoot.querySelector(".ir-dialog");
+    const classesInp = dialog.querySelector('input[type="text"]');
+    classesInp.value = "ir-empty";
+    dialog.querySelector(".ir-btn-primary").click();
+
+    await settle(() => !dialog.querySelector(".ir-dialog-error").hidden);
+    assert.match(dialog.querySelector(".ir-dialog-error").textContent, /invalid or reserved/i);
+    assert.equal(!!report.shadowRoot.querySelector(".ir-dialog"), true,
+        "invalid class input keeps the dialog open");
 
     report.remove();
 });

@@ -8,6 +8,10 @@
     ],
     "computed": [
       { "id": "c1", "label": "With Tax", "expr": "ROUND(AMOUNT * 1.0825, 2)" }
-    ]
+    ],
+    "formats": {
+      "AMOUNT": { "classes": [ "amount-column" ] },
+      "c1": { "classes": [ "amount-column" ] }
+    }
   }
 }

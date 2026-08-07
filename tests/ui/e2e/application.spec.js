@@ -39,6 +39,9 @@ test("loads the configured primary report, queries data, searches, pages, and ch
     await expect(page.getByRole("columnheader")).toHaveText([
         "Order #", "Customer Name", "Region", "Status", "Amount", "Ordered On▼", "Notes", "With Tax",
     ]);
+    const report = page.locator("interactive-report");
+    await expect(report.locator('link[data-ir-custom-styles]')).toHaveAttribute("href", "/report-overrides.css");
+    await expect(page.getByRole("columnheader", { name: "Amount", exact: true })).toHaveClass(/amount-column/);
     await expect(page.getByText("1 – 50 of 500 rows", { exact: true })).toBeVisible();
 
     await search(page, "Acme Corp");

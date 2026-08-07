@@ -57,12 +57,23 @@ public sealed class ReportStateResolverTests
     {
         var defaults = new ReportState
         {
-            Formats = new() { ["AMOUNT"] = new ColumnFormat { Mask = "decimal2", Align = "right" } },
+            Formats = new()
+            {
+                ["AMOUNT"] = new ColumnFormat
+                {
+                    Mask = "decimal2",
+                    Align = "right",
+                    Classes = ["amount-column"],
+                },
+            },
         };
 
         var inherited = ReportStateResolver.Resolve(defaults, new ReportState());
         Assert.Equal("decimal2", inherited.Formats!["AMOUNT"].Mask);
         Assert.NotSame(defaults.Formats, inherited.Formats);
+        Assert.NotSame(defaults.Formats["AMOUNT"], inherited.Formats["AMOUNT"]);
+        Assert.NotSame(defaults.Formats["AMOUNT"].Classes, inherited.Formats["AMOUNT"].Classes);
+        Assert.Equal(["amount-column"], inherited.Formats["AMOUNT"].Classes);
 
         var overridden = ReportStateResolver.Resolve(defaults, new ReportState
         {

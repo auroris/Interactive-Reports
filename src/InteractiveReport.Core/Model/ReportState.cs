@@ -50,9 +50,8 @@ public sealed class ReportState
 /// <summary>
 /// Per-column display settings, all optional. Mask tokens are a closed client-side
 /// vocabulary (per column type); style properties are the same constrained set the
-/// highlight rules use — deliberately not a CSS class (host classes cannot pierce
-/// the shadow root) and not freeform CSS (a style string in a globally published
-/// report is an injection surface).
+/// highlight rules use. Classes select rules from the report definition's trusted
+/// shadow-root stylesheet; report state can never supply CSS or a stylesheet URL.
 /// </summary>
 public sealed class ColumnFormat
 {
@@ -67,6 +66,12 @@ public sealed class ColumnFormat
     /// <summary>Text / background colors, as in <see cref="HighlightStyle"/>.</summary>
     public string? Fg { get; set; }
     public string? Bg { get; set; }
+
+    /// <summary>
+    /// Custom class tokens for this column's header and cells. The client accepts a
+    /// conservative identifier subset and refuses the component's reserved ir- prefix.
+    /// </summary>
+    public List<string>? Classes { get; set; }
 }
 
 /// <summary>

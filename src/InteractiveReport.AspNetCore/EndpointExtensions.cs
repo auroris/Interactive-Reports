@@ -69,6 +69,7 @@ public static class EndpointExtensions
             {
                 name = def.Name,
                 title = def.Title ?? ColumnModel.Prettify(def.Name),
+                styleSheet = def.StyleSheet?.Trim(),
                 columns = columns.Select(c => new ColumnInfo(c.Name, c.Label, c.KindName, c.IsComputed)),
                 defaultState = SchemaDefaultState(def),
                 stateVersion = ReportState.CurrentVersion,

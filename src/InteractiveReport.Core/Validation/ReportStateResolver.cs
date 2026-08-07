@@ -36,5 +36,18 @@ public static class ReportStateResolver
         => values is null ? null : new(values);
 
     private static Dictionary<string, ColumnFormat>? Copy(Dictionary<string, ColumnFormat>? values)
-        => values is null ? null : new(values);
+        => values?.ToDictionary(
+            entry => entry.Key,
+            entry => entry.Value is null
+                ? new ColumnFormat()
+                : new ColumnFormat
+                {
+                    Mask = entry.Value.Mask,
+                    Align = entry.Value.Align,
+                    Bold = entry.Value.Bold,
+                    Italic = entry.Value.Italic,
+                    Fg = entry.Value.Fg,
+                    Bg = entry.Value.Bg,
+                    Classes = Copy(entry.Value.Classes),
+                });
 }

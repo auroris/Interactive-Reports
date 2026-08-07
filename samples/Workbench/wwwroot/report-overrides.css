@@ -1,0 +1,5 @@
+/* Loaded inside the orders report's shadow root through its styleSheet setting. */
+.amount-column {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}

@@ -96,6 +96,14 @@ public sealed class ReportDefinition
     /// precedence over database reports with the same title.
     /// </summary>
     public List<string>? DocumentFiles { get; set; }
+
+    /// <summary>
+    /// Optional application-controlled stylesheet URL. The report component places a
+    /// link to it inside its shadow root, after the packaged styles, so report-specific
+    /// rules can reach the component without accepting CSS from report documents.
+    /// Relative URLs resolve against the host page.
+    /// </summary>
+    public string? StyleSheet { get; set; }
 }
 
 public sealed class ContextParamSpec

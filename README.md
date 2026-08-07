@@ -34,6 +34,7 @@ the host's content root unless absolute:
   "connection": "MainDb",
   "dialect": "SqlServer",
   "sql": "SELECT ORDER_ID, CUSTOMER, AMOUNT FROM ORDERS",
+  "styleSheet": "/css/orders-report.css",
   "documentFiles": [
     "ReportDocuments/orders.primary.json",
     "ReportDocuments/orders.finance.json"
@@ -51,7 +52,10 @@ normal versioned state document:
   "state": {
     "v": 2,
     "columns": [ "ORDER_ID", "CUSTOMER", "AMOUNT" ],
-    "sorts": [ { "col": "AMOUNT", "dir": "desc" } ]
+    "sorts": [ { "col": "AMOUNT", "dir": "desc" } ],
+    "formats": {
+      "AMOUNT": { "classes": [ "amount-column", "emphasized" ] }
+    }
   }
 }
 ```
@@ -63,6 +67,22 @@ database copy under another title. A configured title takes precedence over an e
 database report with the same title, and new title collisions are rejected. Ensure the
 host project copies these files to its build and publish output; the Workbench project
 shows one way to do that.
+
+`styleSheet` is an application-controlled relative or HTTP(S) URL. The component
+places its `<link>` inside the report's shadow root after the packaged styles, so its
+rules can target report internals without leaking into the host page. For example:
+
+```css
+.amount-column { font-variant-numeric: tabular-nums; }
+.emphasized { font-weight: 700; }
+```
+
+Column Settings accepts space-separated class names and saves them in the column's
+`formats.classes` list. Classes apply to the column header, data cells, and aggregate
+cells. Tokens begin with a letter or `_`, then use letters, digits, `_`, or `-`; the
+component's `ir-` prefix is reserved. Report documents can therefore select
+developer-defined rules but cannot supply CSS or choose a stylesheet URL. The host's
+Content Security Policy still governs stylesheet loading.
 
 ## Embedding the report
 

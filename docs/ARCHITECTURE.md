@@ -102,6 +102,7 @@ public interface IReportDefinitionStore
       "features": [ "search", "filter", "sort", "savedReports", "download" ],
       "maxRows": 100000,
       "defaultPageSize": 50,
+      "styleSheet": "/css/open-orders.css",
       "documentFiles": [
         "ReportDocuments/open-orders.primary.json",
         "ReportDocuments/open-orders.finance.json"
@@ -166,6 +167,11 @@ Notes:
   the administrator list retains shadowed rows so they can be renamed or removed.
   PUT/DELETE of a configured document return 403, while Save As remains available.
   Hosts must include the referenced files in their build/publish output.
+- `styleSheet` is a relative or HTTP(S) URL chosen by the report developer. The schema
+  delivers it to the component, which links it inside the shadow root after the
+  packaged styles. Relative URLs resolve against the host page; CSP `style-src` still
+  applies. The URL never enters report state, so saved/global reports cannot redirect
+  CSS loading.
 - Definitions version in git and deploy with the app: schema changes and report changes travel together.
 
 ## 5. Report state document
@@ -186,7 +192,12 @@ the version 1 column/operator/value filter shape with shared boolean expressions
   "sorts":  [ { "col": "ORDER_DATE", "dir": "desc" } ],
   "columns": ["ORDER_ID", "CUSTOMER", "AMOUNT", "ORDER_DATE", "c1"],
   "labels": { "ORDER_ID": "Ticket #" },
-  "formats": { "AMOUNT": { "mask": "integer", "align": "center", "bold": true } },
+  "formats": {
+    "AMOUNT": {
+      "mask": "integer", "align": "center", "bold": true,
+      "classes": [ "amount-column", "emphasized" ]
+    }
+  },
   "computed": [
     { "id": "c1", "enabled": true, "label": "Amount w/ Tax",
       "expr": "ROUND(AMOUNT * 1.0825, 2)" }
@@ -226,17 +237,19 @@ provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
   report the schema endpoint delivers. A computed column still names itself on its
   own rule. Like every state property, a present map replaces the default wholesale
   and `{}` explicitly clears it.
-- `formats` (real column name → `{ mask, align, bold, italic, fg, bg }`) is the
+- `formats` (real column name → `{ mask, align, bold, italic, fg, bg, classes[] }`) is the
   second presentation map, written by the Column Settings dialog and following every
   labels rule: never validated, never gating execution, wholesale-replace with `{}`
   as the explicit clear, resolvable from the effective primary state so definitions
   can ship default formatting. Masks are a closed client-side token vocabulary per
   column type (`integer`/`decimal2`/`decimal4`/`plain` for numbers; `date`/`datetime`/
   `dateMedium`/`dateLong` for dates); unknown tokens and indigestible values fall
-  through to default rendering — a mask is a lens, never a gate. Styling is the same
-  constrained property set highlights use, deliberately not a CSS class (host classes
-  cannot pierce the shadow root) and not freeform CSS (a style string in a globally
-  published report is an injection surface). Unlike labels the server consumes
+  through to default rendering — a mask is a lens, never a gate. Inline styling is the
+  same constrained property set highlights use. `classes` selects rules from the
+  definition's trusted shadow-root `styleSheet`; the client accepts conservative CSS
+  identifier tokens, drops malformed/reserved state, and refuses the component's
+  `ir-` namespace in the dialog. A report document can select classes but cannot carry
+  CSS or a URL. Unlike labels the server consumes
   `formats` nowhere: exports keep raw values, because headers are captions but cells
   are data — a masked number in a CSV would break the spreadsheet arithmetic the
   export exists for. Highlight styles win over column styles where both apply.
@@ -723,9 +736,11 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   `saved-report`, or the API location re-initializes in place. Consumers need no build
   step.
 - Each element renders into its own shadow root, including menus and dialogs. The
-  stylesheet is compiled into the JavaScript bundle, so host resets and utility
-  classes cannot enter the component and component styles cannot escape onto the
-  host page. Hosts can theme documented `--ir-*` custom properties on the element.
+  packaged stylesheet is compiled into the JavaScript bundle, so host resets and
+  utility classes cannot enter the component and component styles cannot escape onto
+  the host page. A definition's optional `styleSheet` link is inserted inside that
+  root after the packaged styles. Hosts can also theme documented `--ir-*` custom
+  properties on the element.
 - Source modules live in `src/client`, organized by concern. The root holds only the
   three bundle entries (`ir.js`, `ir-admin.js`, `ir-chart.js` — thin registration/
   re-export files whose basenames fix the `Ui/dist` output names) and the shared
@@ -747,8 +762,9 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   Feature modules are free functions over the widget instance `w` — nothing
   imports the element class except its entry, so the graph stays acyclic.
   `npm run build` uses esbuild to compile the stylesheet and modules into three
-  self-contained entry bundles in `Ui/dist`; these generated assets are committed
-  so a normal .NET build does not require Node.js.
+  self-contained entry bundles in `Ui/dist`. The generated assets are ignored; the
+  release pipeline builds them before packing, so package consumers do not require
+  Node.js.
 - **Feature surface**: scoped toolbar search (all text columns or one typed column → expression filter);
   Actions menu (Columns shuttle, Column Settings, Filter, Sort, Control Break, Highlight, Aggregate,
   Compute with token-insert helpers, Group By, Pivot, Chart, Save/Save As/Delete/Reset,
@@ -758,7 +774,8 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   (edits stage per column, so several columns can be configured in one visit): a
   Visible checkbox that writes the same `doc.columns` list the shuttle owns
   (re-shown columns append to the end — no second source of truth), alignment,
-  a per-type format-mask select, bold/italic, text/background colors, and a live
+  a per-type format-mask select, bold/italic, text/background colors, validated custom
+  CSS classes, and a live
   preview fed by the column's own data; everything but visibility lands in the
   doc's `formats` map (§5), applied by the grid renderer to header alignment,
   cells, and aggregate-row alignment; settings chips with
@@ -873,7 +890,7 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   server rendering the user's screen, applies the posted document's labels to headers
   and synthetics via `ValidatedState.WithDisplayLabels`.
 - **M11 — Feature whitelist** ✅ *(2026-08-07)*: per-report `features` whitelist (§4)
-  — fourteen canonical tokens covering the Actions menu, search, views, saved
+  — fifteen canonical tokens covering the Actions menu, search, views, saved
   reports, and download; validated fail-fast at definition load, resolved onto the
   schema payload, and applied by the packaged UI (chrome removal + locked chips).
   `download` and `savedReports` creation are server-enforced 403s; everything else
@@ -894,6 +911,11 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   data); definitions ship default formatting through the effective primary state,
   with no new config surface. Remaining per-column configuration candidates: LOVs,
   links, help text, per-column sort/filter permissions.
+- **M14 — Trusted custom CSS** ✅ *(2026-08-07)*: a definition-owned `styleSheet`
+  URL is delivered through schema and linked inside the report's shadow root. Column
+  Settings writes validated class tokens to `formats.classes`; the grid applies them
+  to headers, cells, and aggregates while filtering malformed and reserved `ir-*`
+  state. Reports select application-authored rules but cannot inject CSS or URLs.
 
 ## Appendix: decision log
 
@@ -921,11 +943,11 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 | CSV: UTF-8 BOM, label headers, X-IR-Truncated header | bare UTF-8, name headers, silent truncation | Excel needs the BOM to detect encoding; users recognize labels, not internal names; silent truncation reads as complete data. |
 | Views share the export pipeline | grid-only export | Exporting "what the view shows" falls out of running the same validated state unpaged — no special cases. |
 | Oracle BindByName via reflection in CommandBuilder | reference ODP.NET from Core | ODP.NET binds by position by default; context params appear first in SQL but are added last, so positional binding silently misbinds. Reflection keeps Core provider-free. |
-| UI: no-build vanilla ES modules as custom elements | React/Vite bundle | No node toolchain in a .NET repo; embeddable in any host (Umbraco: one script tag + one element); the protocol keeps the JS dumb enough that a framework buys little. |
+| UI: packaged vanilla ES modules as custom elements | React/Vite application | Package consumers need no frontend toolchain; hosts embed one script tag + one element. The repository uses esbuild only to produce the release bundles, and the protocol keeps the JS small enough that a framework buys little. |
 | UI assets embedded in the AspNetCore assembly, served under the mapped prefix | RCL static web assets | Zero host setup (`UseStaticFiles`/`_content` not required), one mapping call delivers API + UI, works identically in any host. |
 | UI asset endpoint `AllowAnonymous` | inherit group auth | Assets are public package code (readable on any feed); an auth-gated script tag turns "session expired" into a blank region that can't even say "sign in". Data endpoints keep the full gate. |
 | Asset ETags hash content | assembly version tag | Version-tagged ETags 304 stale content across rebuilds of the same version (bitten in dev; would bite ops on patch releases). |
-| Light DOM + `.ir-*` prefix + CSS custom properties | Shadow DOM | Hosts want to theme the region, not fight encapsulation; prefix discipline is enough isolation and keeps the DOM inspectable. |
+| Shadow DOM + theme properties + configured inner stylesheet | Light DOM + `.ir-*` prefix | Isolation keeps host resets out and report rules in. Theme tokens cover broad branding; a developer-owned stylesheet inside the root supports deliberate internal and per-column styling. |
 | Expression-rule `enabled` is canonical protocol state | strip disabled instructions | A saved computed column, filter, or highlight is either on or off; disabling does not delete the author's expression, label, or color choice. |
 | Compiled rule + typed effect plan | separate computed/filter/highlight expression pipelines | Parsing, binding, result contracts, and enabled behavior are one pipeline; definition, row-inclusion, and decoration effects still make query placement explicit. |
 | Cell styles apply after row styles | depend on rule order | Cell highlighting has explicit priority over the background/foreground inherited from a row highlight. |
@@ -954,5 +976,5 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 | Locked chips: state from an absent feature displays read-only | hide the chips; let them stay editable | The chip strip is the doc made visible — hiding active filters would misrepresent the data shown, and editing them would reopen the very dialogs the whitelist removed. Leaving a locked view for the grid stays possible: it abandons the feature rather than using it. |
 | Column formatting is a second document map (`formats`), client-consumed only | apply masks server-side; format exported values | Labels proved the shape: presentation maps are never validated and never gate execution. Formats go one step further — the server consumes them nowhere, because a masked value in a CSV is a caption pretending to be data; spreadsheet arithmetic needs the raw number. |
 | Masks are closed per-type tokens (Intl-backed) | freeform mask strings (APEX FML/999G999D99) | Same rule as TO_STRING: a validated vocabulary renders identically everywhere and cannot smuggle anything; unknown tokens fall through to default rendering instead of erroring, because a display mask must never break a report. |
-| Column styling = the highlight property set (align/bold/italic/fg/bg) | CSS class hook; freeform style string | A class can't reach into the shadow root, so it would be dead config; a freeform style string in a globally published saved report is an injection surface (url() exfil, layout escapes). The constrained set already proved itself on highlights, which still win where both apply. |
+| Column classes select a definition-owned shadow-root stylesheet | freeform style/CSS in report state; page-level classes | The URL and CSS stay application-controlled; saved reports carry only conservative class tokens and cannot select reserved `ir-*` behavior. Page CSS cannot cross the shadow boundary, while freeform report CSS would be an injection surface. |
 | The dialog's Visible checkbox writes `doc.columns` | a per-column `visible` flag in formats | One source of truth: the shuttle, the header Hide, and the checkbox all edit the same list, so they can never disagree; re-shown columns append to the end, matching how a user thinks about "bring it back". |

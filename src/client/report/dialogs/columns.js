@@ -7,6 +7,7 @@ import { openDialog } from "../../core/dialog.js";
 import { featureEnabled, pickable, typeOf, visibleColumnNames } from "../schema.js";
 import { colOptions } from "./parts.js";
 import { formatValue, masksFor } from "../render/format.js";
+import { columnClasses } from "../classes.js";
 
 export function columnsDialog(w) {
     const universe = pickable(w);
@@ -87,6 +88,10 @@ export function columnSettingsDialog(w, initialCol) {
     const fgInp = el("input", { type: "color", class: "ir-color", value: "#9f1239" });
     const bgOn = el("input", { type: "checkbox" });
     const bgInp = el("input", { type: "color", class: "ir-color", value: "#fff3cd" });
+    const classesInp = el("input", {
+        type: "text", class: "ir-input", maxLength: 500,
+        placeholder: "e.g. amount-column emphasized",
+    });
     const preview = el("div", { class: "ir-format-preview" });
 
     const read = () => ({
@@ -97,6 +102,7 @@ export function columnSettingsDialog(w, initialCol) {
         italic: italicChk.checked,
         fg: fgOn.checked ? fgInp.value : null,
         bg: bgOn.checked ? bgInp.value : null,
+        classes: classesInp.value.trim(),
     });
 
     const settingsFor = name => {
@@ -110,6 +116,7 @@ export function columnSettingsDialog(w, initialCol) {
             italic: !!fmt.italic,
             fg: fmt.fg ?? null,
             bg: fmt.bg ?? null,
+            classes: Array.isArray(fmt.classes) ? fmt.classes.join(" ") : "",
         };
     };
 
@@ -132,6 +139,8 @@ export function columnSettingsDialog(w, initialCol) {
         preview.style.fontStyle = s.italic ? "italic" : "";
         preview.style.color = s.fg ?? "";
         preview.style.background = s.bg ?? "";
+        preview.className = "ir-format-preview";
+        preview.classList.add(...columnClasses(s.classes));
     };
 
     let active = colSel.value;
@@ -149,6 +158,7 @@ export function columnSettingsDialog(w, initialCol) {
         if (s.fg) fgInp.value = s.fg;
         bgOn.checked = !!s.bg;
         if (s.bg) bgInp.value = s.bg;
+        classesInp.value = s.classes;
         updatePreview();
     };
     colSel.onchange = () => {
@@ -156,7 +166,7 @@ export function columnSettingsDialog(w, initialCol) {
         active = colSel.value;
         load(active);
     };
-    for (const control of [visChk, alignSel, maskSel, boldChk, italicChk, fgOn, fgInp, bgOn, bgInp])
+    for (const control of [visChk, alignSel, maskSel, boldChk, italicChk, fgOn, fgInp, bgOn, bgInp, classesInp])
         control.addEventListener("input", updatePreview);
     load(active);
 
@@ -175,6 +185,9 @@ export function columnSettingsDialog(w, initialCol) {
             el("div", { class: "ir-colors" },
                 el("label", { class: "ir-color-pick" }, fgOn, "Text", fgInp),
                 el("label", { class: "ir-color-pick" }, bgOn, "Background", bgInp)),
+            labeled("CSS Classes", classesInp),
+            el("p", { class: "ir-dialog-note" },
+                "Space-separated classes from the report's configured stylesheet. The ir- prefix is reserved."),
             labeled("Preview", preview)),
         onApply: () => {
             staged.set(active, read());
@@ -199,6 +212,8 @@ export function columnSettingsDialog(w, initialCol) {
                     if (s.italic) entry.italic = true;
                     if (s.fg) entry.fg = s.fg;
                     if (s.bg) entry.bg = s.bg;
+                    const classes = columnClasses(s.classes, { strict: true });
+                    if (classes.length) entry.classes = classes;
                     if (Object.keys(entry).length) (d.formats ??= {})[name] = entry;
                     else if (d.formats) delete d.formats[name];
                 }

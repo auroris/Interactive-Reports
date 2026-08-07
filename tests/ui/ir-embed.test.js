@@ -35,6 +35,7 @@ const json = (value, init = {}) => new Response(JSON.stringify(value), {
 globalThis.fetch = async (url, options = {}) => {
     requests.push({ url: String(url), method: options.method ?? "GET", body: options.body });
     if (String(url).endsWith("/schema")) {
+        const reportName = /\/([^/]+)\/schema$/.exec(String(url))?.[1];
         return json({
             stateVersion: 2,
             // labels here mirror the server contract: friendly names reach the client
@@ -43,6 +44,7 @@ globalThis.fetch = async (url, options = {}) => {
             limits: { defaultPageSize: 25, maxPageSize: 100 },
             columns: [{ name: "ID", label: "ID", type: "number" }],
             capabilities: { aggregateFunctions: {}, expressionFunctions: [] },
+            ...(reportName === "orders" ? { styleSheet: "/styles/orders-report.css?v=3" } : {}),
         });
     }
     if (String(url).endsWith("/whoami")) return json(whoami);
@@ -80,11 +82,17 @@ test("the report is style-isolated and uses its explicit API base", async () => 
 
     assert.ok(report.shadowRoot, "the component should render behind a shadow root");
     assert.ok(report.shadowRoot.querySelector("style[data-ir-styles]"), "styles should live in the shadow root");
+    assert.equal(
+        report.shadowRoot.querySelector("link[data-ir-custom-styles]")?.getAttribute("href"),
+        "/styles/orders-report.css?v=3",
+        "the configured sheet must be linked inside the shadow root");
     assert.ok(report.shadowRoot.querySelector(".ir-toolbar"), "the report UI should render in the shadow root");
     assert.equal(report.shadowRoot.querySelector(".ir-toolbar").getAttribute("part"), "toolbar");
     assert.equal(report.shadowRoot.querySelector(".ir-table").getAttribute("part"), "table");
     assert.equal(report.shadowRoot.querySelector(".ir-report-select"), null);
     assert.equal(document.querySelector("link[data-ir-css]"), null, "the bundle should not inject global CSS");
+    assert.equal(document.querySelector("link[data-ir-custom-styles]"), null,
+        "the report stylesheet must not leak into the page head");
     assert.equal(document.querySelector(".ir-toolbar"), null, "internal elements should not leak into the host DOM");
     assert.equal(report.apiBase, "/custom-report-api/");
     assert.ok(requests.every(r => r.url.startsWith("/custom-report-api/")));
@@ -124,6 +132,8 @@ test("the configured report is loaded directly and can be changed through its at
         await new Promise(resolve => setTimeout(resolve, 1));
 
     assert.equal(report.reportName, "order-feed");
+    assert.equal(report.shadowRoot.querySelector("link[data-ir-custom-styles]"), null,
+        "changing to a report without a custom sheet removes the previous link");
     assert.ok(requests.some(r => r.url === "/custom-report-api/order-feed/schema"));
     assert.ok(requests.some(r => r.url === "/custom-report-api/order-feed/query"));
     assert.ok(!requests.some(r => r.url === "/custom-report-api"));

@@ -7,7 +7,7 @@
 
 import { api, apiUrl, defaultApiBase } from "../core/api.js";
 import { banner } from "../core/dom.js";
-import { createWidgetRoot, disposeWidget } from "../core/widget.js";
+import { createWidgetRoot, disposeWidget, setCustomStyleSheet } from "../core/widget.js";
 import { applyFeatureChrome, buildSkeleton } from "./skeleton.js";
 import { featureEnabled } from "./schema.js";
 import { normalizeReportState, serializeReportState } from "./state.js";
@@ -73,6 +73,7 @@ export class InteractiveReportElement extends HTMLElement {
     // --- lifecycle -----------------------------------------------------------
 
     resetReportContext() {
+        setCustomStyleSheet(this, null);
         this.schema = null;
         this.doc = null;
         this.lastResult = null;
@@ -141,6 +142,7 @@ export class InteractiveReportElement extends HTMLElement {
             const schema = await api(apiUrl(this.base, name, "schema"));
             if (seq !== this._seq) return false;
             this.schema = schema;
+            setCustomStyleSheet(this, schema.styleSheet);
             applyFeatureChrome(this);
             const saved = featureEnabled(this, "savedReports")
                 ? await api(apiUrl(this.base, name, "saved")).catch(() => [])

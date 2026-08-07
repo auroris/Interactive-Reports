@@ -19,6 +19,26 @@ export function createWidgetRoot(host) {
     return { root, mount };
 }
 
+/// A report definition may name one application-owned stylesheet. It belongs inside
+/// the shadow root so its rules share the component's styling boundary. Keeping the
+/// URL out of report state means saved/global reports cannot choose a CSS source.
+export function setCustomStyleSheet(host, href) {
+    const current = host.shadowRoot?.querySelector("link[data-ir-custom-styles]");
+    if (!href) { current?.remove(); return; }
+    if (current?.getAttribute("href") === href) return;
+
+    const link = el("link", {
+        rel: "stylesheet",
+        href,
+        "data-ir-custom-styles": "",
+    });
+    if (current) current.replaceWith(link);
+    else {
+        const root = host.shadowRoot;
+        if (root) root.insertBefore(link, root.querySelector('[part~="surface"]'));
+    }
+}
+
 /// Release document-level listeners and transient UI when a host framework
 /// removes a component from the page.
 export function disposeWidget(host) {
