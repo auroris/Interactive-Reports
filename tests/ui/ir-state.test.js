@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+    expressionReferencesColumn,
     normalizeReportState,
+    removeComputedColumnReferences,
     scopedSearchExpression,
     serializeReportState,
 } from "../../src/client/report/state.js";
@@ -56,6 +58,79 @@ test("label overrides inherit from defaults and an emptied map survives as an ex
 
     delete inherited.labels.ORDER_ID;
     assert.deepEqual(serializeReportState(inherited, 2).labels, {});
+});
+
+test("computed-column deletion removes every dependent instruction", () => {
+    const state = {
+        computed: [
+            { id: "c1", label: "With Tax", expr: "AMOUNT * 1.05" },
+            { id: "c2", label: "Other", expr: "AMOUNT * 2" },
+        ],
+        columns: ["CUSTOMER", "c1", "c2"],
+        labels: { c1: "Taxed", CUSTOMER: "Customer" },
+        sorts: [{ col: "c1", dir: "desc" }, { col: "CUSTOMER", dir: "asc" }],
+        breaks: ["c1", "CUSTOMER"],
+        aggregates: [{ col: "c1", fn: "sum" }, { col: "AMOUNT", fn: "sum" }],
+        filters: [
+            { expr: "c1 > 100" },
+            { expr: "CUSTOMER = 'c1'" },
+            { expr: "c10 > 100" },
+        ],
+        highlights: [
+            { id: "h1", scope: "cell", col: "c1", expr: "AMOUNT > 0" },
+            { id: "h2", scope: "row", expr: "C1 > 100" },
+            { id: "h3", scope: "row", expr: "CUSTOMER = 'c1'" },
+        ],
+        formats: {
+            c1: { mask: "currency:CAD" },
+            CUSTOMER: { displayAs: "link", urlColumn: "c1", textColumn: "CUSTOMER", bold: true },
+            AMOUNT: { mask: "currency:CAD" },
+        },
+        view: {
+            mode: "pivot",
+            rows: ["CUSTOMER"],
+            cols: ["STATUS"],
+            values: [{ col: "c1", fn: "sum" }, { col: "AMOUNT", fn: "sum" }],
+            totals: true,
+        },
+    };
+
+    removeComputedColumnReferences(state, "C1");
+
+    assert.deepEqual(state.computed.map(rule => rule.id), ["c2"]);
+    assert.deepEqual(state.columns, ["CUSTOMER", "c2"]);
+    assert.deepEqual(state.labels, { CUSTOMER: "Customer" });
+    assert.deepEqual(state.sorts, [{ col: "CUSTOMER", dir: "asc" }]);
+    assert.deepEqual(state.breaks, ["CUSTOMER"]);
+    assert.deepEqual(state.aggregates, [{ col: "AMOUNT", fn: "sum" }]);
+    assert.deepEqual(state.filters.map(rule => rule.expr), ["CUSTOMER = 'c1'", "c10 > 100"]);
+    assert.deepEqual(state.highlights.map(rule => rule.id), ["h3"]);
+    assert.deepEqual(state.formats, {
+        CUSTOMER: { bold: true },
+        AMOUNT: { mask: "currency:CAD" },
+    });
+    assert.deepEqual(state.view, {
+        mode: "pivot",
+        rows: ["CUSTOMER"],
+        cols: ["STATUS"],
+        values: [{ col: "AMOUNT", fn: "sum" }],
+        totals: true,
+    });
+});
+
+test("computed-column deletion leaves quoted and longer identifiers alone and abandons invalid views", () => {
+    assert.equal(expressionReferencesColumn("c1 > 0", "C1"), true);
+    assert.equal(expressionReferencesColumn("CUSTOMER = 'c1'", "c1"), false);
+    assert.equal(expressionReferencesColumn("c10 > 0", "c1"), false);
+    assert.equal(expressionReferencesColumn("CUSTOMER = 'it''s c1'", "c1"), false);
+
+    const grouped = { computed: [{ id: "c1" }], view: { mode: "groupBy", groupBy: ["c1"], values: [] } };
+    removeComputedColumnReferences(grouped, "c1");
+    assert.deepEqual(grouped.view, { mode: "grid" });
+
+    const charted = { computed: [{ id: "c1" }], view: { mode: "chart", label: "STATUS", value: "c1", fn: "sum" } };
+    removeComputedColumnReferences(charted, "c1");
+    assert.deepEqual(charted.view, { mode: "grid" });
 });
 
 test("scoped text search emits an escaped expression rule", () => {

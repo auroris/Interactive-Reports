@@ -13,6 +13,7 @@ import { el, icon } from "../../core/dom.js";
 import { featureEnabled, labelOf } from "../schema.js";
 import { FN_LABELS } from "./format.js";
 import { chartSummary } from "./chart-view.js";
+import { removeComputedColumnReferences } from "../state.js";
 import { filterDialog, computeDialog, highlightDialog } from "../dialogs/rules.js";
 import { breakDialog, aggregateDialog } from "../dialogs/grid.js";
 import { openViewDialog } from "../dialogs/view.js";
@@ -30,6 +31,21 @@ function chipToggle(w, kind, index, on) {
 }
 
 function chipRemove(w, kind, index) {
+    if (kind === "computed") {
+        const column = w.doc.computed?.[index]?.id;
+        if (!column) return;
+        w.apply(d => removeComputedColumnReferences(d, column))
+            .then(() => {
+                for (const [mode, view] of Object.entries(w.viewMemory ?? {})) {
+                    const holder = { view: structuredClone(view) };
+                    removeComputedColumnReferences(holder, column);
+                    if (holder.view?.mode === mode) w.viewMemory[mode] = holder.view;
+                    else delete w.viewMemory[mode];
+                }
+            })
+            .catch(err => w.showError(err));
+        return;
+    }
     w.applyOrBanner(d => {
         switch (kind) {
             case "search": d.search = ""; w.els.search.value = ""; break;
@@ -116,7 +132,7 @@ export function renderChips(w, container) {
         // Remove (back to grid) survives the lock — see the header comment.
         const viewLock = featureEnabled(w, d.view.mode) ? {} : { editable: false };
         const text = d.view.mode === "groupBy" ? (d.view.groupBy ?? []).map(c => labelOf(w, c)).join(", ")
-            : d.view.mode === "pivot" ? `${(d.view.rows ?? []).map(c => labelOf(w, c)).join(", ")} × ${(d.view.cols ?? []).map(c => labelOf(w, c)).join(", ")}`
+            : d.view.mode === "pivot" ? `${(d.view.rows ?? []).map(c => labelOf(w, c)).join(", ")} × ${(d.view.cols ?? []).map(c => labelOf(w, c)).join(", ")}${d.view.totals ? " · totals" : ""}`
             : chartSummary(w, d.view);
         const colLabel = { groupBy: "Group by", pivot: "Pivot", chart: "Chart" }[d.view.mode];
         chips.push(chip({ w, kind: "view", index: 0, toggleable: false, colLabel, text, ...viewLock }));

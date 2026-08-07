@@ -523,6 +523,26 @@ public class StateValidatorTests
     }
 
     [Fact]
+    public void Pivot_view_silently_discards_grid_sorts()
+    {
+        var result = Validate(new ReportState
+        {
+            View = new ViewSpec
+            {
+                Mode = "pivot",
+                Rows = ["CUSTOMER"],
+                Cols = ["STATUS"],
+                Values = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum }],
+            },
+            Sorts = [new SortRule { Col = "ORDER_DATE", Dir = SortDir.Desc }],
+        });
+
+        Assert.Equal(ViewMode.Pivot, result.View.Mode);
+        Assert.Empty(result.Sorts);
+        Assert.DoesNotContain(result.Ignored, i => i.Kind == "view" && i.Detail.Contains("sort"));
+    }
+
+    [Fact]
     public void Chart_defaults_fill_optional_fields()
     {
         var result = Validate(new ReportState

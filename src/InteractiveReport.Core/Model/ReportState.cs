@@ -178,6 +178,9 @@ public sealed class ViewSpec
     public List<string>? Cols { get; set; }
     public List<AggregateRule>? Values { get; set; }
 
+    /// <summary>Pivot mode: show correctly re-aggregated total rows below the matrix.</summary>
+    public bool? Totals { get; set; }
+
     // Chart mode: one chart per report — a label dimension and a single numeric metric.
 
     /// <summary>"bar", "line", "area", or "pie".</summary>

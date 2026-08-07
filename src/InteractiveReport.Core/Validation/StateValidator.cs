@@ -109,7 +109,6 @@ public static class StateValidator
             }
             else if (view.Mode == ViewMode.Pivot && sorts.Count > 0)
             {
-                ignored.Add(new IgnoredItem("view", "pivot view orders by its dimensions; sorts are ignored"));
                 sorts = [];
             }
         }

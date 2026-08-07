@@ -71,7 +71,7 @@ internal static class ViewSpecValidator
                 columns,
                 errors,
                 ignored);
-            return new ValidView(ViewMode.Pivot, [], rows, pivotColumns, values);
+            return new ValidView(ViewMode.Pivot, [], rows, pivotColumns, values, specification.Totals == true);
         }
 
         if (string.Equals(specification.Mode, "chart", StringComparison.OrdinalIgnoreCase))
@@ -179,7 +179,7 @@ internal static class ViewSpecValidator
         if (errors.Count > before)
             return ValidView.Grid;
 
-        return new ValidView(ViewMode.Chart, [], [], [], [], new ValidChart(
+        return new ValidView(ViewMode.Chart, [], [], [], [], Chart: new ValidChart(
             type!.Value,
             label!,
             value,

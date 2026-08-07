@@ -118,7 +118,14 @@ public sealed class ReportExecutor
                 contextParams,
                 Stopwatch.StartNew(),
                 ct);
-            return new ExportResult(pivot.Columns, pivot.Rows, Truncated: false);
+            return new ExportResult(
+                pivot.Columns,
+                PivotTableBuilder.RowsForExport(
+                    pivot.Columns,
+                    pivot.Rows,
+                    pivot.Aggregates,
+                    validated.View.PivotRows),
+                Truncated: false);
         }
 
         if (validated.View.Mode == ViewMode.Chart)
@@ -328,6 +335,7 @@ public sealed class ReportExecutor
         var compiler = DialectSupport.GetCompiler(definition.Dialect);
 
         List<PivotGroup> groups;
+        List<PivotGroup> totalGroups = [];
         await using (var connection = await _connections.Open(definition, ct))
         {
             var reader = CreateReader(connection, compiler, definition, contextParams);
@@ -337,17 +345,27 @@ public sealed class ReportExecutor
                 state.View.PivotCols.Count,
                 state.View.Values.Count,
                 ct);
+
+            if (groups.Count > MaxPivotGroups)
+            {
+                throw new ReportValidationException(
+                    [new ValidationError(
+                        "view",
+                        $"pivot source exceeds {MaxPivotGroups} groups — filter further or choose lower-cardinality dimensions")]);
+            }
+
+            if (state.View.Totals)
+            {
+                totalGroups = await reader.ReadPivotGroups(
+                    QueryComposer.ComposePivotTotals(definition, state),
+                    0,
+                    state.View.PivotCols.Count,
+                    state.View.Values.Count,
+                    ct);
+            }
         }
 
-        if (groups.Count > MaxPivotGroups)
-        {
-            throw new ReportValidationException(
-                [new ValidationError(
-                    "view",
-                    $"pivot source exceeds {MaxPivotGroups} groups — filter further or choose lower-cardinality dimensions")]);
-        }
-
-        var pivot = PivotTableBuilder.Build(groups, state, definition.MaxPivotColumns);
+        var pivot = PivotTableBuilder.Build(groups, state, definition.MaxPivotColumns, totalGroups);
         stopwatch.Stop();
         return new ReportResult
         {
@@ -356,6 +374,7 @@ public sealed class ReportExecutor
             Rows = pivot.Rows,
             Page = new PageRequest { Index = 1, Size = Math.Max(1, pivot.Rows.Count) },
             TotalRows = pivot.Rows.Count,
+            Aggregates = pivot.Totals,
             Ignored = state.Ignored,
             ElapsedMs = stopwatch.ElapsedMilliseconds,
         };

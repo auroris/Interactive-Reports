@@ -18,6 +18,12 @@
         header a:hover { color: #fff; text-decoration: underline; }
         #identity { background: rgba(255,255,255,.12); border-radius: 1em; padding: .15rem .7rem; font-size: .75rem; }
         main { max-width: 72rem; margin: 1.25rem auto; padding: 0 1rem; }
+        .build-warning {
+            max-width: 44rem; margin: 3rem auto; padding: 1rem 1.25rem;
+            background: #fff8e1; border: 1px solid #e3c86d; border-radius: .4rem;
+            color: #5b4611; line-height: 1.5;
+        }
+        .build-warning code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-weight: 600; }
     </style>
     <script type="module" src="/api/reports/ui/ir.js"></script>
 </head>
@@ -31,7 +37,12 @@
     </header>
 
     <main>
-        <interactive-report report="orders" api-base="/api/reports"></interactive-report>
+        <interactive-report report="orders" api-base="/api/reports">
+            <p class="build-warning">
+                You're seeing this message because you forgot to run
+                <code>npm install &amp;&amp; npm run build</code>.
+            </p>
+        </interactive-report>
     </main>
 
     <script type="module">

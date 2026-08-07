@@ -467,10 +467,12 @@ public class LiveDialectTests
                 Rows = ["CUSTOMER"],
                 Cols = ["STATUS"],
                 Values = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum }],
+                Totals = true,
             },
         }, NoParams);
         var acme = pivot.Rows.Single(r => (string?)r["CUSTOMER"] == "Acme Corp");
         Assert.Equal(12000m, Convert.ToDecimal(acme["p3_0"]));
+        Assert.Equal(26000m, Convert.ToDecimal(pivot.Aggregates["p3_0"]["sum"]));
     }
 
     [SkippableTheory]

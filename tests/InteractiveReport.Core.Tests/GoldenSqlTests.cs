@@ -458,6 +458,29 @@ public class GoldenSqlTests
             DialectSupport.GetCompiler(ReportDialect.Sqlite).Compile(source).Sql);
     }
 
+    [Fact]
+    public void Pivot_totals_reaggregate_by_column_dimensions()
+    {
+        var def = OrdersDefinition(ReportDialect.Sqlite);
+        var validated = StateValidator.Validate(def, new ReportState
+        {
+            View = new ViewSpec
+            {
+                Mode = "pivot",
+                Rows = ["CUSTOMER"],
+                Cols = ["STATUS"],
+                Values = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum }],
+                Totals = true,
+            },
+        }, OrdersSchema);
+
+        var totals = QueryComposer.ComposePivotTotals(def, validated);
+
+        Assert.Equal(
+            "SELECT \"STATUS\", COUNT(*) AS \"__rows\", SUM(\"AMOUNT\") AS \"a0\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base GROUP BY \"STATUS\" ORDER BY \"STATUS\"",
+            DialectSupport.GetCompiler(ReportDialect.Sqlite).Compile(totals).Sql);
+    }
+
     private static SqlResult CompileChart(ReportDialect dialect, ReportState state, int maxPoints = 1000)
     {
         var def = OrdersDefinition(dialect);

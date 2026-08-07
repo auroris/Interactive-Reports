@@ -68,6 +68,7 @@ export function pivotDialog(w) {
     const rows = dimList(w, active?.rows, { addLabel: "Row Column", max: 2 });
     const cols = dimList(w, active?.cols, { addLabel: "Column", max: 2 });
     const values = valueList(w, active?.values);
+    const totalsInp = el("input", { type: "checkbox", checked: active?.totals === true });
 
     openDialog({
         owner: w,
@@ -80,12 +81,14 @@ export function pivotDialog(w) {
             cols.container, cols.list.addButton,
             el("div", { class: "ir-field-label ir-gap-above" }, "Values"),
             values.container, values.list.addButton,
+            el("label", { class: "ir-checkline ir-gap-above" }, totalsInp, "Show total rows"),
             el("p", { class: "ir-dialog-note" }, "No values = a count per cell.")),
         onApply: () => {
             const rowDims = [...new Set(rows.list.read())];
             const colDims = [...new Set(cols.list.read())].filter(c => !rowDims.includes(c));
             if (!rowDims.length || !colDims.length) throw new Error("Pick at least one row column and one distinct column heading");
             const spec = { mode: "pivot", rows: rowDims, cols: colDims, values: values.list.read() };
+            if (totalsInp.checked) spec.totals = true;
             return w.apply(d => { d.view = spec; }).then(() => { w.viewMemory.pivot = spec; });
         },
     });

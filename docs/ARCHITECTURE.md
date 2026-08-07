@@ -308,9 +308,11 @@ schema column names; referenced by id in `columns`, `sorts`, `filters`, `aggrega
 **Views:** `grid` (default) · `groupBy` (`{ "mode": "groupBy", "groupBy": ["REGION"],
 "values": [{"col","fn"}...] }` — pushed down, groups paginated with their own count
 query; response columns are the dims + `__count` + `v0..vN`) · `pivot` (`{ "mode":
-"pivot", "rows": [...], "cols": [...], "values": [...] }` — one grouped query over
-rows+cols dims transformed in memory; synthetic cell columns `p{col}_{value}` with
-human labels; empty `values` ⇒ implicit counts) · `chart` (below). Caps:
+"pivot", "rows": [...], "cols": [...], "values": [...], "totals": true }` — one
+grouped query over rows+cols dims transformed in memory; synthetic cell columns
+`p{col}_{value}` with human labels; empty `values` ⇒ implicit counts; optional bottom
+total rows come from a second source query grouped only by the column dimensions) ·
+`chart` (below). Caps:
 `maxPivotColumns` per definition (default 60), a hard 10,000-group pivot source
 ceiling, and `maxChartPoints` per definition (default 1,000, ceiling 10,000) — all
 surface as precise 400s. Grid-only features (breaks, highlights, grid aggregates,
@@ -827,8 +829,10 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   preview fed by the column's own data; everything but visibility lands in the
   doc's `formats` map (§5), applied by the grid renderer to header alignment,
   cells, and aggregate-row alignment; settings chips with
-  APEX-style enable/disable checkboxes for expression rules; break groups with per-column subtotal rows and
-  grand-total rows; row/cell highlights; groupBy/pivot rendering; saved-report select
+  APEX-style enable/disable checkboxes for expression rules; removing a computed-column chip also removes
+  its references from columns, rules, formats, renderer sources, and alternate views (returning an invalid
+  view to Grid); break groups with per-column subtotal rows and grand-total rows; row/cell highlights;
+  groupBy/pivot rendering; saved-report select
   (Primary Report + Global/Private groups); `ignored[]` and problem+json surfaced as
   notices — validation problems render *inside* the originating dialog, which stays
   open (apply is optimistic: mutate, re-query, roll back on failure). The whole

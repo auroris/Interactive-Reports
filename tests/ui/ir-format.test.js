@@ -106,8 +106,10 @@ test("computed, group, and pivot values all use the normal mask path", () => {
         { name: "p0_0", label: "SHIPPED", type: "number", computed: false, formatSource: "AMOUNT" },
     ];
     w.lastResult.rows = [{ STATUS: "Acme", p0_0: "12345678901234567890.125" }];
+    w.lastResult.aggregates = { p0_0: { sum: "24691357802469135780.25" } };
     renderGrid(w, table);
     assert.equal(table.querySelector("tbody tr").children[1].textContent, "12345678901234567890.13");
+    assert.equal(table.querySelector("tr.ir-grand-total td:last-child").textContent, "24691357802469135780.25");
 });
 
 test("the chart data table retains an exact masked metric", () => {

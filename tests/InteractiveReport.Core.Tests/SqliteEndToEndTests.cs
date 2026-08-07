@@ -845,7 +845,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     [Fact]
     public async Task Pivot_view_builds_the_matrix_in_memory()
     {
-        var result = await _executor.Query(Definition, new ReportState
+        var state = new ReportState
         {
             View = new ViewSpec
             {
@@ -853,8 +853,10 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                 Rows = ["CUSTOMER"],
                 Cols = ["STATUS"],
                 Values = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum }],
+                Totals = true,
             },
-        }, NoParams);
+        };
+        var result = await _executor.Query(Definition, state, NoParams);
 
         // 9 distinct customers; columns = CUSTOMER + 4 statuses (sorted: CANCELLED, NEW, PENDING, SHIPPED)
         Assert.Equal(9, result.TotalRows);
@@ -865,6 +867,25 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         var acme = result.Rows.Single(r => (string?)r["CUSTOMER"] == "Acme Corp");
         Assert.Equal(12000m, Convert.ToDecimal(acme["p3_0"]));       // SHIPPED: 9000 + 3000
         Assert.False(acme.TryGetValue("p2_0", out var pending) && pending is not null);   // no PENDING cell
+        Assert.Equal(6000m, Convert.ToDecimal(result.Aggregates["p0_0"]["sum"]));
+        Assert.Equal(400m, Convert.ToDecimal(result.Aggregates["p1_0"]["sum"]));
+        Assert.Equal(14800m, Convert.ToDecimal(result.Aggregates["p2_0"]["sum"]));
+        Assert.Equal(26000m, Convert.ToDecimal(result.Aggregates["p3_0"]["sum"]));
+
+        var export = await _executor.Export(Definition, state, NoParams);
+        var exportedTotal = export.Rows[^1];
+        Assert.Equal("Sum:", exportedTotal["CUSTOMER"]);
+        Assert.Equal(26000m, Convert.ToDecimal(exportedTotal["p3_0"]));
+
+        var averages = await _executor.Query(Definition, new ReportState
+        {
+            View = new ViewSpec
+            {
+                Mode = "pivot", Rows = ["CUSTOMER"], Cols = ["STATUS"], Totals = true,
+                Values = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Avg }],
+            },
+        }, NoParams);
+        Assert.Equal(5200d, Convert.ToDouble(averages.Aggregates["p3_0"]["avg"]));
     }
 
     [Fact]

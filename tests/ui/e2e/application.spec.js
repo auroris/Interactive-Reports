@@ -29,6 +29,21 @@ async function search(page, value) {
     await runAndWaitForQuery(page, () => page.getByRole("button", { name: "Go", exact: true }).click());
 }
 
+test("explains how to build the client when its bundle is missing", async ({ page }) => {
+    await page.route("**/api/reports/ui/ir.js", route => route.fulfill({
+        status: 404,
+        contentType: "text/plain",
+        body: "Not found",
+    }));
+
+    await page.goto("/");
+
+    await expect(page.getByText(
+        "You're seeing this message because you forgot to run npm install && npm run build.",
+        { exact: true },
+    )).toBeVisible();
+});
+
 test("loads the configured primary report, queries data, paginates from Actions, and changes reports", async ({ page }) => {
     await openWorkbench(page);
 
@@ -175,6 +190,51 @@ test("configures an aggregate chart and returns to the data grid", async ({ page
         page.getByRole("button", { name: "Grid", exact: true }).click());
     await expect(page.getByRole("table")).toBeVisible();
     await expect(page.getByRole("columnheader")).toHaveCount(8);
+});
+
+test("adds correctly aggregated total rows to a pivot without a right-side total column", async ({ page }) => {
+    await openWorkbench(page);
+    await page.getByRole("button", { name: "Pivot", exact: true }).click();
+
+    const dialog = page.getByRole("dialog");
+    let selects = dialog.locator("select");
+    await selects.nth(0).selectOption("CUSTOMER");
+    await selects.nth(1).selectOption("STATUS");
+    await dialog.getByRole("button", { name: "+ Value", exact: true }).click();
+
+    selects = dialog.locator("select");
+    await selects.nth(3).selectOption("AMOUNT");
+    await selects.nth(2).selectOption("sum");
+    await dialog.getByRole("checkbox", { name: "Show total rows", exact: true }).check();
+
+    const response = await runAndWaitForQuery(page, () =>
+        dialog.getByRole("button", { name: "Apply", exact: true }).click());
+    expect(response.request().postDataJSON().view).toEqual({
+        mode: "pivot",
+        rows: ["CUSTOMER"],
+        cols: ["STATUS"],
+        values: [{ col: "AMOUNT", fn: "sum" }],
+        totals: true,
+    });
+
+    await expect(page.locator("tr.ir-grand-total")).toHaveCount(1);
+    await expect(page.locator("tr.ir-grand-total")).toContainText("Sum:");
+    await expect(page.getByRole("columnheader", { name: "Total", exact: true })).toHaveCount(0);
+});
+
+test("deleting a computed column also deletes its references", async ({ page }) => {
+    await openWorkbench(page);
+
+    const computed = page.locator('.ir-chip[data-kind="computed"]');
+    await expect(computed).toContainText("With Tax");
+    const response = await runAndWaitForQuery(page, () =>
+        computed.getByRole("button", { name: "Remove", exact: true }).click());
+    const state = response.request().postDataJSON();
+
+    expect(state.computed).toEqual([]);
+    expect(state.columns).not.toContain("c1");
+    expect(state.formats).not.toHaveProperty("c1");
+    await expect(page.getByText(/unknown column 'c1'/)).toHaveCount(0);
 });
 
 test("saves and reloads a report, then administers its complete lifecycle", async ({ page, request }) => {

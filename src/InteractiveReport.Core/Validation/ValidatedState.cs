@@ -109,6 +109,7 @@ public sealed record ValidView(
     IReadOnlyList<ColumnModel> PivotRows,
     IReadOnlyList<ColumnModel> PivotCols,
     IReadOnlyList<ValidAggregate> Values,
+    bool Totals = false,
     ValidChart? Chart = null)
 {
     public static readonly ValidView Grid = new(ViewMode.Grid, [], [], [], []);

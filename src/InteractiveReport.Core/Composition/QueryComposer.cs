@@ -130,6 +130,19 @@ public static class QueryComposer
     }
 
     /// <summary>
+    /// Optional pivot footer: re-aggregate the filtered source by the pivot's column
+    /// dimensions alone. Deriving totals from the source, rather than adding rendered
+    /// cells, keeps averages, medians, distinct counts, and null semantics correct.
+    /// </summary>
+    public static Query ComposePivotTotals(ReportDefinition def, ValidatedState state)
+    {
+        var core = BuildFilteredCore(def, state);
+        var dims = state.View.PivotCols;
+        return BuildGrouped(core, dims, state.View.Values, def.Dialect,
+            dims.Select(d => new ValidSort(d, SortDir.Asc)));
+    }
+
+    /// <summary>
     /// Chart view: the whole filtered set collapsed to (label, metric) points — through
     /// the shared grouped shape when an aggregate is set, or raw label/value rows when
     /// charting one point per row. Capped at maxPoints+1 so the executor can reject

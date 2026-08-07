@@ -144,6 +144,12 @@ Numeric aggregate pickers include median alongside sum, average, minimum, maximu
 count, and distinct count. Median uses the same grouped query path for report totals,
 control-break totals, Group By, pivot, and chart metrics on every supported database.
 
+The Pivot dialog's **Show total rows** option adds aggregate rows below the matrix.
+Those values are re-aggregated from the filtered source instead of adding displayed
+cells, so averages, medians, distinct counts, and null handling remain correct. It
+does not synthesize a right-side total column, which may require report-specific rules
+such as excluding cancelled orders.
+
 Highlights have a report-facing name and a positive sequence. Matching rules are
 applied from lower to higher sequence, so the highest sequence wins when rules set the
 same style; cell highlights are applied after row highlights. Legacy documents without

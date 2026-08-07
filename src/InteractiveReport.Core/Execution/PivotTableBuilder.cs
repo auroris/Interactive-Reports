@@ -7,10 +7,14 @@ namespace InteractiveReport.Core.Execution;
 /// <summary>Transforms provider-neutral grouped rows into the pivot response matrix.</summary>
 internal static class PivotTableBuilder
 {
+    private static readonly string[] TotalFunctionOrder =
+        ["sum", "avg", "median", "min", "max", "count", "countDistinct"];
+
     public static PivotTable Build(
         IReadOnlyList<PivotGroup> groups,
         ValidatedState state,
-        int maxColumns)
+        int maxColumns,
+        IReadOnlyList<PivotGroup>? totalGroups = null)
     {
         var rowDimensions = state.View.PivotRows;
         var values = state.View.Values;
@@ -85,8 +89,64 @@ internal static class PivotTableBuilder
             }
         }
 
-        return new PivotTable(columns, rows);
+        var totals = new Dictionary<string, IReadOnlyDictionary<string, object?>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var group in totalGroups ?? [])
+        {
+            if (!columnKeyIndexes.TryGetValue(group.ColumnKey, out var columnIndex)) continue;
+
+            for (var valueIndex = 0; valueIndex < valuesPerKey; valueIndex++)
+            {
+                var function = values.Count == 0
+                    ? "count"
+                    : ReportResultColumns.AggregateName(values[valueIndex].Fn);
+                var value = values.Count == 0 ? group.Count : group.Values[valueIndex];
+                totals[$"p{columnIndex}_{valueIndex}"] =
+                    new Dictionary<string, object?> { [function] = value };
+            }
+        }
+
+        return new PivotTable(columns, rows, totals);
     }
+
+    /// <summary>
+    /// CSV has no separate footer channel, so materialize the same total rows the
+    /// browser renders from ReportResult.Aggregates. The first row dimension carries
+    /// the label; remaining dimension cells stay empty.
+    /// </summary>
+    public static IReadOnlyList<IReadOnlyDictionary<string, object?>> RowsForExport(
+        IReadOnlyList<ColumnInfo> columns,
+        IReadOnlyList<IReadOnlyDictionary<string, object?>> rows,
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, object?>> totals,
+        IReadOnlyList<ColumnModel> rowDimensions)
+    {
+        if (totals.Count == 0) return rows;
+
+        var result = rows.ToList();
+        var functions = TotalFunctionOrder
+            .Where(function => totals.Values.Any(byFunction => byFunction.ContainsKey(function)));
+        foreach (var function in functions)
+        {
+            var row = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            for (var dimensionIndex = 0; dimensionIndex < rowDimensions.Count; dimensionIndex++)
+                row[rowDimensions[dimensionIndex].Name] = dimensionIndex == 0 ? $"{TotalLabel(function)}:" : null;
+
+            foreach (var column in columns.Skip(rowDimensions.Count))
+            {
+                if (totals.TryGetValue(column.Name, out var byFunction)
+                    && byFunction.TryGetValue(function, out var value))
+                    row[column.Name] = value;
+            }
+            result.Add(row);
+        }
+        return result;
+    }
+
+    private static string TotalLabel(string function) => function switch
+    {
+        "avg" => "Average",
+        "countDistinct" => "Count Distinct",
+        _ => char.ToUpperInvariant(function[0]) + function[1..],
+    };
 
     private static string FormatKeyPart(object? value)
         => value is null ? "(blank)" : Convert.ToString(value, CultureInfo.InvariantCulture) ?? "";
@@ -143,4 +203,5 @@ internal static class PivotTableBuilder
 
 internal sealed record PivotTable(
     IReadOnlyList<ColumnInfo> Columns,
-    IReadOnlyList<IReadOnlyDictionary<string, object?>> Rows);
+    IReadOnlyList<IReadOnlyDictionary<string, object?>> Rows,
+    IReadOnlyDictionary<string, IReadOnlyDictionary<string, object?>> Totals);
