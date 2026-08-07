@@ -48,6 +48,22 @@ public sealed class ReportExecutor
         });
     }
 
+    /// <summary>
+    /// The unified document-ingestion pipeline: every request that carries a report
+    /// state document — query or export, saved server-side or never saved at all —
+    /// enters here. Discover the (cached) schema, then resolve the document over the
+    /// definition's defaults and validate it into the one typed form processors accept.
+    /// </summary>
+    private async Task<ValidatedState> IngestDocument(
+        ReportDefinition definition,
+        ReportState state,
+        IReadOnlyDictionary<string, object?> contextParams,
+        CancellationToken ct)
+    {
+        var schema = await GetSchema(definition, contextParams, ct);
+        return StateValidator.Validate(definition, state, schema);
+    }
+
     public async Task<ReportResult> Query(
         ReportDefinition definition,
         ReportState state,
@@ -55,8 +71,7 @@ public sealed class ReportExecutor
         CancellationToken ct = default)
     {
         var stopwatch = Stopwatch.StartNew();
-        var schema = await GetSchema(definition, contextParams, ct);
-        var validated = StateValidator.Validate(definition, state, schema);
+        var validated = await IngestDocument(definition, state, contextParams, ct);
 
         return validated.View.Mode switch
         {
@@ -67,15 +82,19 @@ public sealed class ReportExecutor
         };
     }
 
-    /// <summary>Uses the same validated state without paging, capped at MaxRows.</summary>
+    /// <summary>
+    /// Uses the same validated state without paging, capped at MaxRows. An export is
+    /// the server rendering what the user sees, so the ingested document's display
+    /// labels apply here (headers, sum(…) labels, pivot cells) — the posted document
+    /// is the source of truth, since the client's state may never have been saved.
+    /// </summary>
     public async Task<ExportResult> Export(
         ReportDefinition definition,
         ReportState state,
         IReadOnlyDictionary<string, object?> contextParams,
         CancellationToken ct = default)
     {
-        var schema = await GetSchema(definition, contextParams, ct);
-        var validated = StateValidator.Validate(definition, state, schema);
+        var validated = (await IngestDocument(definition, state, contextParams, ct)).WithDisplayLabels();
 
         if (validated.View.Mode == ViewMode.Pivot)
         {

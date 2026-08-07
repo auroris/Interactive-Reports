@@ -124,9 +124,10 @@ public static class EndpointExtensions
     /// <summary>
     /// The default report the schema endpoint sends down — always complete, never null.
     /// An unconfigured DefaultState synthesizes to an empty state (every schema column
-    /// in database order), and this is the one place friendly names leave the server:
-    /// the definition's columnLabels become the default report's labels unless the
-    /// configured state carries its own. The server never applies labels itself.
+    /// in database order), and the definition's columnLabels become the default
+    /// report's labels unless the configured state carries its own. Query responses
+    /// never apply labels; the document ingestion pipeline mirrors this same layering
+    /// so exports render what an equivalent client displays.
     /// </summary>
     internal static ReportState SchemaDefaultState(ReportDefinition def)
     {

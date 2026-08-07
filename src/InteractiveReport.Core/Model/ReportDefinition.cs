@@ -36,10 +36,11 @@ public sealed class ReportDefinition
 
     /// <summary>
     /// Column name → friendly display label, for base queries whose column names are
-    /// not presentable. Friendly names are client-side presentation: the server never
-    /// applies this map to its schema or results — it only delivers it to the client
-    /// as the labels of the default report the schema endpoint sends down (a configured
-    /// DefaultState with its own labels wins). Reports override from there; column
+    /// not presentable. Never applied to the engine's schema or query results: it is
+    /// delivered to the client as the labels of the default report the schema endpoint
+    /// sends down (a configured DefaultState with its own labels wins), and it plays
+    /// the same default-report role as the bottom layer of document-label resolution
+    /// at ingestion, so an unlabeled export matches an untouched client. Column
     /// references crossing the wire always use the real name.
     /// </summary>
     public Dictionary<string, string>? ColumnLabels { get; set; }

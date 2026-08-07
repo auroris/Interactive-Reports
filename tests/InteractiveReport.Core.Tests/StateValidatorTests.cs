@@ -152,19 +152,59 @@ public class StateValidatorTests
     }
 
     [Fact]
-    public void Labels_are_client_presentation_the_engine_never_interprets()
+    public void Labels_resolve_at_ingestion_but_never_touch_query_surfaces()
     {
-        // Unknown keys included on purpose: the map is display state the server
-        // round-trips, so it is not validated, applied, or reported on.
+        // Unknown keys included on purpose: the map is display state, not a program —
+        // resolved for consumers like export, never validated or applied to the schema.
         var result = Validate(new ReportState
         {
-            Labels = new() { ["AMOUNT"] = "Order Total", ["GHOST"] = "Also Fine" },
+            Labels = new() { ["amount"] = "  Order Total  ", ["GHOST"] = "Also Fine", ["NOTES"] = " " },
             Aggregates = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum }],
         });
 
         Assert.Equal("Amount", result.Schema.Lookup["AMOUNT"].Label);
         Assert.Equal("Amount", Assert.Single(result.Aggregates).Column.Label);
         Assert.Empty(result.Ignored);
+        Assert.Equal("Order Total", result.Labels["AMOUNT"]);   // trimmed, case-insensitive lookup
+        Assert.Equal(2, result.Labels.Count);                   // blank-valued entry dropped
+    }
+
+    [Fact]
+    public void Label_resolution_layers_request_over_default_state_over_column_labels()
+    {
+        var def = OrdersDefinition(ReportDialect.Sqlite);
+        def.ColumnLabels = new() { ["AMOUNT"] = "Configured" };
+
+        Assert.Equal("Configured", Validate(new ReportState(), def).Labels["AMOUNT"]);
+
+        def.DefaultState = new ReportState { Labels = new() { ["AMOUNT"] = "Default Report" } };
+        Assert.Equal("Default Report", Validate(new ReportState(), def).Labels["AMOUNT"]);
+
+        var request = Validate(new ReportState { Labels = new() { ["AMOUNT"] = "Mine" } }, def);
+        Assert.Equal("Mine", request.Labels["AMOUNT"]);
+
+        // An explicit empty map is a clear, not an inherit.
+        Assert.Empty(Validate(new ReportState { Labels = new() }, def).Labels);
+    }
+
+    [Fact]
+    public void Display_labels_apply_to_every_metadata_surface_on_request()
+    {
+        var validated = Validate(new ReportState
+        {
+            Labels = new() { ["AMOUNT"] = "Order Total", ["REGION"] = "Territory" },
+            Aggregates = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum }],
+            Breaks = ["REGION"],
+        });
+
+        var display = validated.WithDisplayLabels();
+
+        Assert.Equal("Order Total", display.Schema.Lookup["AMOUNT"].Label);
+        Assert.Equal("Order Total", display.SelectColumns.Single(c => c.Name == "AMOUNT").Label);
+        Assert.Equal("Order Total", Assert.Single(display.Aggregates).Column.Label);
+        Assert.Equal("Territory", Assert.Single(display.Breaks).Label);
+        Assert.Equal("AMOUNT", display.SelectColumns.Single(c => c.Name == "AMOUNT").Name);   // names untouched
+        Assert.Equal("Amount", validated.Schema.Lookup["AMOUNT"].Label);                      // original untouched
     }
 
     [Fact]

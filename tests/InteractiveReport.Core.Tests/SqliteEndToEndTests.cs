@@ -43,11 +43,11 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     }
 
     [Fact]
-    public async Task Friendly_names_never_touch_discovery_or_results()
+    public async Task Friendly_names_never_touch_discovery_or_query_results()
     {
         // columnLabels is configuration the schema endpoint hands to the client;
-        // the engine's schema and result metadata stay on server-derived labels,
-        // and a state's labels map is opaque display state.
+        // the engine's schema and query metadata stay on server-derived labels,
+        // and a state's labels map is opaque display state on this path.
         var def = Definition;
         def.ColumnLabels = new() { ["ORDER_ID"] = "Order #" };
 
@@ -61,6 +61,38 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
 
         Assert.Equal("Customer", result.AvailableColumns.Single(c => c.Name == "CUSTOMER").Label);
         Assert.Empty(result.Ignored);
+    }
+
+    [Fact]
+    public async Task Export_applies_the_documents_labels_because_it_renders_what_the_user_sees()
+    {
+        var def = Definition;
+        def.ColumnLabels = new() { ["ORDER_ID"] = "Order #" };
+
+        // The posted document is the source of truth — this one was never saved
+        // server-side. Its labels override the configured mapping wholesale.
+        var grid = await _executor.Export(def, new ReportState
+        {
+            Columns = ["ORDER_ID", "AMOUNT"],
+            Labels = new() { ["AMOUNT"] = "Order Total" },
+        }, NoParams);
+
+        Assert.Equal(["ORDER_ID", "AMOUNT"], grid.Columns.Select(c => c.Name));
+        Assert.Equal(["Order Id", "Order Total"], grid.Columns.Select(c => c.Label));
+
+        // A document with no labels of its own falls back to the configured mapping,
+        // and synthetic aggregate columns rebuild their labels from the display name.
+        var grouped = await _executor.Export(def, new ReportState
+        {
+            View = new ViewSpec
+            {
+                Mode = "groupBy",
+                GroupBy = ["STATUS"],
+                Values = [new AggregateRule { Col = "ORDER_ID", Fn = AggregateFn.Max }],
+            },
+        }, NoParams);
+
+        Assert.Equal(["Status", "Count", "max(Order #)"], grouped.Columns.Select(c => c.Label));
     }
 
     [Fact]

@@ -22,11 +22,11 @@ public sealed class ReportState
     public List<string>? Columns { get; set; }
 
     /// <summary>
-    /// Real column name → display label. Client-side presentation only: the server
-    /// stores and round-trips this map (saved reports, default-state resolution) but
-    /// never interprets it — execution, validation, and result metadata see real
-    /// names and server-derived labels. Computed columns keep their label on the
-    /// computed rule.
+    /// Real column name → display label. Presentation, never a program: it does not
+    /// gate execution or validation, and query responses keep server-derived labels —
+    /// the client renders its own. The server consumes it in exactly one place:
+    /// an export renders what the user sees, so the posted document's labels apply
+    /// there. Computed columns keep their label on the computed rule.
     /// </summary>
     public Dictionary<string, string>? Labels { get; set; }
 

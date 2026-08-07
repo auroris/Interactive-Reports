@@ -169,13 +169,17 @@ styles. `CONTAINS`, `STARTS_WITH`, and `ENDS_WITH` are case-insensitive; `IN_LIS
 provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
 `IS NULL OR col = ''` when empty text should also count.
 - `search` is the toolbar search: OR of `contains` across visible text columns.
-- `labels` (real column name → display label) is **pure client-side presentation** the
-  server stores and round-trips but never interprets: execution, validation, result
-  metadata, and CSV headers all use server-derived labels (prettified names, computed
-  rule labels, `sum(Amount)`-style synthetics), so a rename is a client rendering
-  concern and never a server conversation. The client resolves display names as
-  `labels[name] ?? server label` — including rebuilding synthetic groupBy/chart metric
-  labels from the view spec it authored. A computed column still names itself on its
+- `labels` (real column name → display label) is presentation, never a program: it
+  does not gate execution or validation (unknown keys are unused display data), and
+  query responses keep server-derived labels — the client resolves display names as
+  `labels[name] ?? server label`, rebuilding synthetic groupBy/chart metric labels
+  from the view spec it authored. The document is the single source of truth for what
+  the user sees, so the one server consumer is **export**: rendering a file is
+  rendering the user's screen, and the posted document's labels apply to its headers
+  and synthetic labels (the active document may never have been saved, so nothing can
+  be looked up server-side). Ingestion resolves labels once for every path — request
+  `??` defaultState `??` the definition's `columnLabels` — mirroring the default
+  report the schema endpoint delivers. A computed column still names itself on its
   own rule. Like every state property, a present map replaces the default wholesale
   and `{}` explicitly clears it.
 - A partial request resolves over `defaultState` once: a missing property inherits,
@@ -264,7 +268,7 @@ Mounted by the host: `app.MapInteractiveReports("/api/reports").RequireAuthoriza
 | `POST /api/reports/{name}/saved` | Save the posted state under a title (global publish = admin). |
 | `GET/PUT/DELETE /api/reports/saved/{id}` | Load / modify / delete one saved report (matrix in §13). |
 | `GET  /api/reports/admin/saved` | Administrator: every saved report in the system. |
-| `POST /api/reports/{name}/export` | Same state, same gate, no paging → CSV (UTF-8 BOM, label headers), capped at `maxRows` with `X-IR-Truncated` header. XLSX/HTML later. |
+| `POST /api/reports/{name}/export` | Same state, same gate, no paging → CSV (UTF-8 BOM; headers are the posted document's display labels, §5), capped at `maxRows` with `X-IR-Truncated` header. XLSX/HTML later. |
 | `GET  /api/reports/ui/{file}` | Packaged UI assets (§14). Anonymous by design; content-hash ETags. |
 
 POST is the primary verb deliberately: state documents outgrow querystrings, and GET puts
@@ -304,9 +308,12 @@ only what the client already sent.
 resolve definition (store)                         404 if absent
 → authorize (endpoint gate + per-report policy)    403/401
 → resolve context params (claims/resolver)
-→ discover/fetch cached schema
-→ validate state doc against schema + enums        400 problem+json (precise)
-→ compile enabled expression rules                 typed definition/predicate/decoration plan
+→ ingest document (one pipeline, query + export):
+    discover/fetch cached schema
+    resolve doc over defaultState (labels: … ?? columnLabels)
+    validate against schema + enums                400 problem+json (precise)
+    compile enabled expression rules               typed definition/predicate/decoration plan
+→ [export only] apply document display labels      metadata surfaces; names/SQL untouched
 → build core query:
     wrap base SQL as subquery (ir_base)
     [if computed columns] second wrap layer:
@@ -327,8 +334,12 @@ resolve definition (store)                         404 if absent
 
 The execution path is split by responsibility rather than view mode:
 
-- `ReportExecutor` is the application-service orchestrator. It selects the view path and
-  coordinates validation, composition, execution, and response timing.
+- `ReportExecutor` is the application-service orchestrator. Its `IngestDocument` is the
+  unified entry for every request carrying a state document — query and export, saved
+  server-side or never saved — pairing cached schema discovery with `StateValidator`;
+  the export path then applies the ingested document's display labels
+  (`ValidatedState.WithDisplayLabels`) before selecting the view path and coordinating
+  composition, execution, and response timing.
 - `ReportConnectionManager` owns opening connections and applying trusted session policy,
   including timezone configuration.
 - `ReportQueryReader` owns command compilation/execution and maps the engine's stable
@@ -750,15 +761,17 @@ APEX's Interactive Reports.
   Chart dialog/chip/view with a lazily loaded tree-shaken Chart.js bundle, chart
   theme tokens, and a canvas description + "View chart data" table for assistive
   tech.
-- **M10 — Friendly names** ✅ *(2026-08-07)*: client-side display names. A definition's
-  `columnLabels` and a state's `labels` map (additive field, no version bump) carry
-  real column name → display label, and the server's only involvement is delivering
-  the mapping as the default report's labels on the schema endpoint — which now always
-  returns a complete `defaultState`, synthesizing an empty one when unconfigured. The
-  engine, validation, result metadata, and CSV export never interpret labels; the
-  packaged UI resolves display names from its state document (grid, chips, dialogs,
-  synthetic groupBy/chart metric labels) and gains header-menu Rename with
-  blank-restores-default semantics.
+- **M10 — Friendly names** ✅ *(2026-08-07)*: client-side display names over a unified
+  document flow. A definition's `columnLabels` and a state's `labels` map (additive
+  field, no version bump) carry real column name → display label; the schema endpoint
+  always returns a complete `defaultState` (synthesized when unconfigured) whose
+  labels deliver the mapping to the client. Document ingestion is one pipeline
+  (`ReportExecutor.IngestDocument` → `StateValidator`) that resolves labels for every
+  path; query surfaces stay on neutral server labels — the packaged UI resolves
+  display names from its state document (grid, chips, dialogs, synthetic
+  groupBy/chart metric labels) and gains header-menu Rename — while export, the
+  server rendering the user's screen, applies the posted document's labels to headers
+  and synthetics via `ValidatedState.WithDisplayLabels`.
 
 ## Appendix: decision log
 
@@ -809,6 +822,7 @@ APEX's Interactive Reports.
 | TO_STRING formats are a closed token set, translated and bound per dialect | pass native masks through | Native masks don't port (strftime ≠ TO_CHAR ≠ .NET) and raw pass-through would hand client text to the SQL layer. A validated vocabulary translates exactly and the mask still rides as a binding. |
 | Timezone pins at the connection (definition `TimeZone`), not in expressions | AT_TZ()/NOW('UTC') vocabulary; UTC everywhere | A report's clock is a property of the data source, not of each expression: the definition's `TimeZone` pins the session at open, and unset means the server's setting. Engines without a session timezone (SQL Server, SQLite) silently ignore the setting rather than erroring — it requests session behavior that simply doesn't exist there, and their clock follows the host either way. Expression-level vocabulary couldn't fix them portably and would hand a timezone decision to every report author. |
 | Bare dates rejected in concatenation | implicit rendering; auto-wrap in TO_STRING | Implicit date-to-text is the one place engine settings (session language, NLS, DateStyle) would leak into output, and it differs per engine. Rejection matches the language's explicit-conversion rule (TO_DATE inbound, TO_STRING outbound); auto-wrapping would pick a format silently. |
-| Friendly names are client-side only; the server delivers `columnLabels` as the default report's `labels` and never applies them | apply labels server-side at discovery/validation so results and exports carry them | Display naming is presentation, and presentation belongs to the client: the engine's schema, validation, results, and exports speak real names and neutral labels, so no execution surface depends on captions. The cost is accepted openly — server-rendered artifacts (CSV headers, synthetic `sum(…)` labels in metadata) use server labels, with the client rebuilding grid/chart synthetics from the view spec it authored. |
-| Report `labels` maps are opaque state, not validated | ignored[]/errors for unknown or blank entries | The server validates what it executes; a map it never reads has nothing to validate. Unknown keys are unused display data, exactly as resilient as a saved report is entitled to be. (Config-side `columnLabels` still fail fast on blank/case-colliding entries — config mistakes, not state.) |
+| Friendly names live in the document; the server delivers `columnLabels` as the default report's `labels` and keeps query surfaces neutral | apply labels at discovery/validation so all results carry them | Display naming is presentation: the engine's schema, validation, and query metadata speak real names and neutral labels, so no execution surface depends on captions, and the client renders its own document's names (rebuilding grid/chart synthetics from the view spec it authored). |
+| Report `labels` maps are never validated | ignored[]/errors for unknown or blank entries | The server validates what gates execution; labels gate nothing. Unknown keys are unused display data, exactly as resilient as a saved report is entitled to be. (Config-side `columnLabels` still fail fast on blank/case-colliding entries — config mistakes, not state.) |
+| Export applies the posted document's labels (ingest → `WithDisplayLabels`) | neutral export headers; look up the user's saved report server-side | An export is the server rendering the user's screen, and the active document may never have been saved — the posted document is the only source of truth. One ingestion pipeline resolves labels (request ?? defaultState ?? columnLabels, matching the delivered default report); the export path relabels metadata surfaces only, so composition, row keys, and golden SQL are untouched. |
 | Schema endpoint synthesizes an empty `defaultState` | nullable `defaultState` | Every client would otherwise invent its own "no default configured" behavior. An empty state already *means* the right thing — all columns, database order — and it is also the delivery vehicle: the definition's mapping rides down as its `labels`. |

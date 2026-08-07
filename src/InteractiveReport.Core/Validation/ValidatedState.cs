@@ -21,6 +21,67 @@ public sealed class ValidatedState
     public required int PageIndex { get; init; }
     public required int PageSize { get; init; }
     public required IReadOnlyList<IgnoredItem> Ignored { get; init; }
+
+    /// <summary>
+    /// The document's display labels (real column name → label), resolved during
+    /// ingestion: request ?? default state ?? the definition's columnLabels. Query
+    /// responses never consume these — the client renders its own labels — but a
+    /// server-rendered artifact (export) applies them via WithDisplayLabels.
+    /// </summary>
+    public required IReadOnlyDictionary<string, string> Labels { get; init; }
+
+    /// <summary>
+    /// Returns this state with Labels applied to every column surface that feeds
+    /// response metadata, so server-rendered output (CSV headers, synthetic
+    /// sum(…) labels, pivot cells) shows the document's names exactly as the client
+    /// displays them. Column names are untouched — composition and row keys are
+    /// unaffected — and query paths never call this.
+    /// </summary>
+    public ValidatedState WithDisplayLabels()
+    {
+        if (Labels.Count == 0) return this;
+
+        ColumnModel Relabel(ColumnModel column)
+            => Labels.TryGetValue(column.Name, out var label) && label != column.Label
+                ? new ColumnModel
+                {
+                    Name = column.Name,
+                    Label = label,
+                    ClrType = column.ClrType,
+                    IsNullable = column.IsNullable,
+                    IsComputed = column.IsComputed,
+                }
+                : column;
+
+        return new ValidatedState
+        {
+            Schema = ReportSchema.Create("display", Schema.Columns.Select(Relabel)),
+            Rules = Rules,
+            Search = Search,
+            Sorts = Sorts,
+            SelectColumns = SelectColumns.Select(Relabel).ToList(),
+            Aggregates = Aggregates.Select(a => a with { Column = Relabel(a.Column) }).ToList(),
+            Breaks = Breaks.Select(Relabel).ToList(),
+            View = View with
+            {
+                GroupBy = View.GroupBy.Select(Relabel).ToList(),
+                PivotRows = View.PivotRows.Select(Relabel).ToList(),
+                PivotCols = View.PivotCols.Select(Relabel).ToList(),
+                Values = View.Values.Select(v => v with { Column = Relabel(v.Column) }).ToList(),
+                Chart = View.Chart is null
+                    ? null
+                    : View.Chart with
+                    {
+                        Label = Relabel(View.Chart.Label),
+                        Value = View.Chart.Value is null ? null : Relabel(View.Chart.Value),
+                    },
+            },
+            PageIndex = PageIndex,
+            PageSize = PageSize,
+            Ignored = Ignored,
+            Labels = Labels,
+        };
+    }
 }
 
 /// <summary>

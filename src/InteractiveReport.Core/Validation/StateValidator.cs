@@ -32,8 +32,12 @@ public static class StateValidator
         var ignored = new List<IgnoredItem>();
         var resolved = ReportStateResolver.Resolve(def.DefaultState, state);
 
-        // resolved.Labels is deliberately not consulted: display labels are client-side
-        // presentation. The engine validates only what it executes.
+        // Display labels resolve here — one ingestion path for every consumer — but
+        // they are presentation, not a program: never validated against the schema
+        // (unknown keys are unused display data) and never applied to query surfaces.
+        // The definition's columnLabels are the bottom default layer, mirroring the
+        // default report the schema endpoint delivers.
+        var labels = ResolveLabels(resolved.Labels ?? def.ColumnLabels);
 
         // Computed columns validate first against the BASE schema, then join the
         // effective schema — everything after this line treats them as ordinary columns.
@@ -142,7 +146,25 @@ public static class StateValidator
             PageIndex = pageIndex,
             PageSize = pageSize,
             Ignored = ignored,
+            Labels = labels,
         };
+    }
+
+    private static readonly IReadOnlyDictionary<string, string> NoLabels =
+        new Dictionary<string, string>();
+
+    private static IReadOnlyDictionary<string, string> ResolveLabels(
+        Dictionary<string, string>? labels)
+    {
+        if (labels is not { Count: > 0 }) return NoLabels;
+
+        var resolved = new Dictionary<string, string>(labels.Count, StringComparer.OrdinalIgnoreCase);
+        foreach (var (name, label) in labels)
+        {
+            if (!string.IsNullOrWhiteSpace(name) && !string.IsNullOrWhiteSpace(label))
+                resolved[name] = label.Trim();
+        }
+        return resolved;
     }
 
     private static List<ColumnModel> ValidateBreaks(
