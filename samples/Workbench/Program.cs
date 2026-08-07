@@ -7,8 +7,21 @@ var builder = WebApplication.CreateBuilder(args);
 var dbPath = Path.Combine(builder.Environment.ContentRootPath, "App_Data", "sample.db");
 var connectionString = $"Data Source={dbPath}";
 
-builder.Services.AddInteractiveReports(builder.Configuration)
+var interactiveReports = builder.Services.AddInteractiveReports(builder.Configuration)
     .AddConnection("SampleDb", _ => new SqliteConnection(connectionString));
+
+// Browser automation can isolate saved-report writes from the developer's Workbench
+// database by supplying this path and selecting the named connection in configuration.
+// Normal sample runs leave it unset and retain the zero-configuration App_Data store.
+var testSavedReportsPath = builder.Configuration["InteractiveReportTest:SavedReportsPath"];
+if (!string.IsNullOrWhiteSpace(testSavedReportsPath))
+{
+    testSavedReportsPath = Path.GetFullPath(testSavedReportsPath);
+    Directory.CreateDirectory(Path.GetDirectoryName(testSavedReportsPath)!);
+    interactiveReports.AddConnection(
+        "PlaywrightSavedReports",
+        _ => new SqliteConnection($"Data Source={testSavedReportsPath};Pooling=False"));
+}
 
 builder.Services
     .AddAuthentication(DevAuthHandler.SchemeName)

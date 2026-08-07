@@ -32,9 +32,12 @@ npm run test:ui
 ```
 
 The configuration starts `samples/Workbench` on `http://127.0.0.1:5042`, reuses a
-compatible local server outside CI, and retains traces and screenshots on failure.
-Feature-specific `*.spec.js` files belong in `tests/ui/e2e`; the directory is
-intentionally free of specs while the automation foundation is established.
+compatible local server outside CI, and retains traces and screenshots on failure. The
+full-application suite covers the synthetic default report, live querying, search,
+paging, report switching, CSV download, aggregate chart rendering, saved-report
+save/reload across a page refresh, the administration lifecycle, and non-administrator
+authorization. Saved-report test data uses random names and is removed even when an
+assertion fails.
 
 ## Live-dialect verification (M5)
 

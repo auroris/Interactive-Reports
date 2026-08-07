@@ -1,7 +1,19 @@
 # Browser UI tests
 
-Place Playwright `*.spec.js` files in this directory. The shared configuration starts
-the Workbench on `http://127.0.0.1:5042` and runs tests in Chromium.
+The shared Playwright configuration starts the real Workbench on
+`http://127.0.0.1:5042` and runs these tests in Chromium. Locators use accessible roles
+and labels through the components' open shadow roots, so the scenarios exercise the UI
+as a user sees it rather than calling component methods.
 
-No feature-specific browser scenarios are defined yet. `npm run test:ui` is configured
-to succeed with an empty suite so the infrastructure can land independently.
+The test server always starts as a fresh process and redirects saved reports to
+`test-results/ui/workbench-saved.db`. Browser runs therefore neither reuse an
+incompatible developer server nor modify `samples/Workbench/App_Data`.
+
+`application.spec.js` covers report discovery, the synthetic default document, query,
+search, paging, report switching, CSV export, saved-report persistence, administration,
+and non-administrator authorization. Saved reports use random names and are removed in
+`finally` blocks, allowing the suite to run against an existing developer Workbench.
+
+```sh
+npm run test:ui
+```
