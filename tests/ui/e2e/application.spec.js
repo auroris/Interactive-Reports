@@ -260,6 +260,52 @@ test("saves and reloads a report, then administers its complete lifecycle", asyn
     }
 });
 
+test("admin uploads a validated report document and downloads its canonical file", async ({ page, request }) => {
+    const title = `document-${randomUUID()}`;
+    let importedId;
+
+    try {
+        await page.goto("/admin.html");
+        await expect(page.getByRole("button", { name: "Upload JSON…", exact: true })).toBeVisible();
+        await page.getByRole("button", { name: "Upload JSON…", exact: true }).click();
+
+        const dialog = page.getByRole("dialog");
+        await dialog.getByLabel("Report name", { exact: true }).fill("orders");
+        await dialog.getByLabel("Report document JSON", { exact: true }).setInputFiles({
+            name: "candidate.json",
+            mimeType: "application/json",
+            buffer: Buffer.from(JSON.stringify({
+                title,
+                primary: true,
+                state: { v: 2, filters: [{ expr: "AMOUNT > 100" }] },
+            })),
+        });
+
+        const uploadResponsePromise = page.waitForResponse(response =>
+            response.request().method() === "POST"
+            && new URL(response.url()).pathname === "/api/reports/admin/orders/documents");
+        await dialog.getByRole("button", { name: "Upload", exact: true }).click();
+        const uploadResponse = await uploadResponsePromise;
+        expect(uploadResponse.status()).toBe(201);
+        importedId = (await uploadResponse.json()).id;
+
+        const row = page.getByRole("row").filter({ hasText: title });
+        await expect(row).toContainText("Private");
+
+        const downloadPromise = page.waitForEvent("download");
+        await row.getByRole("button", { name: "Download", exact: true }).click();
+        const downloaded = await downloadPromise;
+        expect(downloaded.suggestedFilename()).toMatch(/^orders\..+\.json$/);
+        const document = JSON.parse(await readFile(await downloaded.path(), "utf8"));
+        expect(document.title).toBe(title);
+        expect(document.primary).toBe(false);
+        expect(document.state.filters).toEqual([{ expr: "AMOUNT > 100", enabled: true }]);
+    } finally {
+        if (importedId)
+            await request.delete(`/api/reports/saved/${importedId}`);
+    }
+});
+
 test("a feature-whitelisted report pares the UI down and the server enforces the rest", async ({ page, request }) => {
     await openWorkbench(page);
     await runAndWaitForQuery(page, () =>

@@ -48,10 +48,20 @@ export async function api(url, { method = "GET", body, signal } = {}) {
 
 /// POST that answers with a file. Returns { blob, filename, truncated }.
 export async function download(url, body) {
+    const result = await downloadFile(url, { method: "POST", body });
+    return {
+        ...result,
+        truncated: result.response.headers.get("X-IR-Truncated") === "true",
+    };
+}
+
+/// Request an arbitrary attachment. Used by the admin report-document export as
+/// well as the report-specific POST export above.
+export async function downloadFile(url, { method = "GET", body } = {}) {
     const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        method,
+        headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
     });
     if (!res.ok) throw await problemFrom(res);
     const disposition = res.headers.get("Content-Disposition") ?? "";
@@ -59,7 +69,7 @@ export async function download(url, body) {
     return {
         blob: await res.blob(),
         filename,
-        truncated: res.headers.get("X-IR-Truncated") === "true",
+        response: res,
     };
 }
 

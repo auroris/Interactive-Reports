@@ -3,6 +3,7 @@ using System.Data.Common;
 using InteractiveReport.Core.Composition;
 using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Model;
+using Microsoft.Extensions.Logging;
 using SqlKata;
 
 namespace InteractiveReport.Core.Schema;
@@ -16,10 +17,18 @@ namespace InteractiveReport.Core.Schema;
 /// </summary>
 public static class SchemaDiscovery
 {
+    public static Task<ReportSchema> Discover(
+        DbConnection connection,
+        ReportDefinition def,
+        IReadOnlyDictionary<string, object?> contextParams,
+        CancellationToken ct = default)
+        => Discover(connection, def, contextParams, logger: null, ct);
+
     public static async Task<ReportSchema> Discover(
         DbConnection connection,
         ReportDefinition def,
         IReadOnlyDictionary<string, object?> contextParams,
+        ILogger? logger,
         CancellationToken ct = default)
     {
         var probe = new Query()
@@ -28,7 +37,7 @@ public static class SchemaDiscovery
 
         var compiled = DialectSupport.GetCompiler(def.Dialect).Compile(probe);
 
-        await using var cmd = CommandBuilder.Build(connection, compiled, contextParams, def);
+        await using var cmd = CommandBuilder.Build(connection, compiled, contextParams, def, logger);
         await using var reader = await cmd.ExecuteReaderAsync(CommandBehavior.SchemaOnly, ct);
 
         var columns = new List<ColumnModel>();

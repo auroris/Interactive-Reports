@@ -51,7 +51,11 @@ internal static class CommandBuilder
 
         // Logging discipline: SQL text at Debug only, and parameter VALUES never — the
         // values are user filters and row-security context, i.e. data.
-        logger?.LogDebug("SQL: {Sql}", compiled.Sql);
+        // Use the command's final text rather than the compiler result so the log is
+        // exactly what Execute* submits to the provider. Structured logging keeps the
+        // complete multi-line statement available to sinks without interpolating it
+        // unless Debug is enabled.
+        logger?.LogDebug("Executing report SQL:\n{Sql}", cmd.CommandText);
 
         return cmd;
     }

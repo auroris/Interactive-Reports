@@ -199,6 +199,78 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
             summary.GetProperty("title").GetString(), "Regional View", StringComparison.OrdinalIgnoreCase)));
     }
 
+    [Fact]
+    public async Task Administrator_can_download_a_canonical_configured_report_document()
+    {
+        var admin = await GetJson("/api/reports/admin/saved");
+        var configured = admin.EnumerateArray()
+            .Single(summary => summary.GetProperty("title").GetString() == "Regional View");
+
+        using var response = await _client.GetAsync(
+            $"/api/reports/admin/saved/{configured.GetProperty("id").GetString()}/document");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
+        Assert.EndsWith(".json", response.Content.Headers.ContentDisposition?.FileName?.Trim('"'));
+        var document = await ReadJson(response);
+        Assert.Equal("Regional View", document.GetProperty("title").GetString());
+        Assert.False(document.GetProperty("primary").GetBoolean());
+        Assert.Equal("ID = 1", document.GetProperty("state").GetProperty("filters")[0]
+            .GetProperty("expr").GetString());
+    }
+
+    [Fact]
+    public async Task Administrator_upload_validates_then_imports_a_report_document()
+    {
+        using var invalidResponse = await _client.PostAsync(
+            $"/api/reports/admin/{ReportName}/documents",
+            JsonContent.Create(new
+            {
+                title = "Broken Candidate",
+                state = new { v = 2, filters = new[] { new { expr = "ID +" } } },
+            }));
+        Assert.Equal(HttpStatusCode.BadRequest, invalidResponse.StatusCode);
+        var invalid = await ReadJson(invalidResponse);
+        Assert.Equal("Report state failed validation", invalid.GetProperty("title").GetString());
+
+        var title = $"Uploaded {Guid.NewGuid():N}";
+        using var uploadResponse = await _client.PostAsync(
+            $"/api/reports/admin/{ReportName}/documents",
+            JsonContent.Create(new
+            {
+                title,
+                primary = true,
+                state = new
+                {
+                    v = 2,
+                    columns = new[] { "ID", "LABEL" },
+                    filters = new[] { new { expr = "ID = 2" } },
+                },
+            }));
+        Assert.Equal(HttpStatusCode.Created, uploadResponse.StatusCode);
+        var imported = await ReadJson(uploadResponse);
+        Assert.Equal(title, imported.GetProperty("title").GetString());
+        Assert.Equal(Identity, imported.GetProperty("owner").GetString());
+        Assert.False(imported.GetProperty("isGlobal").GetBoolean());
+
+        var id = imported.GetProperty("id").GetString();
+        var loaded = await GetJson($"/api/reports/saved/{id}");
+        Assert.Equal("ID = 2", loaded.GetProperty("state").GetProperty("filters")[0]
+            .GetProperty("expr").GetString());
+
+        using var downloadResponse = await _client.GetAsync(
+            $"/api/reports/admin/saved/{id}/document");
+        var downloaded = await ReadJson(downloadResponse);
+        Assert.Equal(title, downloaded.GetProperty("title").GetString());
+        // Primary is meaningful only in a configured file, not in the imported
+        // private saved copy.
+        Assert.False(downloaded.GetProperty("primary").GetBoolean());
+
+        var admin = await GetJson("/api/reports/admin/saved");
+        Assert.DoesNotContain(admin.EnumerateArray(), summary =>
+            summary.GetProperty("title").GetString() == "Broken Candidate");
+    }
+
     private async Task<JsonElement> GetJson(string path)
     {
         using var response = await _client.GetAsync(path);

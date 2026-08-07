@@ -369,6 +369,8 @@ Mounted by the host: `app.MapInteractiveReports("/api/reports").RequireAuthoriza
 | `POST /api/reports/{name}/saved` | Save the posted state under a title (global publish = admin). 403 when `savedReports` is not whitelisted (§4). |
 | `GET/PUT/DELETE /api/reports/saved/{id}` | Load / modify / delete one report document (matrix in §13; configured documents reject mutation). |
 | `GET  /api/reports/admin/saved` | Administrator: every saved report in the system. |
+| `GET  /api/reports/admin/saved/{id}/document` | Administrator: download a canonical `{ title, primary, state }` source-file envelope. |
+| `POST /api/reports/admin/{name}/documents` | Administrator: validate a source-file envelope against the named report and import a private saved copy for testing. |
 | `POST /api/reports/{name}/export` | Same state, same gate, no paging → CSV (UTF-8 BOM; headers are the posted document's display labels, §5), capped at `maxRows` with `X-IR-Truncated` header. 403 when `download` is not whitelisted (§4). XLSX/HTML later. |
 | `GET  /api/reports/ui/{file}` | Packaged UI assets (§14). Anonymous by design; content-hash ETags. |
 
@@ -690,8 +692,9 @@ as a parameter.)
   **All** pagination choice.
 - Command timeout per definition (default modest, e.g. 30s); `CancellationToken` flows
   from the HTTP request so abandoned browsers stop occupying the database.
-- Logging: SQL text at Debug only; parameter *values* never logged above Debug;
-  correlation id at Information joins HTTP log ↔ engine log ↔ problem response.
+- Logging: the final `DbCommand.CommandText` for report queries, schema probes, and
+  session setup is logged at Debug only; parameter *values* are never logged.
+  Correlation id at Information joins HTTP log ↔ engine log ↔ problem response.
 
 ## 12. Security model
 
@@ -869,8 +872,9 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   `Cache-Control: no-cache` — an assembly-version tag would 304 stale content across
   rebuilds of the same version.
 - The admin element drives the §13 administrator surface: list everything,
-  publish/unpublish, reassign owner, inspect the stored state document, delete. It
-  simply loses its data (404) for non-administrators and says so.
+  publish/unpublish, reassign owner, inspect the stored state document, download a
+  canonical file-backed envelope, upload and validate an envelope as a private saved
+  copy, and delete. It simply loses its data (404) for non-administrators and says so.
 
 ## 15. Milestones
 

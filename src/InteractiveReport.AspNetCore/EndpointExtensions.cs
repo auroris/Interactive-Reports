@@ -48,6 +48,8 @@ public static class EndpointExtensions
         group.MapPut("/saved/{id}", SavedReportEndpoints.Update);
         group.MapDelete("/saved/{id}", SavedReportEndpoints.Delete);
         group.MapGet("/admin/saved", SavedReportEndpoints.AdminListAll);
+        group.MapGet("/admin/saved/{id}/document", SavedReportEndpoints.AdminDownloadDocument);
+        group.MapPost("/admin/{name}/documents", SavedReportEndpoints.AdminUploadDocument);
 
         return group;
     }
@@ -206,10 +208,7 @@ public static class EndpointExtensions
         }
         catch (ReportValidationException ex)
         {
-            var errors = ex.Errors
-                .GroupBy(error => error.Path)
-                .ToDictionary(group => group.Key, group => group.Select(error => error.Message).ToArray());
-            return Results.ValidationProblem(errors, title: "Report state failed validation");
+            return ValidationProblem(ex);
         }
         catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)
         {
@@ -226,7 +225,15 @@ public static class EndpointExtensions
     /// provider messages that may embed SQL fragments) go to the server log under a
     /// correlation id; the client gets a generic problem document carrying that id.
     /// </summary>
-    private static IResult ServerError(HttpContext ctx, string reportName, string operation, Exception ex)
+    internal static IResult ValidationProblem(ReportValidationException ex)
+    {
+        var errors = ex.Errors
+            .GroupBy(error => error.Path)
+            .ToDictionary(group => group.Key, group => group.Select(error => error.Message).ToArray());
+        return Results.ValidationProblem(errors, title: "Report state failed validation");
+    }
+
+    internal static IResult ServerError(HttpContext ctx, string reportName, string operation, Exception ex)
     {
         var logger = ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("InteractiveReport");
         logger.LogError(ex, "Report {Report}: {Operation} failed (traceId {TraceId})",

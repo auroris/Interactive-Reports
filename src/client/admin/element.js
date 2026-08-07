@@ -1,9 +1,10 @@
 // The <interactive-report-admin> element: every saved report in the system,
 // with the admin-only powers from the authorization matrix — publish/unpublish
-// globals, reassign owner, inspect state, delete. The server enforces the
-// matrix; this widget simply loses its data (404) for non-administrators.
+// globals, reassign owner, inspect/download state, upload canonical file-backed
+// documents for validation and testing, delete. The server enforces the matrix;
+// this widget simply loses its data (404) for non-administrators.
 
-import { api, apiUrl, defaultApiBase } from "../core/api.js";
+import { api, apiUrl, defaultApiBase, downloadFile, saveBlob } from "../core/api.js";
 import { el, banner, labeled } from "../core/dom.js";
 import { openDialog, confirmDialog } from "../core/dialog.js";
 import { createWidgetRoot, disposeWidget } from "../core/widget.js";
@@ -59,6 +60,7 @@ export class InteractiveReportAdminElement extends HTMLElement {
             el("div", { class: "ir-admin-bar", part: "toolbar" },
                 filter,
                 el("button", { type: "button", class: "ir-btn", onclick: () => this.reload() }, "Refresh"),
+                el("button", { type: "button", class: "ir-btn", onclick: () => this.uploadDocument() }, "Upload JSON…"),
                 this.els.count,
                 el("span", { class: "ir-spacer" }),
                 this.els.identity),
@@ -120,11 +122,15 @@ export class InteractiveReportAdminElement extends HTMLElement {
 
         const trs = rows.map(r => {
             const actions = r.isReadOnly
-                ? [linkBtn("State", () => this.viewState(r))]
+                ? [
+                    linkBtn("State", () => this.viewState(r)),
+                    " · ", linkBtn("Download", () => this.downloadDocument(r)),
+                ]
                 : [
                     linkBtn(r.isGlobal ? "Unpublish" : "Publish", () => this.setGlobal(r, !r.isGlobal)),
                     " · ", linkBtn("Reassign…", () => this.reassign(r)),
                     " · ", linkBtn("State", () => this.viewState(r)),
+                    " · ", linkBtn("Download", () => this.downloadDocument(r)),
                     " · ", linkBtn("Delete…", () => this.remove(r), true),
                 ];
             const scope = r.isReadOnly ? "Read only" : r.isGlobal ? "Global" : "Private";
@@ -188,6 +194,55 @@ export class InteractiveReportAdminElement extends HTMLElement {
                     el("pre", { class: "ir-state-pre" }, JSON.stringify(doc.state, null, 2))),
             });
         } catch (err) { this.fail(err); }
+    }
+
+    async downloadDocument(r) {
+        try {
+            const file = await downloadFile(apiUrl(this.base, "admin", "saved", r.id, "document"));
+            saveBlob(file.blob, file.filename ?? `${r.reportName}.report.json`);
+        } catch (err) { this.fail(err); }
+    }
+
+    uploadDocument() {
+        const reportInp = el("input", {
+            class: "ir-input", type: "text", placeholder: "Configured report name",
+            autocomplete: "off",
+        });
+        const fileInp = el("input", {
+            class: "ir-input", type: "file", accept: ".json,application/json",
+        });
+        openDialog({
+            owner: this,
+            title: "Upload Report Document",
+            width: "30rem",
+            applyLabel: "Upload",
+            build: body => body.append(
+                labeled("Report name", reportInp),
+                labeled("Report document JSON", fileInp),
+                el("p", { class: "ir-dialog-note" },
+                    "The title and state are imported as your private saved report after schema validation. " +
+                    "The primary flag applies only when the file is configured by the host.")),
+            onApply: async () => {
+                const reportName = reportInp.value.trim();
+                if (!reportName) throw new Error("Enter the configured report name.");
+                const file = fileInp.files?.[0];
+                if (!file) throw new Error("Choose a report document JSON file.");
+
+                let document;
+                try {
+                    document = JSON.parse(await file.text());
+                } catch {
+                    throw new Error("The selected file is not valid JSON.");
+                }
+
+                const imported = await api(apiUrl(this.base, "admin", reportName, "documents"), {
+                    method: "POST",
+                    body: document,
+                });
+                this.notify(`"${imported.title}" uploaded as a private saved report.`);
+                await this.reload();
+            },
+        });
     }
 
     async remove(r) {

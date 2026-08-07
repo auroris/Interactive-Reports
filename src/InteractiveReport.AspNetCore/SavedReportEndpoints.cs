@@ -1,5 +1,6 @@
 using System.Text.Json;
 using InteractiveReport.Core.Definitions;
+using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Identity;
 using InteractiveReport.Core.Model;
 using InteractiveReport.Core.SavedReports;
@@ -233,6 +234,162 @@ internal static class SavedReportEndpoints
         return Results.Json(configured.Concat(all.Select(report => Summary(report, identity))), IrJson.Options);
     }
 
+    /// <summary>
+    /// Downloads the canonical source-controlled envelope, not the endpoint's
+    /// summary/state response wrapper. The resulting file can be placed directly in a
+    /// report definition's documentFiles collection after the operator chooses whether
+    /// it should be primary.
+    /// </summary>
+    internal static async Task<IResult> AdminDownloadDocument(
+        string id,
+        HttpContext ctx,
+        CancellationToken ct)
+    {
+        if (Identity(ctx) is null) return Results.Unauthorized();
+        if (!IsAdmin(ctx)) return Results.NotFound();
+
+        string reportName;
+        ReportDocumentFile document;
+        if (Documents(ctx).Find(id) is { } configured)
+        {
+            reportName = configured.ReportName;
+            document = new ReportDocumentFile
+            {
+                Title = configured.Title,
+                Primary = configured.Primary,
+                State = configured.State,
+            };
+        }
+        else
+        {
+            var report = await SavedStore(ctx).Get(id, ct);
+            if (report is null) return Results.NotFound();
+            reportName = report.ReportName;
+
+            ReportState? state;
+            try
+            {
+                state = JsonSerializer.Deserialize<ReportState>(report.StateJson, IrJson.Options);
+            }
+            catch (JsonException ex)
+            {
+                return EndpointExtensions.ServerError(ctx, reportName, "report document download", ex);
+            }
+
+            if (state is null)
+                return EndpointExtensions.ServerError(
+                    ctx,
+                    reportName,
+                    "report document download",
+                    new InvalidOperationException($"Saved report '{id}' has no state document."));
+
+            document = new ReportDocumentFile
+            {
+                Title = report.Title,
+                Primary = false,
+                State = state,
+            };
+        }
+
+        var definition = await ctx.RequestServices.GetRequiredService<IReportDefinitionStore>()
+            .Find(reportName, ct);
+        if (definition is null) return Results.NotFound();
+        if (await ReportRequestAccess.Authorize(definition, ctx) is { } denied) return denied;
+
+        var jsonOptions = new JsonSerializerOptions(IrJson.Options) { WriteIndented = true };
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(document, jsonOptions);
+        return Results.File(
+            bytes,
+            "application/json; charset=utf-8",
+            DownloadFileName(reportName, document.Title!));
+    }
+
+    /// <summary>
+    /// Imports a canonical report-document file as a private saved report owned by the
+    /// administrator. This deliberately bypasses the end-user savedReports feature
+    /// flag, but not report authorization or document validation. The imported copy is
+    /// a convenient live test surface; primary remains file-publication metadata.
+    /// </summary>
+    internal static async Task<IResult> AdminUploadDocument(
+        string name,
+        HttpContext ctx,
+        CancellationToken ct)
+    {
+        var identity = Identity(ctx);
+        if (identity is null) return Results.Unauthorized();
+        if (!IsAdmin(ctx)) return Results.NotFound();
+
+        var definition = await ctx.RequestServices.GetRequiredService<IReportDefinitionStore>()
+            .Find(name, ct);
+        if (definition is null) return Results.NotFound();
+        if (await ReportRequestAccess.Authorize(definition, ctx) is { } denied) return denied;
+
+        ReportDocumentFile? document;
+        try
+        {
+            document = await JsonSerializer.DeserializeAsync<ReportDocumentFile>(
+                ctx.Request.Body,
+                IrJson.Options,
+                ct);
+        }
+        catch (JsonException ex)
+        {
+            return BadRequest("Malformed report document", ex.Message);
+        }
+
+        if (TitleError(document?.Title, "Malformed report document") is { } titleError) return titleError;
+        if (document!.State is null)
+            return BadRequest("Malformed report document", "state is required");
+        if (ConfiguredTitleExists(Documents(ctx).List(definition), document.Title!))
+            return ConfiguredTitleConflict(document.Title!);
+
+        try
+        {
+            var contextParams = await ReportRequestAccess.ResolveContextParameters(definition, ctx, ct);
+            await ctx.RequestServices.GetRequiredService<ReportExecutor>()
+                .ValidateDocument(definition, document.State, contextParams, ct);
+        }
+        catch (ReportValidationException ex)
+        {
+            return EndpointExtensions.ValidationProblem(ex);
+        }
+        catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return EndpointExtensions.ServerError(ctx, definition.Name, "report document upload", ex);
+        }
+
+        var report = new SavedReport
+        {
+            Id = SavedReport.NewId(),
+            ReportName = definition.Name,
+            Title = document.Title!.Trim(),
+            Owner = identity,
+            IsGlobal = false,
+            StateJson = JsonSerializer.Serialize(document.State, IrJson.Options),
+        };
+        try
+        {
+            await SavedStore(ctx).Create(report, ct);
+        }
+        catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return EndpointExtensions.ServerError(ctx, definition.Name, "report document upload", ex);
+        }
+
+        return Results.Json(
+            Summary(report, identity),
+            IrJson.Options,
+            statusCode: StatusCodes.Status201Created);
+    }
+
     // --- helpers -------------------------------------------------------------
 
     private static InteractiveReportOptions Options(HttpContext ctx)
@@ -303,9 +460,9 @@ internal static class SavedReportEndpoints
             statusCode: StatusCodes.Status403Forbidden);
     }
 
-    private static IResult? TitleError(string? title)
+    private static IResult? TitleError(string? title, string problemTitle = "Malformed save request")
         => string.IsNullOrWhiteSpace(title) || title.Trim().Length > 200
-            ? BadRequest("Malformed save request", "title is required (1–200 characters)")
+            ? BadRequest(problemTitle, "title is required (1–200 characters)")
             : null;
 
     private static IResult BadRequest(string title, string detail)
@@ -321,6 +478,16 @@ internal static class SavedReportEndpoints
         SavedReportAccess.AdministratorRequired => AdminRequired(administratorDetail),
         _ => throw new ArgumentOutOfRangeException(nameof(access)),
     };
+
+    private static string DownloadFileName(string reportName, string title)
+    {
+        var stem = $"{reportName}.{title}";
+        var safe = new string(stem.Select(character =>
+            char.IsLetterOrDigit(character) || character is '.' or '-' or '_'
+                ? character
+                : '-').ToArray()).Trim('.', '-');
+        return (safe.Length == 0 ? "report" : safe) + ".json";
+    }
 }
 
 internal sealed class SaveReportRequest

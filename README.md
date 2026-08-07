@@ -77,6 +77,26 @@ database report with the same title, and new title collisions are rejected. Ensu
 host project copies these files to its build and publish output; the Workbench project
 shows one way to do that.
 
+The packaged administration panel can download any listed report as this canonical
+`{ title, primary, state }` JSON envelope. This makes a database-backed saved report
+ready to add to `documentFiles` without manually reconstructing the file. **Upload
+JSON…** takes a configured report name and one of these envelopes, validates its state
+against that report's current schema through the same ingestion pipeline as query and
+export, and imports it as the administrator's private saved report for live testing.
+The envelope's `primary` flag remains publication metadata and does not make an
+uploaded database copy primary.
+
+To log the exact SQL command text submitted to the configured database, enable Debug
+for the report executor category. Parameter values are never logged:
+
+```json
+"Logging": {
+  "LogLevel": {
+    "InteractiveReport.Core.Execution.ReportExecutor": "Debug"
+  }
+}
+```
+
 `styleSheet` is an application-controlled relative or HTTP(S) URL. The component
 places its `<link>` inside the report's shadow root after the packaged styles, so its
 rules can target report internals without leaking into the host page. For example:

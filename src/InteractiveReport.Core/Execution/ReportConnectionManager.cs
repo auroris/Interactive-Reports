@@ -1,5 +1,6 @@
 using System.Data.Common;
 using InteractiveReport.Core.Model;
+using Microsoft.Extensions.Logging;
 
 namespace InteractiveReport.Core.Execution;
 
@@ -8,7 +9,9 @@ namespace InteractiveReport.Core.Execution;
 /// execution. Callers receive an open, prepared connection and remain responsible for
 /// disposing it.
 /// </summary>
-internal sealed class ReportConnectionManager(IReportConnectionFactory connections)
+internal sealed class ReportConnectionManager(
+    IReportConnectionFactory connections,
+    ILogger? logger = null)
 {
     public async Task<DbConnection> Open(ReportDefinition definition, CancellationToken ct)
     {
@@ -16,7 +19,7 @@ internal sealed class ReportConnectionManager(IReportConnectionFactory connectio
         try
         {
             await connection.OpenAsync(ct);
-            await ApplySessionTimeZone(connection, definition, ct);
+            await ApplySessionTimeZone(connection, definition, logger, ct);
             return connection;
         }
         catch
@@ -34,6 +37,7 @@ internal sealed class ReportConnectionManager(IReportConnectionFactory connectio
     private static async Task ApplySessionTimeZone(
         DbConnection connection,
         ReportDefinition definition,
+        ILogger? logger,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(definition.TimeZone)) return;
@@ -49,6 +53,7 @@ internal sealed class ReportConnectionManager(IReportConnectionFactory connectio
 
         await using var command = connection.CreateCommand();
         command.CommandText = sql;
+        logger?.LogDebug("Executing report SQL:\n{Sql}", command.CommandText);
         await command.ExecuteNonQueryAsync(ct);
     }
 }

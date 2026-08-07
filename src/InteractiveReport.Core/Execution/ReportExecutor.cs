@@ -32,7 +32,7 @@ public sealed class ReportExecutor
         SchemaCache schemaCache,
         ILogger<ReportExecutor>? logger = null)
     {
-        _connections = new ReportConnectionManager(connections);
+        _connections = new ReportConnectionManager(connections, logger);
         _schemaCache = schemaCache;
         _logger = logger;
     }
@@ -45,9 +45,21 @@ public sealed class ReportExecutor
         return await _schemaCache.GetOrDiscover(definition, async () =>
         {
             await using var connection = await _connections.Open(definition, ct);
-            return await SchemaDiscovery.Discover(connection, definition, contextParams, ct);
+            return await SchemaDiscovery.Discover(connection, definition, contextParams, _logger, ct);
         });
     }
+
+    /// <summary>
+    /// Runs a report document through the same default resolution, schema discovery,
+    /// and validation pipeline used by query and export, without executing its data
+    /// query. Administrative imports use this before persisting an uploaded document.
+    /// </summary>
+    public async Task ValidateDocument(
+        ReportDefinition definition,
+        ReportState state,
+        IReadOnlyDictionary<string, object?> contextParams,
+        CancellationToken ct = default)
+        => _ = await IngestDocument(definition, state, contextParams, ct);
 
     /// <summary>
     /// The unified document-ingestion pipeline: every request that carries a report
