@@ -8,13 +8,15 @@
   },
   "scripts": {
     "build": "npm run build:client",
-    "build:client": "esbuild src/InteractiveReport.AspNetCore/Ui/ir.js src/InteractiveReport.AspNetCore/Ui/ir-admin.js src/InteractiveReport.AspNetCore/Ui/ir-chart.js --bundle --format=esm --target=es2022 --loader:.css=text --minify --sourcemap --entry-names=[name] --outdir=src/InteractiveReport.AspNetCore/Ui/dist",
-    "dev": "npm run build:client -- --watch",
-    "test": "npm run build:client && npm run test:ui",
-    "test:ui": "node --test tests/ui/*.test.js",
-    "verify": "npm test"
+    "build:client": "node scripts/build-client.mjs",
+    "dev": "node scripts/build-client.mjs --watch",
+    "test": "npm run build:client && npm run test:unit",
+    "test:unit": "node --test tests/ui/*.test.js",
+    "test:ui": "npm run build:client && playwright test --pass-with-no-tests",
+    "verify": "npm test && npm run test:ui"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "chart.js": "^4.5.1",
     "esbuild": "^0.28.1",
     "happy-dom": "^20.11.1"

@@ -69,8 +69,8 @@ still avoiding the worst dialect divergence (native PIVOT syntax) entirely.
 | Project | Responsibility |
 |---|---|
 | `src/InteractiveReport.Core` | State model, validation, expression parser, query composition (SqlKata), execution, schema discovery, highlight evaluation, in-memory pivot, export. No ASP.NET dependencies. |
-| `src/InteractiveReport.AspNetCore` | Endpoint mapping (`MapInteractiveReports`), config-backed definition store, auth integration, JSON protocol shaping, problem+json errors. `Ui/` holds the packaged product UI (§14), embedded and served by the same mapping. |
-| `samples/Workbench` | Dev harness: SQLite sample DB. `index.html`/`admin.html` host the packaged UI; `plain.html` is the deliberately plain JS page exercising every engine feature — the living spec for the protocol. |
+| `src/InteractiveReport.AspNetCore` | Endpoint mapping (`MapInteractiveReports`), config-backed definition store, auth integration, JSON protocol shaping, problem+json errors. `Ui/src` holds the product UI source and `Ui/dist` its packaged assets (§14), embedded and served by the same mapping. |
+| `samples/Workbench` | Dev harness: SQLite sample DB. `index.html` and `admin.html` host the packaged report and administration elements. |
 | `tests/InteractiveReport.Core.Tests` | Composer golden tests (state doc → expected SQL, ×4 dialects), expression parser tests, SQLite end-to-end integration tests. |
 
 Target framework: `net8.0` (Umbraco 13 LTS floor; builds under SDK 8/10).
@@ -631,10 +631,9 @@ Saved-report loads still pass the underlying report definition's authorization g
 
 ## 14. Packaged UI
 
-The product UI is a consumer of the JSON protocol, nothing more — it ships *with* the
-AspNetCore package but the engine never depends on it. Everything the plain Workbench
-harness proves about the protocol, the packaged UI does for real users, styled after
-APEX's Interactive Reports.
+The product UI is a consumer of the JSON protocol, nothing more. It ships *with* the
+AspNetCore package, but the engine never depends on it. The Workbench hosts the same
+packaged elements used by real applications, styled after APEX's Interactive Reports.
 
 **Consumption** (any host page, Umbraco included):
 
@@ -662,12 +661,12 @@ APEX's Interactive Reports.
   stylesheet is compiled into the JavaScript bundle, so host resets and utility
   classes cannot enter the component and component styles cannot escape onto the
   host page. Hosts can theme documented `--ir-*` custom properties on the element.
-- Source modules: `ir.js` (element, toolbar/menus), `ir-state.js` (pure normalization,
+- Source modules live in `Ui/src`: `ir.js` (element, toolbar/menus), `ir-state.js` (pure normalization,
   serialization, and scoped-search expression construction), `ir-api.js`
   (fetch + problem+json), `ir-ui.js` (menu/dialog primitives), `ir-render.js`
   (chips, grid, pager), `ir-dialogs.js` (the Actions dialogs), `ir-admin.js`
   (admin element), `ir.css`. `npm run build` uses esbuild to compile the stylesheet
-  and modules into two self-contained entry bundles in `Ui/dist`; these generated
+  and modules into three self-contained entry bundles in `Ui/dist`; these generated
   assets are committed so a normal .NET build does not require Node.js.
 - **Feature surface**: scoped toolbar search (all text columns or one typed column → expression filter);
   Actions menu (Columns shuttle, Filter, Sort, Control Break, Highlight, Aggregate,
@@ -737,7 +736,8 @@ APEX's Interactive Reports.
   logging. Live battery verified green ×2 dialects 2026-08-05.*
 - **M6 — The real UI** ✅ *(2026-08-05)*: packaged APEX-style widget + saved-report
   administration widget (§14), embedded-asset serving, Workbench pages rebuilt around
-  them (plain harness preserved as the protocol spec). Verified end-to-end in the
+  them. The original plain protocol harness was retired after the packaged UI replaced
+  it. Verified end-to-end in the
   browser against the SQLite sample: filters/chips/toggles, header menus, computed
   columns, highlights, breaks + subtotal/grand rows, groupBy, pivot, scoped search,
   saved reports (save-as/publish/reassign/state/delete), CSV download, validation

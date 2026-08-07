@@ -9,7 +9,7 @@
 //   api-base — API prefix; defaults to the prefix this script was served from
 //   base     — compatibility alias for api-base
 
-import { api } from "./ir-api.js";
+import { api, apiUrl } from "./ir-api.js";
 import { el, banner, createWidgetRoot, disposeWidget, labeled, openDialog, confirmDialog } from "./ir-ui.js";
 
 const BASE_DEFAULT = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
@@ -80,7 +80,7 @@ class InteractiveReportAdminElement extends HTMLElement {
         const seq = this._seq;
         this.els.errorSlot.replaceChildren();
         try {
-            const rows = await api(`${this.base}/admin/saved`);
+            const rows = await api(apiUrl(this.base, "admin", "saved"));
             if (seq !== this._seq || !this.isConnected) return;
             this.rows = rows;
             this.renderTable();
@@ -146,7 +146,7 @@ class InteractiveReportAdminElement extends HTMLElement {
 
     async setGlobal(r, isGlobal) {
         try {
-            await api(`${this.base}/saved/${encodeURIComponent(r.id)}`, { method: "PUT", body: { isGlobal } });
+            await api(apiUrl(this.base, "saved", r.id), { method: "PUT", body: { isGlobal } });
             this.notify(isGlobal ? `"${r.title}" is now global.` : `"${r.title}" is now private to ${r.owner}.`);
             await this.reload();
         } catch (err) { this.fail(err); }
@@ -166,7 +166,7 @@ class InteractiveReportAdminElement extends HTMLElement {
             onApply: async () => {
                 const owner = ownerInp.value.trim();
                 if (!owner) throw new Error("Enter an identity value");
-                await api(`${this.base}/saved/${encodeURIComponent(r.id)}`, { method: "PUT", body: { owner } });
+                await api(apiUrl(this.base, "saved", r.id), { method: "PUT", body: { owner } });
                 this.notify(`"${r.title}" reassigned to ${owner}.`);
                 await this.reload();
             },
@@ -175,7 +175,7 @@ class InteractiveReportAdminElement extends HTMLElement {
 
     async viewState(r) {
         try {
-            const doc = await api(`${this.base}/saved/${encodeURIComponent(r.id)}`);
+            const doc = await api(apiUrl(this.base, "saved", r.id));
             openDialog({
                 owner: this,
                 title: `${r.title} — state document`,
@@ -190,7 +190,7 @@ class InteractiveReportAdminElement extends HTMLElement {
         const scope = r.isGlobal ? "the GLOBAL report" : `${r.owner}'s report`;
         if (!await confirmDialog(this, "Delete Saved Report", `Delete ${scope} "${r.title}"? This cannot be undone.`)) return;
         try {
-            await api(`${this.base}/saved/${encodeURIComponent(r.id)}`, { method: "DELETE" });
+            await api(apiUrl(this.base, "saved", r.id), { method: "DELETE" });
             this.notify(`"${r.title}" deleted.`);
             await this.reload();
         } catch (err) { this.fail(err); }

@@ -2,8 +2,9 @@
 
 ## Everyday suite
 
-```
+```sh
 dotnet test
+npm test
 ```
 
 The Core and ASP.NET test projects run with zero infrastructure (SQLite in-memory).
@@ -11,6 +12,24 @@ Coverage: composer goldens ×4 dialects, the row-condition corpus × dialect mat
 parser/emitter, the shared computed/filter/highlight rule plan (including disabled-rule
 elision), validator rules, SQL-safety corpus, saved-report store, CSV writer, and
 end-to-end engine passes.
+
+`npm test` builds the packaged client and runs the fast DOM-level unit suite with
+Node.js and happy-dom.
+
+## Browser UI automation
+
+Playwright is configured to run Chromium against the real Workbench host. Install the
+browser once, then run the browser suite:
+
+```sh
+npx playwright install chromium
+npm run test:ui
+```
+
+The configuration starts `samples/Workbench` on `http://127.0.0.1:5042`, reuses a
+compatible local server outside CI, and retains traces and screenshots on failure.
+Feature-specific `*.spec.js` files belong in `tests/ui/e2e`; the directory is
+intentionally free of specs while the automation foundation is established.
 
 ## Live-dialect verification (M5)
 

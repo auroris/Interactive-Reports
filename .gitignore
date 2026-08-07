@@ -481,8 +481,7 @@ $RECYCLE.BIN/
 # Vim temporary swap files
 *.swp
 
-# Temporary ignore the dist files
-src/InteractiveReport.AspNetCore/Ui/dist/*
-
-src/InteractiveReport.AspNetCore/Ui/dist/ir.js
-src/InteractiveReport.AspNetCore/Ui/dist/ir.js.map
+# Browser-test output
+playwright-report/
+test-results/
+blob-report/

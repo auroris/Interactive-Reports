@@ -2,7 +2,8 @@
 
 ## Client build
 
-The client-side source is in `src/InteractiveReport.AspNetCore/Ui`. Install the
+The client-side source is in `src/InteractiveReport.AspNetCore/Ui/src`; generated
+browser assets live beside it in `Ui/dist`. Install the
 toolchain and create the browser bundles with:
 
 ```sh
@@ -10,8 +11,10 @@ npm ci
 npm run build
 ```
 
-`npm run dev` rebuilds on changes. `npm test` runs the UI unit tests, and
-`npm run verify` runs both the tests and a production build.
+`npm run dev` rebuilds on changes. `npm test` builds the client and runs the fast
+DOM unit tests. Browser automation is configured with Playwright; install Chromium
+once with `npx playwright install chromium`, then run `npm run test:ui`.
+`npm run verify` runs both test layers.
 
 The generated `Ui/dist/ir.js`, `Ui/dist/ir-admin.js`, and `Ui/dist/ir-chart.js`
 files are embedded in the ASP.NET Core assembly. They are checked in so consuming

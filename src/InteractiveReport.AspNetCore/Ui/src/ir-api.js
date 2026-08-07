@@ -1,6 +1,12 @@
 // Fetch layer for the report protocol: problem+json aware, JSON in/out, blob export.
 // Shared by the report widget (ir.js) and the admin widget (ir-admin.js).
 
+export function apiUrl(base, ...segments) {
+    const prefix = String(base).replace(/\/+$/, "");
+    if (!segments.length) return prefix;
+    return `${prefix}/${segments.map(segment => encodeURIComponent(String(segment))).join("/")}`;
+}
+
 export class ApiError extends Error {
     constructor(problem, status) {
         const parts = [];
