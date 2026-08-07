@@ -236,8 +236,9 @@ non-dim sorts) are noted in `ignored[]` in alternate views, never fatal.
   itself be a number column.
 - **Chart validation is stricter than grid aggregation**: the metric must come out
   numeric, so `min/max` chart only number columns (grid aggregation also allows
-  date/text). The schema endpoint advertises the stricter set as
-  `capabilities.chartAggregateFunctions`.
+  date/text), and pie metrics must be non-negative. The schema endpoint advertises
+  the stricter function set as `capabilities.chartAggregateFunctions`; negative pie
+  data is rejected after query execution with a precise validation error.
 - The chart query runs over the **complete filtered rowset** (computed columns,
   filters, search — never the visible page). Sorting lives inside the spec
   (`sort.by: label|value`, value sorts tie-break on the label); grid `sorts` are
@@ -245,7 +246,9 @@ non-dim sorts) are noted in `ignored[]` in alternate views, never fatal.
   titles are presentation carried in state; pie ignores them.
 - The response keeps the generic two-column shape: the label column as itself plus
   the metric (`v0` labeled like `sum(Amount)`, `__count` for bare counts, or the raw
-  value column). Exceeding `maxChartPoints` is a precise validation error — the
+  value column). When those names would collide with the label, the metric gains a
+  `_metric` suffix; chart points are read by ordinal so a legitimate `v0` or
+  `__count` label can never be overwritten. Exceeding `maxChartPoints` is a precise validation error — the
   server never silently truncates a chart, because a truncated pie misstates
   proportions. Export in chart view emits exactly the charted points.
 

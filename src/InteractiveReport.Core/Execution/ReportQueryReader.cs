@@ -41,6 +41,25 @@ internal sealed class ReportQueryReader(
         return ApplyLimit(rows, maxRows);
     }
 
+    /// <summary>
+    /// Reads the chart's stable ordinal shape without assigning source or synthetic
+    /// column names. Chart result shaping chooses collision-free protocol keys later,
+    /// so a legitimate label named "v0" or "__count" cannot be overwritten.
+    /// </summary>
+    public async Task<List<ChartPoint>> ReadChartPoints(
+        Query query,
+        int metricOrdinal,
+        CancellationToken ct)
+    {
+        var points = new List<ChartPoint>();
+        await using var command = Build(query);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            points.Add(new ChartPoint(ValueAt(reader, 0), ValueAt(reader, metricOrdinal)));
+
+        return points;
+    }
+
     /// <summary>Reads the shared grouped layout: dimensions, __rows, then a0..aN.</summary>
     public async Task<QueryRows> ReadGroupedRows(
         Query query,
@@ -181,6 +200,8 @@ internal sealed class ReportQueryReader(
 internal sealed record QueryRows(
     List<IReadOnlyDictionary<string, object?>> Rows,
     bool Truncated);
+
+internal sealed record ChartPoint(object? Label, object? Value);
 
 internal sealed record PivotGroup(
     object?[] RowKey,

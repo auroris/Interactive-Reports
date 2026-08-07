@@ -349,6 +349,10 @@ class InteractiveReportElement extends HTMLElement {
             if (this.lastResult !== result || (this.doc.view?.mode ?? "grid") !== "chart" || !this.isConnected) return;
             this._chart = renderChartView(this, this.els.chartWrap, module);
         } catch {
+            // A failed chunk load may settle after the user has already switched
+            // views, reports, or disconnected the element. Do not leak that stale
+            // failure into the current view.
+            if (this.lastResult !== result || (this.doc.view?.mode ?? "grid") !== "chart" || !this.isConnected) return;
             this.els.chartWrap.replaceChildren();
             this.showError(new Error("The charting module failed to load. Reload the page and try again."));
         }

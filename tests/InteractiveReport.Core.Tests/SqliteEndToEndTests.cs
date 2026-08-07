@@ -709,6 +709,60 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     }
 
     [Fact]
+    public async Task Chart_aggregate_metric_key_does_not_overwrite_a_v0_label()
+    {
+        var def = Definition;
+        def.Name = "chart-v0-label";
+        def.Sql = "SELECT STATUS AS v0, AMOUNT FROM ORDERS";
+
+        var result = await _executor.Query(def, new ReportState
+        {
+            View = new ViewSpec
+            {
+                Mode = "chart", Type = "bar", Label = "v0", Value = "AMOUNT", Fn = AggregateFn.Sum,
+            },
+        }, NoParams);
+
+        Assert.Equal(["v0", "v0_metric"], result.Columns.Select(c => c.Name));
+        Assert.Equal(["CANCELLED", "NEW", "PENDING", "SHIPPED"], result.Rows.Select(r => (string)r["v0"]!));
+        Assert.Equal([6000m, 400m, 14800m, 26000m], result.Rows.Select(r => Convert.ToDecimal(r["v0_metric"])));
+    }
+
+    [Fact]
+    public async Task Chart_count_metric_key_does_not_overwrite_an___count_label()
+    {
+        var def = Definition;
+        def.Name = "chart-count-label";
+        def.Sql = "SELECT STATUS AS __count FROM ORDERS";
+
+        var result = await _executor.Query(def, new ReportState
+        {
+            View = new ViewSpec { Mode = "chart", Type = "pie", Label = "__count", Fn = AggregateFn.Count },
+        }, NoParams);
+
+        Assert.Equal(["__count", "__count_metric"], result.Columns.Select(c => c.Name));
+        Assert.Equal(["CANCELLED", "NEW", "PENDING", "SHIPPED"], result.Rows.Select(r => (string)r["__count"]!));
+        Assert.Equal([1L, 1L, 3L, 5L], result.Rows.Select(r => Convert.ToInt64(r["__count_metric"])));
+    }
+
+    [Fact]
+    public async Task Pie_chart_rejects_negative_metrics()
+    {
+        var ex = await Assert.ThrowsAsync<ReportValidationException>(() =>
+            _executor.Query(Definition, new ReportState
+            {
+                Computed = [new ComputedColumn { Id = "c1", Label = "Loss", Expr = "0 - AMOUNT" }],
+                View = new ViewSpec
+                {
+                    Mode = "chart", Type = "pie", Label = "STATUS", Value = "c1", Fn = AggregateFn.Sum,
+                },
+            }, NoParams));
+
+        Assert.Contains(ex.Errors, error =>
+            error.Path == "view.value" && error.Message.Contains("non-negative", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task Chart_without_fn_plots_one_point_per_filtered_row()
     {
         var result = await _executor.Query(DateDefinition, new ReportState
@@ -722,6 +776,19 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         Assert.Equal(
             [5000m, 7500m, 9000m, 6000m, 12000m],                    // label (date-text) ascending
             result.Rows.Select(r => Convert.ToDecimal(r["AMOUNT"])));
+    }
+
+    [Fact]
+    public async Task Raw_chart_uses_distinct_keys_when_label_and_value_are_the_same_column()
+    {
+        var result = await _executor.Query(Definition, new ReportState
+        {
+            View = new ViewSpec { Mode = "chart", Type = "line", Label = "AMOUNT", Value = "AMOUNT" },
+        }, NoParams);
+
+        Assert.Equal(["AMOUNT", "AMOUNT_metric"], result.Columns.Select(c => c.Name));
+        Assert.All(result.Rows, row =>
+            Assert.Equal(Convert.ToDecimal(row["AMOUNT"]), Convert.ToDecimal(row["AMOUNT_metric"])));
     }
 
     [Fact]

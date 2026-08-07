@@ -35,6 +35,8 @@ internal static class ReportResultColumns
             { Value: null } => new ColumnInfo("__count", "Count", "number", false),
             { Fn: { } fn, Value: { } value } => ForAggregate(new ValidAggregate(value, fn), "v0"),
         };
+        if (string.Equals(label.Name, metric.Name, StringComparison.OrdinalIgnoreCase))
+            metric = metric with { Name = $"{metric.Name}_metric" };
         return [label, metric];
     }
 

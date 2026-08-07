@@ -236,13 +236,12 @@ public sealed class ReportExecutor
         var query = QueryComposer.ComposeChartView(definition, state, maxPoints);
         var compiler = DialectSupport.GetCompiler(definition.Dialect);
 
-        List<IReadOnlyDictionary<string, object?>> rows;
+        List<ChartPoint> rows;
         await using (var connection = await _connections.Open(definition, ct))
         {
             var reader = CreateReader(connection, compiler, definition, contextParams);
-            rows = chart.Fn is null
-                ? (await reader.ReadRows(query, maxRows: null, ct)).Rows
-                : (await reader.ReadGroupedRows(query, [chart.Label], chart.Value is null ? 0 : 1, maxRows: null, ct)).Rows;
+            var metricOrdinal = chart.Fn is null || chart.Value is null ? 1 : 2;
+            rows = await reader.ReadChartPoints(query, metricOrdinal, ct);
         }
 
         if (rows.Count > maxPoints)
@@ -253,13 +252,21 @@ public sealed class ReportExecutor
                     $"chart would draw more than {maxPoints} points — filter further or aggregate to fewer categories")]);
         }
 
+        if (chart.Type == ChartType.Pie && rows.Any(point => IsNegative(point.Value)))
+        {
+            throw new ReportValidationException(
+                [new ValidationError(
+                    "view.value",
+                    "pie charts require non-negative values")]);
+        }
+
         var columns = ReportResultColumns.ForChart(chart);
         var points = new List<IReadOnlyDictionary<string, object?>>(rows.Count);
         foreach (var row in rows)
         {
             var point = new Dictionary<string, object?>(columns.Count, StringComparer.OrdinalIgnoreCase);
-            foreach (var column in columns)
-                point[column.Name] = row.TryGetValue(column.Name, out var value) ? value : null;
+            point[columns[0].Name] = row.Label;
+            point[columns[1].Name] = row.Value;
             points.Add(point);
         }
 
@@ -275,6 +282,9 @@ public sealed class ReportExecutor
             ElapsedMs = stopwatch.ElapsedMilliseconds,
         };
     }
+
+    private static bool IsNegative(object? value)
+        => value is not null && Convert.ToDouble(value, System.Globalization.CultureInfo.InvariantCulture) < 0;
 
     private async Task<ReportResult> QueryPivot(
         ReportDefinition definition,
