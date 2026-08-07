@@ -19,6 +19,9 @@ public sealed class ReportExecutor
     /// <summary>Hard ceiling on pivot source groups regardless of definition settings.</summary>
     public const int MaxPivotGroups = 10_000;
 
+    /// <summary>Ceiling a definition's MaxChartPoints may be configured up to.</summary>
+    public const int MaxChartPointsCeiling = 10_000;
+
     private readonly ReportConnectionManager _connections;
     private readonly SchemaCache _schemaCache;
     private readonly ILogger? _logger;
@@ -59,6 +62,7 @@ public sealed class ReportExecutor
         {
             ViewMode.GroupBy => await QueryGroupBy(definition, validated, contextParams, stopwatch, ct),
             ViewMode.Pivot => await QueryPivot(definition, validated, contextParams, stopwatch, ct),
+            ViewMode.Chart => await QueryChart(definition, validated, contextParams, stopwatch, ct),
             _ => await QueryGrid(definition, validated, contextParams, stopwatch, ct),
         };
     }
@@ -82,6 +86,19 @@ public sealed class ReportExecutor
                 Stopwatch.StartNew(),
                 ct);
             return new ExportResult(pivot.Columns, pivot.Rows, Truncated: false);
+        }
+
+        if (validated.View.Mode == ViewMode.Chart)
+        {
+            // The charted dataset is the export: same points, same cap, same precise
+            // overflow error — a chart export never truncates silently either.
+            var chart = await QueryChart(
+                definition,
+                validated,
+                contextParams,
+                Stopwatch.StartNew(),
+                ct);
+            return new ExportResult(chart.Columns, chart.Rows, Truncated: false);
         }
 
         var compiler = DialectSupport.GetCompiler(definition.Dialect);
@@ -178,6 +195,63 @@ public sealed class ReportExecutor
             Rows = rows,
             Page = Page(state),
             TotalRows = totalGroups,
+            Ignored = state.Ignored,
+            ElapsedMs = stopwatch.ElapsedMilliseconds,
+        };
+    }
+
+    /// <summary>
+    /// Chart data over the complete filtered rowset — computed columns, filters, and
+    /// search all apply; the visible grid page never feeds a chart. The response keeps
+    /// the generic shape: two columns (label, metric) and a row collection.
+    /// </summary>
+    private async Task<ReportResult> QueryChart(
+        ReportDefinition definition,
+        ValidatedState state,
+        IReadOnlyDictionary<string, object?> contextParams,
+        Stopwatch stopwatch,
+        CancellationToken ct)
+    {
+        var chart = state.View.Chart!;
+        var maxPoints = definition.MaxChartPoints;
+        var query = QueryComposer.ComposeChartView(definition, state, maxPoints);
+        var compiler = DialectSupport.GetCompiler(definition.Dialect);
+
+        List<IReadOnlyDictionary<string, object?>> rows;
+        await using (var connection = await _connections.Open(definition, ct))
+        {
+            var reader = CreateReader(connection, compiler, definition, contextParams);
+            rows = chart.Fn is null
+                ? (await reader.ReadRows(query, maxRows: null, ct)).Rows
+                : (await reader.ReadGroupedRows(query, [chart.Label], chart.Value is null ? 0 : 1, maxRows: null, ct)).Rows;
+        }
+
+        if (rows.Count > maxPoints)
+        {
+            throw new ReportValidationException(
+                [new ValidationError(
+                    "view",
+                    $"chart would draw more than {maxPoints} points — filter further or aggregate to fewer categories")]);
+        }
+
+        var columns = ReportResultColumns.ForChart(chart);
+        var points = new List<IReadOnlyDictionary<string, object?>>(rows.Count);
+        foreach (var row in rows)
+        {
+            var point = new Dictionary<string, object?>(columns.Count, StringComparer.OrdinalIgnoreCase);
+            foreach (var column in columns)
+                point[column.Name] = row.TryGetValue(column.Name, out var value) ? value : null;
+            points.Add(point);
+        }
+
+        stopwatch.Stop();
+        return new ReportResult
+        {
+            AvailableColumns = ReportResultColumns.From(state.Schema),
+            Columns = columns,
+            Rows = points,
+            Page = new PageRequest { Index = 1, Size = Math.Max(1, points.Count) },
+            TotalRows = points.Count,
             Ignored = state.Ignored,
             ElapsedMs = stopwatch.ElapsedMilliseconds,
         };

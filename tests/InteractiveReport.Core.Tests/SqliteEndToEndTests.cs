@@ -620,6 +620,122 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     }
 
     [Fact]
+    public async Task Chart_view_aggregates_the_whole_filtered_set()
+    {
+        var result = await _executor.Query(Definition, new ReportState
+        {
+            Filters = [Filter("STATUS <> 'NEW'")],
+            View = new ViewSpec
+            {
+                Mode = "chart", Type = "bar", Label = "STATUS", Value = "AMOUNT", Fn = AggregateFn.Sum,
+                Sort = new ChartSortSpec { By = "value", Dir = SortDir.Desc },
+            },
+        }, NoParams);
+
+        Assert.Equal(["STATUS", "v0"], result.Columns.Select(c => c.Name));
+        Assert.Equal("sum(Amount)", result.Columns[1].Label);
+        Assert.Equal("number", result.Columns[1].Type);
+        Assert.Equal(3, result.TotalRows);
+        Assert.Equal(["SHIPPED", "PENDING", "CANCELLED"], result.Rows.Select(r => (string)r["STATUS"]!));
+        Assert.Equal([26000m, 14800m, 6000m], result.Rows.Select(r => Convert.ToDecimal(r["v0"])));
+        Assert.All(result.Rows, r => Assert.Equal(2, r.Count));      // the grouped __count never leaks
+    }
+
+    [Fact]
+    public async Task Chart_count_alone_counts_rows_per_label()
+    {
+        var result = await _executor.Query(Definition, new ReportState
+        {
+            View = new ViewSpec { Mode = "chart", Type = "pie", Label = "STATUS", Fn = AggregateFn.Count },
+        }, NoParams);
+
+        Assert.Equal(["STATUS", "__count"], result.Columns.Select(c => c.Name));
+        Assert.Equal("Count", result.Columns[1].Label);
+        Assert.Equal(["CANCELLED", "NEW", "PENDING", "SHIPPED"], result.Rows.Select(r => (string)r["STATUS"]!));
+        Assert.Equal([1L, 1L, 3L, 5L], result.Rows.Select(r => Convert.ToInt64(r["__count"])));
+    }
+
+    [Fact]
+    public async Task Chart_without_fn_plots_one_point_per_filtered_row()
+    {
+        var result = await _executor.Query(DateDefinition, new ReportState
+        {
+            Filters = [Filter("AMOUNT >= 5000")],
+            View = new ViewSpec { Mode = "chart", Type = "line", Label = "ORDER_DATE", Value = "AMOUNT" },
+        }, NoParams);
+
+        Assert.Equal(5, result.TotalRows);
+        Assert.Equal(["ORDER_DATE", "AMOUNT"], result.Columns.Select(c => c.Name));
+        Assert.Equal(
+            [5000m, 7500m, 9000m, 6000m, 12000m],                    // label (date-text) ascending
+            result.Rows.Select(r => Convert.ToDecimal(r["AMOUNT"])));
+    }
+
+    [Fact]
+    public async Task Chart_aggregates_computed_value_by_computed_label()
+    {
+        var result = await _executor.Query(Definition, new ReportState
+        {
+            Computed =
+            [
+                new ComputedColumn { Id = "c1", Label = "Size", Expr = "CASE WHEN AMOUNT >= 6000 THEN 'BIG' ELSE 'SMALL' END" },
+                new ComputedColumn { Id = "c2", Label = "Doubled", Expr = "AMOUNT * 2" },
+            ],
+            View = new ViewSpec { Mode = "chart", Type = "bar", Label = "c1", Value = "c2", Fn = AggregateFn.Sum },
+        }, NoParams);
+
+        Assert.Equal("sum(Doubled)", result.Columns[1].Label);
+        Assert.Equal(["BIG", "SMALL"], result.Rows.Select(r => (string)r["c1"]!));
+        Assert.Equal([69000m, 25400m], result.Rows.Select(r => Convert.ToDecimal(r["v0"])));
+    }
+
+    [Fact]
+    public async Task Chart_point_limit_is_a_precise_validation_error()
+    {
+        var def = Definition;
+        def.MaxChartPoints = 3;
+
+        var ex = await Assert.ThrowsAsync<ReportValidationException>(() =>
+            _executor.Query(def, new ReportState
+            {
+                View = new ViewSpec { Mode = "chart", Type = "pie", Label = "CUSTOMER", Fn = AggregateFn.Count },
+            }, NoParams));                                           // 9 distinct customers > 3
+
+        Assert.Contains(ex.Errors, e => e.Path == "view" && e.Message.Contains("3 points"));
+    }
+
+    [Fact]
+    public async Task Chart_ignores_grid_sorts_with_a_notice()
+    {
+        var result = await _executor.Query(Definition, new ReportState
+        {
+            Sorts = [new SortRule { Col = "AMOUNT", Dir = SortDir.Desc }],
+            View = new ViewSpec { Mode = "chart", Type = "bar", Label = "STATUS", Fn = AggregateFn.Count },
+        }, NoParams);
+
+        Assert.Contains(result.Ignored, i => i.Kind == "view" && i.Detail.Contains("chart sort"));
+        Assert.Equal(
+            ["CANCELLED", "NEW", "PENDING", "SHIPPED"],              // chart's own label sort, not the grid sort
+            result.Rows.Select(r => (string)r["STATUS"]!));
+    }
+
+    [Fact]
+    public async Task Export_chart_view_exports_the_charted_points()
+    {
+        var export = await _executor.Export(Definition, new ReportState
+        {
+            View = new ViewSpec
+            {
+                Mode = "chart", Type = "bar", Label = "STATUS", Value = "AMOUNT", Fn = AggregateFn.Sum,
+            },
+        }, NoParams);
+
+        Assert.False(export.Truncated);
+        Assert.Equal(["STATUS", "v0"], export.Columns.Select(c => c.Name));
+        Assert.Equal(4, export.Rows.Count);
+    }
+
+    [Fact]
     public async Task Highlight_on_computed_column_cell()
     {
         var result = await _executor.Query(Definition, new ReportState

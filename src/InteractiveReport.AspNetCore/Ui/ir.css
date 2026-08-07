@@ -18,6 +18,19 @@
     --ir-radius: 3px;
     --ir-font: system-ui, -apple-system, "Segoe UI", sans-serif;
     --ir-font-size: 13px;
+    /* Chart palette: fixed categorical order (slot 1 doubles as the single-series
+       color), validated for adjacent-slot CVD separation on the white surface.
+       The below-3:1-contrast slots are relieved by the built-in data table. */
+    --ir-chart-1: #0572ce;
+    --ir-chart-2: #eb6834;
+    --ir-chart-3: #1baf7a;
+    --ir-chart-4: #eda100;
+    --ir-chart-5: #e87ba4;
+    --ir-chart-6: #008300;
+    --ir-chart-7: #4a3aa7;
+    --ir-chart-8: #e34948;
+    --ir-chart-grid: var(--ir-border-light);
+    --ir-chart-text: var(--ir-text-muted);
     font-family: var(--ir-font);
     font-size: var(--ir-font-size);
     line-height: normal;
@@ -241,6 +254,25 @@
 }
 .ir-agg-fn { font-style: normal; font-weight: 600; font-size: 12px; color: var(--ir-text-muted); }
 .ir-table tr.ir-empty td { text-align: center; color: var(--ir-text-muted); padding: 26px; }
+
+/* --- chart view ---------------------------------------------------------------- */
+
+.ir-chart-region {
+    position: relative;
+    height: 22rem;
+    padding: 14px 14px 8px;
+}
+.ir-chart-empty { padding: 26px; text-align: center; color: var(--ir-text-muted); }
+.ir-chart-data { border-top: 1px solid var(--ir-border-light); }
+.ir-chart-data summary {
+    cursor: pointer;
+    padding: 7px 12px;
+    font-size: 12px;
+    color: var(--ir-text-muted);
+}
+.ir-chart-data summary:hover { color: var(--ir-accent); }
+.ir-chart-data .ir-tablewrap { max-height: 16rem; overflow-y: auto; }
+.ir-chart-valuerow select { min-width: 0; }
 
 /* --- pagination ---------------------------------------------------------------- */
 

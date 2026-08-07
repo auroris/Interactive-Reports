@@ -93,6 +93,11 @@ export function renderChips(w, container) {
             w, kind: "view", index: 0, toggleable: false, colLabel: "Pivot",
             text: `${(d.view.rows ?? []).map(c => w.labelOf(c)).join(", ")} × ${(d.view.cols ?? []).map(c => w.labelOf(c)).join(", ")}`,
         }));
+    } else if (d.view?.mode === "chart") {
+        chips.push(chip({
+            w, kind: "view", index: 0, toggleable: false, colLabel: "Chart",
+            text: chartSummary(w, d.view),
+        }));
     }
 
     container.replaceChildren(...chips);
@@ -224,6 +229,77 @@ export function renderGrid(w, table) {
     table.replaceChildren(el("thead", {}, headRow), el("tbody", {}, ...bodyRows));
 }
 
+// --- chart view --------------------------------------------------------------
+
+const CHART_TYPE_LABELS = { bar: "Bar", line: "Line", area: "Line with Area", pie: "Pie" };
+
+/// "Sum of Amount by Status" — the chart's human name, shared by the view chip
+/// and the accessible description.
+export function chartSummary(w, view) {
+    const by = ` by ${w.labelOf(view.label)}`;
+    if (!view.fn) return w.labelOf(view.value) + by;
+    const fn = FN_LABELS[view.fn] ?? view.fn;
+    return view.value ? `${fn} of ${w.labelOf(view.value)}${by}` : fn + by;
+}
+
+/**
+ * Render the chart view into its container: a canvas region (described for
+ * assistive tech — canvas pixels are invisible to it) plus a "View chart data"
+ * disclosure holding the same label/value dataset as a real table. Returns the
+ * Chart.js instance via the lazily loaded chartModule, or null with no data.
+ */
+export function renderChartView(w, container, chartModule) {
+    const result = w.lastResult;
+    const view = w.doc.view;
+    if (!result?.rows.length) {
+        container.replaceChildren(el("div", { class: "ir-chart-empty" }, "No data found."));
+        return null;
+    }
+
+    const [labelCol, valueCol] = result.columns;
+    const labels = result.rows.map(r => {
+        const value = r[labelCol.name];
+        return value === null || value === undefined ? "(blank)" : formatValue(value, labelCol.type);
+    });
+    const values = result.rows.map(r => {
+        const value = r[valueCol.name];
+        return value === null || value === undefined ? null : Number(value);
+    });
+    const decimal = result.rows.some(r =>
+        typeof r[valueCol.name] === "number" && !Number.isInteger(r[valueCol.name]));
+
+    const description =
+        `${CHART_TYPE_LABELS[view.type] ?? "Chart"} chart of ${chartSummary(w, view)}. ${labels.length} data points.`;
+    const canvas = el("canvas", { class: "ir-chart-canvas", role: "img", "aria-label": description });
+    const table = el("table", { class: "ir-table ir-chart-table" },
+        el("thead", {}, el("tr", {},
+            el("th", { scope: "col" }, labelCol.label),
+            el("th", { scope: "col", class: "ir-num" }, valueCol.label))),
+        el("tbody", {}, ...result.rows.map((r, i) => el("tr", {},
+            el("td", {}, labels[i]),
+            el("td", { class: "ir-num" }, formatValue(r[valueCol.name], valueCol.type, decimal))))));
+
+    container.replaceChildren(
+        el("div", { class: "ir-chart-region" }, canvas),
+        el("details", { class: "ir-chart-data" },
+            el("summary", {}, "View chart data"),
+            el("div", { class: "ir-tablewrap" }, table)));
+
+    // No 2d context (headless/print environments): the description and data
+    // table still stand on their own; only the pixels are skipped.
+    if (!canvas.getContext?.("2d")) return null;
+
+    return chartModule.renderChart(canvas, {
+        type: view.type,
+        horizontal: view.orientation === "horizontal",
+        labels,
+        values,
+        metricLabel: valueCol.label,
+        labelAxisTitle: view.labelAxisTitle ?? null,
+        valueAxisTitle: view.valueAxisTitle ?? null,
+    });
+}
+
 // --- pagination --------------------------------------------------------------
 
 export function renderPager(w, container) {
@@ -232,7 +308,8 @@ export function renderPager(w, container) {
 
     const { index, size } = result.page;
     const total = result.totalRows;
-    const unit = (w.doc.view?.mode ?? "grid") === "groupBy" ? "groups" : "rows";
+    const mode = w.doc.view?.mode ?? "grid";
+    const unit = mode === "groupBy" ? "groups" : mode === "chart" ? "points" : "rows";
     const start = total === 0 ? 0 : (index - 1) * size + 1;
     const end = total === 0 ? 0 : start + result.rows.length - 1;
     const pages = Math.max(1, Math.ceil(total / size));
@@ -258,6 +335,6 @@ export function renderPager(w, container) {
                 type: "button", class: "ir-btn ir-page-btn", disabled: index >= pages,
                 "aria-label": "Next page", onclick: () => w.gotoPage(index + 1),
             }, "›"),
-            el("span", { class: "ir-pagesize-wrap" }, "Rows ", sizeSel)),
+            mode === "chart" ? null : el("span", { class: "ir-pagesize-wrap" }, "Rows ", sizeSel)),
         el("div", { class: "ir-pager-right" }, `${result.elapsedMs} ms`));
 }

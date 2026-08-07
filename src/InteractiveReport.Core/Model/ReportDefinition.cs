@@ -53,6 +53,13 @@ public sealed class ReportDefinition
     /// <summary>Cap on distinct pivot-column combinations the pivot view may produce.</summary>
     public int MaxPivotColumns { get; set; } = 60;
 
+    /// <summary>
+    /// Cap on points the chart view may draw. Exceeding it is a precise validation
+    /// error, never truncation — a silently truncated chart (a pie especially)
+    /// misrepresents the data it claims to show.
+    /// </summary>
+    public int MaxChartPoints { get; set; } = 1000;
+
     public int CommandTimeoutSeconds { get; set; } = 30;
 
     /// <summary>The developer's default view (APEX "Primary Report").</summary>

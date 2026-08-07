@@ -91,11 +91,42 @@ public sealed class HighlightStyle
 
 public sealed class ViewSpec
 {
-    /// <summary>"grid" (default), "groupBy", "pivot".</summary>
+    /// <summary>"grid" (default), "groupBy", "pivot", "chart".</summary>
     public string Mode { get; set; } = "grid";
 
     public List<string>? GroupBy { get; set; }
     public List<string>? Rows { get; set; }
     public List<string>? Cols { get; set; }
     public List<AggregateRule>? Values { get; set; }
+
+    // Chart mode: one chart per report — a label dimension and a single numeric metric.
+
+    /// <summary>"bar", "line", "area", or "pie".</summary>
+    public string? Type { get; set; }
+
+    /// <summary>Label (category) column; text, number, date, or bool.</summary>
+    public string? Label { get; set; }
+
+    /// <summary>Metric source column. Optional only with fn "count", which becomes COUNT(*).</summary>
+    public string? Value { get; set; }
+
+    /// <summary>Optional aggregation over Value grouped by Label. Absent = one point per filtered row.</summary>
+    public AggregateFn? Fn { get; set; }
+
+    /// <summary>"vertical" (default) or "horizontal".</summary>
+    public string? Orientation { get; set; }
+
+    public ChartSortSpec? Sort { get; set; }
+
+    public string? LabelAxisTitle { get; set; }
+    public string? ValueAxisTitle { get; set; }
+}
+
+/// <summary>Chart ordering lives inside the chart spec; grid sorts never apply to charts.</summary>
+public sealed class ChartSortSpec
+{
+    /// <summary>"label" (default) or "value".</summary>
+    public string By { get; set; } = "label";
+
+    public SortDir Dir { get; set; } = SortDir.Asc;
 }

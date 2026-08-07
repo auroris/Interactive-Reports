@@ -69,6 +69,27 @@ public sealed class ConfigurationReportDefinitionStoreTests
         Assert.Contains("unique", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task Find_rejects_out_of_range_chart_point_limits()
+    {
+        var options = new InteractiveReportOptions();
+        options.Reports["orders"] = new ReportDefinition
+        {
+            Connection = "db",
+            Dialect = ReportDialect.Sqlite,
+            Sql = "select 1 as ID",
+            MaxChartPoints = 0,
+        };
+        using var store = new ConfigurationReportDefinitionStore(
+            new OptionsMonitorStub(options),
+            new SchemaCache());
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await store.Find("orders"));
+
+        Assert.Contains("maxChartPoints", error.Message);
+    }
+
     private sealed class OptionsMonitorStub(InteractiveReportOptions options)
         : IOptionsMonitor<InteractiveReportOptions>
     {

@@ -123,6 +123,48 @@ public static class QueryComposer
             .Limit(maxGroups + 1);
     }
 
+    /// <summary>
+    /// Chart view: the whole filtered set collapsed to (label, metric) points — through
+    /// the shared grouped shape when an aggregate is set, or raw label/value rows when
+    /// charting one point per row. Capped at maxPoints+1 so the executor can reject
+    /// overflow precisely instead of truncating (a truncated pie lies about proportions).
+    /// </summary>
+    public static Query ComposeChartView(ReportDefinition def, ValidatedState state, int maxPoints)
+    {
+        var core = BuildFilteredCore(def, state);
+        var chart = state.View.Chart!;
+
+        Query q;
+        string metricAlias;
+        if (chart.Fn is { } fn)
+        {
+            IReadOnlyList<ValidAggregate> values = chart.Value is null
+                ? []
+                : [new ValidAggregate(chart.Value, fn)];
+            q = BuildGrouped(core, [chart.Label], values, def.Dialect, []);
+            metricAlias = chart.Value is null ? "__rows" : "a0";
+        }
+        else
+        {
+            q = core.Clone().Select(chart.Label.Name, chart.Value!.Name);
+            metricAlias = chart.Value!.Name;
+        }
+
+        if (chart.SortBy == ChartSortBy.Value)
+        {
+            if (chart.SortDir == SortDir.Asc) q.OrderBy(metricAlias);
+            else q.OrderByDesc(metricAlias);
+            q.OrderBy(chart.Label.Name);   // deterministic ties
+        }
+        else
+        {
+            if (chart.SortDir == SortDir.Asc) q.OrderBy(chart.Label.Name);
+            else q.OrderByDesc(chart.Label.Name);
+        }
+
+        return q.Limit(maxPoints + 1);
+    }
+
     /// <summary>Grid rows for export: selected columns, effective sorts, no paging, capped for truncation detection.</summary>
     public static Query ComposeGridExport(ReportDefinition def, ValidatedState state, int maxRows)
     {

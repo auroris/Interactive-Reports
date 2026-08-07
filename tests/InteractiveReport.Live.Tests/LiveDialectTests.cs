@@ -473,6 +473,41 @@ public class LiveDialectTests
 
     [SkippableTheory]
     [MemberData(nameof(Dialects))]
+    public async Task Chart_view_orders_by_metric_and_caps_points(ReportDialect dialect)
+    {
+        var live = LiveDb.For(dialect);
+
+        // Value-desc ordering exercises ORDER BY on the aggregate alias inside a
+        // grouped query — the one construct charts emit that no other view does.
+        var chart = await live.Executor.Query(live.Definition(), new ReportState
+        {
+            View = new ViewSpec
+            {
+                Mode = "chart", Type = "bar", Label = "STATUS", Value = "AMOUNT", Fn = AggregateFn.Sum,
+                Sort = new ChartSortSpec { By = "value", Dir = SortDir.Desc },
+            },
+        }, NoParams);
+        Assert.Equal(
+            ["SHIPPED", "PENDING", "CANCELLED", "NEW"],
+            chart.Rows.Select(r => (string)r[chart.Columns[0].Name]!));
+        Assert.Equal(
+            [26000m, 14800m, 6000m, 400m],
+            chart.Rows.Select(r => Convert.ToDecimal(r["v0"])));
+
+        // Overflow is a precise error, never truncation: 9 distinct customers > 3.
+        var def = live.Definition();
+        def.Name = $"live-chart-cap-{dialect}";
+        def.MaxChartPoints = 3;
+        var ex = await Assert.ThrowsAsync<ReportValidationException>(() =>
+            live.Executor.Query(def, new ReportState
+            {
+                View = new ViewSpec { Mode = "chart", Type = "pie", Label = "CUSTOMER", Fn = AggregateFn.Count },
+            }, NoParams));
+        Assert.Contains(ex.Errors, e => e.Path == "view" && e.Message.Contains("3 points"));
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Dialects))]
     public async Task Export_truncates_at_max_rows(ReportDialect dialect)
     {
         var live = LiveDb.For(dialect);

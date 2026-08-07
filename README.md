@@ -13,9 +13,11 @@ npm run build
 `npm run dev` rebuilds on changes. `npm test` runs the UI unit tests, and
 `npm run verify` runs both the tests and a production build.
 
-The generated `Ui/dist/ir.js` and `Ui/dist/ir-admin.js` files are embedded in
-the ASP.NET Core assembly. They are checked in so consuming and building the
-.NET projects does not require Node.js.
+The generated `Ui/dist/ir.js`, `Ui/dist/ir-admin.js`, and `Ui/dist/ir-chart.js`
+files are embedded in the ASP.NET Core assembly. They are checked in so consuming
+and building the .NET projects does not require Node.js. `ir-chart.js` (the
+Chart.js-based chart renderer) is fetched on demand the first time a report
+enters chart view; pages that never chart never load it.
 
 ## Embedding the report
 
@@ -60,6 +62,9 @@ interactive-report::part(toolbar) {
 The supported theme properties are `--ir-accent`, `--ir-accent-soft`,
 `--ir-border`, `--ir-border-light`, `--ir-bg`, `--ir-bg-soft`,
 `--ir-bg-header`, `--ir-text`, `--ir-text-muted`, `--ir-danger`,
-`--ir-radius`, `--ir-font`, and `--ir-font-size`. The supported structural parts
-are `surface`, `toolbar`, `report-select`, `notices`, `chips`, `table-container`,
-`table`, `pager`, `menu`, `dialog-overlay`, and `dialog`.
+`--ir-radius`, `--ir-font`, and `--ir-font-size`, plus the chart tokens
+`--ir-chart-1` … `--ir-chart-8` (categorical palette; slot 1 is also the
+single-series color), `--ir-chart-grid`, and `--ir-chart-text`. The supported
+structural parts are `surface`, `toolbar`, `report-select`, `notices`, `chips`,
+`table-container`, `chart-container`, `table`, `pager`, `menu`,
+`dialog-overlay`, and `dialog`.

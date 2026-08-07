@@ -327,6 +327,82 @@ public class GoldenSqlTests
             DialectSupport.GetCompiler(ReportDialect.Sqlite).Compile(source).Sql);
     }
 
+    private static SqlResult CompileChart(ReportDialect dialect, ReportState state, int maxPoints = 1000)
+    {
+        var def = OrdersDefinition(dialect);
+        var validated = StateValidator.Validate(def, state, OrdersSchema);
+        var query = QueryComposer.ComposeChartView(def, validated, maxPoints);
+        return DialectSupport.GetCompiler(dialect).Compile(query);
+    }
+
+    [Fact]
+    public void Chart_grouped_query_orders_by_the_metric_with_label_tiebreak()
+    {
+        var sql = CompileChart(ReportDialect.Sqlite, new ReportState
+        {
+            Filters = [Filter("STATUS <> 'CANCELLED'")],
+            View = new ViewSpec
+            {
+                Mode = "chart", Type = "bar", Label = "STATUS", Value = "AMOUNT", Fn = AggregateFn.Sum,
+                Sort = new ChartSortSpec { By = "value", Dir = SortDir.Desc },
+            },
+        });
+
+        Assert.Equal(
+            "SELECT \"STATUS\", COUNT(*) AS \"__rows\", SUM(\"AMOUNT\") AS \"a0\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base WHERE (\"STATUS\" <> @p0) GROUP BY \"STATUS\" ORDER BY \"a0\" DESC, \"STATUS\" LIMIT @p1",
+            sql.Sql);
+        Assert.Equal(["CANCELLED", 1001], sql.NamedBindings.Values.ToArray());
+    }
+
+    [Fact]
+    public void Chart_count_alone_groups_on_the_row_count()
+    {
+        var sql = CompileChart(ReportDialect.Sqlite, new ReportState
+        {
+            View = new ViewSpec { Mode = "chart", Type = "pie", Label = "STATUS", Fn = AggregateFn.Count },
+        });
+
+        Assert.Equal(
+            "SELECT \"STATUS\", COUNT(*) AS \"__rows\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base GROUP BY \"STATUS\" ORDER BY \"STATUS\" LIMIT @p0",
+            sql.Sql);
+    }
+
+    [Fact]
+    public void Chart_without_fn_selects_raw_label_value_pairs()
+    {
+        var sql = CompileChart(ReportDialect.Sqlite, new ReportState
+        {
+            View = new ViewSpec { Mode = "chart", Type = "line", Label = "ORDER_DATE", Value = "AMOUNT" },
+        });
+
+        Assert.Equal(
+            "SELECT \"ORDER_DATE\", \"AMOUNT\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base ORDER BY \"ORDER_DATE\" LIMIT @p0",
+            sql.Sql);
+    }
+
+    [Fact]
+    public void SqlServer_and_oracle_chart_queries_group_and_cap()
+    {
+        var chartState = new ReportState
+        {
+            View = new ViewSpec
+            {
+                Mode = "chart", Type = "bar", Label = "STATUS", Value = "AMOUNT", Fn = AggregateFn.Avg,
+                Sort = new ChartSortSpec { By = "value", Dir = SortDir.Desc },
+            },
+        };
+
+        var sqlServer = CompileChart(ReportDialect.SqlServer, chartState).Sql;
+        Assert.Contains("AVG(CAST([AMOUNT] AS FLOAT)) AS [a0]", sqlServer);
+        Assert.Contains("GROUP BY [STATUS]", sqlServer);
+        Assert.Contains("ORDER BY [a0] DESC, [STATUS]", sqlServer);
+
+        var oracle = CompileChart(ReportDialect.Oracle, chartState).Sql;
+        Assert.Contains("AVG(\"AMOUNT\") AS \"a0\"", oracle);
+        Assert.Contains("GROUP BY \"STATUS\"", oracle);
+        Assert.Contains("ORDER BY \"a0\" DESC, \"STATUS\"", oracle);
+    }
+
     [Fact]
     public void SqlServer_paging_without_sort_still_compiles_valid_sql()
     {

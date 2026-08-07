@@ -412,6 +412,106 @@ export function pivotDialog(w) {
     });
 }
 
+// --- Chart -------------------------------------------------------------------
+
+const CHART_TYPES = [
+    { value: "bar", label: "Bar" },
+    { value: "line", label: "Line" },
+    { value: "area", label: "Line with Area" },
+    { value: "pie", label: "Pie" },
+];
+
+export function chartDialog(w) {
+    const active = w.doc.view?.mode === "chart" ? w.doc.view : w.viewMemory.chart;
+    const chartable = w.pickable().filter(c => c.type !== "other");
+
+    const typeSel = sel(CHART_TYPES, active?.type ?? "bar");
+    const labelSel = sel([
+        { value: "", label: "— Select —" },
+        ...chartable.map(c => ({ value: c.name, label: c.computed ? `ƒ ${c.label}` : c.label })),
+    ], active?.label ?? "");
+    const valueSel = sel([
+        { value: "", label: "— Row Count —" },
+        ...w.pickable().map(c => ({ value: c.name, label: c.computed ? `ƒ ${c.label}` : c.label })),
+    ], active?.value ?? "");
+
+    const fnSel = el("select", { class: "ir-select" });
+    const refreshFns = keep => {
+        const options = [];
+        if (!valueSel.value) {
+            options.push({ value: "count", label: FN_LABELS.count });
+        } else {
+            const type = w.typeOf(valueSel.value);
+            options.push(...w.chartFnsFor(type).map(f => ({ value: f, label: FN_LABELS[f] ?? f })));
+            if (type === "number") options.push({ value: "", label: "— Each Row —" });
+        }
+        fnSel.replaceChildren(...options.map(o => new Option(o.label, o.value)));
+        if (keep !== undefined && [...fnSel.options].some(o => o.value === keep)) fnSel.value = keep;
+    };
+    valueSel.onchange = () => refreshFns(fnSel.value);
+    refreshFns(active ? (active.fn ?? "") : undefined);
+
+    const orientSel = sel([
+        { value: "vertical", label: "Vertical" },
+        { value: "horizontal", label: "Horizontal" },
+    ], active?.orientation ?? "vertical");
+    const sortBySel = sel([{ value: "label", label: "Label" }, { value: "value", label: "Value" }], active?.sort?.by ?? "label");
+    const sortDirSel = sel(DIR_OPTIONS, active?.sort?.dir ?? "asc");
+
+    const labelTitleInp = el("input", { class: "ir-input", type: "text", value: active?.labelAxisTitle ?? "", placeholder: "Optional" });
+    const valueTitleInp = el("input", { class: "ir-input", type: "text", value: active?.valueAxisTitle ?? "", placeholder: "Optional" });
+
+    const orientField = labeled("Orientation", orientSel);
+    const labelTitleField = labeled("Label Axis Title", labelTitleInp);
+    const valueTitleField = labeled("Value Axis Title", valueTitleInp);
+    const syncType = () => {
+        const pie = typeSel.value === "pie";
+        orientField.hidden = pie;
+        labelTitleField.hidden = pie;
+        valueTitleField.hidden = pie;
+    };
+    typeSel.onchange = syncType;
+    syncType();
+
+    openDialog({
+        owner: w,
+        title: "Chart",
+        width: "30rem",
+        build: body => body.append(
+            labeled("Chart Type", typeSel),
+            labeled("Label", labelSel),
+            el("div", { class: "ir-field" },
+                el("span", { class: "ir-field-label" }, "Value"),
+                el("div", { class: "ir-dlgrow ir-chart-valuerow" },
+                    fnSel, el("span", { class: "ir-row-of" }, "of"), valueSel)),
+            orientField,
+            el("div", { class: "ir-field" },
+                el("span", { class: "ir-field-label" }, "Sort"),
+                el("div", { class: "ir-dlgrow" }, sortBySel, sortDirSel)),
+            labelTitleField,
+            valueTitleField,
+            el("p", { class: "ir-dialog-note" },
+                "The chart draws the whole filtered result — never just the visible page — up to the report's point limit.")),
+        onApply: () => {
+            if (!labelSel.value) throw new Error("Pick a label column");
+            const spec = {
+                mode: "chart",
+                type: typeSel.value,
+                label: labelSel.value,
+                sort: { by: sortBySel.value, dir: sortDirSel.value },
+            };
+            if (valueSel.value) spec.value = valueSel.value;
+            if (fnSel.value) spec.fn = fnSel.value;
+            if (typeSel.value !== "pie") {
+                spec.orientation = orientSel.value;
+                if (labelTitleInp.value.trim()) spec.labelAxisTitle = labelTitleInp.value.trim();
+                if (valueTitleInp.value.trim()) spec.valueAxisTitle = valueTitleInp.value.trim();
+            }
+            return w.apply(d => { d.view = spec; }).then(() => { w.viewMemory.chart = spec; });
+        },
+    });
+}
+
 // --- Save --------------------------------------------------------------------
 
 export function saveDialog(w, { asNew }) {

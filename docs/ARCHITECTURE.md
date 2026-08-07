@@ -181,10 +181,43 @@ schema column names; referenced by id in `columns`, `sorts`, `filters`, `aggrega
 query; response columns are the dims + `__count` + `v0..vN`) · `pivot` (`{ "mode":
 "pivot", "rows": [...], "cols": [...], "values": [...] }` — one grouped query over
 rows+cols dims transformed in memory; synthetic cell columns `p{col}_{value}` with
-human labels; empty `values` ⇒ implicit counts). Caps: `maxPivotColumns` per definition
-(default 60) and a hard 10,000-group source ceiling — both surface as precise 400s.
-Grid-only features (breaks, highlights, grid aggregates, non-dim sorts) are noted in
-`ignored[]` in alternate views, never fatal.
+human labels; empty `values` ⇒ implicit counts) · `chart` (below). Caps:
+`maxPivotColumns` per definition (default 60), a hard 10,000-group pivot source
+ceiling, and `maxChartPoints` per definition (default 1,000, ceiling 10,000) — all
+surface as precise 400s. Grid-only features (breaks, highlights, grid aggregates,
+non-dim sorts) are noted in `ignored[]` in alternate views, never fatal.
+
+**Chart view** (APEX-style: one chart per report, single metric):
+
+```json
+"view": {
+  "mode": "chart", "type": "bar",
+  "label": "STATUS", "value": "AMOUNT", "fn": "sum",
+  "orientation": "vertical",
+  "sort": { "by": "value", "dir": "desc" },
+  "labelAxisTitle": "Status", "valueAxisTitle": "Total"
+}
+```
+
+- `type`: `bar | line | area | pie`. `label`: any text/number/date/bool column
+  (computed included). With `fn`, the composer groups by the label and aggregates
+  `value` through the shared grouped shape; `fn: "count"` may omit `value` and
+  becomes `COUNT(*)`; without `fn`, every filtered row is a point and `value` must
+  itself be a number column.
+- **Chart validation is stricter than grid aggregation**: the metric must come out
+  numeric, so `min/max` chart only number columns (grid aggregation also allows
+  date/text). The schema endpoint advertises the stricter set as
+  `capabilities.chartAggregateFunctions`.
+- The chart query runs over the **complete filtered rowset** (computed columns,
+  filters, search — never the visible page). Sorting lives inside the spec
+  (`sort.by: label|value`, value sorts tie-break on the label); grid `sorts` are
+  reported in `ignored[]` while chart view is active. `orientation` and the axis
+  titles are presentation carried in state; pie ignores them.
+- The response keeps the generic two-column shape: the label column as itself plus
+  the metric (`v0` labeled like `sum(Amount)`, `__count` for bare counts, or the raw
+  value column). Exceeding `maxChartPoints` is a precise validation error — the
+  server never silently truncates a chart, because a truncated pie misstates
+  proportions. Export in chart view emits exactly the charted points.
 
 **Resilience:** structural state elements referencing columns that no longer exist are
 dropped into `ignored[]`. Expressions are typed programs, so an unknown referenced column
@@ -596,13 +629,28 @@ APEX's Interactive Reports.
   assets are committed so a normal .NET build does not require Node.js.
 - **Feature surface**: scoped toolbar search (all text columns or one typed column → expression filter);
   Actions menu (Columns shuttle, Filter, Sort, Control Break, Highlight, Aggregate,
-  Compute with token-insert helpers, Group By, Pivot, Save/Save As/Delete/Reset,
+  Compute with token-insert helpers, Group By, Pivot, Chart, Save/Save As/Delete/Reset,
   CSV download); column-header menus (sort/hide/break/filter); settings chips with
   APEX-style enable/disable checkboxes for expression rules; break groups with per-column subtotal rows and
   grand-total rows; row/cell highlights; groupBy/pivot rendering; saved-report select
   (Primary Report + Global/Private groups); `ignored[]` and problem+json surfaced as
   notices — validation problems render *inside* the originating dialog, which stays
   open (apply is optimistic: mutate, re-query, roll back on failure).
+- **Chart rendering**: `ir-chart.js` is a third self-contained bundle (Chart.js
+  tree-shaken to bar/line/area/pie plus scales, tooltip, legend, filler) that the
+  main bundle loads with a runtime-computed dynamic `import()` the first time chart
+  view opens — grid-only pages never fetch it, and the URL resolves relative to the
+  served `ir.js` so it works under any prefix. All Chart.js configuration stays in
+  that module; none enters protocol or saved state. Colors, grid lines, and label
+  ink come from `--ir-chart-1..8`, `--ir-chart-grid`, and `--ir-chart-text` tokens
+  (slot 1 doubles as the single-series color; the categorical order is fixed and
+  CVD-validated on the light surface). The canvas carries `role="img"` with a
+  generated description ("Bar chart of Sum of Amount by Status, N data points"),
+  and a "View chart data" disclosure renders the same label/value dataset as a
+  real table — canvas pixels are invisible to assistive tech, so the table is part
+  of the feature, not polish. The widget destroys the Chart.js instance on view
+  switches, report changes, and disconnect; a canvas without a 2d context (headless
+  hosts) degrades to the description + table rather than erroring.
 - **Enabled state:** computed, filter, and highlight checkboxes write their canonical
   `enabled` property, which survives saving and export. Breaks and aggregates have no
   enabled protocol state, so their chips edit or remove them without a false toggle.
@@ -663,6 +711,15 @@ APEX's Interactive Reports.
   absorbed by case-insensitive schema matching. Live battery green 53/53 across
   SQL Server + Oracle + PostgreSQL after shared filter/highlight predicates and
   highlight projections were added.
+- **M9 — Charts** ✅ *(2026-08-06)*: APEX-style chart view (bar/line/area/pie, one
+  label + one numeric metric, optional aggregation, chart-owned sort, orientation,
+  axis titles) as a fourth `ViewMode` — additive `ViewSpec` fields, no state-version
+  bump. Composition reuses the shared grouped shape over the filtered core;
+  `maxChartPoints` (default 1,000) rejects oversized charts precisely instead of
+  truncating; chart-mode export emits the charted points. Packaged UI gains the
+  Chart dialog/chip/view with a lazily loaded tree-shaken Chart.js bundle, chart
+  theme tokens, and a canvas description + "View chart data" table for assistive
+  tech.
 
 ## Appendix: decision log
 
@@ -683,6 +740,9 @@ APEX's Interactive Reports.
 | Microsoft.Data.Sqlite dependency in the AspNetCore package | host-supplied providers only | The zero-config default saved-report store must work with no host setup; report-data connections remain host-supplied. |
 | Decimal parameters bind as double on SQLite | decimal-as-TEXT (provider default) | The provider's TEXT binding breaks comparisons against affinity-less expressions (computed columns) via SQLite's cross-type ordering; double is SQLite's native numeric storage, so the conversion is faithful to the engine. |
 | Pivot caps: 60 column groups (configurable) + hard 10k source groups | unbounded pivot | An unbounded pivot is a memory/usability grenade; the caps surface as precise 400s telling the user what to change. |
+| Chart overflow is a precise 400, never truncation | truncate at the point cap like grid export | A truncated bar chart is misleading; a truncated pie is a lie — its proportions claim to describe the whole. Export truncation keeps its header signal; charts get an error naming the cap. |
+| One chart, one metric (APEX model) | multi-series charts | Covers the dominant reporting ask with a small state surface; multi-series, click-to-filter, legends-as-controls, image export, and "Other" folding stay open as increments that extend — not rework — this shape. |
+| Chart.js in a lazily imported third bundle | Apache ECharts; server-rendered SVG | Chart.js covers exactly bar/line/area/pie, tree-shakes small, MIT. ECharts earns its size only when multi-series/zoom/dense-data arrive. The lazy chunk keeps grid-only pages at their old weight; embedding keeps the no-CDN packaging story. |
 | CSV: UTF-8 BOM, label headers, X-IR-Truncated header | bare UTF-8, name headers, silent truncation | Excel needs the BOM to detect encoding; users recognize labels, not internal names; silent truncation reads as complete data. |
 | Views share the export pipeline | grid-only export | Exporting "what the view shows" falls out of running the same validated state unpaged — no special cases. |
 | Oracle BindByName via reflection in CommandBuilder | reference ODP.NET from Core | ODP.NET binds by position by default; context params appear first in SQL but are added last, so positional binding silently misbinds. Reflection keeps Core provider-free. |

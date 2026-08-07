@@ -13,17 +13,25 @@
 
 import { api, download, saveBlob } from "./ir-api.js";
 import { el, icon, banner, createWidgetRoot, disposeWidget, popupMenu, confirmDialog } from "./ir-ui.js";
-import { renderChips, renderGrid, renderPager } from "./ir-render.js";
+import { renderChips, renderChartView, renderGrid, renderPager } from "./ir-render.js";
 import { normalizeReportState, scopedSearchExpression, serializeReportState } from "./ir-state.js";
 import {
     columnsDialog, filterDialog, sortDialog, breakDialog, aggregateDialog,
-    computeDialog, highlightDialog, groupByDialog, pivotDialog, saveDialog,
+    computeDialog, highlightDialog, groupByDialog, pivotDialog, chartDialog, saveDialog,
 } from "./ir-dialogs.js";
 
 // …/api/reports/ui/ir.js → …/api/reports
 const BASE_DEFAULT = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
 const sameName = (left, right) => typeof left === "string" && typeof right === "string"
     && left.toUpperCase() === right.toUpperCase();
+
+// Chart.js glue ships as its own bundle beside ir.js and loads the first time
+// any report on the page enters chart view. The URL is computed at runtime so
+// the bundler leaves the import dynamic instead of inlining the chunk here.
+let chartModulePromise;
+const loadChartModule = () =>
+    chartModulePromise ??= import(new URL("./ir-chart.js", import.meta.url).href)
+        .catch(err => { chartModulePromise = undefined; throw err; });
 
 class InteractiveReportElement extends HTMLElement {
     static observedAttributes = ["report", "api-base", "base"];
@@ -51,6 +59,7 @@ class InteractiveReportElement extends HTMLElement {
         ++this._seq;
         this._abort?.abort();
         this._abort = null;
+        this.destroyChart();
         disposeWidget(this);
     }
     attributeChangedCallback(_name, oldValue, newValue) {
@@ -70,6 +79,7 @@ class InteractiveReportElement extends HTMLElement {
         this._initialized = true;
         this._abort?.abort();
         this._abort = null;
+        this.destroyChart();
 
         this.schema = null;
         this.doc = null;
@@ -134,6 +144,10 @@ class InteractiveReportElement extends HTMLElement {
         this.searchScopeCol = null;
         this.viewMemory = {};
         this.els.search.value = "";
+        this.destroyChart();
+        this.els.chartWrap.replaceChildren();
+        this.els.chartWrap.hidden = true;
+        this.els.tablewrap.hidden = false;
         this.els.table.replaceChildren();
         this.els.pager.replaceChildren();
         this.els.chips.replaceChildren();
@@ -185,7 +199,8 @@ class InteractiveReportElement extends HTMLElement {
         const views = el("div", { class: "ir-viewbtns", role: "group", "aria-label": "View" },
             viewBtn("grid", "grid", "Grid"),
             viewBtn("groupBy", "group", "Group By"),
-            viewBtn("pivot", "pivot", "Pivot"));
+            viewBtn("pivot", "pivot", "Pivot"),
+            viewBtn("chart", "chart", "Chart"));
 
         const actionsBtn = el("button", {
             type: "button", class: "ir-btn ir-actionsbtn",
@@ -212,8 +227,10 @@ class InteractiveReportElement extends HTMLElement {
             ignoredSlot: el("div", {}),
             chips: el("div", { class: "ir-chips", part: "chips", hidden: true }),
             table: el("table", { class: "ir-table", part: "table" }),
+            chartWrap: el("div", { class: "ir-chartwrap", part: "chart-container", hidden: true }),
             pager: el("div", { class: "ir-pager", part: "pager" }),
         };
+        this.els.tablewrap = el("div", { class: "ir-tablewrap", part: "table-container" }, this.els.table);
 
         this._mount.replaceChildren(
             el("div", { class: "ir-toolbar", part: "toolbar" },
@@ -225,7 +242,8 @@ class InteractiveReportElement extends HTMLElement {
             el("div", { class: "ir-busybar" }),
             el("div", { class: "ir-notices", part: "notices" }, this.els.errorSlot, this.els.transientSlot, this.els.ignoredSlot),
             this.els.chips,
-            el("div", { class: "ir-tablewrap", part: "table-container" }, this.els.table),
+            this.els.tablewrap,
+            this.els.chartWrap,
             this.els.pager);
     }
 
@@ -239,6 +257,12 @@ class InteractiveReportElement extends HTMLElement {
     labelOf(name) { return this.pickable().find(c => c.name === name)?.label ?? name; }
     fnsFor(type) {
         const catalog = this.schema?.capabilities?.aggregateFunctions ?? {};
+        return catalog[type] ?? catalog.other ?? [];
+    }
+
+    /// Chart metrics must come out numeric, so the server advertises a stricter set.
+    chartFnsFor(type) {
+        const catalog = this.schema?.capabilities?.chartAggregateFunctions ?? {};
         return catalog[type] ?? catalog.other ?? [];
     }
 
@@ -278,7 +302,7 @@ class InteractiveReportElement extends HTMLElement {
             if (this.doc.view?.mode && this.doc.view.mode !== "grid")
                 this.viewMemory[this.doc.view.mode] = this.doc.view;
             renderChips(this, this.els.chips);
-            renderGrid(this, this.els.table);
+            this.renderView();
             renderPager(this, this.els.pager);
             this.renderIgnored(result.ignored);
             this.refreshViewButtons();
@@ -291,6 +315,41 @@ class InteractiveReportElement extends HTMLElement {
         } finally {
             if (ctrl === this._abort) this._mount.classList.remove("ir-busy");
         }
+    }
+
+    /// Route the result to the table or the chart. Only one is ever visible; the
+    /// other is emptied so stale content cannot flash back on the next switch.
+    renderView() {
+        const chartMode = (this.doc.view?.mode ?? "grid") === "chart";
+        this.els.tablewrap.hidden = chartMode;
+        this.els.chartWrap.hidden = !chartMode;
+        if (!chartMode) {
+            this.destroyChart();
+            this.els.chartWrap.replaceChildren();
+            renderGrid(this, this.els.table);
+            return;
+        }
+        this.els.table.replaceChildren();
+        this.renderChart();
+    }
+
+    async renderChart() {
+        const result = this.lastResult;
+        this.destroyChart();
+        try {
+            const module = await loadChartModule();
+            // The module load is async: bail if the widget moved on meanwhile.
+            if (this.lastResult !== result || (this.doc.view?.mode ?? "grid") !== "chart" || !this.isConnected) return;
+            this._chart = renderChartView(this, this.els.chartWrap, module);
+        } catch {
+            this.els.chartWrap.replaceChildren();
+            this.showError(new Error("The charting module failed to load. Reload the page and try again."));
+        }
+    }
+
+    destroyChart() {
+        this._chart?.destroy();
+        this._chart = null;
     }
 
     /// Optimistic apply: mutate the doc, re-query, roll back on failure. Throws so
@@ -383,7 +442,13 @@ class InteractiveReportElement extends HTMLElement {
         if (mode === "grid") { this.applyOrBanner(d => { d.view = { mode: "grid" }; }); return; }
         const memory = this.viewMemory[mode];
         if (memory) this.applyOrBanner(d => { d.view = memory; });
-        else mode === "groupBy" ? groupByDialog(this) : pivotDialog(this);
+        else this.openViewDialog(mode);
+    }
+
+    openViewDialog(mode) {
+        if (mode === "groupBy") groupByDialog(this);
+        else if (mode === "pivot") pivotDialog(this);
+        else chartDialog(this);
     }
 
     // --- toolbar: actions menu ----------------------------------------------
@@ -402,6 +467,7 @@ class InteractiveReportElement extends HTMLElement {
             "-",
             { label: "Group By…", onPick: () => groupByDialog(this) },
             { label: "Pivot…", onPick: () => pivotDialog(this) },
+            { label: "Chart…", onPick: () => chartDialog(this) },
             { heading: "Report" },
             ...(canSave ? [{ label: "Save", onPick: () => saveDialog(this, { asNew: false }) }] : []),
             { label: "Save As…", onPick: () => saveDialog(this, { asNew: true }) },
@@ -480,7 +546,7 @@ class InteractiveReportElement extends HTMLElement {
             case "aggregate": aggregateDialog(this); break;
             case "computed": computeDialog(this, index); break;
             case "highlight": highlightDialog(this, index); break;
-            case "view": this.doc.view?.mode === "pivot" ? pivotDialog(this) : groupByDialog(this); break;
+            case "view": this.openViewDialog(this.doc.view?.mode ?? "groupBy"); break;
         }
     }
 

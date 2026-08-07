@@ -83,6 +83,9 @@ public sealed partial class ConfigurationReportDefinitionStore : IReportDefiniti
         if (def.MaxPivotColumns < 1 || def.MaxPivotColumns > ReportExecutor.MaxPivotGroups)
             throw new InvalidOperationException(
                 $"Report '{def.Name}': maxPivotColumns must be between 1 and {ReportExecutor.MaxPivotGroups}.");
+        if (def.MaxChartPoints < 1 || def.MaxChartPoints > ReportExecutor.MaxChartPointsCeiling)
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': maxChartPoints must be between 1 and {ReportExecutor.MaxChartPointsCeiling}.");
         if (def.CommandTimeoutSeconds < 1)
             throw new InvalidOperationException(
                 $"Report '{def.Name}': commandTimeoutSeconds must be at least 1.");

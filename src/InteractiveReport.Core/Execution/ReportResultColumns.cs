@@ -25,6 +25,19 @@ internal static class ReportResultColumns
         return columns;
     }
 
+    /// <summary>Two columns always: the label as itself, then the metric.</summary>
+    public static List<ColumnInfo> ForChart(ValidChart chart)
+    {
+        var label = new ColumnInfo(chart.Label.Name, chart.Label.Label, chart.Label.KindName, chart.Label.IsComputed);
+        var metric = chart switch
+        {
+            { Fn: null } => new ColumnInfo(chart.Value!.Name, chart.Value.Label, chart.Value.KindName, chart.Value.IsComputed),
+            { Value: null } => new ColumnInfo("__count", "Count", "number", false),
+            { Fn: { } fn, Value: { } value } => ForAggregate(new ValidAggregate(value, fn), "v0"),
+        };
+        return [label, metric];
+    }
+
     public static ColumnInfo ForAggregate(ValidAggregate aggregate, string name)
         => new(name, AggregateLabel(aggregate), AggregateType(aggregate), false);
 

@@ -34,6 +34,28 @@ public static class AggregateCatalog
         _ => false,
     };
 
+    /// <summary>Chart functions by column type, for client fn pickers in the chart dialog.</summary>
+    public static IReadOnlyDictionary<string, IReadOnlyList<string>> ChartFunctionsByColumnType { get; } =
+        Enum.GetValues<ColumnKind>().ToFrozenDictionary(
+            kind => KindName(kind),
+            kind => (IReadOnlyList<string>)Array.AsReadOnly(All
+                .Where(function => IsChartCompatible(kind, function))
+                .Select(FunctionName)
+                .ToArray()),
+            StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Chart metrics must be numeric, so charts are stricter than grid aggregation:
+    /// min/max lose their date/text reach here because MIN(ORDER_DATE) is a date, not
+    /// a plottable number.
+    /// </summary>
+    public static bool IsChartCompatible(ColumnKind kind, AggregateFn function) => function switch
+    {
+        AggregateFn.Sum or AggregateFn.Avg or AggregateFn.Min or AggregateFn.Max => kind == ColumnKind.Number,
+        AggregateFn.Count or AggregateFn.CountDistinct => true,
+        _ => false,
+    };
+
     private static string FunctionName(AggregateFn function)
         => JsonNamingPolicy.CamelCase.ConvertName(function.ToString());
 

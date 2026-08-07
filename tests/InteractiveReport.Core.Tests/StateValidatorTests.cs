@@ -373,6 +373,178 @@ public class StateValidatorTests
     }
 
     [Fact]
+    public void Chart_view_validates_and_moves_grid_features_to_ignored()
+    {
+        var result = Validate(new ReportState
+        {
+            View = new ViewSpec
+            {
+                Mode = "chart",
+                Type = "bar",
+                Label = "STATUS",
+                Value = "AMOUNT",
+                Fn = AggregateFn.Sum,
+                Orientation = "horizontal",
+                Sort = new ChartSortSpec { By = "value", Dir = SortDir.Desc },
+                LabelAxisTitle = "  Status  ",
+                ValueAxisTitle = "Total",
+            },
+            Breaks = ["REGION"],
+            Aggregates = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Avg }],
+            Sorts = [new SortRule { Col = "AMOUNT", Dir = SortDir.Desc }],
+        });
+
+        Assert.Equal(ViewMode.Chart, result.View.Mode);
+        var chart = result.View.Chart!;
+        Assert.Equal(ChartType.Bar, chart.Type);
+        Assert.Equal("STATUS", chart.Label.Name);
+        Assert.Equal("AMOUNT", chart.Value!.Name);
+        Assert.Equal(AggregateFn.Sum, chart.Fn);
+        Assert.Equal(ChartOrientation.Horizontal, chart.Orientation);
+        Assert.Equal((ChartSortBy.Value, SortDir.Desc), (chart.SortBy, chart.SortDir));
+        Assert.Equal("Status", chart.LabelAxisTitle);
+        Assert.Equal("Total", chart.ValueAxisTitle);
+        Assert.Empty(result.Breaks);
+        Assert.Empty(result.Aggregates);
+        Assert.Empty(result.Sorts);
+        Assert.Contains(result.Ignored, i => i.Kind == "view" && i.Detail.Contains("chart sort"));
+    }
+
+    [Fact]
+    public void Chart_defaults_fill_optional_fields()
+    {
+        var result = Validate(new ReportState
+        {
+            View = new ViewSpec { Mode = "chart", Type = "pie", Label = "STATUS", Fn = AggregateFn.Count },
+        });
+
+        var chart = result.View.Chart!;
+        Assert.Null(chart.Value);                                    // count alone = COUNT(*)
+        Assert.Equal(AggregateFn.Count, chart.Fn);
+        Assert.Equal(ChartOrientation.Vertical, chart.Orientation);
+        Assert.Equal((ChartSortBy.Label, SortDir.Asc), (chart.SortBy, chart.SortDir));
+        Assert.Null(chart.LabelAxisTitle);
+        Assert.Null(chart.ValueAxisTitle);
+    }
+
+    [Fact]
+    public void Chart_metric_must_be_numeric_where_grid_aggregation_is_looser()
+    {
+        // max(ORDER_DATE) is a valid grid aggregate but produces a date — unplottable.
+        var ex = Assert.Throws<ReportValidationException>(() =>
+            Validate(new ReportState
+            {
+                View = new ViewSpec
+                {
+                    Mode = "chart", Type = "bar", Label = "STATUS",
+                    Value = "ORDER_DATE", Fn = AggregateFn.Max,
+                },
+            }));
+
+        Assert.Contains(ex.Errors, e => e.Path == "view.value" && e.Message.Contains("numeric"));
+    }
+
+    [Fact]
+    public void Chart_without_fn_requires_a_number_value_column()
+    {
+        var ex = Assert.Throws<ReportValidationException>(() =>
+            Validate(new ReportState
+            {
+                View = new ViewSpec { Mode = "chart", Type = "line", Label = "ORDER_DATE", Value = "CUSTOMER" },
+            }));
+
+        Assert.Contains(ex.Errors, e => e.Path == "view.value" && e.Message.Contains("number"));
+    }
+
+    [Fact]
+    public void Chart_value_is_required_unless_counting_rows()
+    {
+        var sum = Assert.Throws<ReportValidationException>(() =>
+            Validate(new ReportState
+            {
+                View = new ViewSpec { Mode = "chart", Type = "bar", Label = "STATUS", Fn = AggregateFn.Sum },
+            }));
+        Assert.Contains(sum.Errors, e => e.Path == "view.value" && e.Message.Contains("'sum'"));
+
+        var distinct = Assert.Throws<ReportValidationException>(() =>
+            Validate(new ReportState
+            {
+                View = new ViewSpec { Mode = "chart", Type = "bar", Label = "STATUS", Fn = AggregateFn.CountDistinct },
+            }));
+        Assert.Contains(distinct.Errors, e => e.Path == "view.value");
+
+        var bare = Assert.Throws<ReportValidationException>(() =>
+            Validate(new ReportState
+            {
+                View = new ViewSpec { Mode = "chart", Type = "bar", Label = "STATUS" },
+            }));
+        Assert.Contains(bare.Errors, e => e.Path == "view.value");
+    }
+
+    [Fact]
+    public void Chart_structural_problems_are_errors()
+    {
+        var badType = Assert.Throws<ReportValidationException>(() =>
+            Validate(new ReportState
+            {
+                View = new ViewSpec { Mode = "chart", Type = "donut", Label = "STATUS", Fn = AggregateFn.Count },
+            }));
+        Assert.Contains(badType.Errors, e => e.Path == "view.type" && e.Message.Contains("donut"));
+
+        var noLabel = Assert.Throws<ReportValidationException>(() =>
+            Validate(new ReportState
+            {
+                View = new ViewSpec { Mode = "chart", Type = "bar", Fn = AggregateFn.Count },
+            }));
+        Assert.Contains(noLabel.Errors, e => e.Path == "view.label");
+
+        var unknownLabel = Assert.Throws<ReportValidationException>(() =>
+            Validate(new ReportState
+            {
+                View = new ViewSpec { Mode = "chart", Type = "bar", Label = "GHOST", Fn = AggregateFn.Count },
+            }));
+        Assert.Contains(unknownLabel.Errors, e => e.Path == "view.label" && e.Message.Contains("GHOST"));
+
+        var badOrientation = Assert.Throws<ReportValidationException>(() =>
+            Validate(new ReportState
+            {
+                View = new ViewSpec
+                {
+                    Mode = "chart", Type = "bar", Label = "STATUS", Fn = AggregateFn.Count,
+                    Orientation = "diagonal",
+                },
+            }));
+        Assert.Contains(badOrientation.Errors, e => e.Path == "view.orientation");
+
+        var badSort = Assert.Throws<ReportValidationException>(() =>
+            Validate(new ReportState
+            {
+                View = new ViewSpec
+                {
+                    Mode = "chart", Type = "bar", Label = "STATUS", Fn = AggregateFn.Count,
+                    Sort = new ChartSortSpec { By = "hue" },
+                },
+            }));
+        Assert.Contains(badSort.Errors, e => e.Path == "view.sort.by");
+    }
+
+    [Fact]
+    public void Chart_label_of_unknowable_kind_is_rejected()
+    {
+        var schemaWithBlob = OrdersSchema.Append(Col("PAYLOAD", typeof(byte[]))).ToList();
+        var ex = Assert.Throws<ReportValidationException>(() =>
+            StateValidator.Validate(
+                OrdersDefinition(ReportDialect.Sqlite),
+                new ReportState
+                {
+                    View = new ViewSpec { Mode = "chart", Type = "bar", Label = "PAYLOAD", Fn = AggregateFn.Count },
+                },
+                schemaWithBlob));
+
+        Assert.Contains(ex.Errors, e => e.Path == "view.label" && e.Message.Contains("cannot label"));
+    }
+
+    [Fact]
     public void View_structural_problems_are_errors()
     {
         var badMode = Assert.Throws<ReportValidationException>(() =>

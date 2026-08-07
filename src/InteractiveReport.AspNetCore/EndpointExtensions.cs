@@ -100,8 +100,15 @@ public static class EndpointExtensions
                 {
                     expressionFunctions = ExpressionLanguageCatalog.Functions,
                     aggregateFunctions = AggregateCatalog.FunctionsByColumnType,
+                    chartAggregateFunctions = AggregateCatalog.ChartFunctionsByColumnType,
                 },
-                limits = new { defaultPageSize = def.DefaultPageSize, maxPageSize = def.MaxPageSize, maxRows = def.MaxRows },
+                limits = new
+                {
+                    defaultPageSize = def.DefaultPageSize,
+                    maxPageSize = def.MaxPageSize,
+                    maxRows = def.MaxRows,
+                    maxChartPoints = def.MaxChartPoints,
+                },
             }, IrJson.Options);
         }
         catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)

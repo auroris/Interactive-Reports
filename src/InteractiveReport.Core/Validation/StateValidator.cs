@@ -95,7 +95,12 @@ public static class StateValidator
                     ignored.Add(new IgnoredItem("view", "sorts on non-grouped columns are ignored in groupBy view"));
                 sorts = kept;
             }
-            else if (sorts.Count > 0)
+            else if (view.Mode == ViewMode.Chart && sorts.Count > 0)
+            {
+                ignored.Add(new IgnoredItem("view", "chart view orders by its own chart sort; sorts are ignored"));
+                sorts = [];
+            }
+            else if (view.Mode == ViewMode.Pivot && sorts.Count > 0)
             {
                 ignored.Add(new IgnoredItem("view", "pivot view orders by its dimensions; sorts are ignored"));
                 sorts = [];

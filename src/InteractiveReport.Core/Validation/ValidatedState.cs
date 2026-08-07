@@ -26,14 +26,16 @@ public sealed class ValidatedState
 /// <summary>
 /// The validated alternate-view request. Grid is the default; groupBy pushes a GROUP BY
 /// down and paginates groups; pivot uses the same grouped query (Rows+Cols dims) and is
-/// transformed in memory. Values fall back to an implicit row count when empty.
+/// transformed in memory. Values fall back to an implicit row count when empty. Chart
+/// collapses the whole filtered set to (label, metric) points.
 /// </summary>
 public sealed record ValidView(
     ViewMode Mode,
     IReadOnlyList<ColumnModel> GroupBy,
     IReadOnlyList<ColumnModel> PivotRows,
     IReadOnlyList<ColumnModel> PivotCols,
-    IReadOnlyList<ValidAggregate> Values)
+    IReadOnlyList<ValidAggregate> Values,
+    ValidChart? Chart = null)
 {
     public static readonly ValidView Grid = new(ViewMode.Grid, [], [], [], []);
 }
@@ -43,6 +45,43 @@ public enum ViewMode
     Grid,
     GroupBy,
     Pivot,
+    Chart,
+}
+
+/// <summary>
+/// The validated chart request: one label dimension and one numeric metric. Fn present
+/// = group by label and aggregate value; Fn null = one point per filtered row. Value is
+/// null only for count, which the composer turns into COUNT(*).
+/// </summary>
+public sealed record ValidChart(
+    ChartType Type,
+    ColumnModel Label,
+    ColumnModel? Value,
+    AggregateFn? Fn,
+    ChartOrientation Orientation,
+    ChartSortBy SortBy,
+    SortDir SortDir,
+    string? LabelAxisTitle,
+    string? ValueAxisTitle);
+
+public enum ChartType
+{
+    Bar,
+    Line,
+    Area,
+    Pie,
+}
+
+public enum ChartOrientation
+{
+    Vertical,
+    Horizontal,
+}
+
+public enum ChartSortBy
+{
+    Label,
+    Value,
 }
 
 public sealed record ValidSort(ColumnModel Column, SortDir Dir);
