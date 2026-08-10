@@ -55,11 +55,16 @@ internal static class ExpressionRuleCompiler
     }
 
     private static string RuleLabel(string collectionPath)
-        => collectionPath switch
+    {
+        // Paths are stage-qualified ("pipeline[0].layer.filters"); the trailing
+        // segment names the rule collection.
+        var segment = collectionPath[(collectionPath.LastIndexOf('.') + 1)..];
+        return segment switch
         {
             "computed" => "computed columns",
             "filters" => "filter rules",
             "highlights" => "highlight rules",
             _ => "rules",
         };
+    }
 }

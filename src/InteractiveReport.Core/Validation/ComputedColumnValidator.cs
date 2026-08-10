@@ -10,16 +10,17 @@ internal static partial class ComputedColumnValidator
     public static List<CompiledRule<DefineColumnEffect>> Validate(
         List<ComputedColumn>? rules,
         IReadOnlyDictionary<string, ColumnModel> baseSchema,
-        List<ValidationError> errors)
+        List<ValidationError> errors,
+        string collectionPath = "computed")
     {
         var seenIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         return ExpressionRuleCompiler.Compile<ComputedColumn, DefineColumnEffect>(
             rules,
             maxRules: 20,
-            collectionPath: "computed",
+            collectionPath,
             baseSchema,
             ExpressionRequirement.Value,
-            prepareEffect: (rule, index) => PrepareEffect(rule, index, baseSchema, seenIds, errors),
+            prepareEffect: (rule, index) => PrepareEffect(rule, index, baseSchema, seenIds, errors, collectionPath),
             errors);
     }
 
@@ -28,9 +29,10 @@ internal static partial class ComputedColumnValidator
         int index,
         IReadOnlyDictionary<string, ColumnModel> baseSchema,
         HashSet<string> seenIds,
-        List<ValidationError> errors)
+        List<ValidationError> errors,
+        string collectionPath)
     {
-        var path = $"computed[{index}]";
+        var path = $"{collectionPath}[{index}]";
         if (!ComputedIdPattern().IsMatch(rule.Id))
         {
             errors.Add(new ValidationError(
@@ -47,7 +49,7 @@ internal static partial class ComputedColumnValidator
         {
             errors.Add(new ValidationError(
                 path,
-                $"computed column id '{rule.Id}' shadows a schema column"));
+                $"computed column id '{rule.Id}' shadows a column of this stage"));
             return null;
         }
 

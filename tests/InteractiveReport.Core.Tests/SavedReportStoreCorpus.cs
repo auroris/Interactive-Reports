@@ -21,7 +21,7 @@ public abstract class SavedReportStoreCorpus
         Title = title,
         Owner = owner,
         IsGlobal = global,
-        StateJson = """{"v":2,"filters":[]}""",
+        StateJson = """{"v":3,"pipeline":[{"shape":{"kind":"source"},"layer":{"filters":[]}}]}""",
     };
 
     [SkippableFact]

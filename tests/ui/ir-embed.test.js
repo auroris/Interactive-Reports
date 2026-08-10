@@ -37,10 +37,14 @@ globalThis.fetch = async (url, options = {}) => {
     if (String(url).endsWith("/schema")) {
         const reportName = /\/([^/]+)\/schema$/.exec(String(url))?.[1];
         return json({
-            stateVersion: 2,
+            stateVersion: 3,
             // labels here mirror the server contract: friendly names reach the client
             // only as part of the default report; column metadata stays neutral.
-            defaultState: { page: { index: 1, size: 25 }, view: { mode: "grid" }, labels: { ID: "Ident" } },
+            defaultState: {
+                v: 3,
+                page: { index: 1, size: 25 },
+                pipeline: [{ shape: { kind: "source" }, layer: { labels: { ID: "Ident" } } }],
+            },
             limits: { defaultPageSize: 25, maxPageSize: 100 },
             columns: [{ name: "ID", label: "ID", type: "number" }],
             capabilities: { aggregateFunctions: {}, expressionFunctions: [] },
@@ -188,7 +192,9 @@ test("labels resolve client-side: default report seeds them, rename overrides, c
         // Booleans only: a DOM element in a failed assertion makes the reporter
         // serialize the whole happy-dom graph.
         assert.equal(!report.shadowRoot.querySelector(".ir-dialog"), true, "the dialog should close on success");
-        return JSON.parse(requests.filter(r => r.url.endsWith("/query")).at(-1).body);
+        const doc = JSON.parse(requests.filter(r => r.url.endsWith("/query")).at(-1).body);
+        // Display labels live on the posted pipeline's source layer.
+        return doc.pipeline?.[0]?.layer ?? {};
     };
 
     assert.deepEqual((await rename("Ticket")).labels, { ID: "Ticket" });

@@ -60,31 +60,6 @@ internal sealed class ReportQueryReader(
         return points;
     }
 
-    /// <summary>Reads the shared grouped layout: dimensions, __rows, then a0..aN.</summary>
-    public async Task<QueryRows> ReadGroupedRows(
-        Query query,
-        IReadOnlyList<ColumnModel> dimensions,
-        int valueCount,
-        int? maxRows,
-        CancellationToken ct)
-    {
-        var rows = new List<IReadOnlyDictionary<string, object?>>();
-        await using var command = Build(query);
-        await using var reader = await command.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
-        {
-            var row = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-            for (var i = 0; i < dimensions.Count; i++)
-                row[dimensions[i].Name] = ValueAt(reader, i);
-            row["__count"] = Convert.ToInt64(reader.GetValue(dimensions.Count));
-            for (var i = 0; i < valueCount; i++)
-                row[$"v{i}"] = ValueAt(reader, dimensions.Count + 1 + i);
-            rows.Add(row);
-        }
-
-        return ApplyLimit(rows, maxRows);
-    }
-
     /// <summary>Reads a single-row aggregate query whose aliases are a0..aN.</summary>
     public async Task<Dictionary<string, IReadOnlyDictionary<string, object?>>> ReadAggregates(
         Query query,
@@ -103,7 +78,7 @@ internal sealed class ReportQueryReader(
         return NestAggregates(aggregates, i => values[i]);
     }
 
-    /// <summary>Reads break columns, __rows, then a0..aN.</summary>
+    /// <summary>Reads break columns, __count, then a0..aN.</summary>
     public async Task<List<BreakTotal>> ReadBreakTotals(
         Query query,
         IReadOnlyList<ColumnModel> breaks,

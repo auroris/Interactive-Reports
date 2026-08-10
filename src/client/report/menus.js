@@ -1,11 +1,15 @@
 // The two popup menus: the toolbar Actions menu and the per-column header menu.
 // Menus are pure dispatch — every entry opens a dialog or applies a one-line
 // doc mutation; nothing here owns state of its own. Every entry is gated by the
-// definition's feature whitelist; sections that empty out take their separators
-// and headings with them.
+// definition's feature whitelist and enabled per the current stage's
+// capabilities (stage.js): the same Columns/Compute/Sort/Highlight surfaces
+// operate on whichever table the pipeline's tail produces, while Filter always
+// edits the source stage.
 
 import { popupMenu } from "../core/menu.js";
-import { anyMutableFeature, featureEnabled, visibleColumnNames } from "./schema.js";
+import { anyMutableFeature, featureEnabled } from "./schema.js";
+import { stageContext } from "./stage.js";
+import { sameColumn } from "./state.js";
 import { columnSettingsDialog, columnsDialog, renameDialog } from "./dialogs/columns.js";
 import { filterDialog, computeDialog, highlightDialog } from "./dialogs/rules.js";
 import { paginationDialog, sortDialog, breakDialog, aggregateDialog } from "./dialogs/grid.js";
@@ -14,40 +18,48 @@ import { saveDialog } from "./dialogs/save.js";
 import { canManageCurrentSaved, deleteCurrentSaved, resetWorkingCopy } from "./saved.js";
 import { exportCsv } from "./export.js";
 
-/// Features whose entries live in the grid header menu; if none of them are
+/// Features whose entries live in the header menu per mode; if none of them are
 /// whitelisted the header offers nothing and should not open (nor look clickable).
-const HEADER_FEATURES = ["sort", "rename", "columnSettings", "columns", "controlBreak", "filter"];
-
 export function headerMenuAvailable(w, mode) {
-    if (mode !== "grid") return featureEnabled(w, "sort");
-    return HEADER_FEATURES.some(f => featureEnabled(w, f));
+    const features = mode === "grid"
+        ? ["sort", "rename", "columnSettings", "columns", "controlBreak", "filter"]
+        : mode === "groupBy"
+            ? ["sort", "rename", "columnSettings", "columns", "filter"]
+            : mode === "pivot"
+                ? ["sort", "rename", "columnSettings"]
+                : [];
+    return features.some(f => featureEnabled(w, f));
 }
 
 const joinSections = sections => sections.filter(s => s.length)
     .flatMap((section, i) => i === 0 ? section : ["-", ...section]);
 
 /// The Actions menu entries the whitelist leaves standing. Exported so the
-/// toolbar can hide the Actions button when nothing remains.
+/// toolbar can hide the Actions button when nothing remains. Entries a stage
+/// cannot use stay visible but disabled — the menu shape is stable; the table
+/// under it changes.
 export function actionsMenuItems(w) {
+    const ctx = w.doc ? stageContext(w) : null;
+    const caps = ctx?.caps ?? {};
     const feature = (name, ...entries) => featureEnabled(w, name) ? entries : [];
     const canSave = canManageCurrentSaved(w);
     const items = joinSections([
         [
-            ...feature("columns", { label: "Columns…", onPick: () => columnsDialog(w) }),
-            ...feature("columnSettings", { label: "Column Settings…", onPick: () => columnSettingsDialog(w) }),
+            ...feature("columns", { label: "Columns…", disabled: !caps.columns, onPick: () => columnsDialog(w) }),
+            ...feature("columnSettings", { label: "Column Settings…", disabled: !caps.columnSettings, onPick: () => columnSettingsDialog(w) }),
             ...feature("filter", { label: "Filter…", onPick: () => filterDialog(w, {}) }),
-            ...feature("sort", { label: "Sort…", onPick: () => sortDialog(w) }),
+            ...feature("sort", { label: "Sort…", disabled: !caps.sort, onPick: () => sortDialog(w) }),
             ...feature("pagination", {
                 label: "Pagination…",
-                disabled: !["grid", "groupBy"].includes(w.doc?.view?.mode ?? "grid"),
+                disabled: !caps.pagination,
                 onPick: () => paginationDialog(w),
             }),
         ],
         [
-            ...feature("controlBreak", { label: "Control Break…", onPick: () => breakDialog(w) }),
-            ...feature("highlight", { label: "Highlight…", onPick: () => highlightDialog(w) }),
-            ...feature("aggregate", { label: "Aggregate…", onPick: () => aggregateDialog(w) }),
-            ...feature("compute", { label: "Compute…", onPick: () => computeDialog(w) }),
+            ...feature("controlBreak", { label: "Control Break…", disabled: !caps.break, onPick: () => breakDialog(w) }),
+            ...feature("highlight", { label: "Highlight…", disabled: !caps.highlight, onPick: () => highlightDialog(w) }),
+            ...feature("aggregate", { label: "Aggregate…", disabled: !caps.aggregate, onPick: () => aggregateDialog(w) }),
+            ...feature("compute", { label: "Compute…", disabled: !caps.compute, onPick: () => computeDialog(w) }),
         ],
         [
             ...feature("groupBy", { label: "Group By…", onPick: () => groupByDialog(w) }),
@@ -75,37 +87,79 @@ export function openActionsMenu(w, anchor) {
 }
 
 export function openHeaderMenu(w, col, anchor) {
-    const mode = w.doc.view?.mode ?? "grid";
+    const ctx = stageContext(w);
     const feature = (name, ...entries) => featureEnabled(w, name) ? entries : [];
-    const sortItems = feature("sort",
-        { label: "Sort Ascending", onPick: () => w.applyOrBanner(d => { d.sorts = [{ col, dir: "asc" }]; }) },
-        { label: "Sort Descending", onPick: () => w.applyOrBanner(d => { d.sorts = [{ col, dir: "desc" }]; }) });
-    if (mode !== "grid") {
-        if (sortItems.length) popupMenu(anchor, sortItems);
-        return;
+    const isDim = (ctx.dims ?? []).some(d => sameColumn(d, col));
+    const column = ctx.columns.find(c => sameColumn(c.name, col));
+
+    // Sorting: grid sorts the source table; group/pivot sort through the group
+    // layer (pivot restricted to row dims — cells have no single order column).
+    const sortable = ctx.mode === "grid"
+        || (ctx.mode === "groupBy" && ctx.caps.sort)
+        || (ctx.mode === "pivot" && ctx.caps.sort && isDim);
+    const sortItems = sortable
+        ? feature("sort",
+            {
+                label: "Sort Ascending",
+                onPick: () => w.applyOrBanner(d => { ctx.sortLayer(d).sorts = [{ col, dir: "asc" }]; }),
+            },
+            {
+                label: "Sort Descending",
+                onPick: () => w.applyOrBanner(d => { ctx.sortLayer(d).sorts = [{ col, dir: "desc" }]; }),
+            })
+        : [];
+
+    if (ctx.mode === "chart") return;
+
+    const presentation = [
+        ...(ctx.caps.rename ? feature("rename", { label: "Rename…", onPick: () => renameDialog(w, col) }) : []),
+        ...(ctx.caps.columnSettings
+            ? feature("columnSettings", { label: "Column Settings…", onPick: () => columnSettingsDialog(w, col) })
+            : []),
+    ];
+
+    // Hiding: the terminal table's column selection. Group dims stay visible at
+    // T0 (hiding a dim makes rows look duplicated); spread output has no column
+    // selection at all.
+    if (ctx.caps.columns && ctx.caps.visibility && !isDim) {
+        const visible = visibleStageColumnNames(ctx, w);
+        presentation.push(...feature("columns", {
+            label: "Hide Column",
+            disabled: visible.length <= 1,
+            onPick: () => w.applyOrBanner(d => {
+                ctx.columnsLayer(d).columns = visible.filter(n => !sameColumn(n, col));
+            }),
+        }));
     }
 
-    const visible = visibleColumnNames(w);
-    const breaking = (w.doc.breaks ?? []).includes(col);
-    const items = joinSections([
-        sortItems,
-        [
-            ...feature("rename", { label: "Rename…", onPick: () => renameDialog(w, col) }),
-            ...feature("columnSettings", { label: "Column Settings…", onPick: () => columnSettingsDialog(w, col) }),
-            ...feature("columns", {
-                label: "Hide Column",
-                disabled: visible.length <= 1,
-                onPick: () => w.applyOrBanner(d => { d.columns = visible.filter(n => n !== col); }),
+    if (ctx.mode === "grid") {
+        const breaking = (ctx.columnsLayer(w.doc).breaks ?? []).some(b => sameColumn(b, col));
+        presentation.push(...feature("controlBreak", {
+            label: breaking ? "Remove Control Break" : "Control Break",
+            checked: breaking,
+            onPick: () => w.applyOrBanner(d => {
+                const layer = ctx.columnsLayer(d);
+                layer.breaks = breaking
+                    ? (layer.breaks ?? []).filter(b => !sameColumn(b, col))
+                    : [...(layer.breaks ?? []), col];
             }),
-            ...feature("controlBreak", {
-                label: breaking ? "Remove Control Break" : "Control Break",
-                checked: breaking,
-                onPick: () => w.applyOrBanner(d => {
-                    d.breaks = breaking ? (d.breaks ?? []).filter(b => b !== col) : [...(d.breaks ?? []), col];
-                }),
-            }),
-        ],
-        feature("filter", { label: "Filter…", onPick: () => filterDialog(w, { col }) }),
-    ]);
+        }));
+    }
+
+    // Filter always targets the source stage; offer it where the clicked column
+    // exists there (grid columns; group/pivot pass-through dims).
+    const filterable = ctx.mode === "grid" || (isDim && !column?.metric);
+    const filterItems = filterable
+        ? feature("filter", { label: "Filter…", onPick: () => filterDialog(w, { col }) })
+        : [];
+
+    const items = joinSections([sortItems, presentation, filterItems]);
     if (items.length) popupMenu(anchor, items);
+}
+
+/// The terminal table's currently visible column names (explicit selection or all).
+export function visibleStageColumnNames(ctx, w) {
+    const explicit = ctx.columnsLayer?.(w.doc)?.columns;
+    if (explicit?.length) return [...explicit];
+    return ctx.columns.map(c => c.name);
 }

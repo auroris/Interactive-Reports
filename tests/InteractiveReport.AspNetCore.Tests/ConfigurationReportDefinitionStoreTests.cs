@@ -14,10 +14,18 @@ public sealed class ConfigurationReportDefinitionStoreTests
             Connection = "db",
             Dialect = ReportDialect.Sqlite,
             Sql = "select 1 as ID",
+            // The config-bound default state is a v3 pipeline document.
             DefaultState = new ReportState
             {
                 Search = "configured",
-                Filters = [new FilterRule { Expr = "ID = 1" }],
+                Pipeline =
+                [
+                    new PipelineStage
+                    {
+                        Shape = new StageShape { Kind = "source" },
+                        Layer = new StageLayer { Filters = [new FilterRule { Expr = "ID = 1" }] },
+                    },
+                ],
             },
         };
         var options = new InteractiveReportOptions();
@@ -33,12 +41,13 @@ public sealed class ConfigurationReportDefinitionStoreTests
         Assert.Equal("orders", snapshot.Name);
         Assert.NotSame(configured, snapshot);
         Assert.NotSame(configured.DefaultState, snapshot.DefaultState);
-        Assert.NotSame(configured.DefaultState!.Filters, snapshot.DefaultState!.Filters);
+        Assert.NotSame(configured.DefaultState!.Pipeline, snapshot.DefaultState!.Pipeline);
+        Assert.Equal("source", snapshot.DefaultState.Pipeline![0].Shape!.Kind);
 
         snapshot.DefaultState.Search = "changed";
-        snapshot.DefaultState.Filters![0].Expr = "ID = 2";
+        snapshot.DefaultState.Pipeline[0].Layer!.Filters![0].Expr = "ID = 2";
         Assert.Equal("configured", configured.DefaultState.Search);
-        Assert.Equal("ID = 1", configured.DefaultState.Filters![0].Expr);
+        Assert.Equal("ID = 1", configured.DefaultState.Pipeline![0].Layer!.Filters![0].Expr);
     }
 
     [Fact]

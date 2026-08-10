@@ -153,8 +153,19 @@ public sealed class FeatureWhitelistHttpTests : IAsyncLifetime
         // valid — the whitelist gates chrome and the two enforced endpoints, not state.
         var state = new
         {
-            filters = new[] { new { expr = "ID = 1" } },
-            breaks = new[] { "LABEL" },
+            v = 3,
+            pipeline = new object[]
+            {
+                new
+                {
+                    shape = new { kind = "source" },
+                    layer = new
+                    {
+                        filters = new[] { new { expr = "ID = 1" } },
+                        breaks = new[] { "LABEL" },
+                    },
+                },
+            },
         };
         using var response = await _client.PostAsync(
             "/api/reports/locked/query", JsonContent.Create(state));

@@ -11,9 +11,11 @@ import { createWidgetRoot, disposeWidget, setCustomStyleSheet } from "../core/wi
 import { applyFeatureChrome, buildSkeleton } from "./skeleton.js";
 import { featureEnabled } from "./schema.js";
 import {
-    activateReportView,
-    configuredReportView,
+    activateTail,
+    configuredTail,
+    modeOf,
     normalizeReportState,
+    schemaMismatch,
     serializeReportState,
 } from "./state.js";
 import { refreshSavedSelect } from "./saved.js";
@@ -163,9 +165,9 @@ export class InteractiveReportElement extends HTMLElement {
                 const docResponse = await api(apiUrl(this.base, "saved", savedMatches[0].id));
                 if (seq !== this._seq) return false;
                 this.currentSaved = docResponse.summary;
-                this.doc = this.normalize(docResponse.state);
+                this.adoptState(docResponse.state, `Saved report "${docResponse.summary?.title}"`);
             } else {
-                this.doc = this.normalize(schema.defaultState);
+                this.adoptState(schema.defaultState, "The default report");
                 if (requestedSaved) {
                     savedWarning = savedMatches.length === 0
                         ? `Saved report "${requestedSaved}" is not available; loaded Primary Report.`
@@ -194,10 +196,39 @@ export class InteractiveReportElement extends HTMLElement {
             this.schema?.defaultState);
     }
 
+    /// The T0 consistency gate: a document whose recorded schema snapshot no
+    /// longer matches the live schema is refused — not run — and the working
+    /// copy resets down the drift-proof chain: default report, then the
+    /// synthetic empty state (which depends on nothing). Stored rows are never
+    /// touched; only the working copy resets. Absent snapshots skip the check.
+    adoptState(rawState, description) {
+        const live = this.schema?.columns ?? [];
+        let mismatch = schemaMismatch(rawState?.schema, live);
+        if (!mismatch) {
+            this.doc = this.normalize(rawState);
+            return true;
+        }
+
+        const detail = mismatch.join("; ");
+        let fallback = "the default report";
+        const defaultState = this.schema?.defaultState;
+        if (schemaMismatch(defaultState?.schema, live)) {
+            // A configured default can itself predate the schema change; the
+            // synthetic empty terminus cannot.
+            this.doc = normalizeReportState(null, this.schema?.limits?.defaultPageSize ?? 50);
+            fallback = "an empty report";
+        } else {
+            this.doc = this.normalize(defaultState);
+        }
+        this.showError(new Error(
+            `${description ?? "This report"} was built against a schema that has changed (${detail}). Loaded ${fallback} instead.`));
+        return false;
+    }
+
     /// Canonical state: explicit empty values survive so they can clear report defaults;
     /// undefined values and underscore-prefixed working data do not cross the protocol.
     serialize() {
-        return serializeReportState(this.doc, this.schema?.stateVersion ?? 2);
+        return serializeReportState(this.doc, this.schema?.stateVersion ?? 3);
     }
 
     reportUrl(resource) {
@@ -234,7 +265,7 @@ export class InteractiveReportElement extends HTMLElement {
     /// Route the result to the table or the chart. Only one is ever visible; the
     /// other is emptied so stale content cannot flash back on the next switch.
     renderView() {
-        const chartMode = (this.doc.view?.mode ?? "grid") === "chart";
+        const chartMode = modeOf(this.doc) === "chart";
         this.els.tablewrap.hidden = chartMode;
         this.els.chartWrap.hidden = !chartMode;
         if (!chartMode) {
@@ -253,13 +284,13 @@ export class InteractiveReportElement extends HTMLElement {
         try {
             const module = await loadChartModule();
             // The module load is async: bail if the widget moved on meanwhile.
-            if (this.lastResult !== result || (this.doc.view?.mode ?? "grid") !== "chart" || !this.isConnected) return;
+            if (this.lastResult !== result || modeOf(this.doc) !== "chart" || !this.isConnected) return;
             this._chart = renderChartView(this, this.els.chartWrap, module);
         } catch {
             // A failed chunk load may settle after the user has already switched
             // views, reports, or disconnected the element. Do not leak that stale
             // failure into the current view.
-            if (this.lastResult !== result || (this.doc.view?.mode ?? "grid") !== "chart" || !this.isConnected) return;
+            if (this.lastResult !== result || modeOf(this.doc) !== "chart" || !this.isConnected) return;
             this.els.chartWrap.replaceChildren();
             this.showError(new Error("The charting module failed to load. Reload the page and try again."));
         }
@@ -316,18 +347,17 @@ export class InteractiveReportElement extends HTMLElement {
     // --- view switching ------------------------------------------------------
 
     refreshViewButtons() {
-        const mode = this.doc?.view?.mode ?? "grid";
+        const mode = this.doc ? modeOf(this.doc) : "grid";
         for (const btn of this.els.views.children)
             btn.classList.toggle("ir-active", btn.dataset.mode === mode);
     }
 
     switchView(mode) {
-        const current = this.doc.view?.mode ?? "grid";
+        const current = modeOf(this.doc);
         if (mode === current) return;
         if (mode !== "grid" && !featureEnabled(this, mode)) return;
-        if (mode === "grid") { this.applyOrBanner(d => activateReportView(d, { mode: "grid" })); return; }
-        const configured = configuredReportView(this.doc, mode);
-        if (configured) this.applyOrBanner(d => activateReportView(d, configured));
+        if (mode === "grid") { this.applyOrBanner(d => activateTail(d, "grid")); return; }
+        if (configuredTail(this.doc, mode)) this.applyOrBanner(d => activateTail(d, mode));
         else openViewDialog(this, mode);
     }
 }

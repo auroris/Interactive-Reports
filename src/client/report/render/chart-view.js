@@ -4,6 +4,7 @@
 
 import { el } from "../../core/dom.js";
 import { labelOf } from "../schema.js";
+import { stageOf } from "../state.js";
 import { hasFraction, FN_LABELS } from "./format.js";
 import { formatForColumn, renderTextValue } from "./column-renderers.js";
 
@@ -26,7 +27,7 @@ export function chartSummary(w, view) {
  */
 export function renderChartView(w, container, chartModule) {
     const result = w.lastResult;
-    const view = w.doc.view;
+    const view = stageOf(w.doc, "chart")?.shape ?? {};
     if (!result?.rows.length) {
         container.replaceChildren(el("div", { class: "ir-chart-empty" }, "No data found."));
         return null;

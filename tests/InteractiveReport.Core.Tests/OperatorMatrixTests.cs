@@ -69,7 +69,7 @@ public class OperatorMatrixTests
         var definition = OrdersDefinition(dialect);
         var state = StateValidator.Validate(
             definition,
-            new ReportState { Filters = [new FilterRule { Expr = expression }] },
+            Doc(source: new StageLayer { Filters = [new FilterRule { Expr = expression }] }),
             OrdersSchema);
         return DialectSupport.GetCompiler(dialect).Compile(QueryComposer.Compose(definition, state).Page);
     }

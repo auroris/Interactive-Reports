@@ -28,14 +28,22 @@ const json = value => new Response(JSON.stringify(value), {
     headers: { "Content-Type": "application/json" },
 });
 
+// The view mode derives from the posted pipeline's tail in v3 documents.
+const chartStageOf = state =>
+    (state.pipeline ?? []).find(s => s.shape?.kind === "chart")?.shape ?? null;
+
 globalThis.fetch = async (url, options = {}) => {
     const request = { url: String(url), method: options.method ?? "GET", body: options.body ?? null };
     requests.push(request);
     if (request.url === "/api") return json([{ name: "orders", title: "Orders" }]);
     if (request.url.endsWith("/schema")) {
         return json({
-            stateVersion: 2,
-            defaultState: { page: { index: 1, size: 25 }, view: { mode: "grid" } },
+            stateVersion: 3,
+            defaultState: {
+                v: 3,
+                page: { index: 1, size: 25 },
+                pipeline: [{ shape: { kind: "source" }, layer: {} }],
+            },
             limits: { defaultPageSize: 25, maxPageSize: 100, maxRows: 1000, maxChartPoints: 1000 },
             columns: [
                 { name: "STATUS", label: "Status", type: "text" },
@@ -55,7 +63,7 @@ globalThis.fetch = async (url, options = {}) => {
     if (request.url.endsWith("/saved")) return json([]);
     if (request.url.endsWith("/query")) {
         const state = JSON.parse(request.body);
-        if (state.view?.mode === "chart") {
+        if (chartStageOf(state)) {
             return json({
                 columns: [
                     { name: "STATUS", label: "Status", type: "text" },
@@ -123,11 +131,13 @@ test("chart view renders behind the dialog with an accessible data table, and gr
 
     await until(() => {
         const body = requests.at(-1)?.body;
-        return body && JSON.parse(body).view?.mode === "chart" && !root.querySelector(".ir-dialog");
+        return body && chartStageOf(JSON.parse(body)) && !root.querySelector(".ir-dialog");
     }, "the chart query to apply");
     const sent = JSON.parse(requests.at(-1).body);
-    assert.deepEqual(sent.view, { mode: "chart", type: "pie", label: "STATUS", fn: "count", sort: { by: "label", dir: "asc" } });
-    assert.deepEqual(sent.views.chart, sent.view);
+    assert.deepEqual(
+        chartStageOf(sent),
+        { kind: "chart", type: "pie", label: "STATUS", fn: "count", sort: { by: "label", dir: "asc" } });
+    assert.equal(sent.pipeline.length, 2, "the chart rides as the pipeline's tail stage");
 
     // The chart region replaces the grid: canvas described for AT + the data table.
     await until(() => root.querySelector(".ir-chart-canvas"), "the chart region to render");
@@ -148,16 +158,21 @@ test("chart view renders behind the dialog with an accessible data table, and gr
     assert.ok(chip?.textContent.includes("Count by Status"), "the chart chip should describe the chart");
     assert.match(root.querySelector(".ir-pager").textContent, /points/);
 
-    // Back to grid: the chart region empties and the table returns.
+    // Back to grid: the chart region empties and the table returns. The chart
+    // tail parks on the shelf instead of being discarded.
     root.querySelector('.ir-viewbtn[data-mode="grid"]').click();
-    await until(() => JSON.parse(requests.at(-1).body).view?.mode === "grid", "the grid query");
+    await until(() => {
+        const body = JSON.parse(requests.at(-1).body);
+        return !chartStageOf(body) && body.pipeline?.length === 1;
+    }, "the grid query");
+    assert.ok(JSON.parse(requests.at(-1).body).shelf?.chart, "the chart tail parks on the shelf");
     await until(() => root.querySelector(".ir-chartwrap").hidden, "the chart region to hide");
     assert.equal(root.querySelector(".ir-chartwrap").children.length, 0, "chart content should be disposed");
     assert.ok(root.querySelector(".ir-table tbody tr"), "grid rows should render again");
 
     // The chart config survives in report state: switching back skips the dialog.
     root.querySelector('.ir-viewbtn[data-mode="chart"]').click();
-    await until(() => JSON.parse(requests.at(-1).body).view?.mode === "chart", "the remembered chart query");
+    await until(() => chartStageOf(JSON.parse(requests.at(-1).body)), "the remembered chart query");
     assert.equal(root.querySelector(".ir-dialog"), null, "no dialog when view memory holds a chart");
 
     report.remove();

@@ -36,9 +36,16 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
               "title": "Committed Primary",
               "primary": true,
               "state": {
-                "v": 2,
-                "columns": [ "LABEL" ],
-                "sorts": [ { "col": "ID", "dir": "desc" } ]
+                "v": 3,
+                "pipeline": [
+                  {
+                    "shape": { "kind": "source" },
+                    "layer": {
+                      "columns": [ "LABEL" ],
+                      "sorts": [ { "col": "ID", "dir": "desc" } ]
+                    }
+                  }
+                ]
               }
             }
             """);
@@ -46,9 +53,16 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
             {
               "title": "Regional View",
               "state": {
-                "v": 2,
-                "columns": [ "ID", "LABEL" ],
-                "filters": [ { "expr": "ID = 1" } ]
+                "v": 3,
+                "pipeline": [
+                  {
+                    "shape": { "kind": "source" },
+                    "layer": {
+                      "columns": [ "ID", "LABEL" ],
+                      "filters": [ { "expr": "ID = 1" } ]
+                    }
+                  }
+                ]
               }
             }
             """);
@@ -124,9 +138,10 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
         var schema = await GetJson($"/api/reports/{ReportName}/schema");
         var defaultState = schema.GetProperty("defaultState");
         Assert.False(defaultState.TryGetProperty("search", out _));
-        Assert.Equal(["LABEL"], defaultState.GetProperty("columns").EnumerateArray()
+        var sourceLayer = defaultState.GetProperty("pipeline")[0].GetProperty("layer");
+        Assert.Equal(["LABEL"], sourceLayer.GetProperty("columns").EnumerateArray()
             .Select(value => value.GetString()).ToArray());
-        Assert.Equal("ID", defaultState.GetProperty("sorts")[0].GetProperty("col").GetString());
+        Assert.Equal("ID", sourceLayer.GetProperty("sorts")[0].GetProperty("col").GetString());
 
         using var response = await _client.PostAsync(
             $"/api/reports/{ReportName}/query", JsonContent.Create(new { }));
@@ -141,7 +156,7 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
     {
         using var saveResponse = await _client.PostAsync(
             $"/api/reports/{ReportName}/saved",
-            JsonContent.Create(new { title = "Editable", state = new { v = 2 } }));
+            JsonContent.Create(new { title = "Editable", state = new { v = 3 } }));
         Assert.Equal(HttpStatusCode.Created, saveResponse.StatusCode);
         var saved = await ReadJson(saveResponse);
         Assert.False(saved.GetProperty("isReadOnly").GetBoolean());
@@ -157,11 +172,11 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
         var id = configured.GetProperty("id").GetString()!;
         var loaded = await GetJson($"/api/reports/saved/{id}");
         Assert.True(loaded.GetProperty("summary").GetProperty("isReadOnly").GetBoolean());
-        Assert.Equal("ID = 1", loaded.GetProperty("state").GetProperty("filters")[0]
-            .GetProperty("expr").GetString());
+        Assert.Equal("ID = 1", loaded.GetProperty("state").GetProperty("pipeline")[0]
+            .GetProperty("layer").GetProperty("filters")[0].GetProperty("expr").GetString());
 
         using var update = await _client.PutAsJsonAsync(
-            $"/api/reports/saved/{id}", new { title = "Changed", state = new { v = 2 } });
+            $"/api/reports/saved/{id}", new { title = "Changed", state = new { v = 3 } });
         Assert.Equal(HttpStatusCode.Forbidden, update.StatusCode);
         using var delete = await _client.DeleteAsync($"/api/reports/saved/{id}");
         Assert.Equal(HttpStatusCode.Forbidden, delete.StatusCode);
@@ -178,7 +193,7 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
             ReportName = ReportName,
             Title = "regional view",
             Owner = Identity,
-            StateJson = "{\"v\":2,\"search\":\"database\"}",
+            StateJson = "{\"v\":3,\"search\":\"database\"}",
         });
 
         var visible = await GetJson($"/api/reports/{ReportName}/saved");
@@ -191,7 +206,7 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
 
         using var collision = await _client.PostAsync(
             $"/api/reports/{ReportName}/saved",
-            JsonContent.Create(new { title = "REGIONAL VIEW", state = new { v = 2 } }));
+            JsonContent.Create(new { title = "REGIONAL VIEW", state = new { v = 3 } }));
         Assert.Equal(HttpStatusCode.Conflict, collision.StatusCode);
 
         var admin = await GetJson("/api/reports/admin/saved");
@@ -204,28 +219,28 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
     {
         using var firstResponse = await _client.PostAsync(
             $"/api/reports/{ReportName}/saved",
-            JsonContent.Create(new { title = "Customer Totals", state = new { v = 2 } }));
+            JsonContent.Create(new { title = "Customer Totals", state = new { v = 3 } }));
         Assert.Equal(HttpStatusCode.Created, firstResponse.StatusCode);
         var first = await ReadJson(firstResponse);
 
         using var duplicate = await _client.PostAsync(
             $"/api/reports/{ReportName}/saved",
-            JsonContent.Create(new { title = "customer totals", state = new { v = 2 } }));
+            JsonContent.Create(new { title = "customer totals", state = new { v = 3 } }));
         Assert.Equal(HttpStatusCode.Conflict, duplicate.StatusCode);
 
         using var duplicateImport = await _client.PostAsync(
             $"/api/reports/admin/{ReportName}/documents",
-            JsonContent.Create(new { title = "CUSTOMER TOTALS", state = new { v = 2 } }));
+            JsonContent.Create(new { title = "CUSTOMER TOTALS", state = new { v = 3 } }));
         Assert.Equal(HttpStatusCode.Conflict, duplicateImport.StatusCode);
 
         using var sameTitleUpdate = await _client.PutAsJsonAsync(
             $"/api/reports/saved/{first.GetProperty("id").GetString()}",
-            new { title = "CUSTOMER TOTALS", state = new { v = 2, search = "updated" } });
+            new { title = "CUSTOMER TOTALS", state = new { v = 3, search = "updated" } });
         Assert.Equal(HttpStatusCode.OK, sameTitleUpdate.StatusCode);
 
         using var secondResponse = await _client.PostAsync(
             $"/api/reports/{ReportName}/saved",
-            JsonContent.Create(new { title = "Other", state = new { v = 2 } }));
+            JsonContent.Create(new { title = "Other", state = new { v = 3 } }));
         var second = await ReadJson(secondResponse);
         using var collidingRename = await _client.PutAsJsonAsync(
             $"/api/reports/saved/{second.GetProperty("id").GetString()}",
@@ -249,8 +264,8 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
         var document = await ReadJson(response);
         Assert.Equal("Regional View", document.GetProperty("title").GetString());
         Assert.False(document.GetProperty("primary").GetBoolean());
-        Assert.Equal("ID = 1", document.GetProperty("state").GetProperty("filters")[0]
-            .GetProperty("expr").GetString());
+        Assert.Equal("ID = 1", document.GetProperty("state").GetProperty("pipeline")[0]
+            .GetProperty("layer").GetProperty("filters")[0].GetProperty("expr").GetString());
     }
 
     [Fact]
@@ -261,7 +276,18 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
             JsonContent.Create(new
             {
                 title = "Broken Candidate",
-                state = new { v = 2, filters = new[] { new { expr = "ID +" } } },
+                state = new
+                {
+                    v = 3,
+                    pipeline = new object[]
+                    {
+                        new
+                        {
+                            shape = new { kind = "source" },
+                            layer = new { filters = new[] { new { expr = "ID +" } } },
+                        },
+                    },
+                },
             }));
         Assert.Equal(HttpStatusCode.BadRequest, invalidResponse.StatusCode);
         var invalid = await ReadJson(invalidResponse);
@@ -276,9 +302,19 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
                 primary = true,
                 state = new
                 {
-                    v = 2,
-                    columns = new[] { "ID", "LABEL" },
-                    filters = new[] { new { expr = "ID = 2" } },
+                    v = 3,
+                    pipeline = new object[]
+                    {
+                        new
+                        {
+                            shape = new { kind = "source" },
+                            layer = new
+                            {
+                                columns = new[] { "ID", "LABEL" },
+                                filters = new[] { new { expr = "ID = 2" } },
+                            },
+                        },
+                    },
                 },
             }));
         Assert.Equal(HttpStatusCode.Created, uploadResponse.StatusCode);
@@ -289,8 +325,8 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
 
         var id = imported.GetProperty("id").GetString();
         var loaded = await GetJson($"/api/reports/saved/{id}");
-        Assert.Equal("ID = 2", loaded.GetProperty("state").GetProperty("filters")[0]
-            .GetProperty("expr").GetString());
+        Assert.Equal("ID = 2", loaded.GetProperty("state").GetProperty("pipeline")[0]
+            .GetProperty("layer").GetProperty("filters")[0].GetProperty("expr").GetString());
 
         using var downloadResponse = await _client.GetAsync(
             $"/api/reports/admin/saved/{id}/document");

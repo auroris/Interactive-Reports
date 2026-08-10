@@ -48,12 +48,13 @@ public class LiveDialectTests
     public async Task Filter_sort_page(ReportDialect dialect)
     {
         var live = LiveDb.For(dialect);
-        var result = await live.Executor.Query(live.Definition(), new ReportState
-        {
-            Filters = [Filter("STATUS = 'SHIPPED'")],
-            Sorts = [new SortRule { Col = "AMOUNT", Dir = SortDir.Desc }],
-            Page = new PageRequest { Index = 1, Size = 3 },
-        }, NoParams);
+        var result = await live.Executor.Query(live.Definition(), Doc(
+            source: new StageLayer
+            {
+                Filters = [Filter("STATUS = 'SHIPPED'")],
+                Sorts = [new SortRule { Col = "AMOUNT", Dir = SortDir.Desc }],
+            },
+            page: new PageRequest { Index = 1, Size = 3 }), NoParams);
 
         Assert.Equal(5, result.TotalRows);
         Assert.Equal([9000m, 7500m, 5000m], result.Rows.Select(r => Convert.ToDecimal(r["AMOUNT"])));
@@ -64,7 +65,7 @@ public class LiveDialectTests
     public async Task Search_is_case_insensitive(ReportDialect dialect)
     {
         var live = LiveDb.For(dialect);
-        var result = await live.Executor.Query(live.Definition(), new ReportState { Search = "ACME" }, NoParams);
+        var result = await live.Executor.Query(live.Definition(), Doc(search: "ACME"), NoParams);
 
         Assert.Equal(3, result.TotalRows);
     }
@@ -74,7 +75,7 @@ public class LiveDialectTests
     public async Task Highlight_conditions_use_the_shared_expression_pipeline(ReportDialect dialect)
     {
         var live = LiveDb.For(dialect);
-        var result = await live.Executor.Query(live.Definition(), new ReportState
+        var result = await live.Executor.Query(live.Definition(), Doc(source: new StageLayer
         {
             Sorts = [new SortRule { Col = "AMOUNT", Dir = SortDir.Desc }],
             Highlights =
@@ -91,7 +92,7 @@ public class LiveDialectTests
                     Style = new HighlightStyle { Bg = "#fef3c7" },
                 },
             ],
-        }, NoParams);
+        }), NoParams);
 
         Assert.Equal(2, result.Highlights.Count(hit => hit.Id == "large"));
         Assert.Equal(3, result.Highlights.Count(hit => hit.Id == "acme"));
@@ -106,10 +107,10 @@ public class LiveDialectTests
     public async Task Blank_counts_converge_across_dialects(ReportDialect dialect)
     {
         var live = LiveDb.For(dialect);
-        var result = await live.Executor.Query(live.Definition(), new ReportState
+        var result = await live.Executor.Query(live.Definition(), Doc(source: new StageLayer
         {
             Filters = [Filter("NOTES IS NULL OR NOTES = ''")],
-        }, NoParams);
+        }), NoParams);
 
         Assert.Equal(4, result.TotalRows);
     }
@@ -119,14 +120,14 @@ public class LiveDialectTests
     public async Task Between_and_in_compose(ReportDialect dialect)
     {
         var live = LiveDb.For(dialect);
-        var result = await live.Executor.Query(live.Definition(), new ReportState
+        var result = await live.Executor.Query(live.Definition(), Doc(source: new StageLayer
         {
             Filters =
             [
                 Filter("AMOUNT BETWEEN 1000 AND 8000"),
                 Filter("IN_LIST(STATUS, 'SHIPPED', 'PENDING')"),
             ],
-        }, NoParams);
+        }), NoParams);
 
         Assert.Equal(5, result.TotalRows);
     }
@@ -136,7 +137,7 @@ public class LiveDialectTests
     public async Task Aggregates_are_exact(ReportDialect dialect)
     {
         var live = LiveDb.For(dialect);
-        var result = await live.Executor.Query(live.Definition(), new ReportState
+        var result = await live.Executor.Query(live.Definition(), Doc(source: new StageLayer
         {
             Filters = [Filter("STATUS = 'SHIPPED'")],
             Aggregates =
@@ -146,7 +147,7 @@ public class LiveDialectTests
                 new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Median },
                 new AggregateRule { Col = "CUSTOMER", Fn = AggregateFn.CountDistinct },
             ],
-        }, NoParams);
+        }), NoParams);
 
         var amount = result.Aggregates["AMOUNT"];
         Assert.Equal(26000m, Convert.ToDecimal(amount["sum"]));
@@ -160,11 +161,11 @@ public class LiveDialectTests
     public async Task Breaks_group_and_total(ReportDialect dialect)
     {
         var live = LiveDb.For(dialect);
-        var result = await live.Executor.Query(live.Definition(), new ReportState
+        var result = await live.Executor.Query(live.Definition(), Doc(source: new StageLayer
         {
             Breaks = ["STATUS"],
             Aggregates = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum }],
-        }, NoParams);
+        }), NoParams);
 
         Assert.Equal(4, result.BreakTotals.Count);
         Assert.Equal([1L, 1L, 3L, 5L], result.BreakTotals.Select(b => b.Rows));
@@ -178,7 +179,7 @@ public class LiveDialectTests
     public async Task Computed_columns_filter_sort_and_concatenate(ReportDialect dialect)
     {
         var live = LiveDb.For(dialect);
-        var result = await live.Executor.Query(live.Definition(), new ReportState
+        var result = await live.Executor.Query(live.Definition(), Doc(source: new StageLayer
         {
             Computed =
             [
@@ -187,7 +188,7 @@ public class LiveDialectTests
             ],
             Filters = [Filter("c1 >= 10000")],
             Sorts = [new SortRule { Col = "c1", Dir = SortDir.Desc }],
-        }, NoParams);
+        }), NoParams);
 
         Assert.Equal(5, result.TotalRows);
         Assert.Equal(24000m, Convert.ToDecimal(result.Rows[0]["c1"]));
@@ -199,7 +200,7 @@ public class LiveDialectTests
     public async Task Case_computed_column_filters_and_aggregates(ReportDialect dialect)
     {
         var live = LiveDb.For(dialect);
-        var result = await live.Executor.Query(live.Definition(), new ReportState
+        var result = await live.Executor.Query(live.Definition(), Doc(source: new StageLayer
         {
             Computed =
             [
@@ -217,7 +218,7 @@ public class LiveDialectTests
             Filters = [Filter("c1 = 'BIG'")],
             Sorts = [new SortRule { Col = "AMOUNT", Dir = SortDir.Desc }],
             Aggregates = [new AggregateRule { Col = "c2", Fn = AggregateFn.Sum }],
-        }, NoParams);
+        }), NoParams);
 
         // BIG = amounts ≥ 6000: Stark 12000, Acme 9000, Globex 7500, Tyrell 6000.
         Assert.Equal(4, result.TotalRows);
@@ -232,7 +233,7 @@ public class LiveDialectTests
     public async Task Case_blank_condition_exercises_null_and_empty_string_rows(ReportDialect dialect)
     {
         var live = LiveDb.For(dialect);
-        var result = await live.Executor.Query(live.Definition(), new ReportState
+        var result = await live.Executor.Query(live.Definition(), Doc(source: new StageLayer
         {
             Computed =
             [
@@ -243,7 +244,7 @@ public class LiveDialectTests
                 },
             ],
             Aggregates = [new AggregateRule { Col = "c1", Fn = AggregateFn.Sum }],
-        }, NoParams);
+        }), NoParams);
 
         // SQL Server preserves the seeded empty string; Oracle stores it as NULL.
         // The explicit portable blank condition must count the same four rows on both.
@@ -262,7 +263,7 @@ public class LiveDialectTests
             FROM IR_TEST_ORDERS
             """;
 
-        var result = await live.Executor.Query(def, new ReportState
+        var result = await live.Executor.Query(def, Doc(source: new StageLayer
         {
             Computed =
             [
@@ -273,7 +274,7 @@ public class LiveDialectTests
                 },
             ],
             Aggregates = [new AggregateRule { Col = "c1", Fn = AggregateFn.Sum }],
-        }, NoParams);
+        }), NoParams);
 
         Assert.Equal(5m, Convert.ToDecimal(result.Aggregates["c1"]["sum"]));
     }
@@ -293,14 +294,14 @@ public class LiveDialectTests
             FROM IR_TEST_ORDERS
             """;
 
-        var result = await live.Executor.Query(def, new ReportState
+        var result = await live.Executor.Query(def, Doc(source: new StageLayer
         {
             Computed =
             [
                 new ComputedColumn { Id = "c1", Expr = "CASE WHEN LARGE_FLAG THEN 1 ELSE 0 END" },
             ],
             Aggregates = [new AggregateRule { Col = "c1", Fn = AggregateFn.Sum }],
-        }, NoParams);
+        }), NoParams);
 
         Assert.Equal(5m, Convert.ToDecimal(result.Aggregates["c1"]["sum"]));
     }
@@ -316,7 +317,7 @@ public class LiveDialectTests
         def.Name = $"live-dates-{dialect}";
         def.Sql = "SELECT ORDER_ID, AMOUNT, ORDER_DATE, ORDER_DATE_TEXT FROM IR_TEST_ORDERS";
 
-        var result = await live.Executor.Query(def, new ReportState
+        var result = await live.Executor.Query(def, Doc(source: new StageLayer
         {
             Computed =
             [
@@ -327,7 +328,7 @@ public class LiveDialectTests
             ],
             Filters = [Filter("c1 = 2026")],
             Sorts = [new SortRule { Col = "ORDER_ID", Dir = SortDir.Asc }],
-        }, NoParams);
+        }), NoParams);
 
         // 2026 rows: ids 6–10.
         Assert.Equal(5, result.TotalRows);
@@ -352,7 +353,7 @@ public class LiveDialectTests
         def.Name = $"live-date-vocab-{dialect}";
         def.Sql = "SELECT ORDER_ID, AMOUNT, ORDER_DATE, ORDER_DATE_TEXT FROM IR_TEST_ORDERS";
 
-        var result = await live.Executor.Query(def, new ReportState
+        var result = await live.Executor.Query(def, Doc(source: new StageLayer
         {
             Computed =
             [
@@ -383,7 +384,7 @@ public class LiveDialectTests
                 new AggregateRule { Col = "c7", Fn = AggregateFn.Sum },
             ],
             Sorts = [new SortRule { Col = "ORDER_ID", Dir = SortDir.Asc }],
-        }, NoParams);
+        }), NoParams);
 
         Assert.Equal(5m, Convert.ToDecimal(result.Aggregates["c1"]["sum"]));
         Assert.Equal(10m, Convert.ToDecimal(result.Aggregates["c2"]["sum"]));
@@ -434,45 +435,35 @@ public class LiveDialectTests
         var marker = dialect == ReportDialect.Oracle ? ":minAmount" : "@minAmount";
         def.Sql = $"SELECT ORDER_ID, CUSTOMER, STATUS, AMOUNT, NOTES FROM IR_TEST_ORDERS WHERE AMOUNT >= {marker}";
 
-        var result = await live.Executor.Query(def, new ReportState
+        var result = await live.Executor.Query(def, Doc(source: new StageLayer
         {
             Filters = [Filter("STATUS = 'SHIPPED'")],
-        }, new Dictionary<string, object?> { ["minAmount"] = 5000m });
+        }), new Dictionary<string, object?> { ["minAmount"] = 5000m });
 
         Assert.Equal(3, result.TotalRows);   // SHIPPED with AMOUNT >= 5000: 9000, 7500, 5000
     }
 
     [SkippableTheory]
     [MemberData(nameof(Dialects))]
-    public async Task GroupBy_and_pivot_views(ReportDialect dialect)
+    public async Task Group_and_spread_stages(ReportDialect dialect)
     {
         var live = LiveDb.For(dialect);
 
-        var grouped = await live.Executor.Query(live.Definition(), new ReportState
-        {
-            View = new ViewSpec
-            {
-                Mode = "groupBy",
-                GroupBy = ["STATUS"],
-                Values = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum }],
-            },
-        }, NoParams);
+        var grouped = await live.Executor.Query(live.Definition(), Doc(tail:
+        [
+            Group(by: ["STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)]),
+        ]), NoParams);
         Assert.Equal([1L, 1L, 3L, 5L], grouped.Rows.Select(r => Convert.ToInt64(r["__count"])));
+        Assert.Equal([6000m, 400m, 14800m, 26000m], grouped.Rows.Select(r => Convert.ToDecimal(r["m1"])));
 
-        var pivot = await live.Executor.Query(live.Definition(), new ReportState
-        {
-            View = new ViewSpec
-            {
-                Mode = "pivot",
-                Rows = ["CUSTOMER"],
-                Cols = ["STATUS"],
-                Values = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum }],
-                Totals = true,
-            },
-        }, NoParams);
+        var pivot = await live.Executor.Query(live.Definition(), Doc(tail:
+        [
+            Group(by: ["CUSTOMER", "STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)]),
+            Spread(cols: ["STATUS"], totals: true),
+        ]), NoParams);
         var acme = pivot.Rows.Single(r => (string?)r["CUSTOMER"] == "Acme Corp");
-        Assert.Equal(12000m, Convert.ToDecimal(acme["p3_0"]));
-        Assert.Equal(26000m, Convert.ToDecimal(pivot.Aggregates["p3_0"]["sum"]));
+        Assert.Equal(12000m, Convert.ToDecimal(acme["m1@[\"SHIPPED\"]"]));
+        Assert.Equal(26000m, Convert.ToDecimal(pivot.Aggregates["m1@[\"SHIPPED\"]"]["sum"]));
     }
 
     [SkippableTheory]
@@ -483,14 +474,17 @@ public class LiveDialectTests
 
         // Value-desc ordering exercises ORDER BY on the aggregate alias inside a
         // grouped query — the one construct charts emit that no other view does.
-        var chart = await live.Executor.Query(live.Definition(), new ReportState
-        {
-            View = new ViewSpec
+        var chart = await live.Executor.Query(live.Definition(), Doc(tail:
+        [
+            ChartStage(shape =>
             {
-                Mode = "chart", Type = "bar", Label = "STATUS", Value = "AMOUNT", Fn = AggregateFn.Sum,
-                Sort = new ChartSortSpec { By = "value", Dir = SortDir.Desc },
-            },
-        }, NoParams);
+                shape.Type = "bar";
+                shape.Label = "STATUS";
+                shape.Value = "AMOUNT";
+                shape.Fn = AggregateFn.Sum;
+                shape.Sort = new ChartSortSpec { By = "value", Dir = SortDir.Desc };
+            }),
+        ]), NoParams);
         Assert.Equal(
             ["SHIPPED", "PENDING", "CANCELLED", "NEW"],
             chart.Rows.Select(r => (string)r[chart.Columns[0].Name]!));
@@ -503,11 +497,16 @@ public class LiveDialectTests
         def.Name = $"live-chart-cap-{dialect}";
         def.MaxChartPoints = 3;
         var ex = await Assert.ThrowsAsync<ReportValidationException>(() =>
-            live.Executor.Query(def, new ReportState
-            {
-                View = new ViewSpec { Mode = "chart", Type = "pie", Label = "CUSTOMER", Fn = AggregateFn.Count },
-            }, NoParams));
-        Assert.Contains(ex.Errors, e => e.Path == "view" && e.Message.Contains("3 points"));
+            live.Executor.Query(def, Doc(tail:
+            [
+                ChartStage(shape =>
+                {
+                    shape.Type = "pie";
+                    shape.Label = "CUSTOMER";
+                    shape.Fn = AggregateFn.Count;
+                }),
+            ]), NoParams));
+        Assert.Contains(ex.Errors, e => e.Path == "pipeline[1].shape" && e.Message.Contains("3 points"));
     }
 
     [SkippableTheory]
@@ -519,10 +518,10 @@ public class LiveDialectTests
         def.Name = $"live-export-{dialect}";
         def.MaxRows = 3;
 
-        var export = await live.Executor.Export(def, new ReportState
+        var export = await live.Executor.Export(def, Doc(source: new StageLayer
         {
             Sorts = [new SortRule { Col = "AMOUNT", Dir = SortDir.Desc }],
-        }, NoParams);
+        }), NoParams);
 
         Assert.True(export.Truncated);
         Assert.Equal(3, export.Rows.Count);

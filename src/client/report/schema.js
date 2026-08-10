@@ -1,13 +1,18 @@
 // Column metadata resolution over the widget's loaded schema and last result.
 // Free functions over the widget instance `w`, like the render and dialog
 // modules — the widget holds the data, these answer questions about it.
+// Everything in this module speaks the SOURCE table's terms; stage-scoped
+// universes live in stage.js.
+
+import { sourceLayer } from "./state.js";
 
 /// Server column metadata with the report's own display labels applied. Labels
 /// are client-side presentation: the server sends real names and neutral labels;
-/// doc.labels (seeded from the definition via the default report) wins here.
+/// the source layer's labels (seeded from the definition via the default report)
+/// win here.
 export function pickable(w) {
     const columns = w.lastResult?.availableColumns ?? w.schema?.columns ?? [];
-    const labels = w.doc?.labels;
+    const labels = w.doc ? sourceLayer(w.doc).labels : null;
     if (!labels) return columns;
     return columns.map(c => labels[c.name] ? { ...c, label: labels[c.name] } : c);
 }
@@ -34,7 +39,8 @@ export function chartFnsFor(w, type) {
 export function expressionFunctions(w) { return w.schema?.capabilities?.expressionFunctions ?? []; }
 
 export function visibleColumnNames(w) {
-    if (w.doc?.columns?.length) return [...w.doc.columns];
+    const columns = w.doc ? sourceLayer(w.doc).columns : null;
+    if (columns?.length) return [...columns];
     return pickable(w).map(c => c.name);
 }
 

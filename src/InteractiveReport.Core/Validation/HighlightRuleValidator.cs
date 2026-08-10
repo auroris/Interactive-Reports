@@ -10,14 +10,15 @@ internal static class HighlightRuleValidator
         List<HighlightRule>? rules,
         IReadOnlyDictionary<string, ColumnModel> columns,
         List<ValidationError> errors,
-        List<IgnoredItem> ignored)
+        List<IgnoredItem> ignored,
+        string collectionPath = "highlights")
     {
         var seenIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var seenSequences = new HashSet<int>();
         return ExpressionRuleCompiler.Compile<HighlightRule, HighlightEffect>(
             rules,
             maxRules: 50,
-            collectionPath: "highlights",
+            collectionPath,
             columns,
             ExpressionRequirement.Predicate,
             prepareEffect: (rule, index) => PrepareEffect(
@@ -27,7 +28,8 @@ internal static class HighlightRuleValidator
                 seenIds,
                 seenSequences,
                 errors,
-                ignored),
+                ignored,
+                collectionPath),
             errors);
     }
 
@@ -38,9 +40,10 @@ internal static class HighlightRuleValidator
         HashSet<string> seenIds,
         HashSet<int> seenSequences,
         List<ValidationError> errors,
-        List<IgnoredItem> ignored)
+        List<IgnoredItem> ignored,
+        string collectionPath)
     {
-        var path = $"highlights[{index}]";
+        var path = $"{collectionPath}[{index}]";
         if (string.IsNullOrWhiteSpace(rule.Id))
         {
             errors.Add(new ValidationError(path, "highlight id is required"));

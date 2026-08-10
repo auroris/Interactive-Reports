@@ -33,13 +33,14 @@ public class GoldenSqlTests
             composed.BreakTotals is null ? null : compiler.Compile(composed.BreakTotals));
     }
 
-    private static readonly ReportState CoreState = new()
-    {
-        Filters = [Filter("STATUS = 'SHIPPED'")],
-        Sorts = [new SortRule { Col = "ORDER_DATE", Dir = SortDir.Desc }],
-        Columns = ["ORDER_ID", "CUSTOMER", "AMOUNT"],
-        Page = new PageRequest { Index = 2, Size = 25 },
-    };
+    private static ReportState CoreState => Doc(
+        source: new StageLayer
+        {
+            Filters = [Filter("STATUS = 'SHIPPED'")],
+            Sorts = [new SortRule { Col = "ORDER_DATE", Dir = SortDir.Desc }],
+            Columns = ["ORDER_ID", "CUSTOMER", "AMOUNT"],
+        },
+        page: new PageRequest { Index = 2, Size = 25 });
 
     [Fact]
     public void Sqlite_page_query()
@@ -96,11 +97,9 @@ public class GoldenSqlTests
     [Fact]
     public void All_rows_omits_limit_and_offset_from_the_grid_query()
     {
-        var state = new ReportState
-        {
-            Sorts = [new SortRule { Col = "ORDER_ID" }],
-            Page = new PageRequest { Index = 7, Size = 0 },
-        };
+        var state = Doc(
+            source: new StageLayer { Sorts = [new SortRule { Col = "ORDER_ID" }] },
+            page: new PageRequest { Index = 7, Size = 0 });
 
         var (page, _) = Compile(ReportDialect.Sqlite, state);
 
@@ -112,7 +111,7 @@ public class GoldenSqlTests
     [Fact]
     public void Grid_query_projects_hidden_renderer_sources_without_display_metadata()
     {
-        var state = new ReportState
+        var state = Doc(source: new StageLayer
         {
             Columns = ["CUSTOMER"],
             Formats = new()
@@ -124,7 +123,7 @@ public class GoldenSqlTests
                     TextColumn = "STATUS",
                 },
             },
-        };
+        });
 
         var (page, _) = Compile(ReportDialect.Sqlite, state);
 
@@ -134,10 +133,10 @@ public class GoldenSqlTests
     [Fact]
     public void Contains_is_case_insensitive_with_lowered_binding()
     {
-        var (page, _) = Compile(ReportDialect.Sqlite, new ReportState
+        var (page, _) = Compile(ReportDialect.Sqlite, Doc(source: new StageLayer
         {
             Filters = [Filter("CONTAINS(CUSTOMER, 'ACME')")],
-        });
+        }));
 
         Assert.Contains("LOWER(\"CUSTOMER\") LIKE LOWER", page.Sql);
         Assert.Equal(["%", "ACME", "%"], page.NamedBindings.Values.Take(3));
@@ -146,10 +145,10 @@ public class GoldenSqlTests
     [Fact]
     public void Blank_on_text_is_null_or_empty_outside_oracle()
     {
-        var (sqlitePage, _) = Compile(ReportDialect.Sqlite, new ReportState
+        var (sqlitePage, _) = Compile(ReportDialect.Sqlite, Doc(source: new StageLayer
         {
             Filters = [Filter("NOTES IS NULL OR NOTES = ''")],
-        });
+        }));
 
         Assert.Contains("(\"NOTES\" IS NULL)", sqlitePage.Sql);
         Assert.Contains("(\"NOTES\" = @p0)", sqlitePage.Sql);
@@ -158,10 +157,10 @@ public class GoldenSqlTests
     [Fact]
     public void Explicit_empty_string_branch_is_preserved_on_oracle()
     {
-        var (oraclePage, _) = Compile(ReportDialect.Oracle, new ReportState
+        var (oraclePage, _) = Compile(ReportDialect.Oracle, Doc(source: new StageLayer
         {
             Filters = [Filter("NOTES IS NULL OR NOTES = ''")],
-        });
+        }));
 
         Assert.Contains("\"NOTES\" IS NULL", oraclePage.Sql);
         Assert.Contains("= :p", oraclePage.Sql);
@@ -170,10 +169,10 @@ public class GoldenSqlTests
     [Fact]
     public void In_expands_to_bindings()
     {
-        var (page, _) = Compile(ReportDialect.Sqlite, new ReportState
+        var (page, _) = Compile(ReportDialect.Sqlite, Doc(source: new StageLayer
         {
             Filters = [Filter("IN_LIST(STATUS, 'NEW', 'PENDING')")],
-        });
+        }));
 
         Assert.Contains("\"STATUS\" IN (@p0, @p1)", page.Sql);
         Assert.Equal(2, page.NamedBindings.Count(kv => kv.Value is "NEW" or "PENDING"));
@@ -182,10 +181,10 @@ public class GoldenSqlTests
     [Fact]
     public void Between_binds_both_bounds()
     {
-        var (page, _) = Compile(ReportDialect.Sqlite, new ReportState
+        var (page, _) = Compile(ReportDialect.Sqlite, Doc(source: new StageLayer
         {
             Filters = [Filter("AMOUNT BETWEEN 100 AND 500")],
-        });
+        }));
 
         Assert.Contains("\"AMOUNT\" BETWEEN @p0 AND @p1", page.Sql);
     }
@@ -193,7 +192,7 @@ public class GoldenSqlTests
     [Fact]
     public void Search_ors_across_text_columns_in_one_group()
     {
-        var (page, _) = Compile(ReportDialect.Sqlite, new ReportState { Search = "acme" });
+        var (page, _) = Compile(ReportDialect.Sqlite, Doc(search: "acme"));
 
         // Text columns: CUSTOMER, REGION, STATUS, NOTES — one parenthesized OR group.
         Assert.Contains("(LOWER(\"CUSTOMER\") like @p0 OR LOWER(\"REGION\") like @p1 OR LOWER(\"STATUS\") like @p2 OR LOWER(\"NOTES\") like @p3)", page.Sql);
@@ -202,11 +201,9 @@ public class GoldenSqlTests
     [Fact]
     public void Filters_and_search_compose_with_and()
     {
-        var (page, _) = Compile(ReportDialect.Sqlite, new ReportState
-        {
-            Filters = [Filter("AMOUNT > 1000")],
-            Search = "acme",
-        });
+        var (page, _) = Compile(ReportDialect.Sqlite, Doc(
+            source: new StageLayer { Filters = [Filter("AMOUNT > 1000")] },
+            search: "acme"));
 
         Assert.Contains("(\"AMOUNT\" > @p0) AND (LOWER(", page.Sql);
     }
@@ -214,18 +211,19 @@ public class GoldenSqlTests
     [Fact]
     public void Aggregate_query_computes_over_filtered_set_without_paging()
     {
-        var (_, _, aggregates, _) = CompileAll(ReportDialect.Sqlite, new ReportState
-        {
-            Filters = [Filter("STATUS = 'SHIPPED'")],
-            Sorts = [new SortRule { Col = "ORDER_DATE", Dir = SortDir.Desc }],
-            Page = new PageRequest { Index = 2, Size = 25 },
-            Aggregates =
-            [
-                new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum },
-                new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Avg },
-                new AggregateRule { Col = "CUSTOMER", Fn = AggregateFn.CountDistinct },
-            ],
-        });
+        var (_, _, aggregates, _) = CompileAll(ReportDialect.Sqlite, Doc(
+            source: new StageLayer
+            {
+                Filters = [Filter("STATUS = 'SHIPPED'")],
+                Sorts = [new SortRule { Col = "ORDER_DATE", Dir = SortDir.Desc }],
+                Aggregates =
+                [
+                    new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum },
+                    new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Avg },
+                    new AggregateRule { Col = "CUSTOMER", Fn = AggregateFn.CountDistinct },
+                ],
+            },
+            page: new PageRequest { Index = 2, Size = 25 }));
 
         Assert.Equal(
             "SELECT SUM(\"AMOUNT\") AS \"a0\", AVG(\"AMOUNT\") AS \"a1\", COUNT(DISTINCT \"CUSTOMER\") AS \"a2\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base WHERE (\"STATUS\" = @p0)",
@@ -235,10 +233,10 @@ public class GoldenSqlTests
     [Fact]
     public void SqlServer_avg_gets_float_cast_against_integer_truncation()
     {
-        var (_, _, aggregates, _) = CompileAll(ReportDialect.SqlServer, new ReportState
+        var (_, _, aggregates, _) = CompileAll(ReportDialect.SqlServer, Doc(source: new StageLayer
         {
             Aggregates = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Avg }],
-        });
+        }));
 
         Assert.Contains("AVG(CAST([AMOUNT] AS FLOAT)) AS [a0]", aggregates!.Sql);
     }
@@ -250,14 +248,14 @@ public class GoldenSqlTests
     [InlineData(ReportDialect.Postgres)]
     public void Median_uses_the_portable_ranked_aggregate_shape(ReportDialect dialect)
     {
-        var (_, _, aggregates, _) = CompileAll(dialect, new ReportState
+        var (_, _, aggregates, _) = CompileAll(dialect, Doc(source: new StageLayer
         {
             Aggregates =
             [
                 new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum },
                 new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Median },
             ],
-        });
+        }));
 
         Assert.Contains("ROW_NUMBER() OVER", aggregates!.Sql, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("COUNT(", aggregates.Sql, StringComparison.OrdinalIgnoreCase);
@@ -271,11 +269,9 @@ public class GoldenSqlTests
     [Fact]
     public void Paged_break_query_fetches_one_boundary_row_without_changing_the_offset()
     {
-        var (page, _, _, _) = CompileAll(ReportDialect.Sqlite, new ReportState
-        {
-            Breaks = ["STATUS"],
-            Page = new PageRequest { Index = 2, Size = 2 },
-        });
+        var (page, _, _, _) = CompileAll(ReportDialect.Sqlite, Doc(
+            source: new StageLayer { Breaks = ["STATUS"] },
+            page: new PageRequest { Index = 2, Size = 2 }));
 
         Assert.EndsWith("LIMIT @p0 OFFSET @p1", page.Sql);
         Assert.Equal([3, 2L], page.NamedBindings.Values.ToArray());
@@ -284,22 +280,22 @@ public class GoldenSqlTests
     [Fact]
     public void Break_totals_group_the_filtered_set_with_row_counts()
     {
-        var (_, _, _, breakTotals) = CompileAll(ReportDialect.Sqlite, new ReportState
+        var (_, _, _, breakTotals) = CompileAll(ReportDialect.Sqlite, Doc(source: new StageLayer
         {
             Filters = [Filter("AMOUNT > 1000")],
             Breaks = ["REGION"],
             Aggregates = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum }],
-        });
+        }));
 
         Assert.Equal(
-            "SELECT \"REGION\", COUNT(*) AS \"__rows\", SUM(\"AMOUNT\") AS \"a0\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base WHERE (\"AMOUNT\" > @p0) GROUP BY \"REGION\" ORDER BY \"REGION\"",
+            "SELECT \"REGION\", COUNT(*) AS \"__count\", SUM(\"AMOUNT\") AS \"a0\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base WHERE (\"AMOUNT\" > @p0) GROUP BY \"REGION\" ORDER BY \"REGION\"",
             breakTotals!.Sql);
     }
 
     [Fact]
     public void Breaks_sort_first_and_user_direction_on_break_column_wins()
     {
-        var (page, _, _, _) = CompileAll(ReportDialect.Sqlite, new ReportState
+        var (page, _, _, _) = CompileAll(ReportDialect.Sqlite, Doc(source: new StageLayer
         {
             Breaks = ["REGION"],
             Sorts =
@@ -307,7 +303,7 @@ public class GoldenSqlTests
                 new SortRule { Col = "REGION", Dir = SortDir.Desc },
                 new SortRule { Col = "AMOUNT", Dir = SortDir.Asc },
             ],
-        });
+        }));
 
         Assert.Contains("ORDER BY \"REGION\" DESC, \"AMOUNT\"", page.Sql);
     }
@@ -319,7 +315,7 @@ public class GoldenSqlTests
     [InlineData(ReportDialect.SqlServer, "ORDER BY CASE WHEN [NOTES] IS NULL THEN 0 ELSE 1 END, [NOTES] DESC")]
     public void Explicit_null_placement_compiles_portably(ReportDialect dialect, string expected)
     {
-        var (page, _) = Compile(dialect, new ReportState
+        var (page, _) = Compile(dialect, Doc(source: new StageLayer
         {
             Sorts =
             [
@@ -330,22 +326,23 @@ public class GoldenSqlTests
                     Nulls = NullPlacement.First,
                 },
             ],
-        });
+        }));
 
         Assert.Contains(expected, page.Sql);
     }
 
     [Fact]
-    public void GroupBy_dimension_sort_keeps_explicit_null_placement()
+    public void Group_stage_dimension_sort_keeps_explicit_null_placement()
     {
         var def = OrdersDefinition(ReportDialect.Sqlite);
-        var validated = StateValidator.Validate(def, new ReportState
-        {
-            View = new ViewSpec { Mode = "groupBy", GroupBy = ["NOTES"] },
-            Sorts = [new SortRule { Col = "NOTES", Nulls = NullPlacement.Last }],
-        }, OrdersSchema);
+        var validated = StateValidator.Validate(def, Doc(tail:
+        [
+            Group(
+                by: ["NOTES"],
+                layer: new StageLayer { Sorts = [new SortRule { Col = "NOTES", Nulls = NullPlacement.Last }] }),
+        ]), OrdersSchema);
 
-        var (page, _) = QueryComposer.ComposeGroupByView(def, validated);
+        var (page, _) = QueryComposer.ComposeGroupStage(def, validated);
         var sql = DialectSupport.GetCompiler(ReportDialect.Sqlite).Compile(page).Sql;
 
         Assert.Contains("ORDER BY \"NOTES\" ASC NULLS LAST", sql);
@@ -354,14 +351,15 @@ public class GoldenSqlTests
     [Fact]
     public void Computed_columns_get_a_second_wrap_and_become_ordinary_columns()
     {
-        var (page, _, _, _) = CompileAll(ReportDialect.Sqlite, new ReportState
-        {
-            Computed = [new ComputedColumn { Id = "c1", Label = "With Tax", Expr = "ROUND(AMOUNT * 1.0825, 2)" }],
-            Columns = ["ORDER_ID", "c1"],
-            Filters = [Filter("c1 > 1000")],
-            Sorts = [new SortRule { Col = "c1", Dir = SortDir.Desc }],
-            Page = new PageRequest { Index = 1, Size = 10 },
-        });
+        var (page, _, _, _) = CompileAll(ReportDialect.Sqlite, Doc(
+            source: new StageLayer
+            {
+                Computed = [new ComputedColumn { Id = "c1", Label = "With Tax", Expr = "ROUND(AMOUNT * 1.0825, 2)" }],
+                Columns = ["ORDER_ID", "c1"],
+                Filters = [Filter("c1 > 1000")],
+                Sorts = [new SortRule { Col = "c1", Dir = SortDir.Desc }],
+            },
+            page: new PageRequest { Index = 1, Size = 10 }));
 
         Assert.Equal(
             "SELECT \"ORDER_ID\", \"c1\" FROM (SELECT ir_base.*, ROUND((\"AMOUNT\" * @p0), @p1) AS \"c1\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base) AS \"ir_calc\" WHERE (\"c1\" > @p2) ORDER BY \"c1\" DESC LIMIT @p3",
@@ -372,10 +370,10 @@ public class GoldenSqlTests
     [Fact]
     public void Oracle_second_wrap_alias_has_no_AS_keyword()
     {
-        var (page, _, _, _) = CompileAll(ReportDialect.Oracle, new ReportState
+        var (page, _, _, _) = CompileAll(ReportDialect.Oracle, Doc(source: new StageLayer
         {
             Computed = [new ComputedColumn { Id = "c1", Expr = "AMOUNT * 2" }],
-        });
+        }));
 
         Assert.Contains(") \"ir_calc\"", page.Sql);
         Assert.DoesNotContain("AS \"ir_calc\"", page.Sql);
@@ -384,35 +382,28 @@ public class GoldenSqlTests
     [Fact]
     public void Aggregate_on_computed_column_rides_the_wrap()
     {
-        var (_, _, aggregates, _) = CompileAll(ReportDialect.Sqlite, new ReportState
+        var (_, _, aggregates, _) = CompileAll(ReportDialect.Sqlite, Doc(source: new StageLayer
         {
             Computed = [new ComputedColumn { Id = "c1", Expr = "AMOUNT * 2" }],
             Aggregates = [new AggregateRule { Col = "c1", Fn = AggregateFn.Sum }],
-        });
+        }));
 
         Assert.Contains("SUM(\"c1\") AS \"a0\"", aggregates!.Sql);
         Assert.Contains("AS \"ir_calc\"", aggregates.Sql);
     }
 
     [Fact]
-    public void GroupBy_view_pages_groups_and_counts_them()
+    public void Group_stage_pages_groups_and_counts_them()
     {
         var def = OrdersDefinition(ReportDialect.Sqlite);
-        var validated = StateValidator.Validate(def, new ReportState
-        {
-            View = new ViewSpec
-            {
-                Mode = "groupBy",
-                GroupBy = ["REGION"],
-                Values = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum }],
-            },
-            Page = new PageRequest { Index = 1, Size = 10 },
-        }, OrdersSchema);
-        var (page, count) = QueryComposer.ComposeGroupByView(def, validated);
+        var validated = StateValidator.Validate(def, Doc(
+            tail: [Group(by: ["REGION"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)])],
+            page: new PageRequest { Index = 1, Size = 10 }), OrdersSchema);
+        var (page, count) = QueryComposer.ComposeGroupStage(def, validated);
         var compiler = DialectSupport.GetCompiler(ReportDialect.Sqlite);
 
         Assert.Equal(
-            "SELECT \"REGION\", COUNT(*) AS \"__rows\", SUM(\"AMOUNT\") AS \"a0\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base GROUP BY \"REGION\" ORDER BY \"REGION\" LIMIT @p0",
+            "SELECT \"REGION\", COUNT(*) AS \"__count\", SUM(\"AMOUNT\") AS \"m1\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base GROUP BY \"REGION\" ORDER BY \"REGION\" LIMIT @p0",
             compiler.Compile(page).Sql);
 
         var countSql = compiler.Compile(count).Sql;
@@ -422,15 +413,119 @@ public class GoldenSqlTests
     }
 
     [Fact]
+    public void Group_stage_orders_by_layer_metric_sort_then_remaining_dims()
+    {
+        var def = OrdersDefinition(ReportDialect.Sqlite);
+        var validated = StateValidator.Validate(def, Doc(
+            tail:
+            [
+                Group(
+                    by: ["REGION", "STATUS"],
+                    values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
+                    layer: new StageLayer { Sorts = [new SortRule { Col = "m1", Dir = SortDir.Desc }] }),
+            ],
+            page: new PageRequest { Index = 1, Size = 10 }), OrdersSchema);
+        var (page, _) = QueryComposer.ComposeGroupStage(def, validated);
+
+        Assert.Equal(
+            "SELECT \"REGION\", \"STATUS\", COUNT(*) AS \"__count\", SUM(\"AMOUNT\") AS \"m1\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base GROUP BY \"REGION\", \"STATUS\" ORDER BY \"m1\" DESC, \"REGION\", \"STATUS\" LIMIT @p0",
+            DialectSupport.GetCompiler(ReportDialect.Sqlite).Compile(page).Sql);
+    }
+
+    [Fact]
+    public void Group_layer_computed_column_wraps_the_grouped_query_as_ir_stage()
+    {
+        var def = OrdersDefinition(ReportDialect.Sqlite);
+        var validated = StateValidator.Validate(def, Doc(
+            tail:
+            [
+                Group(
+                    by: ["REGION"],
+                    values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
+                    layer: new StageLayer
+                    {
+                        Computed = [new ComputedColumn { Id = "c2", Label = "Per Row", Expr = "ROUND(m1 / __count, 2)" }],
+                    }),
+            ],
+            page: new PageRequest { Index = 1, Size = 10 }), OrdersSchema);
+        var (page, _) = QueryComposer.ComposeGroupStage(def, validated);
+
+        Assert.Equal(
+            "SELECT ir_stage.*, ROUND((\"m1\" / \"__count\"), @p0) AS \"c2\" FROM (SELECT \"REGION\", COUNT(*) AS \"__count\", SUM(\"AMOUNT\") AS \"m1\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base GROUP BY \"REGION\") AS \"ir_stage\" ORDER BY \"REGION\" LIMIT @p1",
+            DialectSupport.GetCompiler(ReportDialect.Sqlite).Compile(page).Sql);
+    }
+
+    [Fact]
+    public void Group_layer_highlight_on_computed_adds_the_ir_stage_calc_level()
+    {
+        var def = OrdersDefinition(ReportDialect.Sqlite);
+        var validated = StateValidator.Validate(def, Doc(
+            tail:
+            [
+                Group(
+                    by: ["REGION"],
+                    values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
+                    layer: new StageLayer
+                    {
+                        Computed = [new ComputedColumn { Id = "c2", Expr = "ROUND(m1 / __count, 2)" }],
+                        Highlights =
+                        [
+                            new HighlightRule
+                            {
+                                Id = "h1", Scope = "row", Expr = "c2 > 1000",
+                                Style = new HighlightStyle { Bg = "#fee2e2" },
+                            },
+                        ],
+                    }),
+            ],
+            page: new PageRequest { Index = 1, Size = 10 }), OrdersSchema);
+        var (page, _) = QueryComposer.ComposeGroupStage(def, validated);
+
+        Assert.Equal(
+            "SELECT ir_stage_calc.*, CASE WHEN (\"c2\" > @p0) THEN 1 ELSE 0 END AS \"__ir_highlight_0\" FROM (SELECT ir_stage.*, ROUND((\"m1\" / \"__count\"), @p1) AS \"c2\" FROM (SELECT \"REGION\", COUNT(*) AS \"__count\", SUM(\"AMOUNT\") AS \"m1\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base GROUP BY \"REGION\") AS \"ir_stage\") AS \"ir_stage_calc\" ORDER BY \"REGION\" LIMIT @p2",
+            DialectSupport.GetCompiler(ReportDialect.Sqlite).Compile(page).Sql);
+    }
+
+    [Fact]
+    public void Oracle_stage_wrap_aliases_have_no_AS_keyword()
+    {
+        var def = OrdersDefinition(ReportDialect.Oracle);
+        var validated = StateValidator.Validate(def, Doc(
+            tail:
+            [
+                Group(
+                    by: ["REGION"],
+                    values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
+                    layer: new StageLayer
+                    {
+                        Computed = [new ComputedColumn { Id = "c2", Expr = "ROUND(m1 / __count, 2)" }],
+                        Highlights =
+                        [
+                            new HighlightRule
+                            {
+                                Id = "h1", Scope = "row", Expr = "c2 > 1000",
+                                Style = new HighlightStyle { Bg = "#fee2e2" },
+                            },
+                        ],
+                    }),
+            ]), OrdersSchema);
+        var (page, _) = QueryComposer.ComposeGroupStage(def, validated);
+        var sql = DialectSupport.GetCompiler(ReportDialect.Oracle).Compile(page).Sql;
+
+        Assert.Contains(") \"ir_stage\"", sql);
+        Assert.Contains(") \"ir_stage_calc\"", sql);
+        Assert.DoesNotContain("AS \"ir_stage\"", sql);
+        Assert.DoesNotContain("AS \"ir_stage_calc\"", sql);
+    }
+
+    [Fact]
     public void All_groups_omits_limit_and_offset_from_the_group_query()
     {
         var def = OrdersDefinition(ReportDialect.Sqlite);
-        var validated = StateValidator.Validate(def, new ReportState
-        {
-            View = new ViewSpec { Mode = "groupBy", GroupBy = ["REGION"] },
-            Page = new PageRequest { Index = 7, Size = 0 },
-        }, OrdersSchema);
-        var (page, _) = QueryComposer.ComposeGroupByView(def, validated);
+        var validated = StateValidator.Validate(def, Doc(
+            tail: [Group(by: ["REGION"])],
+            page: new PageRequest { Index = 7, Size = 0 }), OrdersSchema);
+        var (page, _) = QueryComposer.ComposeGroupStage(def, validated);
 
         var sql = DialectSupport.GetCompiler(ReportDialect.Sqlite).Compile(page).Sql;
         Assert.DoesNotContain("LIMIT", sql, StringComparison.OrdinalIgnoreCase);
@@ -438,46 +533,36 @@ public class GoldenSqlTests
     }
 
     [Fact]
-    public void Pivot_source_groups_all_dims_ordered_and_capped()
+    public void Spread_source_groups_all_dims_ordered_and_capped()
     {
         var def = OrdersDefinition(ReportDialect.Sqlite);
-        var validated = StateValidator.Validate(def, new ReportState
-        {
-            View = new ViewSpec
-            {
-                Mode = "pivot",
-                Rows = ["REGION"],
-                Cols = ["STATUS"],
-                Values = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum }],
-            },
-        }, OrdersSchema);
-        var source = QueryComposer.ComposePivotSource(def, validated, 10_000);
+        var validated = StateValidator.Validate(def, Doc(tail:
+        [
+            Group(by: ["REGION", "STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)]),
+            Spread(cols: ["STATUS"]),
+        ]), OrdersSchema);
+        var source = QueryComposer.ComposeSpreadSource(def, validated, 10_000);
 
         Assert.Equal(
-            "SELECT \"REGION\", \"STATUS\", COUNT(*) AS \"__rows\", SUM(\"AMOUNT\") AS \"a0\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base GROUP BY \"REGION\", \"STATUS\" ORDER BY \"REGION\", \"STATUS\" LIMIT @p0",
+            "SELECT \"REGION\", \"STATUS\", COUNT(*) AS \"__count\", SUM(\"AMOUNT\") AS \"m1\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base GROUP BY \"REGION\", \"STATUS\" ORDER BY \"REGION\", \"STATUS\" LIMIT @p0",
             DialectSupport.GetCompiler(ReportDialect.Sqlite).Compile(source).Sql);
     }
 
     [Fact]
-    public void Pivot_totals_reaggregate_by_column_dimensions()
+    public void Spread_totals_reaggregate_by_column_dimensions()
     {
         var def = OrdersDefinition(ReportDialect.Sqlite);
-        var validated = StateValidator.Validate(def, new ReportState
-        {
-            View = new ViewSpec
-            {
-                Mode = "pivot",
-                Rows = ["CUSTOMER"],
-                Cols = ["STATUS"],
-                Values = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum }],
-                Totals = true,
-            },
-        }, OrdersSchema);
+        var validated = StateValidator.Validate(def, Doc(tail:
+        [
+            Group(by: ["CUSTOMER", "STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)]),
+            Spread(cols: ["STATUS"], totals: true),
+        ]), OrdersSchema);
 
-        var totals = QueryComposer.ComposePivotTotals(def, validated);
+        var totals = QueryComposer.ComposeSpreadTotals(
+            def, validated, QueryComposer.SpreadTotalsComputed(validated.View));
 
         Assert.Equal(
-            "SELECT \"STATUS\", COUNT(*) AS \"__rows\", SUM(\"AMOUNT\") AS \"a0\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base GROUP BY \"STATUS\" ORDER BY \"STATUS\"",
+            "SELECT \"STATUS\", COUNT(*) AS \"__count\", SUM(\"AMOUNT\") AS \"m1\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base GROUP BY \"STATUS\" ORDER BY \"STATUS\"",
             DialectSupport.GetCompiler(ReportDialect.Sqlite).Compile(totals).Sql);
     }
 
@@ -492,18 +577,22 @@ public class GoldenSqlTests
     [Fact]
     public void Chart_grouped_query_orders_by_the_metric_with_label_tiebreak()
     {
-        var sql = CompileChart(ReportDialect.Sqlite, new ReportState
-        {
-            Filters = [Filter("STATUS <> 'CANCELLED'")],
-            View = new ViewSpec
-            {
-                Mode = "chart", Type = "bar", Label = "STATUS", Value = "AMOUNT", Fn = AggregateFn.Sum,
-                Sort = new ChartSortSpec { By = "value", Dir = SortDir.Desc },
-            },
-        });
+        var sql = CompileChart(ReportDialect.Sqlite, Doc(
+            source: new StageLayer { Filters = [Filter("STATUS <> 'CANCELLED'")] },
+            tail:
+            [
+                ChartStage(shape =>
+                {
+                    shape.Type = "bar";
+                    shape.Label = "STATUS";
+                    shape.Value = "AMOUNT";
+                    shape.Fn = AggregateFn.Sum;
+                    shape.Sort = new ChartSortSpec { By = "value", Dir = SortDir.Desc };
+                }),
+            ]));
 
         Assert.Equal(
-            "SELECT \"STATUS\", COUNT(*) AS \"__rows\", SUM(\"AMOUNT\") AS \"a0\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base WHERE (\"STATUS\" <> @p0) GROUP BY \"STATUS\" ORDER BY \"a0\" DESC, \"STATUS\" LIMIT @p1",
+            "SELECT \"STATUS\", COUNT(*) AS \"__count\", SUM(\"AMOUNT\") AS \"m0\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base WHERE (\"STATUS\" <> @p0) GROUP BY \"STATUS\" ORDER BY \"m0\" DESC, \"STATUS\" LIMIT @p1",
             sql.Sql);
         Assert.Equal(["CANCELLED", 1001], sql.NamedBindings.Values.ToArray());
     }
@@ -511,23 +600,50 @@ public class GoldenSqlTests
     [Fact]
     public void Chart_count_alone_groups_on_the_row_count()
     {
-        var sql = CompileChart(ReportDialect.Sqlite, new ReportState
-        {
-            View = new ViewSpec { Mode = "chart", Type = "pie", Label = "STATUS", Fn = AggregateFn.Count },
-        });
+        var sql = CompileChart(ReportDialect.Sqlite, Doc(tail:
+        [
+            ChartStage(shape =>
+            {
+                shape.Type = "pie";
+                shape.Label = "STATUS";
+                shape.Fn = AggregateFn.Count;
+            }),
+        ]));
 
         Assert.Equal(
-            "SELECT \"STATUS\", COUNT(*) AS \"__rows\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base GROUP BY \"STATUS\" ORDER BY \"STATUS\" LIMIT @p0",
+            "SELECT \"STATUS\", COUNT(*) AS \"__count\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base GROUP BY \"STATUS\" ORDER BY \"STATUS\" LIMIT @p0",
             sql.Sql);
+    }
+
+    [Fact]
+    public void Chart_count_value_sort_orders_by_the_count_alias()
+    {
+        var sql = CompileChart(ReportDialect.Sqlite, Doc(tail:
+        [
+            ChartStage(shape =>
+            {
+                shape.Type = "bar";
+                shape.Label = "STATUS";
+                shape.Fn = AggregateFn.Count;
+                shape.Sort = new ChartSortSpec { By = "value", Dir = SortDir.Desc };
+            }),
+        ]));
+
+        Assert.Contains("ORDER BY \"__count\" DESC, \"STATUS\"", sql.Sql);
     }
 
     [Fact]
     public void Chart_without_fn_selects_raw_label_value_pairs()
     {
-        var sql = CompileChart(ReportDialect.Sqlite, new ReportState
-        {
-            View = new ViewSpec { Mode = "chart", Type = "line", Label = "ORDER_DATE", Value = "AMOUNT" },
-        });
+        var sql = CompileChart(ReportDialect.Sqlite, Doc(tail:
+        [
+            ChartStage(shape =>
+            {
+                shape.Type = "line";
+                shape.Label = "ORDER_DATE";
+                shape.Value = "AMOUNT";
+            }),
+        ]));
 
         Assert.Equal(
             "SELECT \"ORDER_DATE\", \"AMOUNT\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base ORDER BY \"ORDER_DATE\" LIMIT @p0",
@@ -537,33 +653,34 @@ public class GoldenSqlTests
     [Fact]
     public void SqlServer_and_oracle_chart_queries_group_and_cap()
     {
-        var chartState = new ReportState
-        {
-            View = new ViewSpec
+        static ReportState ChartState() => Doc(tail:
+        [
+            ChartStage(shape =>
             {
-                Mode = "chart", Type = "bar", Label = "STATUS", Value = "AMOUNT", Fn = AggregateFn.Avg,
-                Sort = new ChartSortSpec { By = "value", Dir = SortDir.Desc },
-            },
-        };
+                shape.Type = "bar";
+                shape.Label = "STATUS";
+                shape.Value = "AMOUNT";
+                shape.Fn = AggregateFn.Avg;
+                shape.Sort = new ChartSortSpec { By = "value", Dir = SortDir.Desc };
+            }),
+        ]);
 
-        var sqlServer = CompileChart(ReportDialect.SqlServer, chartState).Sql;
-        Assert.Contains("AVG(CAST([AMOUNT] AS FLOAT)) AS [a0]", sqlServer);
+        var sqlServer = CompileChart(ReportDialect.SqlServer, ChartState()).Sql;
+        Assert.Contains("AVG(CAST([AMOUNT] AS FLOAT)) AS [m0]", sqlServer);
         Assert.Contains("GROUP BY [STATUS]", sqlServer);
-        Assert.Contains("ORDER BY [a0] DESC, [STATUS]", sqlServer);
+        Assert.Contains("ORDER BY [m0] DESC, [STATUS]", sqlServer);
 
-        var oracle = CompileChart(ReportDialect.Oracle, chartState).Sql;
-        Assert.Contains("AVG(\"AMOUNT\") AS \"a0\"", oracle);
+        var oracle = CompileChart(ReportDialect.Oracle, ChartState()).Sql;
+        Assert.Contains("AVG(\"AMOUNT\") AS \"m0\"", oracle);
         Assert.Contains("GROUP BY \"STATUS\"", oracle);
-        Assert.Contains("ORDER BY \"a0\" DESC, \"STATUS\"", oracle);
+        Assert.Contains("ORDER BY \"m0\" DESC, \"STATUS\"", oracle);
     }
 
     [Fact]
     public void SqlServer_paging_without_sort_still_compiles_valid_sql()
     {
-        var (page, _) = Compile(ReportDialect.SqlServer, new ReportState
-        {
-            Page = new PageRequest { Index = 1, Size = 10 },
-        });
+        var (page, _) = Compile(ReportDialect.SqlServer, Doc(
+            page: new PageRequest { Index = 1, Size = 10 }));
 
         // SQL Server OFFSET requires ORDER BY; the compiler must inject a constant order.
         Assert.Contains("ORDER BY", page.Sql, StringComparison.OrdinalIgnoreCase);

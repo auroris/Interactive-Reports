@@ -4,6 +4,17 @@ import { test, expect } from "@playwright/test";
 
 const queryPath = /\/api\/reports\/[^/]+\/query$/;
 
+// v3 documents: the source layer carries grid state; the tail stages are the view.
+const sourceLayerOf = state => state.pipeline?.[0]?.layer ?? {};
+const stageOf = (state, kind) => (state.pipeline ?? []).find(s => s.shape?.kind === kind)?.shape ?? null;
+const modeOf = state => {
+    const kinds = (state.pipeline ?? []).slice(1).map(s => s.shape?.kind);
+    return kinds.includes("chart") ? "chart"
+        : kinds.includes("spread") ? "pivot"
+        : kinds.includes("group") ? "groupBy"
+        : "grid";
+};
+
 async function openWorkbench(page) {
     await page.goto("/");
     await expect(page.getByRole("table")).toBeVisible();
@@ -127,7 +138,7 @@ test("sorts with explicit null placement from the Actions dialog", async ({ page
 
     const response = await runAndWaitForQuery(page, () =>
         dialog.getByRole("button", { name: "Apply", exact: true }).click());
-    expect(response.request().postDataJSON().sorts).toEqual([
+    expect(sourceLayerOf(response.request().postDataJSON()).sorts).toEqual([
         { col: "NOTES", dir: "desc", nulls: "last" },
     ]);
 
@@ -138,7 +149,7 @@ test("sorts with explicit null placement from the Actions dialog", async ({ page
     await nullSorting.selectOption("");
     const defaultResponse = await runAndWaitForQuery(page, () =>
         reopened.getByRole("button", { name: "Apply", exact: true }).click());
-    expect(defaultResponse.request().postDataJSON().sorts).toEqual([
+    expect(sourceLayerOf(defaultResponse.request().postDataJSON()).sorts).toEqual([
         { col: "NOTES", dir: "desc" },
     ]);
 });
@@ -154,7 +165,7 @@ test("names highlights and saves their explicit precedence sequence", async ({ p
 
     const response = await runAndWaitForQuery(page, () =>
         dialog.getByRole("button", { name: "Apply", exact: true }).click());
-    expect(response.request().postDataJSON().highlights).toEqual([
+    expect(sourceLayerOf(response.request().postDataJSON()).highlights).toEqual([
         {
             id: "h1",
             name: "Large orders",
@@ -209,13 +220,13 @@ test("adds correctly aggregated total rows to a pivot without a right-side total
 
     const response = await runAndWaitForQuery(page, () =>
         dialog.getByRole("button", { name: "Apply", exact: true }).click());
-    expect(response.request().postDataJSON().view).toEqual({
-        mode: "pivot",
-        rows: ["CUSTOMER"],
-        cols: ["STATUS"],
-        values: [{ col: "AMOUNT", fn: "sum" }],
-        totals: true,
+    const posted = response.request().postDataJSON();
+    expect(stageOf(posted, "group")).toEqual({
+        kind: "group",
+        by: ["CUSTOMER", "STATUS"],
+        values: [{ id: "m1", col: "AMOUNT", fn: "sum" }],
     });
+    expect(stageOf(posted, "spread")).toEqual({ kind: "spread", cols: ["STATUS"], totals: true });
 
     await expect(page.locator("tr.ir-grand-total")).toHaveCount(1);
     await expect(page.locator("tr.ir-grand-total")).toContainText("Sum:");
@@ -250,9 +261,8 @@ test("a saved report retains its grid, pivot, and chart configurations with pivo
         const pivotResponse = await runAndWaitForQuery(page, () =>
             dialog.getByRole("button", { name: "Apply", exact: true }).click());
         const configured = pivotResponse.request().postDataJSON();
-        expect(configured.view.mode).toBe("pivot");
-        expect(configured.views.chart.mode).toBe("chart");
-        expect(configured.views.pivot).toEqual(configured.view);
+        expect(modeOf(configured)).toBe("pivot");
+        expect(configured.shelf.chart[0].shape.kind).toBe("chart");
 
         await clickAction(page, "Save As…");
         const saveDialog = page.getByRole("dialog");
@@ -264,26 +274,27 @@ test("a saved report retains its grid, pivot, and chart configurations with pivo
         const saveResponse = await saveResponsePromise;
         savedId = (await saveResponse.json()).id;
         const savedState = saveResponse.request().postDataJSON().state;
-        expect(savedState.view.mode).toBe("pivot");
-        expect(Object.keys(savedState.views).sort()).toEqual(["chart", "pivot"]);
+        expect(modeOf(savedState)).toBe("pivot");
+        expect(Object.keys(savedState.shelf)).toEqual(["chart"]);
+        expect(savedState.schema.AMOUNT).toBe("number");
 
         await runAndWaitForQuery(page, () =>
             page.getByRole("button", { name: "Grid", exact: true }).click());
         const chartResponse = await runAndWaitForQuery(page, () =>
             page.getByRole("button", { name: "Chart", exact: true }).click());
-        expect(chartResponse.request().postDataJSON().view.mode).toBe("chart");
+        expect(modeOf(chartResponse.request().postDataJSON())).toBe("chart");
         await expect(page.getByRole("dialog")).toHaveCount(0);
 
         await page.reload();
         await expect(page.getByRole("table")).toBeVisible();
         const loadResponse = await runAndWaitForQuery(page, () =>
             page.getByRole("combobox", { name: "Saved Report" }).selectOption(savedId));
-        expect(loadResponse.request().postDataJSON().view.mode).toBe("pivot");
+        expect(modeOf(loadResponse.request().postDataJSON())).toBe("pivot");
         await expect(page.getByRole("button", { name: "Pivot", exact: true })).toHaveClass(/ir-active/);
 
         const reloadedChart = await runAndWaitForQuery(page, () =>
             page.getByRole("button", { name: "Chart", exact: true }).click());
-        expect(reloadedChart.request().postDataJSON().view.mode).toBe("chart");
+        expect(modeOf(reloadedChart.request().postDataJSON())).toBe("chart");
         await expect(page.getByRole("dialog")).toHaveCount(0);
     } finally {
         if (savedId) await request.delete(`/api/reports/saved/${savedId}`);
@@ -297,11 +308,11 @@ test("deleting a computed column also deletes its references", async ({ page }) 
     await expect(computed).toContainText("With Tax");
     const response = await runAndWaitForQuery(page, () =>
         computed.getByRole("button", { name: "Remove", exact: true }).click());
-    const state = response.request().postDataJSON();
+    const layer = sourceLayerOf(response.request().postDataJSON());
 
-    expect(state.computed).toEqual([]);
-    expect(state.columns).not.toContain("c1");
-    expect(state.formats).not.toHaveProperty("c1");
+    expect(layer.computed).toEqual([]);
+    expect(layer.columns).not.toContain("c1");
+    expect(layer.formats).not.toHaveProperty("c1");
     await expect(page.getByText(/unknown column 'c1'/)).toHaveCount(0);
 });
 
@@ -453,7 +464,13 @@ test("admin uploads a validated report document and downloads its canonical file
             buffer: Buffer.from(JSON.stringify({
                 title,
                 primary: true,
-                state: { v: 2, filters: [{ expr: "AMOUNT > 100" }] },
+                state: {
+                    v: 3,
+                    pipeline: [{
+                        shape: { kind: "source" },
+                        layer: { filters: [{ expr: "AMOUNT > 100" }] },
+                    }],
+                },
             })),
         });
 
@@ -475,7 +492,7 @@ test("admin uploads a validated report document and downloads its canonical file
         const document = JSON.parse(await readFile(await downloaded.path(), "utf8"));
         expect(document.title).toBe(title);
         expect(document.primary).toBe(false);
-        expect(document.state.filters).toEqual([{ expr: "AMOUNT > 100", enabled: true }]);
+        expect(sourceLayerOf(document.state).filters).toEqual([{ expr: "AMOUNT > 100", enabled: true }]);
     } finally {
         if (importedId)
             await request.delete(`/api/reports/saved/${importedId}`);

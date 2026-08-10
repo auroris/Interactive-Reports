@@ -59,54 +59,90 @@ public sealed class IrJsonTests
     {
         var state = new ReportState
         {
-            Sorts =
+            Pipeline =
             [
-                new SortRule { Col = "A", Nulls = NullPlacement.First },
-                new SortRule { Col = "B" },
+                new PipelineStage
+                {
+                    Shape = new StageShape { Kind = "source" },
+                    Layer = new StageLayer
+                    {
+                        Sorts =
+                        [
+                            new SortRule { Col = "A", Nulls = NullPlacement.First },
+                            new SortRule { Col = "B" },
+                        ],
+                    },
+                },
             ],
         };
 
         var json = JsonSerializer.Serialize(state, IrJson.Options);
         using var document = JsonDocument.Parse(json);
-        var sorts = document.RootElement.GetProperty("sorts");
+        var sorts = document.RootElement.GetProperty("pipeline")[0]
+            .GetProperty("layer").GetProperty("sorts");
 
         Assert.Equal("first", sorts[0].GetProperty("nulls").GetString());
         Assert.False(sorts[1].TryGetProperty("nulls", out _));
 
         var roundTrip = JsonSerializer.Deserialize<ReportState>(json, IrJson.Options)!;
-        Assert.Equal(NullPlacement.First, roundTrip.Sorts![0].Nulls);
-        Assert.Null(roundTrip.Sorts[1].Nulls);
+        var layerSorts = roundTrip.Pipeline![0].Layer!.Sorts!;
+        Assert.Equal(NullPlacement.First, layerSorts[0].Nulls);
+        Assert.Null(layerSorts[1].Nulls);
     }
 
     [Fact]
-    public void Configured_views_round_trip_independently_from_the_selected_default_view()
+    public void Pipeline_and_shelf_round_trip_with_camel_case_shape_fields()
     {
         var state = new ReportState
         {
-            View = new ViewSpec
-            {
-                Mode = "pivot", Rows = ["CUSTOMER"], Cols = ["STATUS"],
-            },
-            Views = new()
-            {
-                ["pivot"] = new ViewSpec
+            Pipeline =
+            [
+                new PipelineStage { Shape = new StageShape { Kind = "source" } },
+                new PipelineStage
                 {
-                    Mode = "pivot", Rows = ["CUSTOMER"], Cols = ["STATUS"],
+                    Shape = new StageShape
+                    {
+                        Kind = "group",
+                        By = ["CUSTOMER", "STATUS"],
+                        Values = [new MetricRule { Id = "m1", Col = "AMOUNT", Fn = AggregateFn.Sum }],
+                    },
                 },
-                ["chart"] = new ViewSpec
-                {
-                    Mode = "chart", Type = "pie", Label = "STATUS", Fn = AggregateFn.Count,
-                },
+                new PipelineStage { Shape = new StageShape { Kind = "spread", Cols = ["STATUS"], Totals = true } },
+            ],
+            Shelf = new()
+            {
+                ["chart"] =
+                [
+                    new PipelineStage
+                    {
+                        Shape = new StageShape
+                        {
+                            Kind = "chart", Type = "pie", Label = "STATUS", Fn = AggregateFn.Count,
+                        },
+                    },
+                ],
             },
         };
 
         var json = JsonSerializer.Serialize(state, IrJson.Options);
-        var roundTrip = JsonSerializer.Deserialize<ReportState>(json, IrJson.Options)!;
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        Assert.Equal("source", root.GetProperty("pipeline")[0].GetProperty("shape").GetProperty("kind").GetString());
+        Assert.Equal("sum", root.GetProperty("pipeline")[1].GetProperty("shape")
+            .GetProperty("values")[0].GetProperty("fn").GetString());          // camelCase enum on the wire
+        Assert.True(root.GetProperty("pipeline")[2].GetProperty("shape").GetProperty("totals").GetBoolean());
+        Assert.Equal("chart", root.GetProperty("shelf").GetProperty("chart")[0]
+            .GetProperty("shape").GetProperty("kind").GetString());           // shelf keys stay verbatim
 
-        Assert.Equal("pivot", roundTrip.View!.Mode);
-        Assert.Equal(["CUSTOMER"], roundTrip.Views!["pivot"].Rows);
-        Assert.Equal("pie", roundTrip.Views["chart"].Type);
-        Assert.Equal(AggregateFn.Count, roundTrip.Views["chart"].Fn);
+        var roundTrip = JsonSerializer.Deserialize<ReportState>(json, IrJson.Options)!;
+        Assert.Equal(3, roundTrip.Pipeline!.Count);
+        var metric = Assert.Single(roundTrip.Pipeline[1].Shape!.Values!);
+        Assert.Equal(("m1", "AMOUNT", AggregateFn.Sum), (metric.Id, metric.Col, metric.Fn));
+        Assert.Equal(["STATUS"], roundTrip.Pipeline[2].Shape!.Cols!);
+        Assert.True(roundTrip.Pipeline[2].Shape!.Totals);
+        var shelfChart = Assert.Single(roundTrip.Shelf!["chart"]);
+        Assert.Equal(("chart", "pie", "STATUS", AggregateFn.Count),
+            (shelfChart.Shape!.Kind, shelfChart.Shape.Type, shelfChart.Shape.Label, shelfChart.Shape.Fn));
     }
 
     private sealed record WireNumbers(long Signed, ulong Unsigned, decimal Precise);

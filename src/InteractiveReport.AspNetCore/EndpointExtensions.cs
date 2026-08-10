@@ -73,7 +73,7 @@ public static class EndpointExtensions
                 title = def.Title ?? ColumnModel.Prettify(def.Name),
                 styleSheet = def.StyleSheet?.Trim(),
                 columns = columns.Select(c => new ColumnInfo(c.Name, c.Label, c.KindName, c.IsComputed)),
-                defaultState = SchemaDefaultState(def),
+                defaultState = SchemaDefaultState(def, columns),
                 stateVersion = ReportState.CurrentVersion,
                 capabilities = new
                 {
@@ -111,13 +111,25 @@ public static class EndpointExtensions
     /// never apply labels; the document ingestion pipeline mirrors this same layering
     /// so exports render what an equivalent client displays.
     /// </summary>
-    internal static ReportState SchemaDefaultState(ReportDefinition def)
+    internal static ReportState SchemaDefaultState(ReportDefinition def, Core.Schema.ReportSchema schema)
     {
         // Resolve against an empty request to get a detached copy — the store's
         // definition (and its DefaultState) must not be mutated by response shaping.
         var state = ReportStateResolver.Resolve(def.DefaultState, new ReportState());
-        if (state.Labels is null && def.ColumnLabels is not null)
-            state.Labels = new(def.ColumnLabels);
+        if (state.Pipeline is not { Count: > 0 })
+            state.Pipeline = [new PipelineStage { Shape = new StageShape { Kind = "source" } }];
+        var source = state.Pipeline[0];
+        source.Layer ??= new StageLayer();
+        if (source.Layer.Labels is null && def.ColumnLabels is not null)
+            source.Layer.Labels = new(def.ColumnLabels);
+
+        // The delivered default is the client's drift-proof reset terminus: a document
+        // that never recorded a snapshot gets stamped with the live schema, so the
+        // client's recorded-vs-live comparison passes by construction.
+        state.Schema ??= schema.Columns.ToDictionary(
+            c => c.Name,
+            c => c.KindName,
+            StringComparer.OrdinalIgnoreCase);
         return state;
     }
 

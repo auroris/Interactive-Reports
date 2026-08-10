@@ -7,6 +7,7 @@ import { api, apiUrl } from "../core/api.js";
 import { el } from "../core/dom.js";
 import { confirmDialog } from "../core/dialog.js";
 import { featureEnabled } from "./schema.js";
+import { schemaSnapshot } from "./state.js";
 
 export function canManageCurrentSaved(w) {
     return canManageSaved(w, w.currentSaved);
@@ -40,7 +41,10 @@ export async function loadSavedById(w, id) {
     try {
         const docResponse = await api(apiUrl(w.base, "saved", id));
         w.currentSaved = docResponse.summary;
-        w.doc = w.normalize(docResponse.state);
+        // The snapshot gate: a drifted document is refused and the working copy
+        // falls back to the default report; the stored row is untouched.
+        if (!w.adoptState(docResponse.state, `Saved report "${docResponse.summary?.title}"`))
+            w.currentSaved = null;
         w.els.search.value = w.doc.search ?? "";
         refreshSavedSelect(w);
         await w.runQuery();
@@ -51,7 +55,7 @@ export async function loadSavedById(w, id) {
 
 export function resetToPrimary(w) {
     w.currentSaved = null;
-    w.doc = w.normalize(w.schema?.defaultState);
+    w.adoptState(w.schema?.defaultState, "The default report");
     w.els.search.value = w.doc.search ?? "";
     refreshSavedSelect(w);
     w.runQuery().catch(() => {});
@@ -65,6 +69,9 @@ export async function resetWorkingCopy(w) {
 }
 
 export async function saveReport(w, { title, isGlobal, asNew, target = null }) {
+    // A save asserts "this configuration is valid against this schema" — stamp
+    // the live snapshot so future loads can detect drift.
+    w.doc.schema = schemaSnapshot(w.schema?.columns);
     const state = w.serialize();
     if (asNew) {
         w.currentSaved = await api(w.reportUrl("saved"), {

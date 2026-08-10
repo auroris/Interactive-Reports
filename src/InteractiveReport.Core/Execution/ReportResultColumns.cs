@@ -16,14 +16,33 @@ internal static class ReportResultColumns
                 column.IsComputed))
             .ToList();
 
-    public static List<ColumnInfo> ForGroupBy(ValidatedState state)
+    /// <summary>
+    /// The terminal group stage's visible columns, in the layer's selection order:
+    /// pass-through dims, __count, metrics by stable id, and layer computed columns.
+    /// Metric labels rebuild from the (possibly relabeled) view metadata so export
+    /// display labels reach the synthetic sum(…) captions.
+    /// </summary>
+    public static List<ColumnInfo> ForGroupStage(ValidatedState state)
     {
-        var columns = From(state.View.GroupBy);
-        columns.Add(new ColumnInfo("__count", "Count", "number", false));
-        for (var i = 0; i < state.View.Values.Count; i++)
-            columns.Add(ForAggregate(state.View.Values[i], $"v{i}"));
-        return columns;
+        var view = state.View;
+        var layer = view.GroupLayer!;
+        var metrics = view.Values.ToDictionary(m => m.Id, StringComparer.OrdinalIgnoreCase);
+
+        var result = new List<ColumnInfo>(layer.SelectColumns.Count);
+        foreach (var column in layer.SelectColumns)
+        {
+            if (metrics.TryGetValue(column.Name, out var metric))
+                result.Add(ForMetric(metric));
+            else if (string.Equals(column.Name, "__count", StringComparison.OrdinalIgnoreCase))
+                result.Add(new ColumnInfo("__count", "Count", "number", false));
+            else
+                result.Add(new ColumnInfo(column.Name, column.Label, column.KindName, column.IsComputed));
+        }
+        return result;
     }
+
+    public static ColumnInfo ForMetric(ValidMetric metric)
+        => ForAggregate(metric.ToAggregate(), metric.Id);
 
     /// <summary>Two columns always: the label as itself, then the metric.</summary>
     public static List<ColumnInfo> ForChart(ValidChart chart)

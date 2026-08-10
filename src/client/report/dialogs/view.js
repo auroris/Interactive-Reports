@@ -1,10 +1,21 @@
-// View-mode dialogs: Group By, Pivot, and Chart. Each applies a full view spec
-// to the doc and records it in the persisted view registry so the toolbar can
-// switch back to the mode without re-asking, including after a saved-report reload.
+// Tail-authoring dialogs: Group By, Pivot, and Chart. Each writes the pipeline's
+// tail stages — [group], [group, spread], or [chart] — and swaps them in through
+// the shelf so the toolbar can switch back to any configured mode without
+// re-asking, including after a saved-report reload. Editing a spec preserves the
+// existing stages' layers (per-view columns, labels, formats, computed, sorts,
+// highlights); metrics keep their stable ids across edits when their column and
+// function survive, so per-metric state never silently re-attaches elsewhere.
 
 import { el, labeled, sel } from "../../core/dom.js";
 import { openDialog } from "../../core/dialog.js";
-import { activateReportView, configuredReportView } from "../state.js";
+import {
+    activateTail,
+    configuredTail,
+    pruneRetiredMetrics,
+    removeStageComputedColumn,
+    sameColumn,
+    stageOf,
+} from "../state.js";
 import { pickable, typeOf, chartFnsFor } from "../schema.js";
 import { rowList, colOptions, fnSelectFor, DIR_OPTIONS } from "./parts.js";
 import { FN_LABELS } from "../render/format.js";
@@ -40,10 +51,49 @@ function valueList(w, initial) {
     return { container, list };
 }
 
+/// Assign stable metric ids to the dialog's (col, fn) rows. A row that matches a
+/// previous value keeps that value's id — its formats, computed references, and
+/// cell state stay attached; new rows get fresh ids never used by the old spec.
+/// Returns the identified values plus the ids the edit retired.
+function assignMetricIds(rows, previous) {
+    const remaining = [...(previous ?? [])];
+    const used = new Set(remaining.map(v => String(v.id).toLowerCase()));
+    let next = 1;
+    const fresh = () => {
+        while (used.has(`m${next}`)) next++;
+        const id = `m${next}`;
+        used.add(id);
+        return id;
+    };
+    const values = rows.map(row => {
+        const index = remaining.findIndex(v => sameColumn(v.col, row.col) && v.fn === row.fn);
+        if (index >= 0) {
+            const [kept] = remaining.splice(index, 1);
+            return { id: kept.id, col: row.col, fn: row.fn };
+        }
+        return { id: fresh(), col: row.col, fn: row.fn };
+    });
+    return { values, retired: remaining.map(v => v.id) };
+}
+
+/// Retired dims and metrics take their dependent stage-layer state with them —
+/// the same coarse rule as deleting a computed column.
+function pruneRetiredStageState(d, retiredMetricIds, retiredDims) {
+    const stage = stageOf(d, "group");
+    if (!stage) return;
+    pruneRetiredMetrics(d, stage, retiredMetricIds);
+    for (const dim of retiredDims) removeStageComputedColumn(d, stage, dim);
+}
+
+const groupShape = tail => tail?.find(s => (s.shape?.kind ?? "") === "group") ?? null;
+const spreadShape = tail => tail?.find(s => (s.shape?.kind ?? "") === "spread") ?? null;
+
 export function groupByDialog(w) {
-    const active = configuredReportView(w.doc, "groupBy");
-    const dims = dimList(w, active?.groupBy, { addLabel: "Group Column", max: 3 });
-    const values = valueList(w, active?.values);
+    const existingTail = configuredTail(w.doc, "groupBy");
+    const existingGroup = groupShape(existingTail);
+    const shape = existingGroup?.shape ?? {};
+    const dims = dimList(w, shape.by, { addLabel: "Group Column", max: 3 });
+    const values = valueList(w, shape.values);
 
     openDialog({
         owner: w,
@@ -56,20 +106,32 @@ export function groupByDialog(w) {
             values.container, values.list.addButton,
             el("p", { class: "ir-dialog-note" }, "A row count per group is always included.")),
         onApply: () => {
-            const groupBy = [...new Set(dims.list.read())];
-            if (!groupBy.length) throw new Error("Pick at least one group column");
-            const spec = { mode: "groupBy", groupBy, values: values.list.read() };
-            return w.apply(d => activateReportView(d, spec));
+            const by = [...new Set(dims.list.read())];
+            if (!by.length) throw new Error("Pick at least one group column");
+            const { values: withIds, retired } = assignMetricIds(values.list.read(), shape.values);
+            const retiredDims = (shape.by ?? []).filter(old => !by.some(n => sameColumn(n, old)));
+            return w.apply(d => {
+                const stage = structuredClone(existingGroup) ?? {};
+                stage.shape = { kind: "group", by, values: withIds };
+                activateTail(d, "groupBy", [stage]);
+                pruneRetiredStageState(d, retired, retiredDims);
+            });
         },
     });
 }
 
 export function pivotDialog(w) {
-    const active = configuredReportView(w.doc, "pivot");
-    const rows = dimList(w, active?.rows, { addLabel: "Row Column", max: 2 });
-    const cols = dimList(w, active?.cols, { addLabel: "Column", max: 2 });
-    const values = valueList(w, active?.values);
-    const totalsInp = el("input", { type: "checkbox", checked: active?.totals === true });
+    const existingTail = configuredTail(w.doc, "pivot");
+    const existingGroup = groupShape(existingTail);
+    const existingSpread = spreadShape(existingTail);
+    const shape = existingGroup?.shape ?? {};
+    const spreadCols = existingSpread?.shape?.cols ?? [];
+    const rowDims = (shape.by ?? []).filter(n => !spreadCols.some(c => sameColumn(c, n)));
+
+    const rows = dimList(w, rowDims, { addLabel: "Row Column", max: 2 });
+    const cols = dimList(w, spreadCols, { addLabel: "Column", max: 2 });
+    const values = valueList(w, shape.values);
+    const totalsInp = el("input", { type: "checkbox", checked: existingSpread?.shape?.totals === true });
 
     openDialog({
         owner: w,
@@ -85,12 +147,22 @@ export function pivotDialog(w) {
             el("label", { class: "ir-checkline ir-gap-above" }, totalsInp, "Show total rows"),
             el("p", { class: "ir-dialog-note" }, "No values = a count per cell.")),
         onApply: () => {
-            const rowDims = [...new Set(rows.list.read())];
-            const colDims = [...new Set(cols.list.read())].filter(c => !rowDims.includes(c));
-            if (!rowDims.length || !colDims.length) throw new Error("Pick at least one row column and one distinct column heading");
-            const spec = { mode: "pivot", rows: rowDims, cols: colDims, values: values.list.read() };
-            if (totalsInp.checked) spec.totals = true;
-            return w.apply(d => activateReportView(d, spec));
+            const rowNames = [...new Set(rows.list.read())];
+            const colNames = [...new Set(cols.list.read())].filter(c => !rowNames.some(n => sameColumn(n, c)));
+            if (!rowNames.length || !colNames.length)
+                throw new Error("Pick at least one row column and one distinct column heading");
+            const { values: withIds, retired } = assignMetricIds(values.list.read(), shape.values);
+            const by = [...rowNames, ...colNames];
+            const retiredDims = (shape.by ?? []).filter(old => !by.some(n => sameColumn(n, old)));
+            return w.apply(d => {
+                const group = structuredClone(existingGroup) ?? {};
+                group.shape = { kind: "group", by, values: withIds };
+                const spread = structuredClone(existingSpread) ?? {};
+                spread.shape = { kind: "spread", cols: colNames };
+                if (totalsInp.checked) spread.shape.totals = true;
+                activateTail(d, "pivot", [group, spread]);
+                pruneRetiredStageState(d, retired, retiredDims);
+            });
         },
     });
 }
@@ -105,7 +177,8 @@ const CHART_TYPES = [
 ];
 
 export function chartDialog(w) {
-    const active = configuredReportView(w.doc, "chart");
+    const existingTail = configuredTail(w.doc, "chart");
+    const active = existingTail?.find(s => (s.shape?.kind ?? "") === "chart")?.shape;
     const chartable = pickable(w).filter(c => c.type !== "other");
 
     const typeSel = sel(CHART_TYPES, active?.type ?? "bar");
@@ -180,20 +253,20 @@ export function chartDialog(w) {
                 "The chart draws the whole filtered result — never just the visible page — up to the report's point limit.")),
         onApply: () => {
             if (!labelSel.value) throw new Error("Pick a label column");
-            const spec = {
-                mode: "chart",
+            const shape = {
+                kind: "chart",
                 type: typeSel.value,
                 label: labelSel.value,
                 sort: { by: sortBySel.value, dir: sortDirSel.value },
             };
-            if (valueSel.value) spec.value = valueSel.value;
-            if (fnSel.value) spec.fn = fnSel.value;
+            if (valueSel.value) shape.value = valueSel.value;
+            if (fnSel.value) shape.fn = fnSel.value;
             if (typeSel.value !== "pie") {
-                spec.orientation = orientSel.value;
-                if (labelTitleInp.value.trim()) spec.labelAxisTitle = labelTitleInp.value.trim();
-                if (valueTitleInp.value.trim()) spec.valueAxisTitle = valueTitleInp.value.trim();
+                shape.orientation = orientSel.value;
+                if (labelTitleInp.value.trim()) shape.labelAxisTitle = labelTitleInp.value.trim();
+                if (valueTitleInp.value.trim()) shape.valueAxisTitle = valueTitleInp.value.trim();
             }
-            return w.apply(d => activateReportView(d, spec));
+            return w.apply(d => activateTail(d, "chart", [{ shape }]));
         },
     });
 }

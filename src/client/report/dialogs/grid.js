@@ -1,7 +1,12 @@
-// Grid-shaping dialogs: pagination, sort order, control breaks, and aggregate rows.
+// Table-shaping dialogs: pagination, sort order, control breaks, and aggregate
+// rows. Sort follows the stage context — the source table in grid, the group
+// stage under a group/spread tail (pivot restricted to row dimensions). Breaks
+// and aggregates are source-stage features (grid only at T0).
 
 import { el, labeled, sel } from "../../core/dom.js";
 import { openDialog } from "../../core/dialog.js";
+import { stageContext } from "../stage.js";
+import { sourceLayer } from "../state.js";
 import { rowList, colOptions, fnSelectFor, DIR_OPTIONS, NULLS_OPTIONS } from "./parts.js";
 
 const PAGE_LIMITS = [10, 50, 100, 500, 1000];
@@ -35,9 +40,11 @@ export function paginationDialog(w) {
 }
 
 export function sortDialog(w) {
+    const ctx = stageContext(w);
+    const layerOf = ctx.sortLayer;
     const container = el("div", {});
-    const list = rowList(container, w.doc.sorts ?? [], (row, item) => {
-        const colSel = sel(colOptions(w, { none: "— Select —" }), item?.col ?? "");
+    const list = rowList(container, layerOf(w.doc).sorts ?? [], (row, item) => {
+        const colSel = sel(colOptions(w, { none: "— Select —", columns: ctx.sortColumns }), item?.col ?? "");
         const dirSel = sel(DIR_OPTIONS, item?.dir ?? "asc");
         const nullsSel = sel(NULLS_OPTIONS, item?.nulls ?? "");
         colSel.setAttribute("aria-label", "Column");
@@ -51,19 +58,25 @@ export function sortDialog(w) {
         } : null;
     }, { addLabel: "Sort", max: 6 });
 
+    const note = ctx.mode === "grid"
+        ? "Control-break columns always sort first."
+        : ctx.mode === "pivot"
+            ? "A pivot orders by its row dimensions."
+            : "Remaining group columns keep the order deterministic.";
+
     openDialog({
         owner: w,
         title: "Sort",
         width: "38rem",
         build: body => body.append(container, list.addButton,
-            el("p", { class: "ir-dialog-note" }, "Control-break columns always sort first.")),
-        onApply: () => w.apply(d => { d.sorts = list.read(); }),
+            el("p", { class: "ir-dialog-note" }, note)),
+        onApply: () => w.apply(d => { layerOf(d).sorts = list.read(); }),
     });
 }
 
 export function breakDialog(w) {
     const container = el("div", {});
-    const list = rowList(container, (w.doc.breaks ?? []).map(b => ({ col: b })), (row, item) => {
+    const list = rowList(container, (sourceLayer(w.doc).breaks ?? []).map(b => ({ col: b })), (row, item) => {
         const colSel = sel(colOptions(w, { none: "— Select —" }), item?.col ?? "");
         row.append(colSel);
         row._read = () => colSel.value || null;
@@ -76,14 +89,14 @@ export function breakDialog(w) {
         build: body => body.append(container, list.addButton,
             el("p", { class: "ir-dialog-note" }, "Rows group under a heading per break value; aggregates subtotal per group.")),
         onApply: () => w.apply(d => {
-            d.breaks = [...new Set(list.read())];
+            sourceLayer(d).breaks = [...new Set(list.read())];
         }),
     });
 }
 
 export function aggregateDialog(w) {
     const container = el("div", {});
-    const list = rowList(container, w.doc.aggregates ?? [], (row, item) => {
+    const list = rowList(container, sourceLayer(w.doc).aggregates ?? [], (row, item) => {
         const colSel = sel(colOptions(w, { none: "— Select —" }), item?.col ?? "");
         const fnSel = fnSelectFor(w, colSel, item?.fn);
         row.append(fnSel, el("span", { class: "ir-row-of" }, "of"), colSel);
@@ -96,6 +109,6 @@ export function aggregateDialog(w) {
         width: "28rem",
         build: body => body.append(container, list.addButton,
             el("p", { class: "ir-dialog-note" }, "Computed over the whole filtered set — grand total and per-break subtotals.")),
-        onApply: () => w.apply(d => { d.aggregates = list.read(); }),
+        onApply: () => w.apply(d => { sourceLayer(d).aggregates = list.read(); }),
     });
 }

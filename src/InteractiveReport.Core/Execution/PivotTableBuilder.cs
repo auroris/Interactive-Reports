@@ -1,23 +1,48 @@
 using System.Globalization;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 using InteractiveReport.Core.Model;
 using InteractiveReport.Core.Validation;
 
 namespace InteractiveReport.Core.Execution;
 
-/// <summary>Transforms provider-neutral grouped rows into the pivot response matrix.</summary>
+/// <summary>
+/// Transforms provider-neutral grouped rows into the spread response matrix. Cell
+/// columns carry stable value-derived names — {metricId}@{JSON array of column-key
+/// strings} — so per-cell presentation state survives data drift and spec reordering.
+/// Clients treat the names as opaque keys; the server is their only author.
+/// </summary>
 internal static class PivotTableBuilder
 {
     private static readonly string[] TotalFunctionOrder =
-        ["sum", "avg", "median", "min", "max", "count", "countDistinct"];
+        ["sum", "avg", "median", "min", "max", "count", "countDistinct", "total"];
+
+    private static readonly JsonSerializerOptions KeyJson = new()
+    {
+        // Match what a JSON-literate reader expects: only structurally required
+        // escaping. Clients never regenerate these names — they copy them.
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
+    /// <summary>One spread cell family: a metric or group-layer computed column.</summary>
+    private sealed record CellDef(
+        string Id,
+        string Label,
+        string Type,
+        string? FormatSource,
+        bool IsComputed,
+        int ValueOrdinal,
+        int TotalsOrdinal);
 
     public static PivotTable Build(
         IReadOnlyList<PivotGroup> groups,
         ValidatedState state,
         int maxColumns,
-        IReadOnlyList<PivotGroup>? totalGroups = null)
+        IReadOnlyList<PivotGroup>? totalGroups = null,
+        IReadOnlyList<CompiledRule<DefineColumnEffect>>? totalsComputed = null)
     {
         var rowDimensions = state.View.PivotRows;
-        var values = state.View.Values;
+        var cells = CellDefinitions(state.View, totalsComputed ?? []);
 
         // Source rows are ordered by row dimensions first, so first-seen column-key
         // order is not global. Sort distinct keys explicitly.
@@ -31,37 +56,27 @@ internal static class PivotTableBuilder
         {
             throw new ReportValidationException(
                 [new ValidationError(
-                    "view.cols",
-                    $"pivot would produce {columnKeys.Count} column groups (max {maxColumns}) — filter further or choose a lower-cardinality column dimension")]);
+                    "pipeline[2].shape.cols",
+                    $"spread would produce {columnKeys.Count} column groups (max {maxColumns}) — filter further or choose a lower-cardinality column dimension")]);
         }
 
-        var columnKeyIndexes = new Dictionary<object?[], int>(KeyComparer.Instance);
-        for (var i = 0; i < columnKeys.Count; i++)
-            columnKeyIndexes[columnKeys[i]] = i;
-
-        // An empty value list means one implicit count cell per column key.
-        var valueLabels = values.Count > 0
-            ? values.Select(ReportResultColumns.AggregateLabel).ToList()
-            : ["count"];
-        var valuesPerKey = valueLabels.Count;
+        var keyNames = columnKeys.ToDictionary(
+            key => key,
+            KeyName,
+            KeyComparer.Instance);
 
         var columns = ReportResultColumns.From(rowDimensions);
-        for (var keyIndex = 0; keyIndex < columnKeys.Count; keyIndex++)
+        foreach (var key in columnKeys)
         {
-            var keyLabel = string.Join(" · ", columnKeys[keyIndex].Select(FormatKeyPart));
-            for (var valueIndex = 0; valueIndex < valuesPerKey; valueIndex++)
+            var keyLabel = string.Join(" · ", key.Select(FormatKeyPart));
+            foreach (var cell in cells)
             {
-                var label = valuesPerKey == 1
+                var label = cells.Count == 1 && !cell.IsComputed
                     ? keyLabel
-                    : $"{keyLabel} · {valueLabels[valueIndex]}";
-                var type = values.Count == 0
-                    ? "number"
-                    : ReportResultColumns.AggregateType(values[valueIndex]);
-                columns.Add(new ColumnInfo($"p{keyIndex}_{valueIndex}", label, type, false)
+                    : $"{keyLabel} · {cell.Label}";
+                columns.Add(new ColumnInfo(CellName(cell, keyNames[key]), label, cell.Type, cell.IsComputed)
                 {
-                    FormatSource = values.Count == 0
-                        ? null
-                        : ReportResultColumns.FormatSource(values[valueIndex]),
+                    FormatSource = cell.FormatSource,
                 });
             }
         }
@@ -80,33 +95,107 @@ internal static class PivotTableBuilder
                 currentKey = group.RowKey;
             }
 
-            var columnIndex = columnKeyIndexes[group.ColumnKey];
-            for (var valueIndex = 0; valueIndex < valuesPerKey; valueIndex++)
+            var keyName = keyNames[group.ColumnKey];
+            foreach (var cell in cells)
             {
-                currentRow![$"p{columnIndex}_{valueIndex}"] = values.Count == 0
+                currentRow![CellName(cell, keyName)] = cell.ValueOrdinal < 0
                     ? group.Count
-                    : group.Values[valueIndex];
+                    : group.Values[cell.ValueOrdinal];
             }
         }
 
         var totals = new Dictionary<string, IReadOnlyDictionary<string, object?>>(StringComparer.OrdinalIgnoreCase);
         foreach (var group in totalGroups ?? [])
         {
-            if (!columnKeyIndexes.TryGetValue(group.ColumnKey, out var columnIndex)) continue;
+            if (!keyNames.TryGetValue(group.ColumnKey, out var keyName)) continue;
 
-            for (var valueIndex = 0; valueIndex < valuesPerKey; valueIndex++)
+            foreach (var cell in cells)
             {
-                var function = values.Count == 0
-                    ? "count"
-                    : ReportResultColumns.AggregateName(values[valueIndex].Fn);
-                var value = values.Count == 0 ? group.Count : group.Values[valueIndex];
-                totals[$"p{columnIndex}_{valueIndex}"] =
+                if (cell.TotalsOrdinal < -1) continue;   // computed excluded from totals
+
+                var function = cell.IsComputed
+                    ? "total"
+                    : cell.ValueOrdinal < 0
+                        ? "count"
+                        : ReportResultColumns.AggregateName(state.View.Values[cell.ValueOrdinal].Fn);
+                var value = cell.TotalsOrdinal < 0 ? group.Count : group.Values[cell.TotalsOrdinal];
+                totals[CellName(cell, keyName)] =
                     new Dictionary<string, object?> { [function] = value };
             }
         }
 
         return new PivotTable(columns, rows, totals);
     }
+
+    /// <summary>
+    /// The spread's cell families: declared metrics in order, then group-layer computed
+    /// columns; the implicit __count when neither exists. Value ordinals follow the
+    /// composed SELECT (metrics, then computed appended by the ir_stage wrap); totals
+    /// ordinals cover only the computed columns whose expressions survive re-grouping
+    /// by the column dimensions alone.
+    /// </summary>
+    private static List<CellDef> CellDefinitions(
+        ValidView view,
+        IReadOnlyList<CompiledRule<DefineColumnEffect>> totalsComputed)
+    {
+        var layer = view.GroupLayer!;
+        var cells = new List<CellDef>();
+        for (var i = 0; i < view.Values.Count; i++)
+        {
+            var metric = view.Values[i];
+            var aggregate = metric.ToAggregate();
+            cells.Add(new CellDef(
+                metric.Id,
+                ReportResultColumns.AggregateLabel(aggregate),
+                ReportResultColumns.AggregateType(aggregate),
+                ReportResultColumns.FormatSource(aggregate),
+                IsComputed: false,
+                ValueOrdinal: i,
+                TotalsOrdinal: i));
+        }
+
+        var totalsIndex = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < totalsComputed.Count; i++)
+            totalsIndex[totalsComputed[i].Effect.Column.Name] = view.Values.Count + i;
+
+        for (var i = 0; i < layer.Computed.Count; i++)
+        {
+            var column = layer.Computed[i].Effect.Column;
+            cells.Add(new CellDef(
+                column.Name,
+                column.Label,
+                column.KindName,
+                FormatSource: null,
+                IsComputed: true,
+                ValueOrdinal: view.Values.Count + i,
+                TotalsOrdinal: totalsIndex.TryGetValue(column.Name, out var ordinal) ? ordinal : -2));
+        }
+
+        if (cells.Count == 0)
+        {
+            cells.Add(new CellDef(
+                "__count",
+                "Count",
+                "number",
+                FormatSource: null,
+                IsComputed: false,
+                ValueOrdinal: -1,
+                TotalsOrdinal: -1));
+        }
+        return cells;
+    }
+
+    private static string CellName(CellDef cell, string keyName) => $"{cell.Id}@{keyName}";
+
+    /// <summary>
+    /// The canonical column-key encoding: a compact JSON array of invariant value
+    /// strings (null stays null). Deterministic and collision-free; the human-facing
+    /// form lives in the column label, never in the name.
+    /// </summary>
+    private static string KeyName(object?[] key)
+        => JsonSerializer.Serialize(
+            key.Select(part => part is null ? null : Convert.ToString(part, CultureInfo.InvariantCulture)),
+            KeyJson);
 
     /// <summary>
     /// CSV has no separate footer channel, so materialize the same total rows the

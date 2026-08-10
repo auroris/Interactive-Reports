@@ -223,6 +223,9 @@ export function formatInteger(value) {
 export const FN_LABELS = {
     sum: "Sum", avg: "Avg", median: "Median", min: "Min", max: "Max",
     count: "Count", countDistinct: "Count Distinct",
+    // Spread totals for a group-layer computed cell aren't any one aggregate —
+    // the expression re-evaluates over the totals grouping.
+    total: "Total",
 };
 
-export const FN_ORDER = ["sum", "avg", "median", "min", "max", "count", "countDistinct"];
+export const FN_ORDER = ["sum", "avg", "median", "min", "max", "count", "countDistinct", "total"];

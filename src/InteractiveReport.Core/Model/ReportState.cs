@@ -3,60 +3,150 @@ namespace InteractiveReport.Core.Model;
 /// <summary>
 /// The report state document: simultaneously the query request body, the saved report,
 /// and the shareable view state. Everything in it is data validated against the report's
-/// discovered schema — never code. Versioned for forward migration.
+/// discovered schema — never code. Version 3 is a literal pipeline of table stages;
+/// versions 1 and 2 are rejected (no external consumers, no migrator by owner decision).
 /// </summary>
 public sealed class ReportState
 {
-    public const int CurrentVersion = 2;
+    public const int CurrentVersion = 3;
 
     public int V { get; set; } = CurrentVersion;
 
-    /// <summary>Toolbar search: OR of case-insensitive contains across visible text columns.</summary>
+    /// <summary>
+    /// The discovered schema snapshot (column name → logical kind) this document was
+    /// authored against. A client-side contract: the client stamps it on save and
+    /// compares it against the live schema on load (removed/retyped columns are a
+    /// mismatch; additions pass). The server never reads it.
+    /// </summary>
+    public Dictionary<string, string>? Schema { get; set; }
+
+    /// <summary>Toolbar search: OR of case-insensitive contains across the source layer's visible text columns.</summary>
     public string? Search { get; set; }
-
-    public List<FilterRule>? Filters { get; set; }
-
-    public List<SortRule>? Sorts { get; set; }
-
-    /// <summary>Visible columns in display order. Null/empty = all schema columns.</summary>
-    public List<string>? Columns { get; set; }
-
-    /// <summary>
-    /// Real column name → display label. Presentation, never a program: it does not
-    /// gate execution or validation, and query responses keep server-derived labels —
-    /// the client renders its own. The server consumes it in exactly one place:
-    /// an export renders what the user sees, so the posted document's labels apply
-    /// there. Computed columns keep their label on the computed rule.
-    /// </summary>
-    public Dictionary<string, string>? Labels { get; set; }
-
-    public List<ComputedColumn>? Computed { get; set; }
-    public List<string>? Breaks { get; set; }
-    public List<AggregateRule>? Aggregates { get; set; }
-    public List<HighlightRule>? Highlights { get; set; }
-
-    /// <summary>
-    /// The selected view. In a persisted report this is also the view selected when
-    /// the report first opens.
-    /// </summary>
-    public ViewSpec? View { get; set; }
-
-    /// <summary>
-    /// Configured alternate views keyed by mode (groupBy, pivot, chart). Only View is
-    /// validated and executed; these inactive definitions are retained so the user can
-    /// switch views without rebuilding them.
-    /// </summary>
-    public Dictionary<string, ViewSpec>? Views { get; set; }
 
     public PageRequest? Page { get; set; }
 
     /// <summary>
-    /// Real column name → display formatting (mask, alignment, styling, renderer).
-    /// Renderer source-column names are schema-checked and projected for grid display;
-    /// the remaining settings are presentation-only. Grid exports keep ordinary values
-    /// raw and serialize link/image cells as the corresponding encoded HTML fragment.
+    /// The executing pipeline. The first stage is always "source"; T0 accepts the tails
+    /// [], [group], [group, spread], and [chart]. The client's view mode is derived
+    /// from the tail, never stored. Null or empty means the bare source stage.
+    /// </summary>
+    public List<PipelineStage>? Pipeline { get; set; }
+
+    /// <summary>
+    /// Parked alternate tails (stage arrays after source), keyed by their derived mode
+    /// name (groupBy, pivot, chart). Never validated or executed — inert retained
+    /// configuration the toolbar swaps into the pipeline.
+    /// </summary>
+    public Dictionary<string, List<PipelineStage>>? Shelf { get; set; }
+}
+
+/// <summary>One pipeline stage: how the input table is reshaped plus the per-table layer.</summary>
+public sealed class PipelineStage
+{
+    public StageShape? Shape { get; set; }
+    public StageLayer? Layer { get; set; }
+}
+
+/// <summary>
+/// The reshaping half of a stage. Kind selects which fields apply: "source" uses none,
+/// "group" uses By/Values, "spread" uses Cols/Totals, "chart" uses the chart fields.
+/// </summary>
+public sealed class StageShape
+{
+    /// <summary>"source", "group", "spread", or "chart".</summary>
+    public string Kind { get; set; } = "source";
+
+    // group
+
+    /// <summary>Group dimensions (schema or computed columns of the previous stage).</summary>
+    public List<string>? By { get; set; }
+
+    /// <summary>Aggregate metrics with stable ids. Empty means the implicit __count alone.</summary>
+    public List<MetricRule>? Values { get; set; }
+
+    // spread
+
+    /// <summary>
+    /// The subset of the preceding group stage's By columns whose values spread into
+    /// cell columns; the remaining By columns key the rows.
+    /// </summary>
+    public List<string>? Cols { get; set; }
+
+    /// <summary>Show correctly re-aggregated total rows below the matrix.</summary>
+    public bool? Totals { get; set; }
+
+    // chart (one chart per report — a label dimension and a single numeric metric)
+
+    /// <summary>"bar", "line", "area", or "pie".</summary>
+    public string? Type { get; set; }
+
+    /// <summary>Label (category) column; text, number, date, or bool.</summary>
+    public string? Label { get; set; }
+
+    /// <summary>Metric source column. Optional only with fn "count", which becomes COUNT(*).</summary>
+    public string? Value { get; set; }
+
+    /// <summary>Optional aggregation over Value grouped by Label. Absent = one point per filtered row.</summary>
+    public AggregateFn? Fn { get; set; }
+
+    /// <summary>"vertical" (default) or "horizontal".</summary>
+    public string? Orientation { get; set; }
+
+    public ChartSortSpec? Sort { get; set; }
+
+    public string? LabelAxisTitle { get; set; }
+    public string? ValueAxisTitle { get; set; }
+}
+
+/// <summary>
+/// One aggregate metric of a group stage. The id ("m1", "m2", …) is the metric's stable
+/// column name in the stage's output — a namespace like computed columns' c1, unique
+/// within the stage, never shadowing input columns — so reordering the values list can
+/// never silently change what downstream references mean.
+/// </summary>
+public sealed class MetricRule
+{
+    public string Id { get; set; } = "";
+    public string Col { get; set; } = "";
+    public AggregateFn Fn { get; set; }
+}
+
+/// <summary>
+/// The per-table layer of a stage, every field bound to that stage's own output schema.
+/// T0 restrictions: filters, breaks, and aggregates are source-only; spread layers carry
+/// labels/formats only; chart layers stay empty. Absent fields inherit nothing — the
+/// layer is data, and an absent list simply means none.
+/// </summary>
+public sealed class StageLayer
+{
+    /// <summary>Visible columns in display order when this stage is terminal. Null/empty = all output columns.</summary>
+    public List<string>? Columns { get; set; }
+
+    /// <summary>
+    /// Stage-output column name → display label. Presentation, never a program: unknown
+    /// keys are unused display data. The server consumes labels only for export.
+    /// </summary>
+    public Dictionary<string, string>? Labels { get; set; }
+
+    /// <summary>
+    /// Stage-output column name → display formatting. Renderer source columns
+    /// (displayAs/urlColumn/textColumn) are honored on the source layer only.
     /// </summary>
     public Dictionary<string, ColumnFormat>? Formats { get; set; }
+
+    public List<ComputedColumn>? Computed { get; set; }
+
+    /// <summary>Row predicates over this stage's table. T0: validated on the source stage only.</summary>
+    public List<FilterRule>? Filters { get; set; }
+
+    public List<SortRule>? Sorts { get; set; }
+    public List<HighlightRule>? Highlights { get; set; }
+
+    /// <summary>Control-break columns (source layer only at T0).</summary>
+    public List<string>? Breaks { get; set; }
+
+    /// <summary>Footer aggregates (source layer only at T0).</summary>
+    public List<AggregateRule>? Aggregates { get; set; }
 }
 
 /// <summary>
@@ -140,7 +230,7 @@ public sealed class PageRequest
 
 public sealed class ComputedColumn : ExpressionRule
 {
-    /// <summary>Separate namespace from schema columns ("c1", "c2", ...); may not shadow them.</summary>
+    /// <summary>Separate namespace from schema columns ("c1", "c2", ...); may not shadow the owning stage's columns.</summary>
     public string Id { get; set; } = "";
     public string? Label { get; set; }
 }
@@ -180,43 +270,7 @@ public sealed class HighlightStyle
     public string? Fg { get; set; }
 }
 
-public sealed class ViewSpec
-{
-    /// <summary>"grid" (default), "groupBy", "pivot", "chart".</summary>
-    public string Mode { get; set; } = "grid";
-
-    public List<string>? GroupBy { get; set; }
-    public List<string>? Rows { get; set; }
-    public List<string>? Cols { get; set; }
-    public List<AggregateRule>? Values { get; set; }
-
-    /// <summary>Pivot mode: show correctly re-aggregated total rows below the matrix.</summary>
-    public bool? Totals { get; set; }
-
-    // Chart mode: one chart per report — a label dimension and a single numeric metric.
-
-    /// <summary>"bar", "line", "area", or "pie".</summary>
-    public string? Type { get; set; }
-
-    /// <summary>Label (category) column; text, number, date, or bool.</summary>
-    public string? Label { get; set; }
-
-    /// <summary>Metric source column. Optional only with fn "count", which becomes COUNT(*).</summary>
-    public string? Value { get; set; }
-
-    /// <summary>Optional aggregation over Value grouped by Label. Absent = one point per filtered row.</summary>
-    public AggregateFn? Fn { get; set; }
-
-    /// <summary>"vertical" (default) or "horizontal".</summary>
-    public string? Orientation { get; set; }
-
-    public ChartSortSpec? Sort { get; set; }
-
-    public string? LabelAxisTitle { get; set; }
-    public string? ValueAxisTitle { get; set; }
-}
-
-/// <summary>Chart ordering lives inside the chart spec; grid sorts never apply to charts.</summary>
+/// <summary>Chart ordering lives inside the chart stage's shape; table sorts never apply to charts.</summary>
 public sealed class ChartSortSpec
 {
     /// <summary>"label" (default) or "value".</summary>

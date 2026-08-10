@@ -8,6 +8,8 @@ namespace InteractiveReport.Core.Composition;
 /// Turns (definition, validated state) into SqlKata queries: the developer's base SELECT
 /// wrapped as a derived table (the APEX trick) with user operations layered on top.
 /// The page and count queries are cloned from one filtered core so they cannot disagree.
+/// Stage layers extend the same pattern upward: a group stage wraps the filtered core in
+/// GROUP BY, and its layer's computed columns/markers/sorts ride one more wrap above it.
 /// Identifiers come exclusively from schema-validated ColumnModel instances; values are
 /// always bindings, never inlined.
 /// </summary>
@@ -15,6 +17,8 @@ public static class QueryComposer
 {
     public const string BaseAlias = "ir_base";
     public const string CalcAlias = "ir_calc";
+    public const string StageAlias = "ir_stage";
+    public const string StageCalcAlias = "ir_stage_calc";
 
     public static ComposedQueries Compose(ReportDefinition def, ValidatedState state)
     {
@@ -67,7 +71,7 @@ public static class QueryComposer
         {
             // Second wrap: no dialect reliably allows referencing a SELECT alias in
             // WHERE, so computed columns become real columns of ir_calc — after this,
-            // filters, sorts, search, aggregates, breaks, and view dimensions treat
+            // filters, sorts, search, aggregates, breaks, and stage dimensions treat
             // them uniformly.
             // Bare, matching the unquoted alias above: a quoted "ir_base" would not
             // resolve against the case-folded IR_BASE on Oracle (ORA-00904).
@@ -90,60 +94,190 @@ public static class QueryComposer
         return core;
     }
 
-    /// <summary>GroupBy view: paginated groups plus the group-count query.</summary>
-    public static (Query Page, Query Count) ComposeGroupByView(ReportDefinition def, ValidatedState state)
+    /// <summary>Group stage as the terminal table: paginated groups plus the group-count query.</summary>
+    public static (Query Page, Query Count) ComposeGroupStage(ReportDefinition def, ValidatedState state)
     {
         var core = BuildFilteredCore(def, state);
-        var dims = state.View.GroupBy;
-
-        var page = BuildGrouped(core, dims, state.View.Values, def.Dialect, DimSorts(dims, state.Sorts));
+        var page = BuildGroupStagePage(core, state, def.Dialect);
         if (!state.PageAll)
             page.ForPage(state.PageIndex, state.PageSize);
 
-        var groups = core.Clone().Select(dims.Select(d => d.Name).ToArray()).GroupBy(dims.Select(d => d.Name).ToArray());
+        var dimNames = state.View.GroupBy.Select(d => d.Name).ToArray();
+        var groups = core.Clone().Select(dimNames).GroupBy(dimNames);
         var count = new Query().From(groups.As("ir_groups")).AsCount();
 
         return (page, count);
     }
 
-    /// <summary>GroupBy view for export: all groups, capped for truncation detection.</summary>
-    public static Query ComposeGroupByExport(ReportDefinition def, ValidatedState state, int maxRows)
+    /// <summary>Group stage for export: all groups, capped for truncation detection.</summary>
+    public static Query ComposeGroupStageExport(ReportDefinition def, ValidatedState state, int maxRows)
     {
         var core = BuildFilteredCore(def, state);
-        var dims = state.View.GroupBy;
-        return BuildGrouped(core, dims, state.View.Values, def.Dialect, DimSorts(dims, state.Sorts))
-            .Limit(maxRows + 1);
+        return BuildGroupStagePage(core, state, def.Dialect).Limit(maxRows + 1);
     }
 
     /// <summary>
-    /// Pivot source: one grouped query over rows+cols dimensions, deterministically
-    /// ordered, capped at maxGroups+1 so the executor can detect overflow. The pivot
-    /// itself happens in memory — native PIVOT syntax never enters the picture.
+    /// The complete ordered group-stage table: grouped core, the layer's computed
+    /// columns and highlight markers wrapped above it, layer sorts (explicit sorts
+    /// first, remaining dims ascending so paging stays deterministic).
     /// </summary>
-    public static Query ComposePivotSource(ReportDefinition def, ValidatedState state, int maxGroups)
+    private static Query BuildGroupStagePage(Query core, ValidatedState state, ReportDialect dialect)
     {
-        var core = BuildFilteredCore(def, state);
-        var dims = state.View.PivotRows.Concat(state.View.PivotCols).ToList();
-        return BuildGrouped(core, dims, state.View.Values, def.Dialect,
-                dims.Select(d => new ValidSort(d, SortDir.Asc)))
-            .Limit(maxGroups + 1);
+        var view = state.View;
+        var layer = view.GroupLayer!;
+        var sorts = GroupStageSorts(layer.Sorts, view.GroupBy).ToList();
+        var query = BuildGroupStageTable(
+            core,
+            view.GroupBy,
+            MetricValues(view),
+            layer,
+            dialect,
+            includeDecorations: true,
+            sorts);
+        foreach (var sort in sorts)
+            ApplySort(query, sort, dialect);
+        return query;
     }
 
     /// <summary>
-    /// Optional pivot footer: re-aggregate the filtered source by the pivot's column
-    /// dimensions alone. Deriving totals from the source, rather than adding rendered
-    /// cells, keeps averages, medians, distinct counts, and null semantics correct.
+    /// Spread source: the group stage's table over row+column dimensions, ordered rows
+    /// first so groups arrive row-contiguous, capped at maxGroups+1 so the executor can
+    /// detect overflow. The spread itself happens in memory — native PIVOT syntax never
+    /// enters the picture.
     /// </summary>
-    public static Query ComposePivotTotals(ReportDefinition def, ValidatedState state)
+    public static Query ComposeSpreadSource(ReportDefinition def, ValidatedState state, int maxGroups)
     {
         var core = BuildFilteredCore(def, state);
-        var dims = state.View.PivotCols;
-        return BuildGrouped(core, dims, state.View.Values, def.Dialect,
-            dims.Select(d => new ValidSort(d, SortDir.Asc)));
+        var view = state.View;
+        var dims = view.PivotRows.Concat(view.PivotCols).ToList();
+
+        // Layer sorts (row dims only, enforced at validation) choose the row order;
+        // remaining row dims and the column dims follow ascending. Row dims always
+        // precede column dims so equal row keys stay adjacent for the builder.
+        var sorts = GroupStageSorts(view.GroupLayer!.Sorts, view.PivotRows)
+            .Concat(view.PivotCols.Select(d => new ValidSort(d, SortDir.Asc)))
+            .ToList();
+
+        var query = BuildGroupStageTable(
+            core,
+            dims,
+            MetricValues(view),
+            view.GroupLayer!,
+            def.Dialect,
+            includeDecorations: false,
+            sorts);
+        foreach (var sort in sorts)
+            ApplySort(query, sort, def.Dialect);
+        return query.Limit(maxGroups + 1);
     }
 
     /// <summary>
-    /// Chart view: the whole filtered set collapsed to (label, metric) points — through
+    /// Optional spread footer: re-aggregate the filtered source by the spread's column
+    /// dimensions alone, through the same computed wrap so derived metrics total
+    /// correctly. Deriving totals from the source, rather than adding rendered cells,
+    /// keeps averages, medians, distinct counts, and null semantics correct. Only the
+    /// totals-safe computed columns (see <see cref="SpreadTotalsComputed"/>) ride along —
+    /// an expression referencing a row dimension has no meaning in a cols-only grouping.
+    /// </summary>
+    public static Query ComposeSpreadTotals(
+        ReportDefinition def,
+        ValidatedState state,
+        IReadOnlyList<CompiledRule<DefineColumnEffect>> totalsComputed)
+    {
+        var core = BuildFilteredCore(def, state);
+        var view = state.View;
+        var sorts = view.PivotCols.Select(d => new ValidSort(d, SortDir.Asc)).ToList();
+        var query = BuildGroupStageTable(
+            core,
+            view.PivotCols,
+            MetricValues(view),
+            view.GroupLayer! with { Computed = totalsComputed, Decorations = [], Sorts = [] },
+            def.Dialect,
+            includeDecorations: false,
+            sorts);
+        foreach (var sort in sorts)
+            ApplySort(query, sort, def.Dialect);
+        return query;
+    }
+
+    /// <summary>
+    /// Group-layer computed columns whose expressions reference only metrics, __count,
+    /// and the spread's column dimensions — the inputs that still exist when the totals
+    /// query re-groups by column dimensions alone. The rest keep their cells but show
+    /// no total.
+    /// </summary>
+    public static IReadOnlyList<CompiledRule<DefineColumnEffect>> SpreadTotalsComputed(ValidView view)
+    {
+        var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "__count" };
+        foreach (var metric in view.Values) allowed.Add(metric.Id);
+        foreach (var column in view.PivotCols) allowed.Add(column.Name);
+
+        return view.GroupLayer!.Computed
+            .Where(rule => Expressions.ExprColumns.Collect(rule.Expression.Ast).All(allowed.Contains))
+            .ToList();
+    }
+
+    /// <summary>
+    /// The group stage's table, unordered: grouped core plus — when the layer computes,
+    /// decorates, or needs an alias materialized for a null-placement sort — the
+    /// ir_stage wrap. Computed columns become real columns of ir_stage_calc before any
+    /// marker or sort expression references them, mirroring the ir_base/ir_calc split.
+    /// </summary>
+    private static Query BuildGroupStageTable(
+        Query core,
+        IReadOnlyList<ColumnModel> dims,
+        IReadOnlyList<GroupedValue> values,
+        ValidStageLayer layer,
+        ReportDialect dialect,
+        bool includeDecorations,
+        IReadOnlyList<ValidSort> sorts)
+    {
+        var grouped = BuildGrouped(core, dims, values, dialect);
+        var decorations = includeDecorations ? layer.Decorations : [];
+
+        var dimNames = new HashSet<string>(dims.Select(d => d.Name), StringComparer.OrdinalIgnoreCase);
+        var computedNames = new HashSet<string>(
+            layer.Computed.Select(rule => rule.Effect.Column.Name),
+            StringComparer.OrdinalIgnoreCase);
+
+        // ORDER BY tolerates a bare SELECT alias on every dialect, but not an alias
+        // inside an expression (SQL Server's null-rank CASE) — those sorts need the
+        // alias materialized by a wrap first.
+        var nullsSortOnAlias = sorts.Any(s => s.Nulls is not null && !dimNames.Contains(s.Column.Name));
+        var nullsSortOnComputed = sorts.Any(s => s.Nulls is not null && computedNames.Contains(s.Column.Name));
+
+        if (layer.Computed.Count == 0 && decorations.Count == 0 && !nullsSortOnAlias)
+            return grouped;
+
+        var wrapped = new Query().From(grouped.As(StageAlias)).SelectRaw($"{StageAlias}.*");
+        foreach (var rule in layer.Computed)
+            ExpressionRuleSqlApplicator.ApplyDefinition(wrapped, rule, dialect);
+
+        var query = wrapped;
+        if (layer.Computed.Count > 0 && (decorations.Count > 0 || nullsSortOnComputed))
+            query = new Query().From(wrapped.As(StageCalcAlias)).SelectRaw($"{StageCalcAlias}.*");
+
+        foreach (var rule in decorations)
+            ExpressionRuleSqlApplicator.ApplyDecoration(query, rule, dialect);
+        return query;
+    }
+
+    /// <summary>Explicit layer sorts first; remaining dims ascending keep the order total.</summary>
+    private static IEnumerable<ValidSort> GroupStageSorts(
+        IReadOnlyList<ValidSort> sorts,
+        IReadOnlyList<ColumnModel> dims)
+    {
+        var covered = new HashSet<string>(sorts.Select(s => s.Column.Name), StringComparer.OrdinalIgnoreCase);
+        return sorts.Concat(dims
+            .Where(d => !covered.Contains(d.Name))
+            .Select(d => new ValidSort(d, SortDir.Asc)));
+    }
+
+    private static IReadOnlyList<GroupedValue> MetricValues(ValidView view)
+        => view.Values.Select(m => new GroupedValue(m.Id, m.Column, m.Fn)).ToList();
+
+    /// <summary>
+    /// Chart stage: the whole filtered set collapsed to (label, metric) points — through
     /// the shared grouped shape when an aggregate is set, or raw label/value rows when
     /// charting one point per row. Capped at maxPoints+1 so the executor can reject
     /// overflow precisely instead of truncating (a truncated pie lies about proportions).
@@ -157,11 +291,11 @@ public static class QueryComposer
         string metricAlias;
         if (chart.Fn is { } fn)
         {
-            IReadOnlyList<ValidAggregate> values = chart.Value is null
+            IReadOnlyList<GroupedValue> values = chart.Value is null
                 ? []
-                : [new ValidAggregate(chart.Value, fn)];
-            q = BuildGrouped(core, [chart.Label], values, def.Dialect, []);
-            metricAlias = chart.Value is null ? "__rows" : "a0";
+                : [new GroupedValue("m0", chart.Value, fn)];
+            q = BuildGrouped(core, [chart.Label], values, def.Dialect);
+            metricAlias = chart.Value is null ? "__count" : "m0";
         }
         else
         {
@@ -195,32 +329,26 @@ public static class QueryComposer
     }
 
     /// <summary>
-    /// The shared grouped shape: dims, COUNT(*) AS __rows, value aggregates a0..aN,
-    /// GROUP BY dims, ordered. Break totals, the groupBy view, and the pivot source all
-    /// read through this one layout.
+    /// The shared grouped shape: dims, COUNT(*) AS __count, then each value under its
+    /// stable alias (metric ids for stage values, a0..aN for footer aggregates and
+    /// break totals). Break totals, the group stage, the spread source, and the chart
+    /// metric all read through this one layout.
     /// </summary>
     private static Query BuildGrouped(
         Query core,
         IReadOnlyList<ColumnModel> dims,
-        IReadOnlyList<ValidAggregate> values,
-        ReportDialect dialect,
-        IEnumerable<ValidSort> order)
+        IReadOnlyList<GroupedValue> values,
+        ReportDialect dialect)
     {
         if (values.Any(value => value.Fn == AggregateFn.Median))
-            return BuildRankedAggregates(core, dims, values, dialect, includeRowCount: true, order);
+            return BuildRankedAggregates(core, dims, values, dialect, includeRowCount: true);
 
         var dimNames = dims.Select(d => d.Name).ToArray();
         var q = core.Clone().Select(dimNames);
-        q.SelectRaw("COUNT(*) AS [__rows]");
-        for (var i = 0; i < values.Count; i++)
-        {
-            var v = values[i];
-            q.SelectRaw($"{DialectSupport.AggregateExpression(dialect, v.Fn, $"[{v.Column.Name}]")} AS [a{i}]");
-        }
+        q.SelectRaw("COUNT(*) AS [__count]");
+        foreach (var v in values)
+            q.SelectRaw($"{DialectSupport.AggregateExpression(dialect, v.Fn, $"[{v.Column.Name}]")} AS [{v.Alias}]");
         q.GroupBy(dimNames);
-
-        foreach (var sort in order)
-            ApplySort(q, sort, dialect);
         return q;
     }
 
@@ -233,10 +361,9 @@ public static class QueryComposer
     private static Query BuildRankedAggregates(
         Query core,
         IReadOnlyList<ColumnModel> dims,
-        IReadOnlyList<ValidAggregate> values,
+        IReadOnlyList<GroupedValue> values,
         ReportDialect dialect,
-        bool includeRowCount,
-        IEnumerable<ValidSort> order)
+        bool includeRowCount)
     {
         var dimNames = dims.Select(d => d.Name).ToArray();
         var selectedNames = dimNames
@@ -263,14 +390,14 @@ public static class QueryComposer
         }
 
         var query = new Query().From(ranked.As("ir_ranked_aggregates")).Select(dimNames);
-        if (includeRowCount) query.SelectRaw("COUNT(*) AS [__rows]");
+        if (includeRowCount) query.SelectRaw("COUNT(*) AS [__count]");
         for (var i = 0; i < values.Count; i++)
         {
             var value = values[i];
             if (value.Fn != AggregateFn.Median)
             {
                 query.SelectRaw(
-                    $"{DialectSupport.AggregateExpression(dialect, value.Fn, $"[{value.Column.Name}]")} AS [a{i}]");
+                    $"{DialectSupport.AggregateExpression(dialect, value.Fn, $"[{value.Column.Name}]")} AS [{value.Alias}]");
                 continue;
             }
 
@@ -282,11 +409,10 @@ public static class QueryComposer
             var median = dialect == ReportDialect.SqlServer
                 ? $"AVG(CAST({candidate} AS FLOAT))"
                 : $"AVG({candidate})";
-            query.SelectRaw($"{median} AS [a{i}]");
+            query.SelectRaw($"{median} AS [{value.Alias}]");
         }
 
         if (dimNames.Length > 0) query.GroupBy(dimNames);
-        foreach (var sort in order) ApplySort(query, sort, dialect);
         return query;
     }
 
@@ -330,14 +456,6 @@ public static class QueryComposer
         else query.OrderByDesc(sort.Column.Name);
     }
 
-    /// <summary>Dimension ordering, honoring a user sort's direction on that dimension.</summary>
-    private static IEnumerable<ValidSort> DimSorts(IReadOnlyList<ColumnModel> dims, IReadOnlyList<ValidSort> sorts)
-    {
-        var byName = sorts.ToDictionary(s => s.Column.Name, StringComparer.OrdinalIgnoreCase);
-        foreach (var dim in dims)
-            yield return byName.TryGetValue(dim.Name, out var s) ? s : new ValidSort(dim, SortDir.Asc);
-    }
-
     /// <summary>
     /// Break columns must sort first so groups arrive contiguous. A user sort on a break
     /// column contributes its direction to the break position; remaining user sorts
@@ -358,30 +476,27 @@ public static class QueryComposer
 
     private static Query BuildAggregates(Query core, ValidatedState state, ReportDialect dialect)
     {
-        if (state.Aggregates.Any(value => value.Fn == AggregateFn.Median))
-            return BuildRankedAggregates(
-                core,
-                [],
-                state.Aggregates,
-                dialect,
-                includeRowCount: false,
-                []);
+        var values = AggregateValues(state.Aggregates);
+        if (values.Any(value => value.Fn == AggregateFn.Median))
+            return BuildRankedAggregates(core, [], values, dialect, includeRowCount: false);
 
         var q = core.Clone();
-        for (var i = 0; i < state.Aggregates.Count; i++)
-        {
-            var agg = state.Aggregates[i];
-            q.SelectRaw($"{DialectSupport.AggregateExpression(dialect, agg.Fn, $"[{agg.Column.Name}]")} AS [a{i}]");
-        }
+        foreach (var value in values)
+            q.SelectRaw($"{DialectSupport.AggregateExpression(dialect, value.Fn, $"[{value.Column.Name}]")} AS [{value.Alias}]");
         return q;
     }
 
     private static Query BuildBreakTotals(Query core, ValidatedState state, ReportDialect dialect)
     {
         // Group ordering mirrors the page's break ordering so renderers walk both in step.
-        return BuildGrouped(core, state.Breaks, state.Aggregates, dialect,
-            EffectiveSorts(state).Take(state.Breaks.Count));
+        var query = BuildGrouped(core, state.Breaks, AggregateValues(state.Aggregates), dialect);
+        foreach (var sort in EffectiveSorts(state).Take(state.Breaks.Count))
+            ApplySort(query, sort, dialect);
+        return query;
     }
+
+    private static IReadOnlyList<GroupedValue> AggregateValues(IReadOnlyList<ValidAggregate> aggregates)
+        => aggregates.Select((a, i) => new GroupedValue($"a{i}", a.Column, a.Fn)).ToList();
 
     private static void ApplySearch(Query q, ValidatedState state)
     {
@@ -394,5 +509,8 @@ public static class QueryComposer
         });
     }
 }
+
+/// <summary>One aggregated value of the shared grouped shape, with its SQL alias.</summary>
+internal readonly record struct GroupedValue(string Alias, ColumnModel Column, AggregateFn Fn);
 
 public sealed record ComposedQueries(Query Page, Query Count, Query? Aggregates = null, Query? BreakTotals = null);

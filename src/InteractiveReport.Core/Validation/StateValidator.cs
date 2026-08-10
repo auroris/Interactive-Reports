@@ -8,7 +8,9 @@ namespace InteractiveReport.Core.Validation;
 /// Turns a raw state document into a ValidatedState against the discovered schema.
 /// Policy: elements referencing unknown columns are dropped into ignored[] (saved-report
 /// resilience); structurally wrong requests (bad arity, untypeable values, or expressions
-/// that do not produce the required type) are precise validation errors.
+/// that do not produce the required type) are precise validation errors. The document is
+/// a stage pipeline: the source layer validates against the effective (base + computed)
+/// schema, the tail via <see cref="PipelineValidator"/> against derived stage schemas.
 /// </summary>
 public static class StateValidator
 {
@@ -25,79 +27,72 @@ public static class StateValidator
             throw new ReportValidationException(
                 [new ValidationError(
                     "v",
-                    $"state version {state.V} is not supported; migrate filters and highlights to version {ReportState.CurrentVersion} expression rules")]);
+                    $"state version {state.V} is not supported; this server requires version {ReportState.CurrentVersion} pipeline documents")]);
         }
 
         var errors = new List<ValidationError>();
         var ignored = new List<IgnoredItem>();
         var resolved = ReportStateResolver.Resolve(def.DefaultState, state);
+        var stages = PipelineValidator.Normalize(resolved.Pipeline, errors);
+        var source = stages.Source;
 
         // Display labels resolve here — one ingestion path for every consumer — but
         // they are presentation, not a program: never validated against the schema
         // (unknown keys are unused display data) and never applied to query surfaces.
         // The definition's columnLabels are the bottom default layer, mirroring the
         // default report the schema endpoint delivers.
-        var labels = ResolveLabels(resolved.Labels ?? def.ColumnLabels);
+        var labels = ResolveLabels(source.Labels ?? def.ColumnLabels);
 
-        // Computed columns validate first against the BASE schema, then join the
+        // Source computed columns validate first against the BASE schema, then join the
         // effective schema — everything after this line treats them as ordinary columns.
         var computed = ComputedColumnValidator.Validate(
-            resolved.Computed,
+            source.Computed,
             schema.Lookup,
-            errors);
+            errors,
+            collectionPath: "pipeline[0].layer.computed");
         var effectiveSchema = schema.Extend(def.Name, computed.Select(rule => rule.Effect.Column));
 
         var filters = ExpressionRuleCompiler.Compile<FilterRule, IncludeRowEffect>(
-            resolved.Filters,
+            source.Filters,
             maxRules: 50,
-            collectionPath: "filters",
+            collectionPath: "pipeline[0].layer.filters",
             effectiveSchema.Lookup,
             ExpressionRequirement.Predicate,
             prepareEffect: static (_, _) => _ => new IncludeRowEffect(),
             errors);
-        var view = ViewSpecValidator.Validate(
-            resolved.View,
-            effectiveSchema.Lookup,
-            errors,
-            ignored);
+        var view = PipelineValidator.ValidateTail(stages, def.Name, effectiveSchema, errors, ignored);
 
-        // A report retains independent settings for all of its views. Bind only the
-        // settings the active execution mode consumes; an inactive Grid configuration
-        // must neither fail nor produce ignored-setting notices while Pivot or Chart
-        // is selected.
+        // A report retains independent settings for every stage. Bind only the settings
+        // the terminal stage consumes; an inactive source configuration must neither
+        // fail nor produce ignored-setting notices while a group or chart tail runs.
         var gridMode = view.Mode == ViewMode.Grid;
         var inactive = new List<IgnoredItem>();
         var columns = ValidateColumns(
-            resolved.Columns,
+            source.Columns,
             effectiveSchema,
             gridMode ? ignored : inactive);
-        var sorts = view.Mode is ViewMode.Grid or ViewMode.GroupBy
-            ? ValidateSorts(resolved.Sorts, effectiveSchema, gridMode ? ignored : inactive)
+        var sorts = gridMode
+            ? ValidateSorts(source.Sorts, effectiveSchema, ignored)
             : [];
         var aggregates = gridMode
             ? AggregateRuleValidator.Validate(
-                resolved.Aggregates,
-                "aggregates",
+                source.Aggregates,
+                "pipeline[0].layer.aggregates",
                 effectiveSchema.Lookup,
                 errors,
                 ignored)
             : [];
         var breaks = gridMode
-            ? ValidateBreaks(resolved.Breaks, effectiveSchema, ignored)
+            ? ValidateBreaks(source.Breaks, effectiveSchema, ignored)
             : [];
         var highlights = gridMode
             ? HighlightRuleValidator.Validate(
-                resolved.Highlights,
+                source.Highlights,
                 effectiveSchema.Lookup,
                 errors,
-                ignored)
+                ignored,
+                collectionPath: "pipeline[0].layer.highlights")
             : [];
-
-        if (view.Mode == ViewMode.GroupBy)
-        {
-            var dims = new HashSet<string>(view.GroupBy.Select(g => g.Name), StringComparer.OrdinalIgnoreCase);
-            sorts = sorts.Where(s => dims.Contains(s.Column.Name)).ToList();
-        }
 
         // Break columns must be selected — renderers group page rows by their values.
         foreach (var b in breaks)
@@ -106,12 +101,12 @@ public static class StateValidator
                 columns.Add(b);
         }
 
-        var formats = ResolveFormats(resolved.Formats);
+        var formats = ResolveFormats(source.Formats);
 
         // A renderer may read a different row column than the displayed slot. Keep
         // those dependencies out of Columns/result metadata, but bind every identifier
         // through the discovered schema before it reaches query composition.
-        var projectionColumns = view.Mode == ViewMode.Grid
+        var projectionColumns = gridMode
             ? ResolveRendererColumns(formats, columns, effectiveSchema, ignored)
             : columns.ToList();
 
@@ -150,7 +145,7 @@ public static class StateValidator
     private static readonly IReadOnlyDictionary<string, string> NoLabels =
         new Dictionary<string, string>();
 
-    private static IReadOnlyDictionary<string, string> ResolveLabels(
+    internal static IReadOnlyDictionary<string, string> ResolveLabels(
         Dictionary<string, string>? labels)
     {
         if (labels is not { Count: > 0 }) return NoLabels;
@@ -260,7 +255,7 @@ public static class StateValidator
         return (index, size, false);
     }
 
-    private static List<ValidSort> ValidateSorts(
+    internal static List<ValidSort> ValidateSorts(
         List<SortRule>? sorts,
         ReportSchema schema,
         List<IgnoredItem> ignored)
@@ -282,7 +277,7 @@ public static class StateValidator
         return result;
     }
 
-    private static List<ColumnModel> ValidateColumns(
+    internal static List<ColumnModel> ValidateColumns(
         List<string>? requested,
         ReportSchema schema,
         List<IgnoredItem> ignored)

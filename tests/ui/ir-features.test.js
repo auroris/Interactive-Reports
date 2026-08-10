@@ -30,10 +30,13 @@ const FEATURES = {
 };
 const DEFAULT_STATES = {
     chipsy: {
+        v: 3,
         page: { index: 1, size: 25 },
-        view: { mode: "grid" },
         search: "acme",
-        filters: [{ enabled: true, expr: "ID = 1" }],
+        pipeline: [{
+            shape: { kind: "source" },
+            layer: { filters: [{ enabled: true, expr: "ID = 1" }] },
+        }],
     },
 };
 
@@ -48,8 +51,12 @@ globalThis.fetch = async (url, options = {}) => {
     const report = /\/([^/]+)\/(schema|query|saved)$/.exec(String(url))?.[1];
     if (String(url).endsWith("/schema")) {
         return json({
-            stateVersion: 2,
-            defaultState: DEFAULT_STATES[report] ?? { page: { index: 1, size: 25 }, view: { mode: "grid" } },
+            stateVersion: 3,
+            defaultState: DEFAULT_STATES[report] ?? {
+                v: 3,
+                page: { index: 1, size: 25 },
+                pipeline: [{ shape: { kind: "source" }, layer: {} }],
+            },
             limits: { defaultPageSize: 25, maxPageSize: 100 },
             columns: [{ name: "ID", label: "ID", type: "number" }],
             capabilities: { aggregateFunctions: {}, expressionFunctions: [] },

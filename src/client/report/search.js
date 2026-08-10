@@ -4,7 +4,7 @@
 
 import { popupMenu } from "../core/menu.js";
 import { pickable, typeOf, labelOf } from "./schema.js";
-import { scopedSearchExpression } from "./state.js";
+import { scopedSearchExpression, sourceLayer } from "./state.js";
 
 export function doSearch(w) {
     const raw = w.els.search.value.trim();
@@ -19,7 +19,7 @@ export function doSearch(w) {
     try { expr = scopedSearchExpression(col, type, raw); }
     catch (error) { w.showError(error); return; }
     w.els.search.value = "";
-    w.applyOrBanner(d => { (d.filters ??= []).push({ enabled: true, expr }); });
+    w.applyOrBanner(d => { (sourceLayer(d).filters ??= []).push({ enabled: true, expr }); });
 }
 
 export function openSearchScopeMenu(w, anchor) {

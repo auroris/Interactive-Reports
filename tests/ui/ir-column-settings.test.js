@@ -51,11 +51,11 @@ globalThis.fetch = async (url, options = {}) => {
     const report = /\/([^/]+)\/(schema|query|saved)$/.exec(String(url))?.[1];
     if (String(url).endsWith("/schema")) {
         return json({
-            stateVersion: 2,
+            stateVersion: 3,
             defaultState: {
-                columns: ["ID", "NAME"],
+                v: 3,
+                pipeline: [{ shape: { kind: "source" }, layer: { columns: ["ID", "NAME"] } }],
                 page: { index: 1, size: 25 },
-                view: { mode: "grid" },
             },
             limits: { defaultPageSize: 25, maxPageSize: 100 },
             columns: ALL_COLUMNS,
@@ -68,11 +68,12 @@ globalThis.fetch = async (url, options = {}) => {
     if (String(url).endsWith("/query")) {
         // Honor the posted visible-columns list so renders reflect visibility edits.
         const doc = options.body ? JSON.parse(options.body) : {};
-        const visible = doc.columns?.length
-            ? ALL_COLUMNS.filter(c => doc.columns.includes(c.name))
+        const layer = doc.pipeline?.[0]?.layer ?? {};
+        const visible = layer.columns?.length
+            ? ALL_COLUMNS.filter(c => layer.columns.includes(c.name))
             : ALL_COLUMNS.filter(c => ["ID", "NAME"].includes(c.name));
         const projected = [...visible];
-        for (const [name, format] of Object.entries(doc.formats ?? {})) {
+        for (const [name, format] of Object.entries(layer.formats ?? {})) {
             if (!visible.some(c => c.name === name) || !["link", "image"].includes(format.displayAs)) continue;
             for (const source of [format.urlColumn, format.displayAs === "link" ? format.textColumn : null]) {
                 const column = ALL_COLUMNS.find(c => c.name === source);
@@ -121,7 +122,9 @@ const applyDialog = async report => {
     report.shadowRoot.querySelector(".ir-dialog .ir-btn-primary").click();
     await settle(() => !report.shadowRoot.querySelector(".ir-dialog"));
     assert.equal(!report.shadowRoot.querySelector(".ir-dialog"), true, "the dialog should close on success");
-    return JSON.parse(requests.filter(r => r.url.endsWith("/query")).at(-1).body);
+    const doc = JSON.parse(requests.filter(r => r.url.endsWith("/query")).at(-1).body);
+    // Grid presentation lives on the posted pipeline's source layer.
+    return doc.pipeline?.[0]?.layer ?? {};
 };
 
 test("column settings write doc.formats and the grid renders mask, alignment, and style", async () => {

@@ -178,57 +178,124 @@ Notes:
 ## 5. Report state document
 
 The single artifact that is simultaneously: the request body, the saved report, and the
-shareable view state. Versioned (`"v": 2`) for forward migration. Version 2 replaces
-the version 1 column/operator/value filter shape with shared boolean expressions; version
-1 state must be migrated before loading.
+shareable view state. Versioned (`"v": 3`). Version 3 restructures the document as a
+literal **pipeline of table stages**; versions 1 and 2 are rejected with a precise error
+(no migrator — nothing external consumes old documents, by owner decision).
+
+**The model: a report is a pipeline of tables.** Stage 1 (`source`) is the developer's
+SELECT; each later stage reshapes its input table (`group`, `spread`) or renders it
+(`chart`). Every *table* stage carries a **layer** of the same per-table instructions —
+column selection, labels, formats, computed columns, sorts, highlights — each bound to
+**that stage's own output schema**. "Computing" therefore exists at every stage:
+source-layer computed columns are filterable and groupable (they extend the schema
+before any reshaping), while a group-layer computed column derives from dims and
+metrics (ratio of sums, share of count). Filtering and search live in the source layer
+only at T0 — they select which rows exist before any table is built — but every layer
+reserves the slot (a group-stage filter is HAVING semantics, a planned fast follow).
 
 ```json
 {
-  "v": 2,
+  "v": 3,
+  "schema": { "ORDER_ID": "number", "CUSTOMER": "text", "STATUS": "text",
+              "AMOUNT": "number", "ORDER_DATE": "date", "CUSTOMER_URL": "text" },
   "search": "acme",
-  "filters": [
-    { "enabled": true, "expr": "IN_LIST(STATUS, 'SHIPPED', 'PENDING')" },
-    { "enabled": false, "expr": "AMOUNT > 1000" }
-  ],
-  "sorts":  [ { "col": "ORDER_DATE", "dir": "desc", "nulls": "last" } ],
-  "columns": ["ORDER_ID", "CUSTOMER", "THUMBNAIL_URL", "AMOUNT", "ORDER_DATE", "c1"],
-  "labels": { "ORDER_ID": "Ticket #" },
-  "formats": {
-    "CUSTOMER": {
-      "displayAs": "link", "urlColumn": "CUSTOMER_URL", "textColumn": "CUSTOMER"
+  "page": { "index": 1, "size": 50 },
+  "pipeline": [
+    {
+      "shape": { "kind": "source" },
+      "layer": {
+        "columns": ["ORDER_ID", "CUSTOMER", "STATUS", "AMOUNT", "ORDER_DATE", "c1"],
+        "labels": { "ORDER_ID": "Ticket #" },
+        "formats": {
+          "CUSTOMER": { "displayAs": "link", "urlColumn": "CUSTOMER_URL" },
+          "AMOUNT": { "mask": "currency:USD", "align": "right" }
+        },
+        "computed": [
+          { "id": "c1", "enabled": true, "label": "Amount w/ Tax",
+            "expr": "ROUND(AMOUNT * 1.0825, 2)" }
+        ],
+        "filters": [
+          { "enabled": true, "expr": "IN_LIST(STATUS, 'SHIPPED', 'PENDING')" },
+          { "enabled": false, "expr": "AMOUNT > 1000" }
+        ],
+        "sorts": [ { "col": "ORDER_DATE", "dir": "desc", "nulls": "last" } ],
+        "highlights": [
+          { "id": "h1", "name": "Large order", "sequence": 10,
+            "enabled": true, "scope": "row",
+            "expr": "c1 > 10000", "style": { "bg": "#fff3cd" } }
+        ],
+        "breaks": [],
+        "aggregates": [ { "col": "AMOUNT", "fn": "sum" } ]
+      }
     },
-    "THUMBNAIL_URL": { "displayAs": "image", "urlColumn": "THUMBNAIL_URL" },
-    "AMOUNT": {
-      "mask": "integer", "align": "center", "bold": true,
-      "classes": [ "amount-column", "emphasized" ]
-    }
-  },
-  "computed": [
-    { "id": "c1", "enabled": true, "label": "Amount w/ Tax",
-      "expr": "ROUND(AMOUNT * 1.0825, 2)" }
-  ],
-  "breaks": ["REGION"],
-  "aggregates": [ { "col": "AMOUNT", "fn": "sum" } ],
-  "highlights": [
-    { "id": "h1", "name": "Large order", "sequence": 10,
-      "enabled": true, "scope": "row",
-      "expr": "ROUND(AMOUNT, 2) > 10000",
-      "style": { "bg": "#fff3cd" } }
-  ],
-  "view": { "mode": "grid" },
-  "views": {
-    "pivot": {
-      "mode": "pivot", "rows": ["CUSTOMER"], "cols": ["STATUS"],
-      "values": [{ "col": "AMOUNT", "fn": "sum" }]
+    {
+      "shape": {
+        "kind": "group",
+        "by": ["CUSTOMER", "STATUS"],
+        "values": [ { "id": "m1", "col": "AMOUNT", "fn": "sum" },
+                    { "id": "m2", "col": "c1", "fn": "avg" } ]
+      },
+      "layer": {
+        "computed": [
+          { "id": "c2", "enabled": true, "label": "Avg per Order",
+            "expr": "ROUND(m1 / __count, 2)" }
+        ],
+        "sorts": [ { "col": "m1", "dir": "desc" } ],
+        "formats": { "m2": { "mask": "decimal2" } },
+        "labels": { "m1": "Total" }
+      }
     },
-    "chart": {
-      "mode": "chart", "type": "pie", "label": "CUSTOMER",
-      "value": "AMOUNT", "fn": "sum"
+    {
+      "shape": { "kind": "spread", "cols": ["STATUS"], "totals": true },
+      "layer": {
+        "labels": { "m1@[\"SHIPPED\"]": "Shipped Total" },
+        "formats": {}
+      }
     }
-  },
-  "page": { "index": 1, "size": 50 }
+  ],
+  "shelf": {
+    "chart": [ { "shape": { "kind": "chart", "type": "pie",
+                            "label": "CUSTOMER", "value": "AMOUNT", "fn": "sum" },
+                 "layer": {} } ]
+  }
 }
 ```
+
+**Pipeline shapes.** The first stage is always `source`. T0 accepts exactly four
+pipelines — `[source]` (grid), `[source, group]` (group by), `[source, group, spread]`
+(pivot), `[source, chart]` (chart) — anything else is a precise validation error.
+The client's view mode is *derived from the tail*, not stored: there is no `view`
+field. `page` applies to the terminal table (grid pages rows, group by pages groups;
+spread and chart run unpaged under their existing caps).
+
+**Shelf.** `shelf` parks configured alternate tails (stage arrays after `source`),
+keyed by their derived mode name. The toolbar swaps tails between `pipeline` and
+`shelf`; the server never validates shelf entries — they are inert retained
+configuration, exactly as the old `views` registry was.
+
+**Schema snapshot.** `schema` records the discovered column name → logical kind
+(`text`/`number`/`date`/`bool`/`other`) map the document was authored against. The
+server ignores it entirely; it is a client-side contract. The client stamps it on
+every save, and on load compares it against the live schema (case- and
+order-insensitive): a recorded column that is missing or retyped is a mismatch —
+pure additions pass. On mismatch the client does **not** run the configured query:
+it shows an error naming the difference and resets its working copy to the default
+report (whose own snapshot is checked too; the synthetic empty state is the
+drift-proof terminus). The stored row is untouched until the user saves. An absent
+snapshot skips the check (hand-authored documents stay writable without ceremony).
+Post-T0, the recorded-vs-live diff plus the pipeline's explicit references enable
+dependency-aware pruning instead of the coarse reset; no protocol change will be
+needed for that upgrade.
+
+**Stable synthetic names.** Group metrics are named by their spec-assigned ids
+(`m1`, `m2`, … — a namespace like computed columns' `c1`, unique within the stage,
+never shadowing schema columns); the implicit row count is always `__count`. Spread
+cell columns are `{metricId}@{JSON array of column-dimension value strings}` — e.g.
+`m1@["SHIPPED"]`, `__count@["SHIPPED","2026"]` — value-derived and therefore stable
+under data drift and spec reordering (the old positional `v0`/`p{k}_{v}` names
+silently changed meaning when the values list was reordered or the data shifted).
+Null dimension values serialize as JSON `null`. Labels carry the human form
+("sum(Amount) · SHIPPED"); the name is identity, not presentation.
 
 **Expression rules:** computed columns, filters, and highlights all contain an `enabled`
 flag and an `expr`. Computed columns must bind to a number, text, or date value; filters
@@ -242,20 +309,23 @@ Legacy documents derive the name from `id` and the sequence from list position i
 increments of ten. `CONTAINS`, `STARTS_WITH`, and `ENDS_WITH` are case-insensitive; `IN_LIST`
 provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
 `IS NULL OR col = ''` when empty text should also count.
-- `search` is the toolbar search: OR of `contains` across visible text columns.
-- `labels` (real column name → display label) is presentation, never a program: it
-  does not gate execution or validation (unknown keys are unused display data), and
-  query responses keep server-derived labels — the client resolves display names as
-  `labels[name] ?? server label`, rebuilding synthetic groupBy/chart metric labels
-  from the view spec it authored. The document is the single source of truth for what
-  the user sees, so the one server consumer is **export**: rendering a file is
-  rendering the user's screen, and the posted document's labels apply to its headers
-  and synthetic labels (the active document may never have been saved, so nothing can
-  be looked up server-side). Ingestion resolves labels once for every path — request
-  `??` effective primary state `??` the definition's `columnLabels` — mirroring the default
-  report the schema endpoint delivers. A computed column still names itself on its
-  own rule. Like every state property, a present map replaces the default wholesale
-  and `{}` explicitly clears it.
+- `search` is the toolbar search: OR of `contains` across the source layer's visible
+  text columns. It is a source-layer concern (stage 1 selects which rows exist) and
+  applies identically under every tail.
+- Each layer's `labels` (column name → display label, keyed by that stage's output
+  names) is presentation, never a program: it does not gate execution or validation
+  (unknown keys are unused display data), and query responses keep server-derived
+  labels — the client resolves display names as `stage labels[name] ?? source
+  labels[name (pass-through dims)] ?? synthetic/server label`. The document is the
+  single source of truth for what the user sees, so the one server consumer is
+  **export**: rendering a file is rendering the user's screen, and the posted
+  document's labels apply to its headers and synthetic labels (the active document
+  may never have been saved, so nothing can be looked up server-side). Ingestion
+  resolves source labels once for every path — request `??` effective primary state
+  `??` the definition's `columnLabels` — mirroring the default report the schema
+  endpoint delivers. A computed column still names itself on its own rule. Like
+  every state property, a present map replaces the default wholesale and `{}`
+  explicitly clears it.
 - `formats` (real column name → `{ mask, align, bold, italic, fg, bg, classes[],
   displayAs, urlColumn, textColumn }`) is the
   second presentation map, written by the Column Settings dialog and following every
@@ -282,24 +352,30 @@ provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
   fragments the browser constructs; ordinary cells stay raw, and hidden renderer
   sources never become exported columns. Highlight styles win over column styles where
   both apply. Text is the base renderer and owns masks; link text composes the base
-  renderer, including the selected text source column's own mask. Group, pivot, and
-  chart metric metadata carry `formatSource`, so a synthetic `v0`/`pN_M` result uses
-  its source column's mask and style without treating aggregate values as links/images.
+  renderer, including the selected text source column's own mask. `displayAs` and its
+  renderer source columns are a **source-layer** affordance only — an aggregate is
+  never a link or image — so group/spread-layer formats carry masks, alignment, and
+  styling. Metric and cell metadata carry `formatSource`, and the client resolves a
+  column's effective format as `terminal-stage formats[name] ?? source-layer formats
+  [formatSource ?? pass-through name] ?? default` — a metric inherits its source
+  column's currency mask until the view overrides it.
 - A partial request resolves over the effective primary state once: a configured
-  primary file, then inline `defaultState`, then the synthetic empty state. A missing
-  property inherits, while an explicit empty string/list clears the default. `{ "mode": "grid" }`
-  explicitly overrides an alternate default view.
-- `view` is the selected execution mode and, when persisted, the view a saved report
-  opens with. `views` retains the configured `groupBy`, `pivot`, and `chart` specs by
-  mode. Switching replaces `view` from that registry without discarding the other
-  configurations. Only the selected spec is validated and executed; inactive specs
-  and Grid-only settings remain inert until their view is selected.
+  primary file, then inline `defaultState`, then the synthetic empty state. `search`
+  and `page` resolve property-wise (missing inherits, explicit empty clears);
+  `pipeline`, `shelf`, and `schema` replace the default **wholesale** when present —
+  stage arrays do not merge, matching the existing list semantics.
+- A persisted pipeline is also the view a saved report opens with: its tail is the
+  active mode. Only the pipeline is validated and executed; shelf entries and layer
+  settings a given tail does not consume (e.g. source breaks under a group tail)
+  remain inert until their stage is terminal again.
 - `GET /{name}/schema` always returns a complete `defaultState`, and it is the one
   place friendly names leave the server: a definition's `columnLabels` become the
-  default report's `labels` unless the effective primary state carries its own. When
-  no default is configured the server synthesizes an empty state — which, by the
-  null-columns rule, means every schema column in database order, flavored by the
-  mapping. A client never invents its own notion of "the default report".
+  default report's source-layer `labels` unless the effective primary state carries
+  its own. When no default is configured the server synthesizes an empty pipeline
+  (`[source]`, empty layer) — which, by the null-columns rule, means every schema
+  column in database order, flavored by the mapping — and stamps it with the current
+  schema snapshot, making it the drift-proof reset terminus. A client never invents
+  its own notion of "the default report".
 
 **Aggregate functions (closed set):** `count sum avg median min max countDistinct`.
 - `sum/avg/median` require number columns; `min/max` allow number/date/text; `count/countDistinct`
@@ -316,34 +392,55 @@ provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
   a subtotal when the final visible group crosses the page boundary. Grand totals render
   only at the logical end of the report.
 
-**Computed columns:** ids live in a separate namespace (`c1`, `c2`, …); may not shadow
-schema column names; referenced by id in `columns`, `sorts`, `filters`, `aggregates`,
-`highlights`.
+**Computed columns:** ids live in separate namespaces per rule kind (`c1`, `c2`, … for
+computed; `m1`, `m2`, … for group metrics); may not shadow the owning stage's schema
+names; referenced by id anywhere that stage's columns are legal. A source computed
+column is a first-class input to later stages (a group dim, a metric source, a chart
+label); a group-layer computed column derives from that stage's dims, `__count`, and
+metrics, and — when a spread follows — spreads into cells like any other metric.
+No layer's computed columns may reference each other (no dependency ordering, same
+rule at every stage).
 
-**Views:** `grid` (default) · `groupBy` (`{ "mode": "groupBy", "groupBy": ["REGION"],
-"values": [{"col","fn"}...] }` — pushed down, groups paginated with their own count
-query; response columns are the dims + `__count` + `v0..vN`) · `pivot` (`{ "mode":
-"pivot", "rows": [...], "cols": [...], "values": [...], "totals": true }` — one
-grouped query over rows+cols dims transformed in memory; synthetic cell columns
-`p{col}_{value}` with human labels; empty `values` ⇒ implicit counts; optional bottom
-total rows come from a second source query grouped only by the column dimensions) ·
-`chart` (below). Caps:
-`maxPivotColumns` per definition (default 60), a hard 10,000-group pivot source
+**Stages.**
+- `source` — the developer's SELECT wrapped as `ir_base` (+ `ir_calc` when the layer
+  has computed columns), with the layer's filters and the toolbar search applied.
+  Terminal rendering (grid) consumes the full layer: visible columns, sorts, breaks,
+  aggregates, highlights, formats. Breaks, aggregates, and `displayAs` renderers are
+  source-only at T0; filters are source-only at T0 (later stages reserve the slot).
+- `group` — `{ "by": [dims...], "values": [{id, col, fn}...] }`, pushed down as GROUP
+  BY over the source core. Output schema (static, derivable without running a query):
+  dims + `__count` + metrics by id + the layer's computed columns. Empty `values` ⇒
+  `__count` alone. The layer's computed/sorts/highlights bind against that schema —
+  sort by metric, highlight on a ratio — and are pushed down through one more wrap
+  (`ir_stage`). Groups paginate with their own count query when terminal.
+- `spread` — `{ "cols": [subset of group.by], "totals": true? }`: the preceding group
+  stage's output pivots in memory; `cols` values become cell columns named
+  `{metricId}@{values…}`, rows keyed by the remaining dims. Group-layer computed
+  metrics spread like declared metrics (pre-spread compute — ratio-of-sums per cell).
+  The spread layer carries `labels`/`formats` only at T0 (never-validated presentation,
+  dormant when a data value vanishes, revived when it returns); cross-cell computed and
+  highlights are deferred — cell columns are data-dependent and cannot be
+  schema-validated before execution. Group-layer sorts under a spread are honored for
+  row dims and ignored (with a notice) for metrics. Optional bottom totals come from a
+  second source query grouped by `cols` alone, wrapped the same way so computed metrics
+  total correctly.
+- `chart` — a renderer, not a table: the existing chart spec fields ride in the shape,
+  its layer stays empty, and chart-owned sorting/validation are unchanged.
+
+Caps: `maxPivotColumns` per definition (default 60), a hard 10,000-group spread source
 ceiling, and `maxChartPoints` per definition (default 1,000, ceiling 10,000) — all
-surface as precise 400s. Grid-only features (columns, breaks, highlights, grid
-aggregates, and unrelated sorts) remain configured but are silent and inert in
-alternate views.
+surface as precise 400s.
 
-**Chart view** (APEX-style: one chart per report, single metric):
+**Chart stage** (APEX-style: one chart per report, single metric):
 
 ```json
-"view": {
-  "mode": "chart", "type": "bar",
-  "label": "STATUS", "value": "AMOUNT", "fn": "sum",
-  "orientation": "vertical",
-  "sort": { "by": "value", "dir": "desc" },
-  "labelAxisTitle": "Status", "valueAxisTitle": "Total"
-}
+{ "shape": {
+    "kind": "chart", "type": "bar",
+    "label": "STATUS", "value": "AMOUNT", "fn": "sum",
+    "orientation": "vertical",
+    "sort": { "by": "value", "dir": "desc" },
+    "labelAxisTitle": "Status", "valueAxisTitle": "Total" },
+  "layer": {} }
 ```
 
 - `type`: `bar | line | area | pie`. `label`: any text/number/date/bool column
@@ -358,9 +455,9 @@ alternate views.
   data is rejected after query execution with a precise validation error.
 - The chart query runs over the **complete filtered rowset** (computed columns,
   filters, search — never the visible page). Sorting lives inside the spec
-  (`sort.by: label|value`, value sorts tie-break on the label); Grid sorts remain
-  configured but inactive while Chart is selected. `orientation` and the axis
-  titles are presentation carried in state; pie ignores them.
+  (`sort.by: label|value`, value sorts tie-break on the label); source-layer sorts
+  remain configured but inactive while the chart tail is active. `orientation` and
+  the axis titles are presentation carried in state; pie ignores them.
 - The response keeps the generic two-column shape: the label column as itself plus
   the metric (`v0` labeled like `sum(Amount)`, `__count` for bare counts, or the raw
   value column). When those names would collide with the label, the metric gains a
@@ -373,6 +470,11 @@ alternate views.
 dropped into `ignored[]`. Expressions are typed programs, so an unknown referenced column
 is a precise validation error. Disabled filters/highlights are not parsed or planned,
 which lets an off instruction remain in saved state while its schema is being revised.
+Layered over that, T0 consistency is **coarse and client-owned**: the schema snapshot
+check (above) refuses to run a drifted document at all, and a user edit that breaks a
+downstream dependency (deleting a computed column a group stage consumes) deletes the
+dependent stages and shelf entries outright rather than limping. Presentation maps are
+exempt — unknown `labels`/`formats` keys stay dormant by design.
 
 ## 6. HTTP protocol
 
@@ -443,24 +545,37 @@ resolve definition (store)                         404 if absent
 → resolve context params (claims/resolver)
 → ingest document (one pipeline, query + export):
     discover/fetch cached schema
-    resolve doc over effective primary state (labels: … ?? columnLabels)
-    validate against schema + enums                400 problem+json (precise)
-    compile enabled expression rules               typed definition/predicate/decoration plan
+    resolve doc over effective primary state (source labels: … ?? columnLabels)
+    walk the stage pipeline:                       400 problem+json (precise)
+        source: validate layer against base ∪ source computed (effective schema)
+        group:  derive static output schema (dims + __count + metrics by id
+                + layer computed) and validate its layer against it
+        spread: cols ⊆ group.by; layer restricted to labels/formats (never validated)
+        chart:  existing chart validation over the effective schema
+    compile enabled expression rules per stage     typed definition/predicate/decoration plans
 → [export only] apply document display labels      metadata surfaces; names/SQL untouched
-→ build core query:
+→ build source core:
     wrap base SQL as subquery (ir_base)
-    [if computed columns] second wrap layer:
+    [if source computed] second wrap layer:
         SELECT ir_base.*, <expr> AS c1 FROM (base) ir_base  → AS ir_calc
         (aliases become filterable/sortable universally — no dialect
          supports referencing a SELECT alias in WHERE reliably)
     apply filter predicates and search
-→ derive via Clone():
+→ [group stage] wrap core as the grouped table:
+    SELECT dims, COUNT(*) AS __rows, fn(col) AS m1 … GROUP BY dims
+    [if group layer computes/decorates/sorts by metric] one more wrap:
+        SELECT ir_stage.*, <expr> AS c2, <markers> FROM (grouped) ir_stage
+    order by group-layer sorts (dims, __count, metrics, computed)
+→ [spread stage] run the grouped table unpaged (capped) for the in-memory pivot;
+    totals (optional) re-run it grouped by cols alone through the same wrap
+→ derive via Clone() (terminal grid) / group-count query (terminal group):
     page query   (+ private highlight predicate projections + ForPage)
     count query  (ClearComponent order → AsCount)
-    aggregates   (ClearComponent order/limit → SELECT fn(col)…)
-    break totals (… → GROUP BY break cols + aggregate fns)
+    aggregates   (ClearComponent order/limit → SELECT fn(col) AS a0…)
+    break totals (… → GROUP BY break cols; COUNT(*) AS __count + a0…)
 → compile (dialect compiler) → execute (provider-neutral DbCommand/DbDataReader, CancellationToken)
-→ post-process in C#: projection markers → ordered highlight hits; pivot transform
+→ post-process in C#: projection markers → ordered highlight hits; spread transform
+    (cell columns {metricId}@{values…})
 → remove private projections and shape visible rows
 → shape response
 ```
@@ -850,12 +965,20 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   doc's `formats` map (§5), applied by the grid renderer to header alignment,
   cells, and aggregate-row alignment; settings chips with
   APEX-style enable/disable checkboxes for expression rules; removing a computed-column chip also removes
-  its references from columns, rules, formats, renderer sources, and alternate views (returning an invalid
-  view to Grid); break groups with per-column subtotal rows and grand-total rows; row/cell highlights;
-  groupBy/pivot rendering; saved-report select
+  its references from columns, rules, formats, and renderer sources — and deletes dependent
+  group/spread/chart stages and shelf entries outright (T0 coarse invalidation, §5);
+  break groups with per-column subtotal rows and grand-total rows; row/cell highlights;
+  group/spread rendering; saved-report select
   (Primary Report + Global/Private groups); `ignored[]` and problem+json surfaced as
   notices — validation problems render *inside* the originating dialog, which stays
-  open (apply is optimistic: mutate, re-query, roll back on failure). The whole
+  open (apply is optimistic: mutate, re-query, roll back on failure). Menus are
+  **stage-aware**: Columns, Column Settings, Compute, Highlight, and Sort operate on
+  the *current* terminal table — the source layer in grid, the group stage's derived
+  schema (dims + `__count` + metrics + computed) under a group tail, the spread
+  layer's presentation maps under a spread tail — while Filter always edits the
+  source layer. On load the client compares the document's schema snapshot against
+  the live schema and, on mismatch, refuses the stale document with a banner naming
+  the difference and falls back to the default report (§5). The whole
   surface is gated by the definition's feature whitelist (§4), which arrives resolved
   on the schema payload: menu entries vanish with their headings and separators, the
   search bar / view buttons / Actions button / saved-report select hide when their
@@ -1009,6 +1132,21 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   names and explicit, validated sequence precedence. Control-break dimensions move into
   headings; a one-row page lookahead defers subtotals for continuing groups, and grand
   totals render only at the report's logical end.
+- **M19 — Pipeline v3** ✅ *(2026-08-10)*: the state document becomes a literal
+  pipeline of table stages, each with its own layer (§5) — group by and pivot become
+  first-class tables with per-stage columns/labels/formats/computed/sorts/highlights;
+  pivot decomposes into `group` + `spread` with pre-spread computed metrics; stable
+  metric/cell identity (`m1`, `m1@["…"]`) replaces positional `v0`/`p{k}_{v}`; the
+  schema snapshot rides in the document with client-side match-or-reset (T0 coarse
+  invalidation). Versions 1–2 rejected; no external consumers, no migrator.
+  Verified: composer goldens ×4 dialects including the `ir_stage`/`ir_stage_calc`
+  wraps and metric ordering; SQLite end-to-end for group-layer compute/sort/highlight
+  and spread cells/totals (incl. totals-unsafe computed exclusion); packaged-UI unit
+  suite; Playwright e2e against the live Workbench (saved pipeline+shelf+snapshot
+  round-trip, coarse computed deletion, v3 admin document upload). Live-dialect
+  battery updated but not yet run. Remaining post-T0 candidates: group-stage filters
+  (HAVING), aggregates/breaks on the group stage, cross-cell pivot expressions,
+  dependency-aware snapshot pruning.
 
 ## Appendix: decision log
 
@@ -1073,3 +1211,9 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 | Column classes select a definition-owned shadow-root stylesheet | freeform style/CSS in report state; page-level classes | The URL and CSS stay application-controlled; saved reports carry only conservative class tokens and cannot select reserved `ir-*` behavior. Page CSS cannot cross the shadow boundary, while freeform report CSS would be an injection surface. |
 | The dialog's Visible checkbox writes `doc.columns` | a per-column `visible` flag in formats | One source of truth: the shuttle, the header Hide, and the checkbox all edit the same list, so they can never disagree; re-shown columns append to the end, matching how a user thinks about "bring it back". |
 | Link/image renderers use explicit source columns | arbitrary HTML or URL/text templates | Column names can be schema-bound and safely projected. Direct DOM construction preserves escaping, and a protocol allowlist blocks active-content URLs without inventing a template language. |
+| v3 document is a literal stage pipeline + shelf | nest per-view layers inside a views registry; keep grid at the doc root | Every table stage carries the same layer bound to its own schema — no grid-vs-view special case, and pivot honestly decomposes into group (SQL) + spread (memory) with the compute slot between them. The shelf keeps the fork (configured alternate tails) without pretending the document is linear. |
+| Mode is derived from the pipeline tail | a stored `view` field | A stored mode can disagree with the stages; the tail cannot. Toolbar switching is tail-swapping against the shelf. |
+| Metrics carry explicit ids (`m1`); spread cells are `{metricId}@{JSON values}` | positional `v0..vN` / `p{k}_{v}` names | Positional names silently change meaning when the values list reorders or data shifts — the failure class this engine exists to prevent. Value-derived cell names make never-validated presentation maps naturally dormant/revivable under data drift. |
+| Schema snapshot lives in the state document; the client checks and resets | definition-side snapshot; server-side enforcement | The document is the thing that was authored against a schema, so it records which one; both comparison inputs already reach the client. T0 mismatch = don't run, explain, reset the working copy (stored rows untouched); the same diff powers post-T0 dependency-aware pruning with no protocol change. |
+| Group-stage filters reserved but not populated at T0 | ship HAVING filters now; forbid forever | Filtering means "which rows exist" (stage 1) in the user's model today; the layer slot makes group filters a dialog-UX task later, not a pipeline change. |
+| v1/v2 documents rejected outright | migrate v2 into v3 | Owner-confirmed: nothing external consumes documents or the wire protocol; a migrator would be dead code the day it lands. |

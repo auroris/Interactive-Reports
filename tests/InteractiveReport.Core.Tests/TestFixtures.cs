@@ -31,4 +31,57 @@ public static class TestFixtures
     };
 
     public static FilterRule Filter(string expression) => new() { Expr = expression };
+
+    // ---- v3 pipeline document construction shorthand ----
+
+    /// <summary>A v3 document: source stage with the given layer plus optional tail stages.</summary>
+    public static ReportState Doc(
+        StageLayer? source = null,
+        IEnumerable<PipelineStage>? tail = null,
+        string? search = null,
+        PageRequest? page = null,
+        Dictionary<string, string>? schema = null,
+        Dictionary<string, List<PipelineStage>>? shelf = null)
+    {
+        var pipeline = new List<PipelineStage>
+        {
+            new() { Shape = new StageShape { Kind = "source" }, Layer = source },
+        };
+        if (tail is not null) pipeline.AddRange(tail);
+        return new ReportState
+        {
+            Search = search,
+            Page = page,
+            Schema = schema,
+            Pipeline = pipeline,
+            Shelf = shelf,
+        };
+    }
+
+    public static PipelineStage Group(
+        string[] by,
+        MetricRule[]? values = null,
+        StageLayer? layer = null)
+        => new()
+        {
+            Shape = new StageShape { Kind = "group", By = [.. by], Values = values?.ToList() },
+            Layer = layer,
+        };
+
+    public static PipelineStage Spread(string[] cols, bool? totals = null, StageLayer? layer = null)
+        => new()
+        {
+            Shape = new StageShape { Kind = "spread", Cols = [.. cols], Totals = totals },
+            Layer = layer,
+        };
+
+    public static PipelineStage ChartStage(Action<StageShape> configure)
+    {
+        var shape = new StageShape { Kind = "chart" };
+        configure(shape);
+        return new PipelineStage { Shape = shape };
+    }
+
+    public static MetricRule Metric(string id, string col, AggregateFn fn)
+        => new() { Id = id, Col = col, Fn = fn };
 }

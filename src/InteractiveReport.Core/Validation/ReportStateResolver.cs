@@ -3,8 +3,10 @@ using InteractiveReport.Core.Model;
 namespace InteractiveReport.Core.Validation;
 
 /// <summary>
-/// Resolves a partial request over a report's default state. Null means inherit;
-/// an explicitly supplied empty string/list means clear the corresponding default.
+/// Resolves a partial request over a report's default state. Search and page resolve
+/// property-wise (null inherits; explicit empty clears); the pipeline, shelf, and
+/// schema snapshot replace the default wholesale when present — stage arrays do not
+/// merge. Everything is deep-copied so validation never mutates a cached default.
 /// </summary>
 public static class ReportStateResolver
 {
@@ -15,19 +17,11 @@ public static class ReportStateResolver
         return new ReportState
         {
             V = requested.V,
+            Schema = Copy(requested.Schema ?? defaults?.Schema),
             Search = requested.Search ?? defaults?.Search,
-            Filters = Copy(requested.Filters ?? defaults?.Filters),
-            Sorts = Copy(requested.Sorts ?? defaults?.Sorts),
-            Columns = Copy(requested.Columns ?? defaults?.Columns),
-            Labels = Copy(requested.Labels ?? defaults?.Labels),
-            Computed = Copy(requested.Computed ?? defaults?.Computed),
-            Breaks = Copy(requested.Breaks ?? defaults?.Breaks),
-            Aggregates = Copy(requested.Aggregates ?? defaults?.Aggregates),
-            Highlights = Copy(requested.Highlights ?? defaults?.Highlights),
-            View = Copy(requested.View ?? defaults?.View),
-            Views = CopyViews(requested.Views ?? defaults?.Views),
             Page = requested.Page ?? defaults?.Page,
-            Formats = Copy(requested.Formats ?? defaults?.Formats),
+            Pipeline = CopyPipeline(requested.Pipeline ?? defaults?.Pipeline),
+            Shelf = CopyShelf(requested.Shelf ?? defaults?.Shelf),
         };
     }
 
@@ -36,37 +30,95 @@ public static class ReportStateResolver
     private static Dictionary<string, string>? Copy(Dictionary<string, string>? values)
         => values is null ? null : new(values);
 
-    private static Dictionary<string, ViewSpec>? CopyViews(Dictionary<string, ViewSpec>? values)
-        => values?.ToDictionary(
+    internal static List<PipelineStage>? CopyPipeline(List<PipelineStage>? stages)
+        => stages?.Select(Copy).ToList();
+
+    private static Dictionary<string, List<PipelineStage>>? CopyShelf(
+        Dictionary<string, List<PipelineStage>>? shelf)
+        => shelf?.ToDictionary(
             entry => entry.Key,
-            entry => Copy(entry.Value) ?? new ViewSpec(),
+            entry => CopyPipeline(entry.Value) ?? [],
             StringComparer.OrdinalIgnoreCase);
 
-    private static ViewSpec? Copy(ViewSpec? view)
-        => view is null
+    private static PipelineStage Copy(PipelineStage stage)
+        => new()
+        {
+            Shape = Copy(stage.Shape),
+            Layer = Copy(stage.Layer),
+        };
+
+    private static StageShape? Copy(StageShape? shape)
+        => shape is null
             ? null
-            : new ViewSpec
+            : new StageShape
             {
-                Mode = view.Mode,
-                GroupBy = Copy(view.GroupBy),
-                Rows = Copy(view.Rows),
-                Cols = Copy(view.Cols),
-                Values = view.Values?.Select(value => new AggregateRule
+                Kind = shape.Kind,
+                By = Copy(shape.By),
+                Values = shape.Values?.Select(value => new MetricRule
                 {
+                    Id = value.Id,
                     Col = value.Col,
                     Fn = value.Fn,
                 }).ToList(),
-                Totals = view.Totals,
-                Type = view.Type,
-                Label = view.Label,
-                Value = view.Value,
-                Fn = view.Fn,
-                Orientation = view.Orientation,
-                Sort = view.Sort is null
+                Cols = Copy(shape.Cols),
+                Totals = shape.Totals,
+                Type = shape.Type,
+                Label = shape.Label,
+                Value = shape.Value,
+                Fn = shape.Fn,
+                Orientation = shape.Orientation,
+                Sort = shape.Sort is null
                     ? null
-                    : new ChartSortSpec { By = view.Sort.By, Dir = view.Sort.Dir },
-                LabelAxisTitle = view.LabelAxisTitle,
-                ValueAxisTitle = view.ValueAxisTitle,
+                    : new ChartSortSpec { By = shape.Sort.By, Dir = shape.Sort.Dir },
+                LabelAxisTitle = shape.LabelAxisTitle,
+                ValueAxisTitle = shape.ValueAxisTitle,
+            };
+
+    private static StageLayer? Copy(StageLayer? layer)
+        => layer is null
+            ? null
+            : new StageLayer
+            {
+                Columns = Copy(layer.Columns),
+                Labels = Copy(layer.Labels),
+                Formats = Copy(layer.Formats),
+                Computed = layer.Computed?.Select(rule => new ComputedColumn
+                {
+                    Id = rule.Id,
+                    Label = rule.Label,
+                    Enabled = rule.Enabled,
+                    Expr = rule.Expr,
+                }).ToList(),
+                Filters = layer.Filters?.Select(rule => new FilterRule
+                {
+                    Enabled = rule.Enabled,
+                    Expr = rule.Expr,
+                }).ToList(),
+                Sorts = layer.Sorts?.Select(rule => new SortRule
+                {
+                    Col = rule.Col,
+                    Dir = rule.Dir,
+                    Nulls = rule.Nulls,
+                }).ToList(),
+                Highlights = layer.Highlights?.Select(rule => new HighlightRule
+                {
+                    Id = rule.Id,
+                    Name = rule.Name,
+                    Sequence = rule.Sequence,
+                    Enabled = rule.Enabled,
+                    Expr = rule.Expr,
+                    Scope = rule.Scope,
+                    Col = rule.Col,
+                    Style = rule.Style is null
+                        ? null
+                        : new HighlightStyle { Bg = rule.Style.Bg, Fg = rule.Style.Fg },
+                }).ToList(),
+                Breaks = Copy(layer.Breaks),
+                Aggregates = layer.Aggregates?.Select(rule => new AggregateRule
+                {
+                    Col = rule.Col,
+                    Fn = rule.Fn,
+                }).ToList(),
             };
 
     private static Dictionary<string, ColumnFormat>? Copy(Dictionary<string, ColumnFormat>? values)

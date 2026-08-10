@@ -15,8 +15,8 @@ export const NULLS_OPTIONS = [
     { value: "last", label: "Nulls Last" },
 ];
 
-export function colOptions(w, { none } = {}) {
-    const opts = pickable(w).map(c => ({ value: c.name, label: c.computed ? `ƒ ${c.label}` : c.label }));
+export function colOptions(w, { none, columns } = {}) {
+    const opts = (columns ?? pickable(w)).map(c => ({ value: c.name, label: c.computed ? `ƒ ${c.label}` : c.label }));
     return none ? [{ value: "", label: none }, ...opts] : opts;
 }
 

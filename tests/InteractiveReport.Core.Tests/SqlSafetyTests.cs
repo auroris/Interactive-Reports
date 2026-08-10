@@ -25,10 +25,10 @@ public class SqlSafetyTests
     [Fact]
     public void Hostile_filter_value_becomes_a_binding_never_sql()
     {
-        var (sql, bindings) = Compile(new ReportState
+        var (sql, bindings) = Compile(Doc(source: new StageLayer
         {
             Filters = [Filter($"CUSTOMER = {TextLiteral(Hostile)}")],
-        });
+        }));
 
         Assert.DoesNotContain("DROP", sql, StringComparison.OrdinalIgnoreCase);
         Assert.Contains(Hostile, bindings.Cast<object>());
@@ -37,7 +37,7 @@ public class SqlSafetyTests
     [Fact]
     public void Hostile_search_value_becomes_a_lowered_like_binding()
     {
-        var (sql, bindings) = Compile(new ReportState { Search = "%' OR '1'='1" });
+        var (sql, bindings) = Compile(Doc(search: "%' OR '1'='1"));
 
         Assert.DoesNotContain("OR '1'='1", sql);
         Assert.Contains(bindings, b => b is string s && s.Contains("%' or '1'='1"));
@@ -46,10 +46,10 @@ public class SqlSafetyTests
     [Fact]
     public void Hostile_in_list_values_all_become_bindings()
     {
-        var (sql, bindings) = Compile(new ReportState
+        var (sql, bindings) = Compile(Doc(source: new StageLayer
         {
             Filters = [Filter($"IN_LIST(STATUS, {TextLiteral(Hostile)}, 'SHIPPED')")],
-        });
+        }));
 
         Assert.DoesNotContain("DROP", sql, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(2, bindings.Count(b => b is string s && (s == Hostile || s == "SHIPPED")));
@@ -61,16 +61,16 @@ public class SqlSafetyTests
         // Expression identifiers are parsed, while structural column/sort names
         // are matched against the discovered schema.
         var def = OrdersDefinition(ReportDialect.Sqlite);
-        Assert.Throws<ReportValidationException>(() => StateValidator.Validate(def, new ReportState
+        Assert.Throws<ReportValidationException>(() => StateValidator.Validate(def, Doc(source: new StageLayer
         {
             Filters = [new FilterRule { Expr = "AMOUNT\" OR 1=1 -- = 1" }],
-        }, OrdersSchema));
+        }), OrdersSchema));
 
-        var validated = StateValidator.Validate(def, new ReportState
+        var validated = StateValidator.Validate(def, Doc(source: new StageLayer
         {
             Columns = ["ORDER_ID", "CUSTOMER]; DROP TABLE ORDERS;--"],
             Sorts = [new SortRule { Col = "1; DELETE FROM ORDERS" }],
-        }, OrdersSchema);
+        }), OrdersSchema);
 
         var sql = DialectSupport.GetCompiler(ReportDialect.Sqlite).Compile(QueryComposer.Compose(def, validated).Page).Sql;
 

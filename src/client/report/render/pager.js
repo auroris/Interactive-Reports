@@ -4,6 +4,7 @@
 // the one mutation that must not reset the page index back to 1.
 
 import { el } from "../../core/dom.js";
+import { modeOf } from "../state.js";
 import { formatInteger, parseReportNumber } from "./format.js";
 
 const gotoPage = (w, index) => w.applyOrBanner(d => { d.page.index = index; }, { resetPage: false });
@@ -17,7 +18,7 @@ export function renderPager(w, container) {
     const total = result.totalRows;
     const totalCount = parseReportNumber(total) ?? parseReportNumber(0);
     const zero = totalCount.eq(0);
-    const mode = w.doc.view?.mode ?? "grid";
+    const mode = modeOf(w.doc);
     const unit = mode === "groupBy" ? "groups" : mode === "chart" ? "points" : "rows";
     const start = zero ? totalCount : all ? parseReportNumber(1) : parseReportNumber(index - 1).times(size).plus(1);
     const end = zero ? totalCount : start.plus(result.rows.length).minus(1);

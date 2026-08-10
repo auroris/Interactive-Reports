@@ -27,6 +27,7 @@ Object.assign(globalThis, {
 });
 
 const digits = value => value.replace(/\D/g, "");
+const src = layer => ({ shape: { kind: "source" }, layer });
 
 test("exact numeric strings format without an IEEE-754 conversion", () => {
     assert.equal(parseReportNumber("9.007199254740993e15").toFixed(0), "9007199254740993");
@@ -51,10 +52,12 @@ test("currency, percentage, and expanded date/time masks use the exact scalar fo
 test("link text composes the source column's ordinary formatter", () => {
     const w = {
         doc: {
-            formats: {
-                CUSTOMER: { displayAs: "link", urlColumn: "URL", textColumn: "AMOUNT" },
-                AMOUNT: { mask: "plain" },
-            },
+            pipeline: [src({
+                formats: {
+                    CUSTOMER: { displayAs: "link", urlColumn: "URL", textColumn: "AMOUNT" },
+                    AMOUNT: { mask: "plain" },
+                },
+            })],
         },
         lastResult: {
             availableColumns: [
@@ -74,39 +77,58 @@ test("link text composes the source column's ordinary formatter", () => {
 });
 
 test("computed, group, and pivot values all use the normal mask path", () => {
+    const source = src({ formats: { AMOUNT: { mask: "plain" } } });
     const w = {
         doc: {
-            formats: { AMOUNT: { mask: "plain" } },
-            view: { mode: "groupBy", groupBy: ["STATUS"], values: [{ col: "AMOUNT", fn: "sum" }] },
+            pipeline: [
+                source,
+                { shape: { kind: "group", by: ["STATUS"], values: [{ id: "m1", col: "AMOUNT", fn: "sum" }] }, layer: {} },
+            ],
         },
         lastResult: {
             columns: [
                 { name: "STATUS", label: "Status", type: "text", computed: false },
-                { name: "v0", label: "sum(Amount)", type: "number", computed: false, formatSource: "AMOUNT" },
+                { name: "m1", label: "sum(Amount)", type: "number", computed: false, formatSource: "AMOUNT" },
             ],
-            rows: [{ STATUS: "SHIPPED", v0: "9007199254740993.125" }],
+            rows: [{ STATUS: "SHIPPED", m1: "9007199254740993.125" }],
             aggregates: {}, breakTotals: [], highlights: [],
         },
-        schema: { columns: [{ name: "STATUS", label: "Status", type: "text" }, { name: "AMOUNT", label: "Amount", type: "number" }] },
+        schema: {
+            columns: [
+                { name: "STATUS", label: "Status", type: "text" },
+                { name: "CUSTOMER", label: "Customer", type: "text" },
+                { name: "AMOUNT", label: "Amount", type: "number" },
+            ],
+        },
     };
     const table = document.createElement("table");
     renderGrid(w, table);
+    // The metric column inherits the source column's mask through formatSource.
     assert.equal(table.querySelector("tbody tr").children[1].textContent, "9007199254740993.13");
 
-    w.doc.view = { mode: "grid" };
-    w.doc.formats.c1 = { mask: "plain" };
+    // A group-layer format on the metric id overrides the inherited source mask.
+    w.doc.pipeline[1].layer.formats = { m1: { mask: "integer" } };
+    renderGrid(w, table);
+    assert.equal(table.querySelector("tbody tr").children[1].textContent, "9,007,199,254,740,993");
+
+    w.doc.pipeline = [source];
+    source.layer.formats.c1 = { mask: "plain" };
     w.lastResult.columns = [{ name: "c1", label: "Computed", type: "number", computed: true }];
     w.lastResult.rows = [{ c1: "999999999999999999.999" }];
     renderGrid(w, table);
     assert.equal(table.querySelector("tbody tr").children[0].textContent, "1000000000000000000.00");
 
-    w.doc.view = { mode: "pivot" };
-    w.lastResult.columns = [
-        { name: "STATUS", label: "Status", type: "text", computed: false },
-        { name: "p0_0", label: "SHIPPED", type: "number", computed: false, formatSource: "AMOUNT" },
+    w.doc.pipeline = [
+        source,
+        { shape: { kind: "group", by: ["CUSTOMER", "STATUS"], values: [{ id: "m1", col: "AMOUNT", fn: "sum" }] }, layer: {} },
+        { shape: { kind: "spread", cols: ["STATUS"] }, layer: {} },
     ];
-    w.lastResult.rows = [{ STATUS: "Acme", p0_0: "12345678901234567890.125" }];
-    w.lastResult.aggregates = { p0_0: { sum: "24691357802469135780.25" } };
+    w.lastResult.columns = [
+        { name: "CUSTOMER", label: "Customer", type: "text", computed: false },
+        { name: 'm1@["SHIPPED"]', label: "SHIPPED", type: "number", computed: false, formatSource: "AMOUNT" },
+    ];
+    w.lastResult.rows = [{ CUSTOMER: "Acme", 'm1@["SHIPPED"]': "12345678901234567890.125" }];
+    w.lastResult.aggregates = { 'm1@["SHIPPED"]': { sum: "24691357802469135780.25" } };
     renderGrid(w, table);
     assert.equal(table.querySelector("tbody tr").children[1].textContent, "12345678901234567890.13");
     assert.equal(table.querySelector("tr.ir-grand-total td:last-child").textContent, "24691357802469135780.25");
@@ -115,10 +137,13 @@ test("computed, group, and pivot values all use the normal mask path", () => {
 test("the chart data table retains an exact masked metric", () => {
     const w = {
         doc: {
-            formats: { AMOUNT: { mask: "plain" } },
-            view: { mode: "chart", type: "bar", label: "STATUS", value: "AMOUNT", fn: "sum" },
+            pipeline: [
+                src({ formats: { AMOUNT: { mask: "plain" } } }),
+                { shape: { kind: "chart", type: "bar", label: "STATUS", value: "AMOUNT", fn: "sum" } },
+            ],
         },
         lastResult: {
+            // Chart metrics keep the synthetic v0/__count response names.
             columns: [
                 { name: "STATUS", label: "Status", type: "text", computed: false },
                 { name: "v0", label: "sum(Amount)", type: "number", computed: false, formatSource: "AMOUNT" },
@@ -137,7 +162,7 @@ test("the chart data table retains an exact masked metric", () => {
 
 test("pager arithmetic and display preserve an Int64 count", () => {
     const w = {
-        doc: { view: { mode: "grid" } },
+        doc: { pipeline: [src({})] },
         schema: { limits: { maxPageSize: 500 } },
         lastResult: {
             page: { index: 1, size: 25 },
@@ -157,7 +182,7 @@ test("pager arithmetic and display preserve an Int64 count", () => {
 
 test("an All result is one unpaged range with no next page", () => {
     const w = {
-        doc: { view: { mode: "grid" } },
+        doc: { pipeline: [src({})] },
         lastResult: {
             page: { index: 1, size: 0 },
             totalRows: "9223372036854775807",
@@ -183,11 +208,12 @@ test("control breaks own their columns and defer subtotal and grand total to log
     ];
     const w = {
         doc: {
-            view: { mode: "grid" },
-            breaks: ["REGION"],
-            sorts: [],
-            highlights: [],
-            formats: {},
+            pipeline: [src({
+                breaks: ["REGION"],
+                sorts: [],
+                highlights: [],
+                formats: {},
+            })],
         },
         schema: { columns },
         lastResult: {
@@ -224,16 +250,17 @@ test("higher highlight sequences win within a scope and cell scope wins over row
     const columns = [{ name: "AMOUNT", label: "Amount", type: "number" }];
     const w = {
         doc: {
-            view: { mode: "grid" },
-            breaks: [],
-            sorts: [],
-            formats: {},
-            highlights: [
-                { id: "row-low", sequence: 10, style: { bg: "#111111" } },
-                { id: "row-high", sequence: 20, style: { bg: "#222222" } },
-                { id: "cell-low", sequence: 10, style: { bg: "#333333" } },
-                { id: "cell-high", sequence: 20, style: { bg: "#444444" } },
-            ],
+            pipeline: [src({
+                breaks: [],
+                sorts: [],
+                formats: {},
+                highlights: [
+                    { id: "row-low", sequence: 10, style: { bg: "#111111" } },
+                    { id: "row-high", sequence: 20, style: { bg: "#222222" } },
+                    { id: "cell-low", sequence: 10, style: { bg: "#333333" } },
+                    { id: "cell-high", sequence: 20, style: { bg: "#444444" } },
+                ],
+            })],
         },
         schema: { columns },
         lastResult: {

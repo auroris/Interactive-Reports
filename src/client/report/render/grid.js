@@ -4,6 +4,8 @@
 
 import { el } from "../../core/dom.js";
 import { labelOf } from "../schema.js";
+import { stageContext } from "../stage.js";
+import { modeOf, sourceLayer } from "../state.js";
 import { formatAgg, formatInteger, hasFraction, parseReportNumber, FN_LABELS, FN_ORDER } from "./format.js";
 import { formatForColumn, renderColumnValue } from "./column-renderers.js";
 import { headerMenuAvailable, openHeaderMenu } from "../menus.js";
@@ -12,8 +14,9 @@ import { columnClasses } from "../classes.js";
 export function renderGrid(w, table) {
     const result = w.lastResult;
     if (!result) { table.replaceChildren(); return; }
-    const mode = w.doc.view?.mode ?? "grid";
-    const requestedBreaks = mode === "grid" ? (w.doc.breaks ?? []) : [];
+    const ctx = stageContext(w);
+    const mode = ctx.mode;
+    const requestedBreaks = mode === "grid" ? (sourceLayer(w.doc).breaks ?? []) : [];
     const breaks = requestedBreaks.map(name =>
         result.columns.find(column => column.name.toLowerCase() === name.toLowerCase())?.name ?? name);
     const breakNames = new Set(breaks);
@@ -39,32 +42,26 @@ export function renderGrid(w, table) {
         return Object.keys(style).length ? style : undefined;
     };
 
-    // Labels resolve client-side: the report's own labels first, then the server's
-    // neutral label. GroupBy metric columns (v0…) are synthetic, so their server label
-    // embeds the raw column label — rebuild it from the view spec the client authored.
-    const displayLabel = col => {
-        const override = w.doc.labels?.[col.name];
-        if (override) return override;
-        const metric = mode === "groupBy" ? /^v(\d+)$/.exec(col.name) : null;
-        const spec = metric && !(w.doc.view?.groupBy ?? []).includes(col.name)
-            ? w.doc.view?.values?.[Number(metric[1])]
-            : null;
-        return spec ? `${spec.fn}(${labelOf(w, spec.col)})` : col.label;
-    };
+    // Labels resolve client-side: the current stage's universe already layered
+    // its own labels over source labels and rebuilt synthetic metric captions,
+    // so the response's neutral label is only the last resort.
+    const stageColumnByName = new Map(ctx.columns.map(c => [c.name.toLowerCase(), c]));
+    const displayLabel = col =>
+        stageColumnByName.get(col.name.toLowerCase())?.label ?? col.label;
 
-    // Header. Sort indicators come from the state doc; menus depend on the view mode.
-    const sortOrd = new Map((w.doc.sorts ?? []).map((s, i) => [s.col, { dir: s.dir ?? "asc", ord: i + 1 }]));
-    const dims = mode === "groupBy" ? new Set(w.doc.view?.groupBy ?? []) : null;
+    // Header. Sort indicators come from the stage that owns ordering: the source
+    // layer in grid, the group layer under a group or spread tail.
+    const activeSorts = ctx.sortLayer ? (ctx.sortLayer(w.doc).sorts ?? []) : [];
+    const sortOrd = new Map(activeSorts.map((s, i) => [s.col.toLowerCase(), { dir: s.dir ?? "asc", ord: i + 1 }]));
     const menuAvailable = headerMenuAvailable(w, mode);
     const headRow = el("tr", {});
     for (const col of columns) {
-        const interactive = menuAvailable
-            && (mode === "grid" || (mode === "groupBy" && dims.has(col.name)));
-        const s = sortOrd.get(col.name);
+        const interactive = menuAvailable && mode !== "chart";
+        const s = sortOrd.get(col.name.toLowerCase());
         const inner = el("span", { class: "ir-th-inner" }, displayLabel(col));
         if (s) {
             inner.append(el("span", { class: "ir-sort-dir", "aria-hidden": "true" }, s.dir === "desc" ? "▼" : "▲"));
-            if ((w.doc.sorts ?? []).length > 1) inner.append(el("span", { class: "ir-sort-ord" }, String(s.ord)));
+            if (activeSorts.length > 1) inner.append(el("span", { class: "ir-sort-ord" }, String(s.ord)));
         }
         const th = el("th", {
             class: classesFor(col, col.type === "number" ? "ir-num" : "", interactive ? "ir-th-menu" : ""),
@@ -86,7 +83,10 @@ export function renderGrid(w, table) {
             && result.rows.some(r => hasFraction(r[c.name])))
         .map(c => c.name));
 
-    const styleById = new Map((w.doc.highlights ?? []).map(h => [h.id, h.style ?? {}]));
+    // Highlight styles belong to whichever layer decorated this table: the
+    // source layer in grid, the group layer when the group stage is terminal.
+    const activeHighlights = ctx.highlightLayer ? (ctx.highlightLayer(w.doc).highlights ?? []) : [];
+    const styleById = new Map(activeHighlights.map(h => [h.id, h.style ?? {}]));
     const hitsByRow = new Map();
     for (const h of result.highlights ?? []) {
         if (!hitsByRow.has(h.row)) hitsByRow.set(h.row, []);
