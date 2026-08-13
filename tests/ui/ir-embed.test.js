@@ -114,7 +114,16 @@ test("the report is style-isolated and uses its explicit API base", async () => 
         .find(item => item.textContent.includes("Columns"))
         .click();
     assert.equal(report.shadowRoot.querySelector(".ir-popup"), null);
-    assert.equal(report.shadowRoot.querySelector(".ir-dialog").getAttribute("part"), "dialog");
+    const dialog = report.shadowRoot.querySelector(".ir-dialog");
+    assert.equal(dialog.getAttribute("part"), "dialog");
+    assert.equal(dialog.getAttribute("popover"), "manual", "editor windows should be modeless manual popovers");
+    assert.equal(dialog.hasAttribute("aria-modal"), false, "editor windows should leave the report available");
+    assert.equal(report.shadowRoot.querySelector(".ir-overlay"), null, "modeless windows should not install a blocking overlay");
+    assert.equal(
+        dialog.getAttribute("aria-labelledby"),
+        dialog.querySelector(".ir-dialog-title-text").id,
+        "the visible title should provide the window's accessible name");
+    assert.equal(dialog.querySelector(".ir-dialog-title").tabIndex, 0, "the move handle should be keyboard reachable");
 
     report.remove();
     assert.equal(report.shadowRoot.querySelector(".ir-dialog"), null, "transient UI should be disposed on unmount");

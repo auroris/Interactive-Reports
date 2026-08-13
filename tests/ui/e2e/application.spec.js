@@ -109,6 +109,49 @@ test("loads the configured primary report, queries data, paginates from Actions,
     await expect(page.getByText("1 – 50 of 500 rows", { exact: true })).toBeVisible();
 });
 
+test("editor windows are named, modeless, movable, and leave the report interactive", async ({ page }) => {
+    await openWorkbench(page);
+    await clickAction(page, "Pagination…");
+
+    const dialog = page.getByRole("dialog", { name: "Pagination", exact: true });
+    await expect(dialog).toHaveAttribute("popover", "manual");
+    await expect(dialog).not.toHaveAttribute("aria-modal", "true");
+    expect(await dialog.evaluate(element => element.matches(":popover-open"))).toBe(true);
+
+    const titleBar = dialog.locator(".ir-dialog-title");
+    const before = await dialog.boundingBox();
+    const handle = await titleBar.boundingBox();
+    expect(before).not.toBeNull();
+    expect(handle).not.toBeNull();
+    await page.mouse.move(handle.x + 24, handle.y + handle.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(handle.x + 94, handle.y + handle.height / 2 + 40);
+    await page.mouse.up();
+
+    const afterPointer = await dialog.boundingBox();
+    expect(afterPointer.x).toBeGreaterThan(before.x + 50);
+    expect(afterPointer.y).toBeGreaterThan(before.y + 25);
+
+    await titleBar.focus();
+    await page.keyboard.press("Alt+ArrowLeft");
+    const afterKeyboard = await dialog.boundingBox();
+    expect(afterKeyboard.x).toBeLessThan(afterPointer.x - 5);
+
+    await runAndWaitForQuery(page, () =>
+        page.getByRole("button", { name: "Next page" }).click());
+    await expect(page.getByText("51 – 100 of 500 rows", { exact: true })).toBeVisible();
+    await expect(dialog).toBeVisible();
+    expect(await dialog.evaluate(element => element.matches(":popover-open"))).toBe(true);
+
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await clickAction(page, "Reset");
+    const confirmation = page.getByRole("dialog", { name: "Reset", exact: true });
+    await expect(confirmation).toHaveAttribute("open", "");
+    await expect(confirmation).toHaveAttribute("aria-modal", "true");
+    expect(await confirmation.evaluate(element => element.tagName)).toBe("DIALOG");
+    await confirmation.getByRole("button", { name: "Cancel", exact: true }).click();
+});
+
 test("exports the current report state as CSV", async ({ page }) => {
     await openWorkbench(page);
     await search(page, "Acme Corp");

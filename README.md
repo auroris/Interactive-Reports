@@ -238,4 +238,5 @@ The supported theme properties are `--ir-accent`, `--ir-accent-soft`,
 single-series color), `--ir-chart-grid`, and `--ir-chart-text`. The supported
 structural parts are `surface`, `toolbar`, `notices`, `chips`,
 `table-container`, `chart-container`, `table`, `pager`, `menu`,
-`dialog-overlay`, and `dialog`.
+and `dialog`. Editor dialogs are movable, modeless windows, so the report remains
+available while they are open. Short destructive confirmations remain modal.

@@ -919,7 +919,9 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   otherwise the widget loads Primary Report and displays a warning. Changing `report`,
   `saved-report`, or the API location re-initializes in place. Consumers need no build
   step.
-- Each element renders into its own shadow root, including menus and dialogs. The
+- Each element renders into its own shadow root, including menus and dialog windows. Editor
+  windows use manual popovers to enter the browser top layer without making the report
+  inert; short destructive confirmations use native modal dialogs. The
   packaged stylesheet is compiled into the JavaScript bundle, so host resets and
   utility classes cannot enter the component and component styles cannot escape onto
   the host page. A definition's optional `styleSheet` link is inserted inside that
@@ -1009,7 +1011,9 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   functions by column type. Query results include the effective base+computed schema,
   so clients do not duplicate language catalogs or guess computed types.
 - **Styling**: shadow DOM isolates every rule, including the bundled styles for
-  popups and dialogs. Deliberate theming crosses the boundary through the supported
+  popups and dialog windows. Modeless editor windows remain component-owned while the
+  Popover API lets them paint in the browser top layer; destructive confirmations use
+  the native dialog top layer. Deliberate theming crosses the boundary through the supported
   `--ir-*` custom properties and `::part()` names; ordinary host selectors cannot
   reach internal controls, and no stylesheet is added to the host document.
 - **Asset endpoint is anonymous** even when the host chains `RequireAuthorization` on
