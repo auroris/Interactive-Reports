@@ -140,6 +140,19 @@ export function schemaMismatch(recorded, liveColumns) {
 export const sameColumn = (left, right) => typeof left === "string" && typeof right === "string"
     && left.toLowerCase() === right.toLowerCase();
 
+export function lookupValue(map, name) {
+    if (!map) return undefined;
+    const requested = String(name).toLowerCase();
+    const key = Object.keys(map).find(candidate => candidate.toLowerCase() === requested);
+    return key === undefined ? undefined : map[key];
+}
+
+export function nextFreeId(usedLowercase, prefix) {
+    let next = 1;
+    while (usedLowercase.has(`${prefix}${next}`)) next++;
+    return `${prefix}${next}`;
+}
+
 const mapDeleteWhere = (map, predicate) => {
     if (!map) return;
     for (const key of Object.keys(map))

@@ -3,7 +3,7 @@
 
 import { el } from "../../core/dom.js";
 import { columnOf, pickable } from "../schema.js";
-import { modeOf, sourceLayer, stageOf } from "../state.js";
+import { lookupValue, modeOf, sourceLayer, stageOf } from "../state.js";
 import { formatValue, hasFraction } from "./format.js";
 
 const LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:", "tel:"]);
@@ -30,13 +30,6 @@ const sourceName = (w, format, property, fallback) => {
     return pickable(w).find(column => column.name.toLowerCase() === requested.toLowerCase())?.name ?? requested;
 };
 
-const lookupFormat = (formats, name) => {
-    if (!formats) return null;
-    const requested = String(name).toLowerCase();
-    const key = Object.keys(formats).find(candidate => candidate.toLowerCase() === requested);
-    return key ? formats[key] : null;
-};
-
 /// A column's effective format: the terminal stage's own entry first, then the
 /// source layer keyed by the column's formatSource (a metric or cell inherits
 /// its source column's mask and style until the view overrides it) or by the
@@ -46,9 +39,9 @@ export function formatForColumn(w, col) {
     const stage = mode === "groupBy" ? stageOf(w.doc, "group")
         : mode === "pivot" ? stageOf(w.doc, "spread")
         : null;
-    const own = stage ? lookupFormat(stage.layer?.formats, col.name) : null;
+    const own = stage ? lookupValue(stage.layer?.formats, col.name) : null;
     if (own) return own;
-    return lookupFormat(sourceLayer(w.doc).formats, col.formatSource ?? col.name);
+    return lookupValue(sourceLayer(w.doc).formats, col.formatSource ?? col.name) ?? null;
 }
 
 function sourceColumn(w, name, fallback) {

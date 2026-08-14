@@ -4,6 +4,7 @@
 // older hosts usable. Menu-specific arrow-key focus remains application behavior.
 
 import { el } from "./dom.js";
+import { hidePopover, showPopover } from "./popover.js";
 
 let activePopup = null;
 let activePopupOwner = null;
@@ -20,11 +21,6 @@ export function closePopups() {
 export function closeMenuOwnedBy(host) {
     if (activePopupOwner === host) closePopups();
 }
-
-const popoverIsOpen = node => {
-    try { return node.matches(":popover-open"); }
-    catch { return node.hasAttribute("data-ir-popover-open"); }
-};
 
 const anchorPositioningAvailable = () =>
     window.CSS?.supports?.("position-anchor: --ir-popup-anchor") === true;
@@ -86,6 +82,7 @@ export function popupMenu(anchor, items) {
 
     const nativePopover = typeof menu.showPopover === "function";
     const anchored = anchorPositioningAvailable();
+    const controller = new AbortController();
     let closed = false;
     let scrollArmed = false;
 
@@ -97,9 +94,7 @@ export function popupMenu(anchor, items) {
     const cleanup = () => {
         if (closed) return;
         closed = true;
-        document.removeEventListener("mousedown", onDocDown, true);
-        window.removeEventListener("scroll", onScroll, true);
-        window.removeEventListener("resize", onScroll);
+        controller.abort();
         anchor.setAttribute("aria-expanded", "false");
         anchor.removeAttribute("aria-controls");
         if (oldAnchorName) anchor.style.setProperty("anchor-name", oldAnchorName, oldAnchorPriority);
@@ -112,9 +107,7 @@ export function popupMenu(anchor, items) {
     };
     const close = () => {
         if (closed) return;
-        if (nativePopover && popoverIsOpen(menu)) {
-            try { menu.hidePopover(); } catch { /* removal below is the fallback */ }
-        }
+        hidePopover(menu);
         cleanup();
     };
 
@@ -144,19 +137,15 @@ export function popupMenu(anchor, items) {
     activePopup = close;
     mount.append(menu);
     menu.style.visibility = "hidden";
-    if (nativePopover) {
-        try { menu.showPopover({ source: anchor }); }
-        catch { menu.showPopover(); }
-    } else {
-        menu.setAttribute("data-ir-popover-open", "");
-        document.addEventListener("mousedown", onDocDown, true);
-    }
+    showPopover(menu, { source: anchor });
+    if (!nativePopover)
+        document.addEventListener("mousedown", onDocDown, { capture: true, signal: controller.signal });
 
     if (!anchored) {
         placeFallback(menu, anchor);
         requestAnimationFrame(() => { scrollArmed = true; });
-        window.addEventListener("scroll", onScroll, true);
-        window.addEventListener("resize", onScroll);
+        window.addEventListener("scroll", onScroll, { capture: true, signal: controller.signal });
+        window.addEventListener("resize", onScroll, { signal: controller.signal });
     }
     menu.style.visibility = "";
     menu.querySelector(".ir-menu-item:not([disabled])")?.focus();

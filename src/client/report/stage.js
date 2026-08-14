@@ -16,21 +16,16 @@
 import { columnOf, labelOf, pickable, typeOf, featureEnabled } from "./schema.js";
 import { FN_LABELS } from "./render/format.js";
 import {
+    lookupValue,
     modeOf,
     pivotRowDims,
+    sameColumn,
     sourceLayer,
     stageLayer,
     stageOf,
 } from "./state.js";
 
-const lookupKey = (map, name) => {
-    if (!map) return undefined;
-    const requested = String(name).toLowerCase();
-    const key = Object.keys(map).find(k => k.toLowerCase() === requested);
-    return key === undefined ? undefined : map[key];
-};
-
-export const stageLabelOf = (layer, name) => lookupKey(layer?.labels, name);
+export const stageLabelOf = (layer, name) => lookupValue(layer?.labels, name);
 
 const countColumn = layer => ({
     name: "__count",
@@ -201,6 +196,16 @@ export function stageContext(w) {
             break: true, aggregate: true, pagination: true,
         }),
     };
+}
+
+/// The terminal table's currently visible, still-valid column names. An explicit
+/// list can outlive a removed column in a saved report, so every caller gets the
+/// same self-healing view before it edits visibility.
+export function visibleStageColumnNames(ctx, w) {
+    const explicit = ctx.columnsLayer?.(w.doc)?.columns;
+    if (explicit?.length)
+        return explicit.filter(name => ctx.columns.some(column => sameColumn(column.name, name)));
+    return ctx.columns.map(column => column.name);
 }
 
 /// Mode capabilities intersected with the definition's feature whitelist. A menu

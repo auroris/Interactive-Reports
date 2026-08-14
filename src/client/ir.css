@@ -1,5 +1,5 @@
 /* InteractiveReport widget theme — an APEX Universal-Theme-flavored skin.
-   This sheet is bundled into each custom element's shadow root. Host-page CSS
+   This sheet is adopted by each custom element's shadow root. Host-page CSS
    cannot reach it; hosts can still theme the documented --ir-* properties. */
 
 :host {
@@ -42,6 +42,7 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 [hidden] { display: none !important; }
+[part~="surface"] { container-type: inline-size; }
 
 .ir-icon { display: inline-flex; align-items: center; line-height: 0; }
 
@@ -112,7 +113,8 @@
     font-size: var(--ir-font-size);
     border: 1px solid #c3cbd3;
     padding: 4px 8px;
-    width: clamp(140px, 26vw, 260px);
+    width: clamp(140px, 26vw, 260px); /* pre-container-query hosts */
+    width: clamp(140px, 26cqi, 260px);
 }
 .ir-search .ir-go { border-radius: 0 var(--ir-radius) var(--ir-radius) 0; border-left: none; }
 
@@ -369,9 +371,9 @@
 .ir-dialog {
     position: fixed;
     inset: auto;
-    top: 6vh;
-    left: 50%;
-    transform: translateX(-50%);
+    top: var(--ir-win-top, 6vh);
+    left: var(--ir-win-left, 50%);
+    transform: var(--ir-win-transform, translateX(-50%));
     margin: 0;
     padding: 0;
     border: 0;
@@ -379,13 +381,14 @@
     color: var(--ir-text);
     border-radius: 6px;
     box-shadow: 0 14px 40px rgba(15, 23, 33, .35);
-    width: 30rem;
+    width: var(--ir-dialog-width, 30rem);
     max-width: calc(100vw - 32px);
     max-height: 86vh;
     flex-direction: column;
     font-size: var(--ir-font-size);
     overflow: hidden;
 }
+.ir-dialog.ir-moved { --ir-win-transform: none; }
 .ir-dialog:popover-open,
 .ir-dialog[data-ir-popover-open],
 dialog.ir-dialog[open] { display: flex; }
@@ -434,9 +437,8 @@ dialog.ir-dialog::backdrop {
     margin: 10px 16px 0;
     padding: 7px 11px;
     border-radius: var(--ir-radius);
-    background: #fdecea;
-    border: 1px solid #f2c4bd;
-    color: #8c1d18;
+    border-width: 1px;
+    border-style: solid;
     font-size: 12.5px;
 }
 .ir-dialog-note { color: var(--ir-text-muted); font-size: 12px; margin: 10px 0 0; }
@@ -444,12 +446,12 @@ dialog.ir-dialog::backdrop {
 
 @media (max-width: 640px) {
     .ir-dialog {
-        top: auto !important;
-        right: 8px !important;
-        bottom: 8px !important;
-        left: 8px !important;
-        transform: none !important;
-        width: auto !important;
+        top: auto;
+        right: 8px;
+        bottom: 8px;
+        left: 8px;
+        transform: none;
+        width: auto;
         max-width: none;
         max-height: calc(100dvh - 16px);
     }
@@ -462,7 +464,7 @@ dialog.ir-dialog::backdrop {
 .ir-condition-head, .ir-gap-above { margin-top: 12px; }
 .ir-field .ir-input, .ir-field .ir-select { align-self: flex-start; min-width: 14rem; }
 .ir-field .ir-input-wide { min-width: 16rem; }
-.ir-checkline { display: flex; align-items: center; gap: 7px; margin: 4px 0 8px; }
+.ir-checkline { display: flex; align-items: center; gap: 7px; margin: 4px 0 8px; font-size: 12.5px; }
 
 .ir-value-editor { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .ir-value-and { color: var(--ir-text-muted); font-size: 12px; }
@@ -502,7 +504,6 @@ dialog.ir-dialog::backdrop {
 .ir-color-pick { display: flex; align-items: center; gap: 7px; font-size: 12.5px; }
 .ir-color-pick .ir-checkline { margin: 0; }
 .ir-checklines { display: flex; gap: 18px; margin-bottom: 12px; }
-.ir-checkline { display: flex; align-items: center; gap: 7px; font-size: 12.5px; margin-bottom: 8px; }
 .ir-checklines .ir-checkline { margin-bottom: 0; }
 .ir-format-preview {
     border: 1px solid var(--ir-border-light);
@@ -514,21 +515,13 @@ dialog.ir-dialog::backdrop {
 }
 .ir-color { width: 36px; height: 24px; padding: 1px; border: 1px solid #c3cbd3; border-radius: var(--ir-radius); background: var(--ir-bg); }
 
+.ir-dialog:has(.ir-display-as option[value=""]:checked) .ir-url-only,
+.ir-dialog:has(.ir-display-as option:not([value="link"]):checked) .ir-text-only,
 .ir-dialog:has(.ir-highlight-scope option[value="row"]:checked) .ir-cell-only,
 .ir-dialog:has(.ir-chart-type option[value="pie"]:checked) .ir-non-pie { display: none; }
 
 /* --- admin widget ---------------------------------------------------------------- */
 
-.ir-admin-bar {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 8px;
-    padding: 8px 10px;
-    background: var(--ir-bg-soft);
-    border-bottom: 1px solid var(--ir-border);
-    border-radius: 4px 4px 0 0;
-}
 .ir-admin-count { color: var(--ir-text-muted); font-size: 12px; }
 .ir-badge {
     display: inline-block;

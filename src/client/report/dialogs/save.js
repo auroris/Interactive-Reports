@@ -2,7 +2,7 @@
 
 import { el, labeled } from "../../core/dom.js";
 import { confirmDialog, openDialog } from "../../core/dialog.js";
-import { canManageCurrentSaved, canManageSaved, saveReport } from "../saved.js";
+import { canManageCurrentSaved, canManageSaved, sameTitle, saveReport } from "../saved.js";
 
 export function saveDialog(w, { asNew }) {
     const updating = !asNew && canManageCurrentSaved(w);
@@ -30,8 +30,7 @@ export function saveDialog(w, { asNew }) {
             const title = titleInp.value.trim();
             if (!title) throw new Error("Enter a name");
             if (!updating) {
-                const matches = (w.savedList ?? []).filter(saved =>
-                    saved.title?.localeCompare(title, undefined, { sensitivity: "accent" }) === 0);
+                const matches = (w.savedList ?? []).filter(saved => sameTitle(saved.title, title));
                 if (matches.length > 1)
                     throw new Error(`Several saved reports are named "${title}". Delete the duplicate before replacing one.`);
                 if (matches.length === 1) {

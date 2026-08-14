@@ -238,6 +238,29 @@ test("names highlights and saves their explicit precedence sequence", async ({ p
     await expect(page.getByText("Large orders", { exact: false })).toBeVisible();
 });
 
+test("column renderer fields follow Display As through CSS", async ({ page }) => {
+    await openWorkbench(page);
+    await clickAction(page, "Column Settings…");
+
+    const dialog = page.getByRole("dialog", { name: "Column Settings", exact: true });
+    const displayAs = dialog.getByRole("combobox", { name: "Display As", exact: true });
+    const urlColumn = dialog.getByRole("combobox", { name: "URL Column", exact: true });
+    const textColumn = dialog.getByRole("combobox", { name: "Link Text Column", exact: true });
+
+    await dialog.getByRole("combobox", { name: "Column", exact: true }).selectOption("STATUS");
+    await expect(urlColumn).toBeHidden();
+    await expect(textColumn).toBeHidden();
+    await displayAs.selectOption("link");
+    await expect(urlColumn).toBeVisible();
+    await expect(textColumn).toBeVisible();
+    await displayAs.selectOption("image");
+    await expect(urlColumn).toBeVisible();
+    await expect(textColumn).toBeHidden();
+    await displayAs.selectOption("");
+    await expect(urlColumn).toBeHidden();
+    await expect(textColumn).toBeHidden();
+});
+
 test("configures an aggregate chart and returns to the data grid", async ({ page }) => {
     await openWorkbench(page);
     await page.getByRole("button", { name: "Chart", exact: true }).click();

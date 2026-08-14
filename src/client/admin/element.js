@@ -4,36 +4,18 @@
 // documents for validation and testing, delete. The server enforces the matrix;
 // this widget simply loses its data (404) for non-administrators.
 
-import { api, apiUrl, defaultApiBase, downloadFile, saveBlob } from "../core/api.js";
+import { api, apiUrl, downloadFile, saveBlob } from "../core/api.js";
 import { el, banner, labeled, transientBanner } from "../core/dom.js";
 import { openDialog, confirmDialog } from "../core/dialog.js";
-import { createWidgetRoot, disposeWidget } from "../core/widget.js";
+import { WidgetElement } from "../core/widget.js";
 
-const BASE_DEFAULT = defaultApiBase();
-
-export class InteractiveReportAdminElement extends HTMLElement {
+export class InteractiveReportAdminElement extends WidgetElement {
     static observedAttributes = ["api-base", "base"];
-
-    constructor() {
-        super();
-        const { root, mount } = createWidgetRoot(this);
-        this._root = root;
-        this._mount = mount;
-        this._seq = 0;
-    }
-
-    get apiBase() { return this.getAttribute("api-base") ?? this.getAttribute("base") ?? BASE_DEFAULT; }
-    set apiBase(value) {
-        if (value === null || value === undefined) this.removeAttribute("api-base");
-        else this.setAttribute("api-base", String(value));
-    }
-    get base() { return this.apiBase.replace(/\/+$/, ""); }
 
     connectedCallback() { this._connected = true; this.init(); }
     disconnectedCallback() {
         this._connected = false;
-        ++this._seq;
-        disposeWidget(this);
+        super.disconnectedCallback();
     }
     attributeChangedCallback(_name, oldValue, newValue) {
         if (this._connected && oldValue !== newValue) this.init();
@@ -58,7 +40,7 @@ export class InteractiveReportAdminElement extends HTMLElement {
             body: el("div", { class: "ir-tablewrap", part: "table-container" }),
         };
         this._mount.replaceChildren(
-            el("div", { class: "ir-admin-bar", part: "toolbar" },
+            el("div", { class: "ir-toolbar ir-admin-bar", part: "toolbar" },
                 filter,
                 el("button", { type: "button", class: "ir-btn", onclick: () => this.reload() }, "Refresh"),
                 el("button", { type: "button", class: "ir-btn", onclick: () => this.uploadDocument() }, "Upload JSON…"),

@@ -8,7 +8,7 @@
 
 import { popupMenu } from "../core/menu.js";
 import { anyMutableFeature, featureEnabled } from "./schema.js";
-import { stageContext } from "./stage.js";
+import { stageContext, visibleStageColumnNames } from "./stage.js";
 import { sameColumn } from "./state.js";
 import { columnSettingsDialog, columnsDialog, renameDialog } from "./dialogs/columns.js";
 import { filterDialog, computeDialog, highlightDialog } from "./dialogs/rules.js";
@@ -155,11 +155,4 @@ export function openHeaderMenu(w, col, anchor) {
 
     const items = joinSections([sortItems, presentation, filterItems]);
     if (items.length) popupMenu(anchor, items);
-}
-
-/// The terminal table's currently visible column names (explicit selection or all).
-export function visibleStageColumnNames(ctx, w) {
-    const explicit = ctx.columnsLayer?.(w.doc)?.columns;
-    if (explicit?.length) return [...explicit];
-    return ctx.columns.map(c => c.name);
 }

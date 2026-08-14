@@ -9,8 +9,8 @@
 import { el, labeled, sel } from "../../core/dom.js";
 import { openDialog } from "../../core/dialog.js";
 import { stageContext } from "../stage.js";
-import { sourceLayer } from "../state.js";
-import { expressionEditor, colOptions } from "./parts.js";
+import { nextFreeId, sourceLayer } from "../state.js";
+import { colorPick, expressionEditor, colOptions } from "./parts.js";
 
 export function filterDialog(w, { editIndex, col } = {}) {
     const existing = editIndex !== undefined ? sourceLayer(w.doc).filters?.[editIndex] : undefined;
@@ -47,9 +47,7 @@ function nextComputedId(doc) {
     for (const stages of Object.values(doc.shelf ?? {}))
         for (const stage of stages ?? [])
             for (const rule of stage.layer?.computed ?? []) ids.add(rule.id.toLowerCase());
-    let n = 1;
-    while (ids.has(`c${n}`)) n++;
-    return `c${n}`;
+    return nextFreeId(ids, "c");
 }
 
 export function computeDialog(w, editIndex) {
@@ -101,13 +99,12 @@ export function highlightDialog(w, editIndex) {
     const layerOf = ctx.highlightLayer ?? (d => sourceLayer(d));
     const existing = editIndex !== undefined ? layerOf(w.doc).highlights?.[editIndex] : undefined;
     const rules = layerOf(w.doc).highlights ?? [];
-    const ids = rules.map(h => (h.id ?? "").toLowerCase());
-    let n = 1;
-    while (ids.includes(`h${n}`.toLowerCase())) n++;
-    const id = existing?.id ?? `h${n}`;
+    const ids = new Set(rules.map(h => (h.id ?? "").toLowerCase()));
+    const freshId = nextFreeId(ids, "h");
+    const id = existing?.id ?? freshId;
     const nextSequence = Math.max(0, ...rules.map((h, i) => h.sequence ?? ((i + 1) * 10))) + 10;
     const nameInp = el("input", {
-        class: "ir-input", type: "text", value: existing?.name ?? existing?.id ?? `Highlight ${n}`,
+        class: "ir-input", type: "text", value: existing?.name ?? existing?.id ?? `Highlight ${freshId.slice(1)}`,
         placeholder: "Highlight name", required: true,
     });
     const sequenceInp = el("input", {
@@ -129,16 +126,11 @@ export function highlightDialog(w, editIndex) {
         columns: ctx.columns,
     });
 
-    const bgInp = el("input", {
-        type: "color", class: "ir-color", value: existing?.style?.bg ?? "#fff3cd",
-        "aria-label": "Background color",
-    });
-    const bgOn = el("input", { type: "checkbox", checked: existing ? !!existing.style?.bg : true });
-    const fgInp = el("input", {
-        type: "color", class: "ir-color", value: existing?.style?.fg ?? "#9f1239",
-        "aria-label": "Text color",
-    });
-    const fgOn = el("input", { type: "checkbox", checked: !!existing?.style?.fg });
+    const bgPick = colorPick(
+        "Background",
+        existing ? (existing.style?.bg ?? null) : "#fff3cd",
+        "#fff3cd");
+    const fgPick = colorPick("Text", existing?.style?.fg ?? null, "#9f1239");
 
     openDialog({
         owner: w,
@@ -152,16 +144,16 @@ export function highlightDialog(w, editIndex) {
             el("div", { class: "ir-field-label ir-condition-head" }, "When"),
             condition,
             el("div", { class: "ir-colors" },
-                el("div", { class: "ir-color-pick" },
-                    el("label", { class: "ir-checkline" }, bgOn, "Background"), bgInp),
-                el("div", { class: "ir-color-pick" },
-                    el("label", { class: "ir-checkline" }, fgOn, "Text"), fgInp))),
+                bgPick.node,
+                fgPick.node)),
         onApply: () => {
             const expr = condition._read();
             const name = nameInp.value.trim();
             if (!name) throw new Error("Enter a highlight name");
             const sequence = Number(sequenceInp.value);
-            if (!bgOn.checked && !fgOn.checked) throw new Error("Pick a background or text color");
+            const bg = bgPick.read();
+            const fg = fgPick.read();
+            if (!bg && !fg) throw new Error("Pick a background or text color");
             const rule = {
                 id,
                 name,
@@ -172,8 +164,8 @@ export function highlightDialog(w, editIndex) {
             };
             if (scopeSel.value === "cell") rule.col = targetSel.value;
             rule.style = {};
-            if (bgOn.checked) rule.style.bg = bgInp.value;
-            if (fgOn.checked) rule.style.fg = fgInp.value;
+            if (bg) rule.style.bg = bg;
+            if (fg) rule.style.fg = fg;
             return w.apply(d => {
                 const layer = layerOf(d);
                 layer.highlights ??= [];

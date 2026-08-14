@@ -4,6 +4,7 @@
 
 import { el, icon } from "./dom.js";
 import { closePopups } from "./menu.js";
+import { hidePopover, popoverIsOpen, showPopover } from "./popover.js";
 
 const dialogsByOwner = new WeakMap();
 const openDialogs = [];
@@ -20,21 +21,6 @@ function viewportBounds() {
     const width = viewport?.width ?? window.innerWidth;
     const height = viewport?.height ?? window.innerHeight;
     return { left, top, right: left + width, bottom: top + height };
-}
-
-function popoverIsOpen(node) {
-    try { return node.matches(":popover-open"); }
-    catch { return node.hasAttribute("data-ir-popover-open"); }
-}
-
-function showPopover(node) {
-    if (typeof node.showPopover === "function") node.showPopover();
-    else node.setAttribute("data-ir-popover-open", "");
-}
-
-function hidePopover(node) {
-    if (typeof node.hidePopover === "function" && popoverIsOpen(node)) node.hidePopover();
-    node.removeAttribute("data-ir-popover-open");
 }
 
 function activateDialog(dlg) {
@@ -79,9 +65,9 @@ function placeWindow(dlg, requestedLeft, requestedTop) {
     const maxTop = Math.max(bounds.top, bounds.bottom - titleHeight);
     const left = clamp(requestedLeft, bounds.left, maxLeft);
     const top = clamp(requestedTop, bounds.top, maxTop);
-    dlg.root.style.left = `${left}px`;
-    dlg.root.style.top = `${top}px`;
-    dlg.root.style.transform = "none";
+    dlg.root.style.setProperty("--ir-win-left", `${left}px`);
+    dlg.root.style.setProperty("--ir-win-top", `${top}px`);
+    dlg.root.classList.add("ir-moved");
     dlg.moved = true;
 }
 
@@ -168,7 +154,7 @@ export function openDialog({
     const titleId = `ir-dialog-title-${++titleSequence}`;
 
     const errorBox = el("div", {
-        class: "ir-dialog-error", hidden: true, role: "alert", "aria-atomic": "true",
+        class: "ir-dialog-error ir-banner-error", hidden: true, role: "alert", "aria-atomic": "true",
     });
     const body = el("div", { class: "ir-dialog-body" });
     let ownedDialogs = null;
@@ -176,6 +162,7 @@ export function openDialog({
         ownedDialogs = dialogsByOwner.get(owner) ?? new Set();
         dialogsByOwner.set(owner, ownedDialogs);
     }
+    const controller = new AbortController();
     let closed = false;
 
     const dlg = {
@@ -190,9 +177,7 @@ export function openDialog({
             if (modal && dlg.root.open) dlg.root.close();
             else if (!modal) hidePopover(dlg.root);
             dlg.root.remove();
-            document.removeEventListener("keydown", onKey, true);
-            window.removeEventListener("resize", onResize);
-            window.visualViewport?.removeEventListener("resize", onResize);
+            controller.abort();
             removeOpenDialog(dlg);
             ownedDialogs?.delete(dlg);
             restorePreviousFocus(restoreFocus);
@@ -258,7 +243,6 @@ export function openDialog({
         class: "ir-dialog" + (cls ? ` ${cls}` : "") + (modal ? " ir-dialog-modal" : ""),
         part: "dialog",
         "aria-labelledby": titleId,
-        style: width ? { width } : {},
     };
     if (modal) dialogProps["aria-modal"] = "true";
     else {
@@ -273,6 +257,7 @@ export function openDialog({
         titleBar,
         errorBox,
         form);
+    if (width) dlg.root.style.setProperty("--ir-dialog-width", width);
 
     const onKey = event => {
         if (openDialogs[openDialogs.length - 1] !== dlg) return;
@@ -296,9 +281,9 @@ export function openDialog({
         dlg.close();
     });
     else makeDraggable(dlg);
-    document.addEventListener("keydown", onKey, true);
-    window.addEventListener("resize", onResize);
-    window.visualViewport?.addEventListener("resize", onResize);
+    document.addEventListener("keydown", onKey, { capture: true, signal: controller.signal });
+    window.addEventListener("resize", onResize, { signal: controller.signal });
+    window.visualViewport?.addEventListener("resize", onResize, { signal: controller.signal });
 
     build(body, dlg);
     mount.append(dlg.root);
@@ -324,7 +309,6 @@ export function confirmDialog(owner, title, message, confirmLabel = "Delete") {
             build: body => body.append(el("p", { class: "ir-confirm-text" }, message)),
             onApply: () => { confirmed = true; },
         });
-        const origClose = dlg.close;
-        dlg.close = () => { origClose(); resolve(confirmed); };
+        dlg.root.addEventListener("close", () => resolve(confirmed), { once: true });
     });
 }

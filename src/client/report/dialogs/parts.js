@@ -32,6 +32,28 @@ export function fieldGroup(text, ...children) {
         el("legend", { class: "ir-field-label" }, text), ...children);
 }
 
+/// Checkbox-gated color input shared by presentation and highlight editors.
+/// A null read means the color is disabled; write() lets multi-column editors
+/// load another staged value without rebuilding the control.
+export function colorPick(label, initial, fallback) {
+    const enabled = el("input", { type: "checkbox", checked: !!initial });
+    const input = el("input", {
+        type: "color",
+        class: "ir-color",
+        value: initial || fallback,
+        "aria-label": `${label} color`,
+    });
+    return {
+        node: el("div", { class: "ir-color-pick" },
+            el("label", { class: "ir-checkline" }, enabled, label), input),
+        read: () => enabled.checked ? input.value : null,
+        write(value) {
+            enabled.checked = !!value;
+            if (value) input.value = value;
+        },
+    };
+}
+
 // --- rows-of-controls pattern ------------------------------------------------
 
 export function rowList(container, items, buildRow, { addLabel = "Add", max } = {}) {

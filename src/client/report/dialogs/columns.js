@@ -9,19 +9,13 @@
 import { el, labeled, sel } from "../../core/dom.js";
 import { openDialog } from "../../core/dialog.js";
 import { featureEnabled, typeOf } from "../schema.js";
-import { stageContext } from "../stage.js";
+import { stageContext, visibleStageColumnNames } from "../stage.js";
 import { sameColumn, sourceLayer } from "../state.js";
-import { colOptions } from "./parts.js";
+import { colorPick, colOptions } from "./parts.js";
 import { masksFor } from "../render/format.js";
 import { renderColumnValue } from "../render/column-renderers.js";
 import { columnClasses } from "../classes.js";
 import { presentationStyle } from "../render/presentation.js";
-
-const visibleStageNames = (ctx, w) => {
-    const explicit = ctx.columnsLayer?.(w.doc)?.columns;
-    if (explicit?.length) return explicit.filter(n => ctx.columns.some(c => sameColumn(c.name, n)));
-    return ctx.columns.map(c => c.name);
-};
 
 export function columnsDialog(w) {
     const ctx = stageContext(w);
@@ -31,7 +25,7 @@ export function columnsDialog(w) {
     const pinned = ctx.mode === "grid" ? [] : (ctx.dims ?? []);
     const universe = ctx.columns.filter(c => !pinned.some(p => sameColumn(p, c.name)));
     const byName = new Map(universe.map(c => [c.name, c]));
-    const visible = visibleStageNames(ctx, w);
+    const visible = visibleStageColumnNames(ctx, w);
     const displayedNames = visible.filter(n => byName.has(n));
     const hiddenNames = universe.map(c => c.name).filter(n => !displayedNames.includes(n));
 
@@ -95,7 +89,7 @@ export function columnSettingsDialog(w, initialCol) {
     const universe = ctx.columns;
     const byName = new Map(universe.map(c => [c.name, c]));
     const columnType = name => byName.get(name)?.type ?? typeOf(w, name);
-    const originallyVisible = visibleStageNames(ctx, w);
+    const originallyVisible = visibleStageColumnNames(ctx, w);
     const canHide = ctx.caps.visibility && featureEnabled(w, "columns");
     const withDisplayAs = ctx.caps.displayAs;
     const isPinned = name => ctx.mode !== "grid" && (ctx.dims ?? []).some(d => sameColumn(d, name));
@@ -113,10 +107,13 @@ export function columnSettingsDialog(w, initialCol) {
         { value: "link", label: "Link" },
         { value: "image", label: "Image" },
     ]);
+    displayAsSel.classList.add("ir-display-as");
     const urlColumnSel = sel(colOptions(w));
     const textColumnSel = sel(colOptions(w));
     const urlColumnField = labeled("URL Column", urlColumnSel);
     const textColumnField = labeled("Link Text Column", textColumnSel);
+    urlColumnField.classList.add("ir-url-only");
+    textColumnField.classList.add("ir-text-only");
     const alignSel = sel([
         { value: "", label: "Default" },
         { value: "left", label: "Left" },
@@ -127,14 +124,8 @@ export function columnSettingsDialog(w, initialCol) {
     const maskField = labeled("Format Mask", maskSel);
     const boldChk = el("input", { type: "checkbox" });
     const italicChk = el("input", { type: "checkbox" });
-    const fgOn = el("input", { type: "checkbox" });
-    const fgInp = el("input", {
-        type: "color", class: "ir-color", value: "#9f1239", "aria-label": "Text color",
-    });
-    const bgOn = el("input", { type: "checkbox" });
-    const bgInp = el("input", {
-        type: "color", class: "ir-color", value: "#fff3cd", "aria-label": "Background color",
-    });
+    const fgPick = colorPick("Text", null, "#9f1239");
+    const bgPick = colorPick("Background", null, "#fff3cd");
     const classesInp = el("input", {
         type: "text", class: "ir-input", maxLength: 500,
         placeholder: "e.g. amount-column emphasized",
@@ -159,8 +150,8 @@ export function columnSettingsDialog(w, initialCol) {
         align: alignSel.value || null,
         bold: boldChk.checked,
         italic: italicChk.checked,
-        fg: fgOn.checked ? fgInp.value : null,
-        bg: bgOn.checked ? bgInp.value : null,
+        fg: fgPick.read(),
+        bg: bgPick.read(),
         classes: classesInp.value.trim(),
     });
 
@@ -209,8 +200,6 @@ export function columnSettingsDialog(w, initialCol) {
         }));
         preview.className = "ir-format-preview";
         preview.classList.add(...columnClasses(s.classes));
-        urlColumnField.hidden = !s.displayAs;
-        textColumnField.hidden = s.displayAs !== "link";
         maskField.hidden = masksFor(type).length === 0
             || s.displayAs === "image"
             || (s.displayAs === "link" && s.textColumn !== name);
@@ -230,10 +219,8 @@ export function columnSettingsDialog(w, initialCol) {
         maskSel.value = masks.some(m => m.value === s.mask) ? s.mask : "";
         boldChk.checked = s.bold;
         italicChk.checked = s.italic;
-        fgOn.checked = !!s.fg;
-        if (s.fg) fgInp.value = s.fg;
-        bgOn.checked = !!s.bg;
-        if (s.bg) bgInp.value = s.bg;
+        fgPick.write(s.fg);
+        bgPick.write(s.bg);
         classesInp.value = s.classes;
         updatePreview();
     };
@@ -243,7 +230,7 @@ export function columnSettingsDialog(w, initialCol) {
         load(active);
     };
     for (const control of [visChk, displayAsSel, urlColumnSel, textColumnSel, alignSel, maskSel,
-        boldChk, italicChk, fgOn, fgInp, bgOn, bgInp, classesInp])
+        boldChk, italicChk, fgPick.node, bgPick.node, classesInp])
         control.addEventListener("input", updatePreview);
     load(active);
 
@@ -263,10 +250,8 @@ export function columnSettingsDialog(w, initialCol) {
                 el("label", { class: "ir-checkline" }, boldChk, "Bold"),
                 el("label", { class: "ir-checkline" }, italicChk, "Italic")),
             el("div", { class: "ir-colors" },
-                el("div", { class: "ir-color-pick" },
-                    el("label", { class: "ir-checkline" }, fgOn, "Text"), fgInp),
-                el("div", { class: "ir-color-pick" },
-                    el("label", { class: "ir-checkline" }, bgOn, "Background"), bgInp)),
+                fgPick.node,
+                bgPick.node),
             labeled("CSS Classes", classesInp),
             el("p", { class: "ir-dialog-note" },
                 "Space-separated classes from the report's configured stylesheet. The ir- prefix is reserved."),

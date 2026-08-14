@@ -5,9 +5,9 @@
 // element through this class's surface: doc, els, apply/applyOrBanner, runQuery,
 // normalize/serialize, reportUrl, and the notice slots.
 
-import { api, apiUrl, defaultApiBase } from "../core/api.js";
+import { api, apiUrl } from "../core/api.js";
 import { banner, transientBanner } from "../core/dom.js";
-import { createWidgetRoot, disposeWidget, setCustomStyleSheet } from "../core/widget.js";
+import { setCustomStyleSheet, WidgetElement } from "../core/widget.js";
 import { applyFeatureChrome, buildSkeleton } from "./skeleton.js";
 import { featureEnabled } from "./schema.js";
 import {
@@ -18,16 +18,12 @@ import {
     schemaMismatch,
     serializeReportState,
 } from "./state.js";
-import { refreshSavedSelect } from "./saved.js";
+import { refreshSavedSelect, sameTitle } from "./saved.js";
 import { renderChips } from "./render/chips.js";
 import { renderGrid } from "./render/grid.js";
 import { renderChartView } from "./render/chart-view.js";
 import { renderPager } from "./render/pager.js";
 import { openViewDialog } from "./dialogs/view.js";
-
-const BASE_DEFAULT = defaultApiBase();
-const sameName = (left, right) => typeof left === "string" && typeof right === "string"
-    && left.toUpperCase() === right.toUpperCase();
 
 // Chart.js glue ships as its own bundle beside ir.js and loads the first time
 // any report on the page enters chart view. The URL is computed at runtime so
@@ -37,36 +33,24 @@ const loadChartModule = () =>
     chartModulePromise ??= import(new URL("./ir-chart.js", import.meta.url).href)
         .catch(err => { chartModulePromise = undefined; throw err; });
 
-export class InteractiveReportElement extends HTMLElement {
+export class InteractiveReportElement extends WidgetElement {
     static observedAttributes = ["report", "saved-report", "api-base", "base"];
 
     constructor() {
         super();
-        const { root, mount } = createWidgetRoot(this);
-        this._root = root;
-        this._mount = mount;
         this._busyTokens = new Set();
-        this._seq = 0;
         this._initialized = false;
     }
-
-    get apiBase() { return this.getAttribute("api-base") ?? this.getAttribute("base") ?? BASE_DEFAULT; }
-    set apiBase(value) {
-        if (value === null || value === undefined) this.removeAttribute("api-base");
-        else this.setAttribute("api-base", String(value));
-    }
-    get base() { return this.apiBase.replace(/\/+$/, ""); }
     get requestedReportName() { return this.getAttribute("report"); }
     get requestedSavedReportName() { return this.getAttribute("saved-report"); }
     get reportName() { return this._activeReportName ?? this.requestedReportName; }
 
     connectedCallback() { this.scheduleInit(); }
     disconnectedCallback() {
-        ++this._seq;
+        super.disconnectedCallback();
         this._abort?.abort();
         this._abort = null;
         this.destroyChart();
-        disposeWidget(this);
     }
     attributeChangedCallback(_name, oldValue, newValue) {
         if (this._initialized && oldValue !== newValue) this.scheduleInit();
@@ -169,7 +153,7 @@ export class InteractiveReportElement extends HTMLElement {
 
             const requestedSaved = this.requestedSavedReportName?.trim();
             const savedMatches = requestedSaved
-                ? saved.filter(candidate => sameName(candidate.title, requestedSaved))
+                ? saved.filter(candidate => sameTitle(candidate.title, requestedSaved))
                 : [];
             let savedWarning;
             if (savedMatches.length === 1) {
@@ -185,7 +169,6 @@ export class InteractiveReportElement extends HTMLElement {
                         : `Saved report name "${requestedSaved}" is ambiguous; loaded Primary Report.`;
                 }
             }
-            this.els.search.value = this.doc.search ?? "";
             refreshSavedSelect(this);
             await this.runQuery({ quiet });
             if (savedWarning) this.notify(savedWarning, "warn");
@@ -214,9 +197,13 @@ export class InteractiveReportElement extends HTMLElement {
     /// touched; only the working copy resets. Absent snapshots skip the check.
     adoptState(rawState, description) {
         const live = this.schema?.columns ?? [];
-        let mismatch = schemaMismatch(rawState?.schema, live);
+        const mismatch = schemaMismatch(rawState?.schema, live);
+        const adopt = state => {
+            this.doc = state;
+            this.els.search.value = state.search ?? "";
+        };
         if (!mismatch) {
-            this.doc = this.normalize(rawState);
+            adopt(this.normalize(rawState));
             return true;
         }
 
@@ -226,10 +213,10 @@ export class InteractiveReportElement extends HTMLElement {
         if (schemaMismatch(defaultState?.schema, live)) {
             // A configured default can itself predate the schema change; the
             // synthetic empty terminus cannot.
-            this.doc = normalizeReportState(null, this.schema?.limits?.defaultPageSize ?? 50);
+            adopt(normalizeReportState(null, this.schema?.limits?.defaultPageSize ?? 50));
             fallback = "an empty report";
         } else {
-            this.doc = this.normalize(defaultState);
+            adopt(this.normalize(defaultState));
         }
         this.showError(new Error(
             `${description ?? "This report"} was built against a schema that has changed (${detail}). Loaded ${fallback} instead.`));

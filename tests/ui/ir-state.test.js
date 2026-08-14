@@ -4,7 +4,9 @@ import {
     activateTail,
     configuredTail,
     expressionReferencesColumn,
+    lookupValue,
     modeOf,
+    nextFreeId,
     normalizeReportState,
     pivotRowDims,
     removeSourceComputedColumn,
@@ -17,6 +19,7 @@ import {
     stageOf,
     tailOf,
 } from "../../src/client/report/state.js";
+import { visibleStageColumnNames } from "../../src/client/report/stage.js";
 
 const src = layer => ({ shape: { kind: "source" }, layer });
 const group = (by, values = [], layer = undefined) =>
@@ -283,4 +286,19 @@ test("scoped search emits typed number, date, and boolean predicates", () => {
 test("scoped search rejects invalid typed input before requesting the server", () => {
     assert.throws(() => scopedSearchExpression("AMOUNT", "number", "twelve"), /not a number/);
     assert.throws(() => scopedSearchExpression("ORDER_DATE", "date", "08\/06\/2026"), /ISO date/);
+});
+
+test("case-insensitive state lookup and generated ids share their canonical helpers", () => {
+    assert.deepEqual(lookupValue({ Amount: { mask: "currency" } }, "AMOUNT"), { mask: "currency" });
+    assert.equal(lookupValue({ Amount: 1 }, "missing"), undefined);
+    assert.equal(nextFreeId(new Set(["c1", "c3"]), "c"), "c2");
+});
+
+test("visible stage columns discard stale explicit names", () => {
+    const w = { doc: { layer: { columns: ["ORDER_ID", "REMOVED"] } } };
+    const ctx = {
+        columns: [{ name: "ORDER_ID" }, { name: "CUSTOMER" }],
+        columnsLayer: doc => doc.layer,
+    };
+    assert.deepEqual(visibleStageColumnNames(ctx, w), ["ORDER_ID"]);
 });

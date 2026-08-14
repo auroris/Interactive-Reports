@@ -11,6 +11,7 @@ import { openDialog } from "../../core/dialog.js";
 import {
     activateTail,
     configuredTail,
+    nextFreeId,
     pruneRetiredMetrics,
     removeStageComputedColumn,
     sameColumn,
@@ -58,10 +59,8 @@ function valueList(w, initial) {
 function assignMetricIds(rows, previous) {
     const remaining = [...(previous ?? [])];
     const used = new Set(remaining.map(v => String(v.id).toLowerCase()));
-    let next = 1;
     const fresh = () => {
-        while (used.has(`m${next}`)) next++;
-        const id = `m${next}`;
+        const id = nextFreeId(used, "m");
         used.add(id);
         return id;
     };

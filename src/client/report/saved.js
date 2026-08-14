@@ -9,6 +9,9 @@ import { confirmDialog } from "../core/dialog.js";
 import { featureEnabled } from "./schema.js";
 import { schemaSnapshot } from "./state.js";
 
+export const sameTitle = (left, right) => typeof left === "string" && typeof right === "string"
+    && left.localeCompare(right, undefined, { sensitivity: "accent" }) === 0;
+
 export function canManageCurrentSaved(w) {
     return canManageSaved(w, w.currentSaved);
 }
@@ -45,7 +48,6 @@ export async function loadSavedById(w, id) {
         // falls back to the default report; the stored row is untouched.
         if (!w.adoptState(docResponse.state, `Saved report "${docResponse.summary?.title}"`))
             w.currentSaved = null;
-        w.els.search.value = w.doc.search ?? "";
         refreshSavedSelect(w);
         await w.runQuery();
     } catch (err) {
@@ -56,7 +58,6 @@ export async function loadSavedById(w, id) {
 export function resetToPrimary(w) {
     w.currentSaved = null;
     w.adoptState(w.schema?.defaultState, "The default report");
-    w.els.search.value = w.doc.search ?? "";
     refreshSavedSelect(w);
     w.runQuery().catch(() => {});
 }

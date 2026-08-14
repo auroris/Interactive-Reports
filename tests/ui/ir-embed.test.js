@@ -85,11 +85,29 @@ test("the report is style-isolated and uses its explicit API base", async () => 
         await new Promise(resolve => setTimeout(resolve, 1));
 
     assert.ok(report.shadowRoot, "the component should render behind a shadow root");
-    assert.ok(report.shadowRoot.querySelector("style[data-ir-styles]"), "styles should live in the shadow root");
+    const customLink = report.shadowRoot.querySelector("link[data-ir-custom-styles]");
     assert.equal(
-        report.shadowRoot.querySelector("link[data-ir-custom-styles]")?.getAttribute("href"),
+        customLink?.getAttribute("href"),
         "/styles/orders-report.css?v=3",
         "the configured sheet must be linked inside the shadow root");
+
+    // The cascade contract: packaged styles come before the custom stylesheet so
+    // its equal-specificity rules win. Adopted sheets always sort last, so a root
+    // hosting a custom stylesheet demotes to a style node placed before the link;
+    // roots without one share the single parsed packaged sheet.
+    const styleNode = report.shadowRoot.querySelector("style[data-ir-styles]");
+    assert.ok(styleNode, "a root with a custom stylesheet uses the style-node path");
+    assert.equal(report.shadowRoot.adoptedStyleSheets?.length ?? 0, 0,
+        "a demoted root must not also adopt the packaged sheet");
+    const rootChildren = [...report.shadowRoot.children];
+    assert.ok(rootChildren.indexOf(styleNode) < rootChildren.indexOf(customLink),
+        "packaged styles must precede the custom stylesheet");
+    const peer = document.createElement("interactive-report");
+    const twin = document.createElement("interactive-report");
+    assert.ok(peer.shadowRoot.adoptedStyleSheets?.length,
+        "a root without a custom stylesheet adopts the packaged sheet");
+    assert.equal(peer.shadowRoot.adoptedStyleSheets[0], twin.shadowRoot.adoptedStyleSheets[0],
+        "widget instances share one parsed packaged stylesheet");
     assert.ok(report.shadowRoot.querySelector(".ir-toolbar"), "the report UI should render in the shadow root");
     assert.equal(report.shadowRoot.querySelector(".ir-toolbar").getAttribute("part"), "toolbar");
     assert.equal(report.shadowRoot.querySelector(".ir-table").getAttribute("part"), "table");
