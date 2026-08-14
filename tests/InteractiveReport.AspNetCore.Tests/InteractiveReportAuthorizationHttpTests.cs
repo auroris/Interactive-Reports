@@ -3,7 +3,9 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text.Json;
+using InteractiveReport.AspNetCore.Definitions;
 using InteractiveReport.Core.Model;
+using InteractiveReport.Core.SavedReports;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -118,10 +120,10 @@ public sealed class InteractiveReportAuthorizationHttpTests
         {
             Assert.Equal("callback-admin", call.User.FindFirstValue(ClaimTypes.NameIdentifier));
             Assert.Equal("orders", call.Resource.ReportName);
-            Assert.Equal("Default", call.Resource.Changes!.Title);
-            Assert.True(call.Resource.Changes.IsPrimary);
-            Assert.True(call.Resource.Changes.StateChanged);
-            Assert.Equal(3, call.Resource.Changes.State!.Value.GetProperty("v").GetInt32());
+            Assert.Equal("Default", call.Resource.Definition!.Title);
+            Assert.True(call.Resource.Definition.Primary);
+            Assert.True(call.Resource.Definition.StateChanged);
+            Assert.Equal(3, call.Resource.Definition.State!.V);
         });
 
         using var listing = await host.Client.SendAsync(Request(
@@ -130,6 +132,209 @@ public sealed class InteractiveReportAuthorizationHttpTests
             "callback-admin"));
         Assert.Equal(HttpStatusCode.OK, listing.StatusCode);
         Assert.Contains(seen, call => call.Action == InteractiveReportAction.ListAllSavedReports);
+    }
+
+    [Fact]
+    public async Task Callback_receives_typed_definition_and_can_narrow_it_before_admin_actions()
+    {
+        var seen = new ConcurrentQueue<InteractiveReportAction>();
+        await using var host = await Start(
+            (reports, _) => reports.UseAuthorization((request, _) =>
+            {
+                seen.Enqueue(request.Action);
+                if (request.Action == InteractiveReportAction.CreateSavedReport)
+                {
+                    var definition = Assert.IsType<InteractiveReportDefinition>(
+                        request.Resource.Definition);
+                    Assert.Equal("orders", definition.ReportName);
+                    Assert.True(definition.Public);
+                    Assert.True(definition.StateChanged);
+                    var source = Assert.Single(definition.State!.Pipeline!);
+                    Assert.IsType<FilterRule>(Assert.Single(source.Layer!.Filters!));
+
+                    definition.Public = false;
+                    definition.Title = "Server approved";
+                    definition.State.Search = "server-normalized";
+                }
+
+                return ValueTask.FromResult(true);
+            }),
+            administrators: ["configured-admin"]);
+
+        using var save = await host.Client.SendAsync(Request(
+            HttpMethod.Post,
+            "/api/reports/orders/saved",
+            "ordinary-user",
+            new
+            {
+                title = "Client proposal",
+                isGlobal = true,
+                state = new
+                {
+                    v = 3,
+                    unknownClientMember = "not persisted",
+                    pipeline = new[]
+                    {
+                        new
+                        {
+                            shape = new { kind = "source" },
+                            layer = new { filters = new[] { new { expr = "ID = 1" } } },
+                        },
+                    },
+                },
+            }));
+
+        Assert.Equal(HttpStatusCode.Created, save.StatusCode);
+        var saved = await ReadJson(save);
+        Assert.Equal("Server approved", saved.GetProperty("title").GetString());
+        Assert.False(saved.GetProperty("isGlobal").GetBoolean());
+        Assert.Equal([InteractiveReportAction.CreateSavedReport], seen.ToArray());
+
+        using var load = await host.Client.SendAsync(Request(
+            HttpMethod.Get,
+            $"/api/reports/saved/{saved.GetProperty("id").GetString()}",
+            "ordinary-user"));
+        Assert.Equal(HttpStatusCode.OK, load.StatusCode);
+        var loadedState = (await ReadJson(load)).GetProperty("state");
+        Assert.Equal(
+            "server-normalized",
+            loadedState.GetProperty("search").GetString());
+        Assert.False(loadedState.TryGetProperty("unknownClientMember", out _));
+    }
+
+    [Fact]
+    public async Task Authorization_mutation_is_validated_before_any_definition_is_stored()
+    {
+        string? proposedId = null;
+        await using var host = await Start((reports, _) =>
+            reports.UseAuthorization((request, _) =>
+            {
+                if (request.Action == InteractiveReportAction.CreateSavedReport)
+                {
+                    proposedId = request.Resource.Definition!.Id;
+                    request.Resource.Definition.State = new ReportState { V = 2 };
+                }
+                return ValueTask.FromResult(true);
+            }));
+
+        using var save = await host.Client.SendAsync(Request(
+            HttpMethod.Post,
+            "/api/reports/orders/saved",
+            "ordinary-user",
+            new { title = "Invalid after authorization", state = new { v = 3 } }));
+
+        Assert.Equal(HttpStatusCode.BadRequest, save.StatusCode);
+        Assert.NotNull(proposedId);
+        using var load = await host.Client.SendAsync(Request(
+            HttpMethod.Get,
+            $"/api/reports/saved/{proposedId}",
+            "ordinary-user"));
+        Assert.Equal(HttpStatusCode.NotFound, load.StatusCode);
+    }
+
+    [Fact]
+    public async Task Update_definition_has_effective_metadata_but_only_client_authored_state()
+    {
+        var updateInspected = false;
+        await using var host = await Start((reports, _) =>
+            reports.UseAuthorization((request, _) =>
+            {
+                if (request.Action == InteractiveReportAction.UpdateSavedReport)
+                {
+                    var definition = request.Resource.Definition!;
+                    Assert.Equal(request.Resource.SavedReport!.Id, definition.Id);
+                    Assert.Equal("Client update", definition.Title);
+                    Assert.False(definition.Public);
+                    Assert.False(definition.Primary);
+                    Assert.Equal("ordinary-user", definition.Owner);
+                    Assert.False(definition.StateChanged);
+                    Assert.Null(definition.State);
+
+                    definition.Title = "Server update";
+                    updateInspected = true;
+                }
+                return ValueTask.FromResult(true);
+            }));
+
+        using var save = await host.Client.SendAsync(Request(
+            HttpMethod.Post,
+            "/api/reports/orders/saved",
+            "ordinary-user",
+            new { title = "Original", state = new { v = 3, search = "untouched" } }));
+        Assert.Equal(HttpStatusCode.Created, save.StatusCode);
+        var id = (await ReadJson(save)).GetProperty("id").GetString()!;
+        var store = host.Services.GetRequiredService<ISavedReportStore>();
+        var stateBefore = (await store.Get(id))!.StateJson;
+
+        using var update = await host.Client.SendAsync(Request(
+            HttpMethod.Put,
+            $"/api/reports/saved/{id}",
+            "ordinary-user",
+            new { title = "Client update" }));
+
+        Assert.Equal(HttpStatusCode.OK, update.StatusCode);
+        Assert.True(updateInspected);
+        Assert.Equal("Server update", (await ReadJson(update)).GetProperty("title").GetString());
+        Assert.Equal(stateBefore, (await store.Get(id))!.StateJson);
+    }
+
+    [Fact]
+    public async Task Privilege_added_during_authorization_emits_its_own_action()
+    {
+        var seen = new ConcurrentQueue<InteractiveReportAction>();
+        await using var host = await Start((reports, _) =>
+            reports.UseAuthorization((request, _) =>
+            {
+                seen.Enqueue(request.Action);
+                if (request.Action == InteractiveReportAction.CreateSavedReport)
+                    request.Resource.Definition!.Public = true;
+                if (request.Action == InteractiveReportAction.PublishGlobalReport)
+                    request.Resource.Definition!.Primary = true;
+                return ValueTask.FromResult(true);
+            }));
+
+        using var save = await host.Client.SendAsync(Request(
+            HttpMethod.Post,
+            "/api/reports/orders/saved",
+            "ordinary-user",
+            new { title = "Escalated in stages", state = new { v = 3 } }));
+
+        Assert.Equal(HttpStatusCode.Created, save.StatusCode);
+        Assert.Equal(
+            [
+                InteractiveReportAction.CreateSavedReport,
+                InteractiveReportAction.PublishGlobalReport,
+                InteractiveReportAction.PublishPrimaryReport,
+            ],
+            seen.ToArray());
+        var result = await ReadJson(save);
+        Assert.True(result.GetProperty("isGlobal").GetBoolean());
+        Assert.True(result.GetProperty("isPrimary").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Stored_state_is_returned_as_json_without_typed_rehydration()
+    {
+        await using var host = await Start();
+        var report = new SavedReport
+        {
+            Id = SavedReport.NewId(),
+            ReportName = "orders",
+            Title = "Historical",
+            Owner = "ordinary-user",
+            StateJson = "{\"v\":2,\"historicalShape\":{\"stillHere\":true}}",
+        };
+        await host.Services.GetRequiredService<ISavedReportStore>().Create(report);
+
+        using var load = await host.Client.SendAsync(Request(
+            HttpMethod.Get,
+            $"/api/reports/saved/{report.Id}",
+            "ordinary-user"));
+
+        Assert.Equal(HttpStatusCode.OK, load.StatusCode);
+        var state = (await ReadJson(load)).GetProperty("state");
+        Assert.Equal(2, state.GetProperty("v").GetInt32());
+        Assert.True(state.GetProperty("historicalShape").GetProperty("stillHere").GetBoolean());
     }
 
     [Fact]
@@ -390,6 +595,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
         string tempRoot) : IAsyncDisposable
     {
         public HttpClient Client { get; } = client;
+        public IServiceProvider Services => app.Services;
 
         public async ValueTask DisposeAsync()
         {

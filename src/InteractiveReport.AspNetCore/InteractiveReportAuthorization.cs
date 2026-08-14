@@ -1,5 +1,5 @@
 using System.Security.Claims;
-using System.Text.Json;
+using InteractiveReport.AspNetCore.Definitions;
 using InteractiveReport.Core.SavedReports;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.DependencyInjection;
@@ -26,9 +26,8 @@ public enum InteractiveReportAction
 }
 
 /// <summary>
-/// Immutable saved-report metadata exposed to authorization code. The state document
-/// is deliberately excluded; proposed state is available as JSON on the changes
-/// object without exposing the persistence model's mutable JSON text.
+/// Immutable current saved-report metadata exposed to authorization code. The stored
+/// state document is deliberately excluded.
 /// </summary>
 public sealed record SavedReportAuthorizationResource(
     string Id,
@@ -38,26 +37,17 @@ public sealed record SavedReportAuthorizationResource(
     bool IsPrimary,
     SavedReportOrigin Origin);
 
-/// <summary>The requested saved-report mutation, before it is persisted.</summary>
-public sealed record SavedReportAuthorizationChanges
-{
-    public string? Title { get; init; }
-    public bool? IsGlobal { get; init; }
-    public bool? IsPrimary { get; init; }
-    public string? Owner { get; init; }
-    public bool StateChanged { get; init; }
-    public JsonElement? State { get; init; }
-}
-
 /// <summary>
 /// The resource passed to callback and ASP.NET Core resource-based authorization.
-/// SavedReport is the current row; Changes describes the proposed mutation.
+/// SavedReport is immutable current metadata. Definition is the mutable, typed result
+/// of applying the client request and is the object validated and persisted after
+/// authorization.
 /// </summary>
 public sealed record InteractiveReportAuthorizationResource
 {
     public required string ReportName { get; init; }
     public SavedReportAuthorizationResource? SavedReport { get; init; }
-    public SavedReportAuthorizationChanges? Changes { get; init; }
+    public InteractiveReportDefinition? Definition { get; init; }
 }
 
 /// <summary>One application authorization decision requested by Interactive Reports.</summary>

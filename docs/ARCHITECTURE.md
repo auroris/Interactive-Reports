@@ -852,10 +852,11 @@ Layered, default-deny:
    as 404 so it does not disclose whether the named report exists.
 3. **Application operation authorization** — optional callbacks and/or native ASP.NET
    resource handlers receive an `InteractiveReportAction`, the `ClaimsPrincipal`, and
-   current/proposed resource metadata. Every registered authorizer must grant every
-   applicable action. This is an additional restriction over the built-in rules and
-   the fallback administrator authority when the legacy list is empty. See
-   [Authorization](AUTHORIZATION.md).
+   current resource metadata. Saved-report mutations also carry a mutable, typed
+   `InteractiveReportDefinition` containing effective metadata and any client-authored
+   `ReportState`. Every registered authorizer must grant every applicable action. This
+   is an additional restriction over the built-in rules and the fallback administrator
+   authority when the legacy list is empty. See [Authorization](AUTHORIZATION.md).
 4. **Default-deny** — no authorization block ⇒ authenticated-only. Anonymous requires
    explicit `"allowAnonymous": true`. The lazy path is the safe path.
 5. **Row-level security** — server-resolved `contextParams` (§4).
@@ -937,13 +938,26 @@ to `IAuthorizationService` as an `InteractiveReportAuthorizationRequirement` plu
 pipeline, not separate security models. Multiple adapters and multiple actions compose
 with AND semantics.
 
-The resource carries the report name, immutable current saved-report metadata, and
-proposed title/state/publication/owner changes. The action vocabulary is ViewReport,
-Query, Export, List/Read/Create/Update/DeleteSavedReport, PublishGlobalReport,
-PublishPrimaryReport, ChangeSavedReportOwner, ListAllSavedReports,
-DownloadReportDocument, and UploadReportDocument. `false` and the dedicated denial
-exception are ordinary denials. Unexpected exceptions are logged and sanitized as 500;
-request cancellation propagates.
+The resource carries the report name and immutable current saved-report metadata.
+Create, update, and document-upload operations also carry the mutable typed definition
+that will be validated and persisted. Authorization evaluates the base mutation first,
+then derives publication and owner actions from the effective definition. A callback
+can therefore narrow a public proposal to a private save, while any privilege added by
+a later handler still emits its required administrator action. The action vocabulary is
+ViewReport, Query, Export, List/Read/Create/Update/DeleteSavedReport,
+PublishGlobalReport, PublishPrimaryReport, ChangeSavedReportOwner,
+ListAllSavedReports, DownloadReportDocument, and UploadReportDocument. `false` and the
+dedicated denial exception are ordinary denials. Unexpected exceptions are logged and
+sanitized as 500; request cancellation propagates.
+
+Every client-authored state accepted by create, update, or upload is hydrated into the
+existing `ReportState` class graph, passed to authorization, and its executable view is
+semantically validated against the current report schema after authorization mutation.
+Persistence serializes that typed graph rather than copying arbitrary client JSON. An
+update that did not submit state leaves `STATE_JSON` untouched. Ordinary loads retain
+the opposite rule:
+stored state is framed as JSON and returned without `ReportState` rehydration, so a read
+does not become an implicit migration or validation event.
 
 For operations requiring administrator authority, a nonempty configured administrator list is
 authoritative. A listed identity must still pass any configured operation authorizer;

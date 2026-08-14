@@ -1,4 +1,5 @@
 using System.Text.Json;
+using InteractiveReport.AspNetCore.Definitions;
 using InteractiveReport.Core.Definitions;
 using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Identity;
@@ -111,41 +112,48 @@ internal static class SavedReportEndpoints
 
         if (TitleError(request?.Title) is { } titleError) return titleError;
         if (request!.State is null) return BadRequest("Malformed save request", "state is required");
-        var actions = new List<InteractiveReportAction> { InteractiveReportAction.CreateSavedReport };
-        if (request.IsGlobal) actions.Add(InteractiveReportAction.PublishGlobalReport);
-        if (request.IsPrimary) actions.Add(InteractiveReportAction.PublishPrimaryReport);
-        var changes = new SavedReportAuthorizationChanges
-        {
-            Title = request.Title!.Trim(),
-            IsGlobal = request.IsGlobal,
-            IsPrimary = request.IsPrimary,
-            Owner = identity,
-            StateChanged = true,
-            State = StateElement(request.State),
-        };
-        if (await ReportRequestAccess.AuthorizeOperations(
-                def,
-                ctx,
-                actions,
-                Resource(def.Name, changes: changes),
-                administratorRequired: request.IsGlobal || request.IsPrimary,
-                hideDenied: false,
-                denialDetail: "Publishing a global or primary report requires authorization.",
-                ct) is { } operationDenied)
-            return operationDenied;
-        await Synchronizer(ctx).EnsureSynced(ct);
-        if (await FindTitleCollision(ctx, def.Name, request.Title!, exceptId: null, ct) is { } collision)
-            return TitleConflict(collision, request.Title!);
 
-        var report = new SavedReport
+        var candidate = new InteractiveReportDefinition
         {
             Id = SavedReport.NewId(),
             ReportName = def.Name,
             Title = request.Title!.Trim(),
+            Public = request.IsGlobal,
+            Primary = request.IsPrimary,
             Owner = identity,
-            IsGlobal = request.IsGlobal,
-            IsPrimary = request.IsPrimary,
-            StateJson = JsonSerializer.Serialize(request.State, IrJson.Options),
+            State = request.State,
+        };
+
+        if (await AuthorizeDefinitionMutation(
+                def,
+                ctx,
+                InteractiveReportAction.CreateSavedReport,
+                candidate,
+                current: null,
+                baseAdministratorRequired: false,
+                hideDenied: false,
+                denialDetail: "Publishing a global or primary report requires authorization.",
+                ct) is { } operationDenied)
+            return operationDenied;
+
+        if (DefinitionError(candidate, "Malformed save request") is { } candidateError)
+            return candidateError;
+        if (await ValidateSubmittedState(def, candidate, ctx, "saved report creation", ct) is { } stateError)
+            return stateError;
+
+        await Synchronizer(ctx).EnsureSynced(ct);
+        if (await FindTitleCollision(ctx, def.Name, candidate.Title, exceptId: null, ct) is { } collision)
+            return TitleConflict(collision, candidate.Title);
+
+        var report = new SavedReport
+        {
+            Id = candidate.Id,
+            ReportName = def.Name,
+            Title = candidate.Title.Trim(),
+            Owner = candidate.Owner,
+            IsGlobal = candidate.Public,
+            IsPrimary = candidate.Primary,
+            StateJson = JsonSerializer.Serialize(candidate.State, IrJson.Options),
         };
         await SavedStore(ctx).Create(report, ct);
 
@@ -208,80 +216,71 @@ internal static class SavedReportEndpoints
         if (await ReportRequestAccess.AuthorizeDefinition(definition, ctx) is { } definitionDenied)
             return definitionDenied;
 
-        var actions = new List<InteractiveReportAction> { InteractiveReportAction.UpdateSavedReport };
-        if (request.IsGlobal.HasValue) actions.Add(InteractiveReportAction.PublishGlobalReport);
-        if (request.IsPrimary.HasValue) actions.Add(InteractiveReportAction.PublishPrimaryReport);
-        if (request.Owner is not null) actions.Add(InteractiveReportAction.ChangeSavedReportOwner);
-        var changes = new SavedReportAuthorizationChanges
+        var candidate = new InteractiveReportDefinition
         {
-            Title = request.Title,
-            IsGlobal = request.IsGlobal,
-            IsPrimary = request.IsPrimary,
-            Owner = request.Owner,
-            StateChanged = request.State is not null,
-            State = StateElement(request.State),
+            Id = report.Id,
+            ReportName = report.ReportName,
+            Title = request.Title ?? report.Title,
+            Public = request.IsGlobal ?? report.IsGlobal,
+            Primary = request.IsPrimary ?? report.IsPrimary,
+            Owner = request.Owner ?? report.Owner,
         };
+        if (request.State is not null)
+            candidate.State = request.State;
 
         if (report.Origin == SavedReportOrigin.Configured)
         {
-            if (await ReportRequestAccess.AuthorizeOperations(
+            if (await AuthorizeDefinitionMutation(
                     definition,
                     ctx,
-                    actions,
-                    Resource(definition.Name, report, changes),
-                    administratorRequired: true,
+                    InteractiveReportAction.UpdateSavedReport,
+                    candidate,
+                    report,
+                    baseAdministratorRequired: true,
                     hideDenied: false,
                     denialDetail: "Changing a configured report requires authorization.",
                     ct) is { } configuredDenied)
                 return configuredDenied;
 
-            if (!request.IsPrimary.HasValue
-                || request.Title is not null
-                || request.State is not null
-                || request.IsGlobal.HasValue
-                || request.Owner is not null)
+            if (candidate.StateChanged
+                || (!request.IsPrimary.HasValue && candidate.Primary == report.IsPrimary)
+                || !string.Equals(candidate.Title, report.Title, StringComparison.Ordinal)
+                || candidate.Public != report.IsGlobal
+                || !string.Equals(candidate.Owner, report.Owner, StringComparison.Ordinal))
                 return ReadOnlyConfiguredResult();
 
-            report.IsPrimary = request.IsPrimary.Value;
+            report.IsPrimary = candidate.Primary;
             return await savedStore.Update(report, ct)
                 ? Results.Json(Summary(report, identity), IrJson.Options)
                 : Results.NotFound();
         }
 
         var access = SavedReportAccessPolicy.Modify(report, identity, administrator: false);
-        var changesAdministration = request.IsGlobal.HasValue
-                                    || request.IsPrimary.HasValue
-                                    || request.Owner is not null;
-        if (await ReportRequestAccess.AuthorizeOperations(
+        if (await AuthorizeDefinitionMutation(
                 definition,
                 ctx,
-                actions,
-                Resource(definition.Name, report, changes),
-                administratorRequired: access != SavedReportAccess.Allowed || changesAdministration,
+                InteractiveReportAction.UpdateSavedReport,
+                candidate,
+                report,
+                baseAdministratorRequired: access != SavedReportAccess.Allowed,
                 hideDenied: access == SavedReportAccess.Hidden,
                 denialDetail: "Modifying publication or ownership requires authorization.",
                 ct) is { } denied)
             return denied;
 
-        if (request.Title is not null)
-        {
-            if (TitleError(request.Title) is { } titleError) return titleError;
-            if (await FindTitleCollision(ctx, report.ReportName, request.Title, report.Id, ct) is { } collision)
-                return TitleConflict(collision, request.Title);
-            report.Title = request.Title.Trim();
-        }
-        if (request.State is not null)
-            report.StateJson = JsonSerializer.Serialize(request.State, IrJson.Options);
-        if (request.IsGlobal.HasValue)
-            report.IsGlobal = request.IsGlobal.Value;
-        if (request.IsPrimary.HasValue)
-            report.IsPrimary = request.IsPrimary.Value;
-        if (request.Owner is not null)
-        {
-            if (string.IsNullOrWhiteSpace(request.Owner))
-                return BadRequest("Malformed update request", "owner must be a non-empty identity value");
-            report.Owner = request.Owner.Trim();
-        }
+        if (DefinitionError(candidate, "Malformed update request") is { } candidateError)
+            return candidateError;
+        if (await ValidateSubmittedState(definition, candidate, ctx, "saved report update", ct) is { } stateError)
+            return stateError;
+        if (await FindTitleCollision(ctx, report.ReportName, candidate.Title, report.Id, ct) is { } collision)
+            return TitleConflict(collision, candidate.Title);
+
+        report.Title = candidate.Title.Trim();
+        if (candidate.StateChanged)
+            report.StateJson = JsonSerializer.Serialize(candidate.State, IrJson.Options);
+        report.IsGlobal = candidate.Public;
+        report.IsPrimary = candidate.Primary;
+        report.Owner = candidate.Owner?.Trim();
 
         return await savedStore.Update(report, ct)
             ? Results.Json(Summary(report, identity), IrJson.Options)
@@ -424,62 +423,46 @@ internal static class SavedReportEndpoints
         if (document!.State is null)
             return BadRequest("Malformed report document", "state is required");
 
-        var uploadActions = new List<InteractiveReportAction>
-        {
-            InteractiveReportAction.UploadReportDocument,
-        };
-        if (document.Primary) uploadActions.Add(InteractiveReportAction.PublishPrimaryReport);
-        var uploadChanges = new SavedReportAuthorizationChanges
-        {
-            Title = document.Title!.Trim(),
-            IsGlobal = false,
-            IsPrimary = document.Primary,
-            Owner = identity,
-            StateChanged = true,
-            State = StateElement(document.State),
-        };
-        if (await ReportRequestAccess.AuthorizeOperations(
-                definition,
-                ctx,
-                uploadActions,
-                Resource(definition.Name, changes: uploadChanges),
-                administratorRequired: true,
-                hideDenied: true,
-                denialDetail: null,
-                ct) is { } uploadDenied)
-            return uploadDenied;
-        await Synchronizer(ctx).EnsureSynced(ct);
-        if (await FindTitleCollision(ctx, definition.Name, document.Title!, exceptId: null, ct) is { } collision)
-            return TitleConflict(collision, document.Title!);
-
-        try
-        {
-            var contextParams = await ReportRequestAccess.ResolveContextParameters(definition, ctx, ct);
-            await ctx.RequestServices.GetRequiredService<ReportExecutor>()
-                .ValidateDocument(definition, document.State, contextParams, ct);
-        }
-        catch (ReportValidationException ex)
-        {
-            return EndpointExtensions.ValidationProblem(ex);
-        }
-        catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return EndpointExtensions.ServerError(ctx, definition.Name, "report document upload", ex);
-        }
-
-        var report = new SavedReport
+        var candidate = new InteractiveReportDefinition
         {
             Id = SavedReport.NewId(),
             ReportName = definition.Name,
             Title = document.Title!.Trim(),
+            Public = false,
+            Primary = document.Primary,
             Owner = identity,
-            IsGlobal = false,
-            IsPrimary = document.Primary,
-            StateJson = JsonSerializer.Serialize(document.State, IrJson.Options),
+            State = document.State,
+        };
+        if (await AuthorizeDefinitionMutation(
+                definition,
+                ctx,
+                InteractiveReportAction.UploadReportDocument,
+                candidate,
+                current: null,
+                baseAdministratorRequired: true,
+                hideDenied: true,
+                denialDetail: null,
+                ct) is { } uploadDenied)
+            return uploadDenied;
+
+        if (DefinitionError(candidate, "Malformed report document") is { } candidateError)
+            return candidateError;
+        if (await ValidateSubmittedState(definition, candidate, ctx, "report document upload", ct) is { } stateError)
+            return stateError;
+
+        await Synchronizer(ctx).EnsureSynced(ct);
+        if (await FindTitleCollision(ctx, definition.Name, candidate.Title, exceptId: null, ct) is { } collision)
+            return TitleConflict(collision, candidate.Title);
+
+        var report = new SavedReport
+        {
+            Id = candidate.Id,
+            ReportName = definition.Name,
+            Title = candidate.Title.Trim(),
+            Owner = candidate.Owner,
+            IsGlobal = candidate.Public,
+            IsPrimary = candidate.Primary,
+            StateJson = JsonSerializer.Serialize(candidate.State, IrJson.Options),
         };
         try
         {
@@ -528,10 +511,113 @@ internal static class SavedReportEndpoints
         IsReadOnly: report.Origin == SavedReportOrigin.Configured,
         report.ModifiedUtc);
 
+    /// <summary>
+    /// Authorizes the base mutation first so application code can narrow the typed
+    /// candidate. Administrative actions are then derived from the effective values.
+    /// The small loop catches administrative fields added by a later authorization
+    /// handler, so mutation cannot introduce an unchecked privilege.
+    /// </summary>
+    private static async Task<IResult?> AuthorizeDefinitionMutation(
+        ReportDefinition reportDefinition,
+        HttpContext ctx,
+        InteractiveReportAction baseAction,
+        InteractiveReportDefinition candidate,
+        SavedReport? current,
+        bool baseAdministratorRequired,
+        bool hideDenied,
+        string? denialDetail,
+        CancellationToken ct)
+    {
+        var resource = Resource(reportDefinition.Name, current, candidate);
+        if (await ReportRequestAccess.AuthorizeOperations(
+                reportDefinition,
+                ctx,
+                [baseAction],
+                resource,
+                baseAdministratorRequired,
+                hideDenied,
+                denialDetail,
+                ct) is { } baseDenied)
+            return baseDenied;
+
+        var authorized = new HashSet<InteractiveReportAction> { baseAction };
+        while (true)
+        {
+            var nextAction = RequiredAdministratorActions(candidate, current, Identity(ctx))
+                .Where(action => !authorized.Contains(action))
+                .Select(action => (InteractiveReportAction?)action)
+                .FirstOrDefault();
+            if (!nextAction.HasValue) break;
+
+            if (await ReportRequestAccess.AuthorizeOperations(
+                    reportDefinition,
+                    ctx,
+                    [nextAction.Value],
+                    resource,
+                    administratorRequired: true,
+                    hideDenied: hideDenied,
+                    denialDetail: denialDetail,
+                    ct: ct) is { } actionDenied)
+                return actionDenied;
+            authorized.Add(nextAction.Value);
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<InteractiveReportAction> RequiredAdministratorActions(
+        InteractiveReportDefinition candidate,
+        SavedReport? current,
+        string? originalOwner)
+    {
+        if (candidate.Public != (current?.IsGlobal ?? false))
+            yield return InteractiveReportAction.PublishGlobalReport;
+        if (candidate.Primary != (current?.IsPrimary ?? false))
+            yield return InteractiveReportAction.PublishPrimaryReport;
+        var existingOwner = current is null ? originalOwner : current.Owner;
+        if (!string.Equals(candidate.Owner, existingOwner, StringComparison.OrdinalIgnoreCase))
+            yield return InteractiveReportAction.ChangeSavedReportOwner;
+    }
+
+    private static async Task<IResult?> ValidateSubmittedState(
+        ReportDefinition reportDefinition,
+        InteractiveReportDefinition candidate,
+        HttpContext ctx,
+        string operation,
+        CancellationToken ct)
+    {
+        if (!candidate.StateChanged) return null;
+        if (candidate.State is null)
+            return BadRequest("Malformed report definition", "state is required");
+
+        try
+        {
+            var contextParams = await ReportRequestAccess.ResolveContextParameters(
+                reportDefinition,
+                ctx,
+                ct);
+            await ctx.RequestServices.GetRequiredService<ReportExecutor>()
+                .ValidateDocument(reportDefinition, candidate.State, contextParams, ct);
+            return null;
+        }
+        catch (ReportValidationException ex)
+        {
+            return EndpointExtensions.ValidationProblem(ex);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return EndpointExtensions.ServerError(ctx, reportDefinition.Name, operation, ex);
+        }
+    }
+
     private static InteractiveReportAuthorizationResource Resource(
         string reportName,
         SavedReport? report = null,
-        SavedReportAuthorizationChanges? changes = null)
+        InteractiveReportDefinition? definition = null)
         => new()
         {
             ReportName = reportName,
@@ -544,13 +630,8 @@ internal static class SavedReportEndpoints
                     report.IsGlobal,
                     report.IsPrimary,
                     report.Origin),
-            Changes = changes,
+            Definition = definition,
         };
-
-    private static JsonElement? StateElement(ReportState? state)
-        => state is null
-            ? null
-            : JsonSerializer.SerializeToElement(state, IrJson.Options);
 
     /// <summary>
     /// Title uniqueness spans one report definition's rows of both origins — synced
@@ -588,6 +669,19 @@ internal static class SavedReportEndpoints
         => string.IsNullOrWhiteSpace(title) || title.Trim().Length > 200
             ? BadRequest(problemTitle, "title is required (1–200 characters)")
             : null;
+
+    private static IResult? DefinitionError(
+        InteractiveReportDefinition definition,
+        string problemTitle)
+    {
+        if (TitleError(definition.Title, problemTitle) is { } titleError)
+            return titleError;
+        if (definition.Owner is not null && string.IsNullOrWhiteSpace(definition.Owner))
+            return BadRequest(problemTitle, "owner must be a non-empty identity value");
+        if (definition.StateChanged && definition.State is null)
+            return BadRequest(problemTitle, "state is required");
+        return null;
+    }
 
     private static IResult BadRequest(string title, string detail)
         => Results.Problem(title: title, detail: detail, statusCode: StatusCodes.Status400BadRequest);

@@ -17,8 +17,8 @@ internal static class ReportRequestAccess
 {
     /// <summary>
     /// Applies definition-level authentication, administrator-list, and policy gates.
-    /// Operation authorization is separate so mutation endpoints can parse proposed
-    /// changes before describing them to the application authorizer.
+    /// Operation authorization is separate so mutation endpoints can hydrate the
+    /// client-authored definition before passing it to the application authorizer.
     /// </summary>
     public static async Task<IResult?> AuthorizeDefinition(
         ReportDefinition definition,

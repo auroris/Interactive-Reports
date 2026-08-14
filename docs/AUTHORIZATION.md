@@ -87,15 +87,91 @@ the same resource separately.
 | `Action` | One `InteractiveReportAction` describing the operation currently being evaluated. |
 | `Resource.ReportName` | The exact report-definition name. Authorization is therefore scoped to the dataset/report definition, not merely to a database connection. |
 | `Resource.SavedReport` | Current immutable saved-report metadata, when an existing row is involved. It contains id, title, owner, global/primary flags, and origin. |
-| `Resource.Changes` | The proposed saved-report title, flags, owner, and state change, before persistence. Null properties mean that field was not requested. |
+| `Resource.Definition` | The mutable, typed saved-report definition for create, update, and document upload operations. Its metadata is effective rather than a sparse patch. |
 | `RequestServices` | The current request service provider. Use it to resolve scoped ACL services or `IAuthorizationService`. It is available on the callback request, not on the native requirement. |
 
-`SavedReportAuthorizationChanges.State` is a detached `JsonElement` snapshot of the
-proposed saved state. `StateChanged` distinguishes an absent state change from a
-present one. The current stored state is deliberately not exposed. Query and export
-authorization receives the report name and action, not the submitted query state;
-data partitioning belongs in trusted server-side context parameters rather than in
-client-authored filters.
+`Resource.Definition` is an
+`InteractiveReport.AspNetCore.Definitions.InteractiveReportDefinition`. It exposes
+`Id`, `ReportName`, `Title`, `Public`, `Primary`, `Owner`, `State`, and
+`StateChanged`. `Public` corresponds to the HTTP field `isGlobal`; `Primary`
+corresponds to `isPrimary`. `State` is the typed `ReportState` object graph, including
+typed pipeline stages, layers, filters, computed columns, formats, and other nested
+structures.
+
+For updates, title, publication flags, and owner are the effective values after the
+client patch has been applied to current metadata. `StateChanged` distinguishes a
+submitted replacement from an update that retains the existing state. When it is
+false, `State` is null. The server deliberately does not deserialize current stored
+state merely to authorize an update.
+
+Query and export authorization receives the report name and action, not the submitted
+query state. Data partitioning belongs in trusted server-side context parameters rather
+than in client-authored filters.
+
+## Typed definition inspection and mutation
+
+The definition supplied to authorization is the same mutable object the endpoint later
+validates and persists. An application can therefore inspect the full typed shape and
+narrow a client request before granting it:
+
+```csharp
+using InteractiveReport.AspNetCore.Definitions;
+using InteractiveReport.Core.Model;
+
+reports.UseAuthorization((request, cancellationToken) =>
+{
+    cancellationToken.ThrowIfCancellationRequested();
+
+    if (request.Action == InteractiveReportAction.CreateSavedReport
+        && request.Resource.Definition is { } definition)
+    {
+        // This host never permits end users to publish directly. The private save may
+        // still proceed if the rest of the rule grants CreateSavedReport.
+        definition.Public = false;
+
+        // The state is typed. No JsonElement traversal or second deserialization is
+        // required.
+        var sourceFilters = definition.State?.Pipeline?
+            .FirstOrDefault()?.Layer?.Filters;
+        if (sourceFilters?.Count > 20)
+            return ValueTask.FromResult(false);
+    }
+
+    return ValueTask.FromResult(ApplicationReportAcl.Allows(
+        request.User,
+        request.Action,
+        request.Resource));
+});
+```
+
+Mutation follows these rules:
+
+- The base `CreateSavedReport`, `UpdateSavedReport`, or `UploadReportDocument` action is
+  evaluated first. All registered authorizers see the same definition instance.
+- Publication and owner actions are derived from the effective definition after the
+  base action passes. Setting `Public = false` during create therefore removes an
+  unwanted publication request before the legacy administrator boundary is evaluated.
+- If an authorizer later adds a public, primary, or owner change, the server detects it
+  and evaluates the corresponding administrator action before persistence.
+- A denial at any point discards all mutations because nothing has yet been stored.
+- After authorization, title/owner invariants and the submitted state's executable
+  view are validated against the current dataset schema. The typed state is then
+  serialized canonically. Unknown client JSON members are not copied into storage.
+
+Assigning `Definition.State` marks `StateChanged` true. Mutating a nested state object
+on create or on an update that already supplied state preserves its existing true
+value. On an update with `StateChanged == false`, the stored JSON remains byte-for-byte
+untouched. To replace it from authorization code, assign a new `ReportState` to
+`Definition.State`.
+
+This mutation surface is available through all three authorization integrations. A
+direct callback is usually the clearest place for request normalization. Native
+resource handlers and resource-aware named policies receive the same mutable resource.
+
+Database reads retain their existing behavior. The ordinary saved-report load endpoint
+parses stored JSON only as JSON for response framing and sends it to the client without
+hydrating `InteractiveReportDefinition` or `ReportState`. Historical stored documents
+are therefore not rewritten or rejected merely because they are read.
 
 Authorization is expressed in facts rather than in how the caller reached an
 endpoint. For saved reports, the relevant facts are available on the resource:
@@ -121,17 +197,18 @@ administrator authority for an empty configured administrator list.
 | `Export` | CSV export | The report's `download` feature must also be enabled. Admin-list export emits `ListAllSavedReports` as well. |
 | `ListSavedReports` | List visible saved reports for one report definition | Storage still filters to primary, global, and caller-owned rows. |
 | `ReadSavedReport` | Load one saved report, or execute it through GraphQL | Public, owner, and administrator access are distinguished from `SavedReport` metadata and the principal. |
-| `CreateSavedReport` | Create a saved report | Requires an authenticated canonical owner and the `savedReports` feature. |
-| `UpdateSavedReport` | Update a saved report | Owner or administrator. Global/primary publication remains unchanged unless its separate action also passes. Configured content remains read-only. |
+| `CreateSavedReport` | Create a saved report | Requires an authenticated canonical owner and the `savedReports` feature. Receives the typed definition before publication actions are derived. |
+| `UpdateSavedReport` | Update a saved report | Owner or administrator. Receives effective metadata and only client-authored replacement state. Global/primary publication remains unchanged unless its separate action also passes. Configured content remains read-only. |
 | `DeleteSavedReport` | Delete a saved report | Owner or administrator. Configured rows remain undeletable even when authorized. |
-| `PublishGlobalReport` | Create or update with `isGlobal` | Emitted for both publishing and unpublishing. Administrator action. |
-| `PublishPrimaryReport` | Create or update with `isPrimary` | Emitted for both flagging and unflagging. Administrator action. |
-| `ChangeSavedReportOwner` | Update with an owner change | Administrator action. |
+| `PublishGlobalReport` | Effective definition changes public status | Emitted for both publishing and unpublishing after base-action mutation. Administrator action. |
+| `PublishPrimaryReport` | Effective definition changes primary status | Emitted for both flagging and unflagging after base-action mutation. Administrator action. |
+| `ChangeSavedReportOwner` | Effective definition changes owner | Administrator action. |
 | `ListAllSavedReports` | Schema/query/export of the built-in `__saved-reports` definition | Administrator action. Its export also emits `Export`. |
 | `DownloadReportDocument` | Download the canonical admin JSON envelope | Administrator action. |
 | `UploadReportDocument` | Validate and import an admin JSON envelope | Administrator action. A primary upload also emits `PublishPrimaryReport`. |
 
-One HTTP request can emit several actions. Examples:
+One HTTP request can emit several actions. These examples assume authorization does
+not first narrow the typed definition:
 
 - Creating a private report emits `CreateSavedReport`.
 - Creating a primary report emits `CreateSavedReport` and

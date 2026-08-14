@@ -111,7 +111,9 @@ imports it as the administrator's saved report for live testing. The envelope's
 ## Application authorization
 
 Interactive Reports describes every requested operation with an action, the ASP.NET
-Core `ClaimsPrincipal`, and current/proposed resource metadata. It makes no assumption
+Core `ClaimsPrincipal`, and current/proposed resource metadata. Create and update
+authorization receives a mutable, typed `InteractiveReportDefinition`, including the
+typed `ReportState` object graph. It makes no assumption
 about which client called the endpoint or how the caller reached it. Integrators can
 use any of three equivalent styles:
 
@@ -125,11 +127,25 @@ The direct callback is a resource decision:
 var reports = builder.Services.AddInteractiveReports(builder.Configuration);
 
 reports.UseAuthorization((request, cancellationToken) =>
-    ValueTask.FromResult(ApplicationReportAcl.Allows(
+{
+    if (request.Action == InteractiveReportAction.CreateSavedReport
+        && request.Resource.Definition is { } definition)
+    {
+        // Keep the save, but discard the client's request to publish it.
+        definition.Public = false;
+    }
+
+    return ValueTask.FromResult(ApplicationReportAcl.Allows(
         request.User,
         request.Action,
-        request.Resource)));
+        request.Resource));
+});
 ```
+
+The mutated definition is revalidated against the dataset schema and then persisted.
+For updates, metadata is complete but `State` is populated only when replacement state
+was submitted; otherwise the existing stored JSON remains untouched. Reads continue to
+return stored state as JSON without typed rehydration.
 
 Built-in report visibility and saved-report ownership remain in force. A nonempty
 `InteractiveReport:Administrators` list is authoritative: listed identities remain
