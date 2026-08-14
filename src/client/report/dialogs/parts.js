@@ -4,7 +4,7 @@
 // the state doc, mutates, re-queries, and rolls back on failure — so a
 // validation problem surfaces inside the dialog and the grid never breaks.
 
-import { el, labeled } from "../../core/dom.js";
+import { el, labeled, sel } from "../../core/dom.js";
 import { pickable, typeOf, fnsFor, expressionFunctions } from "../schema.js";
 import { FN_LABELS } from "../render/format.js";
 
@@ -18,6 +18,18 @@ export const NULLS_OPTIONS = [
 export function colOptions(w, { none, columns } = {}) {
     const opts = (columns ?? pickable(w)).map(c => ({ value: c.name, label: c.computed ? `ƒ ${c.label}` : c.label }));
     return none ? [{ value: "", label: none }, ...opts] : opts;
+}
+
+/// Compact, visible labels for controls that share one repeatable dialog row.
+export function rowField(text, control) {
+    return el("label", { class: "ir-row-field" },
+        el("span", { class: "ir-field-label" }, text), control);
+}
+
+/// Native grouping for related rows of controls.
+export function fieldGroup(text, ...children) {
+    return el("fieldset", { class: "ir-fieldset" },
+        el("legend", { class: "ir-field-label" }, text), ...children);
 }
 
 // --- rows-of-controls pattern ------------------------------------------------
@@ -43,7 +55,7 @@ export function rowList(container, items, buildRow, { addLabel = "Add", max } = 
 
 /// A function select slaved to a column select: the options track the column's
 /// type (the server's aggregateFunctions catalog), keeping the current pick
-/// when it survives the change. Wires colSel.onchange.
+/// when it survives the change. Wires the column select's change event.
 export function fnSelectFor(w, colSel, initialFn) {
     const fnSel = el("select", { class: "ir-select" });
     const refresh = keep => {
@@ -51,16 +63,36 @@ export function fnSelectFor(w, colSel, initialFn) {
         fnSel.replaceChildren(...fns.map(f => new Option(FN_LABELS[f] ?? f, f)));
         if (keep && fns.includes(keep)) fnSel.value = keep;
     };
-    colSel.onchange = () => refresh(fnSel.value);
+    colSel.addEventListener("change", () => refresh(fnSel.value));
     refresh(initialFn);
     return fnSel;
+}
+
+/// The aggregate function/column row shared by report aggregates and grouped
+/// view values. One implementation keeps option behavior, labels, and reading
+/// semantics aligned across every caller.
+export function aggregateRowList(w, initial, { addLabel = "Value" } = {}) {
+    const container = el("div", {});
+    const list = rowList(container, initial ?? [], (row, item) => {
+        const colSel = sel(colOptions(w, { none: "— Select —" }), item?.col ?? "");
+        const fnSel = fnSelectFor(w, colSel, item?.fn);
+        row.append(
+            rowField("Function", fnSel),
+            el("span", { class: "ir-row-of", "aria-hidden": "true" }, "of"),
+            rowField("Column", colSel));
+        row._read = () => colSel.value && fnSel.value
+            ? { col: colSel.value, fn: fnSel.value }
+            : null;
+    }, { addLabel });
+    return { container, list };
 }
 
 // --- expression-rule editor --------------------------------------------------
 
 export function expressionEditor(w, { initial, placeholder, result, columns }) {
     const exprInp = el("textarea", {
-        class: "ir-textarea", rows: result === "predicate" ? 4 : 3, spellcheck: false, placeholder,
+        class: "ir-textarea", rows: result === "predicate" ? 4 : 3,
+        spellcheck: false, placeholder, required: true,
     });
     exprInp.value = initial ?? "";
     const availableColumns = columns ?? pickable(w);

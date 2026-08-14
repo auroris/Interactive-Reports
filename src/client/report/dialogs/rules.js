@@ -108,16 +108,18 @@ export function highlightDialog(w, editIndex) {
     const nextSequence = Math.max(0, ...rules.map((h, i) => h.sequence ?? ((i + 1) * 10))) + 10;
     const nameInp = el("input", {
         class: "ir-input", type: "text", value: existing?.name ?? existing?.id ?? `Highlight ${n}`,
-        placeholder: "Highlight name",
+        placeholder: "Highlight name", required: true,
     });
     const sequenceInp = el("input", {
-        class: "ir-input", type: "number", min: 1, step: 1,
+        class: "ir-input", type: "number", min: 1, step: 1, required: true,
         value: existing?.sequence ?? (editIndex !== undefined ? (editIndex + 1) * 10 : nextSequence),
     });
 
     const scopeSel = sel([{ value: "row", label: "Row" }, { value: "cell", label: "Cell" }], existing?.scope ?? "row");
+    scopeSel.classList.add("ir-highlight-scope");
     const targetSel = sel(colOptions(w, { columns: ctx.columns }), existing?.col);
     const targetField = labeled("Highlight Column", targetSel);
+    targetField.classList.add("ir-cell-only");
     const condition = expressionEditor(w, {
         initial: existing?.expr,
         placeholder: ctx.mode === "grid"
@@ -127,14 +129,16 @@ export function highlightDialog(w, editIndex) {
         columns: ctx.columns,
     });
 
-    const bgInp = el("input", { type: "color", class: "ir-color", value: existing?.style?.bg ?? "#fff3cd" });
+    const bgInp = el("input", {
+        type: "color", class: "ir-color", value: existing?.style?.bg ?? "#fff3cd",
+        "aria-label": "Background color",
+    });
     const bgOn = el("input", { type: "checkbox", checked: existing ? !!existing.style?.bg : true });
-    const fgInp = el("input", { type: "color", class: "ir-color", value: existing?.style?.fg ?? "#9f1239" });
+    const fgInp = el("input", {
+        type: "color", class: "ir-color", value: existing?.style?.fg ?? "#9f1239",
+        "aria-label": "Text color",
+    });
     const fgOn = el("input", { type: "checkbox", checked: !!existing?.style?.fg });
-
-    const syncScope = () => { targetField.hidden = scopeSel.value !== "cell"; };
-    scopeSel.onchange = syncScope;
-    syncScope();
 
     openDialog({
         owner: w,
@@ -148,15 +152,15 @@ export function highlightDialog(w, editIndex) {
             el("div", { class: "ir-field-label ir-condition-head" }, "When"),
             condition,
             el("div", { class: "ir-colors" },
-                el("label", { class: "ir-color-pick" }, bgOn, "Background", bgInp),
-                el("label", { class: "ir-color-pick" }, fgOn, "Text", fgInp))),
+                el("div", { class: "ir-color-pick" },
+                    el("label", { class: "ir-checkline" }, bgOn, "Background"), bgInp),
+                el("div", { class: "ir-color-pick" },
+                    el("label", { class: "ir-checkline" }, fgOn, "Text"), fgInp))),
         onApply: () => {
             const expr = condition._read();
             const name = nameInp.value.trim();
             if (!name) throw new Error("Enter a highlight name");
             const sequence = Number(sequenceInp.value);
-            if (!Number.isInteger(sequence) || sequence <= 0)
-                throw new Error("Sequence must be a positive whole number");
             if (!bgOn.checked && !fgOn.checked) throw new Error("Pick a background or text color");
             const rule = {
                 id,

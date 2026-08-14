@@ -10,6 +10,7 @@ import { formatAgg, formatInteger, hasFraction, parseReportNumber, FN_LABELS, FN
 import { formatForColumn, renderColumnValue } from "./column-renderers.js";
 import { headerMenuAvailable, openHeaderMenu } from "../menus.js";
 import { columnClasses } from "../classes.js";
+import { alignmentStyle, presentationStyle } from "./presentation.js";
 
 export function renderGrid(w, table) {
     const result = w.lastResult;
@@ -30,17 +31,7 @@ export function renderGrid(w, table) {
     const formatFor = col => formatForColumn(w, col);
     const classesFor = (col, ...builtIn) => [...builtIn, ...columnClasses(formatFor(col)?.classes)]
         .filter(Boolean).join(" ") || undefined;
-    const alignStyle = col => formatFor(col)?.align ? { textAlign: formatFor(col).align } : undefined;
-    const formatStyle = fmt => {
-        if (!fmt) return undefined;
-        const style = {};
-        if (fmt.align) style.textAlign = fmt.align;
-        if (fmt.bold) style.fontWeight = "600";
-        if (fmt.italic) style.fontStyle = "italic";
-        if (fmt.fg) style.color = fmt.fg;
-        if (fmt.bg) style.background = fmt.bg;
-        return Object.keys(style).length ? style : undefined;
-    };
+    const alignStyle = col => alignmentStyle(formatFor(col));
 
     // Labels resolve client-side: the current stage's universe already layered
     // its own labels over source labels and rebuilt synthetic metric captions,
@@ -61,15 +52,27 @@ export function renderGrid(w, table) {
         const inner = el("span", { class: "ir-th-inner" }, displayLabel(col));
         if (s) {
             inner.append(el("span", { class: "ir-sort-dir", "aria-hidden": "true" }, s.dir === "desc" ? "▼" : "▲"));
-            if (activeSorts.length > 1) inner.append(el("span", { class: "ir-sort-ord" }, String(s.ord)));
+            if (activeSorts.length > 1)
+                inner.append(el("span", { class: "ir-sort-ord", "aria-hidden": "true" }, String(s.ord)));
         }
         const th = el("th", {
             class: classesFor(col, col.type === "number" ? "ir-num" : "", interactive ? "ir-th-menu" : ""),
             scope: "col",
             style: alignStyle(col),
             "aria-sort": s ? (s.dir === "desc" ? "descending" : "ascending") : undefined,
-        }, inner);
-        if (interactive) th.onclick = () => openHeaderMenu(w, col.name, th);
+        });
+        if (interactive) {
+            const button = el("button", {
+                type: "button",
+                class: "ir-th-button",
+                "aria-haspopup": "menu",
+                "aria-expanded": "false",
+                onclick: () => openHeaderMenu(w, col.name, button),
+            }, inner);
+            th.append(button);
+        } else {
+            th.append(inner);
+        }
         headRow.append(th);
     }
 
@@ -150,7 +153,7 @@ export function renderGrid(w, table) {
                 col,
                 col.type === "number" ? "ir-num" : "",
                 col.type === "date" ? "ir-date" : "");
-            tr.append(el("td", { class: cls, style: formatStyle(fmt) },
+            tr.append(el("td", { class: cls, style: presentationStyle(fmt) },
                 renderColumnValue(w, row, col, decimalCols.has(col.name), fmt, mode === "grid")));
         }
         const rowHits = (hitsByRow.get(r) ?? []).filter(hit => !hit.col);

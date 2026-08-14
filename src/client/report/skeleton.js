@@ -13,17 +13,19 @@ export function buildSkeleton(w) {
     const scopeBtn = el("button", {
         type: "button", class: "ir-btn ir-search-scope",
         title: "Choose search column", "aria-label": "Choose search column",
+        "aria-haspopup": "menu", "aria-expanded": "false",
         onclick: () => openSearchScopeMenu(w, scopeBtn),
     }, icon("search"), icon("caret"));
     const search = el("input", {
         class: "ir-search-input", type: "search", placeholder: "Search",
-        onkeydown: e => { if (e.key === "Enter") doSearch(w); },
+        name: "search", "aria-label": "Search",
     });
-    const go = el("button", { type: "button", class: "ir-btn ir-go", onclick: () => doSearch(w) }, "Go");
+    const go = el("button", { type: "submit", class: "ir-btn ir-go" }, "Go");
 
     const viewBtn = (mode, iconName, label) => el("button", {
         type: "button", class: "ir-btn ir-viewbtn", dataset: { mode },
         title: label, "aria-label": label,
+        "aria-pressed": "false",
         onclick: () => w.switchView(mode),
     }, icon(iconName));
     const views = el("div", { class: "ir-viewbtns", role: "group", "aria-label": "View" },
@@ -34,6 +36,7 @@ export function buildSkeleton(w) {
 
     const actionsBtn = el("button", {
         type: "button", class: "ir-btn ir-actionsbtn",
+        "aria-haspopup": "menu", "aria-expanded": "false",
         onclick: () => openActionsMenu(w, actionsBtn),
     }, "Actions", icon("caret"));
 
@@ -43,12 +46,15 @@ export function buildSkeleton(w) {
     });
     const savedWrap = el("label", { class: "ir-saved", hidden: true },
         el("span", { class: "ir-saved-label" }, "Saved Report"), savedSel);
-    const searchWrap = el("div", { class: "ir-search" }, scopeBtn, search, go);
+    const searchWrap = el("form", {
+        class: "ir-search", role: "search",
+        onsubmit: event => { event.preventDefault(); doSearch(w); },
+    }, scopeBtn, search, go);
     w.els = {
         search, searchWrap, views, actionsBtn, savedSel, savedWrap,
-        errorSlot: el("div", {}),
-        transientSlot: el("div", {}),
-        ignoredSlot: el("div", {}),
+        errorSlot: el("div", { role: "alert", "aria-atomic": "true" }),
+        transientSlot: el("div", { role: "status", "aria-live": "polite", "aria-atomic": "true" }),
+        ignoredSlot: el("div", { role: "status", "aria-live": "polite", "aria-atomic": "true" }),
         chips: el("div", { class: "ir-chips", part: "chips", hidden: true }),
         table: el("table", { class: "ir-table", part: "table" }),
         chartWrap: el("div", { class: "ir-chartwrap", part: "chart-container", hidden: true }),

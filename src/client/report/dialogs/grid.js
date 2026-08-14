@@ -7,7 +7,14 @@ import { el, labeled, sel } from "../../core/dom.js";
 import { openDialog } from "../../core/dialog.js";
 import { stageContext } from "../stage.js";
 import { sourceLayer } from "../state.js";
-import { rowList, colOptions, fnSelectFor, DIR_OPTIONS, NULLS_OPTIONS } from "./parts.js";
+import {
+    aggregateRowList,
+    colOptions,
+    DIR_OPTIONS,
+    NULLS_OPTIONS,
+    rowField,
+    rowList,
+} from "./parts.js";
 
 const PAGE_LIMITS = [10, 50, 100, 500, 1000];
 
@@ -47,10 +54,10 @@ export function sortDialog(w) {
         const colSel = sel(colOptions(w, { none: "— Select —", columns: ctx.sortColumns }), item?.col ?? "");
         const dirSel = sel(DIR_OPTIONS, item?.dir ?? "asc");
         const nullsSel = sel(NULLS_OPTIONS, item?.nulls ?? "");
-        colSel.setAttribute("aria-label", "Column");
-        dirSel.setAttribute("aria-label", "Direction");
-        nullsSel.setAttribute("aria-label", "Null Sorting");
-        row.append(colSel, dirSel, nullsSel);
+        row.append(
+            rowField("Column", colSel),
+            rowField("Direction", dirSel),
+            rowField("Null Sorting", nullsSel));
         row._read = () => colSel.value ? {
             col: colSel.value,
             dir: dirSel.value,
@@ -78,7 +85,7 @@ export function breakDialog(w) {
     const container = el("div", {});
     const list = rowList(container, (sourceLayer(w.doc).breaks ?? []).map(b => ({ col: b })), (row, item) => {
         const colSel = sel(colOptions(w, { none: "— Select —" }), item?.col ?? "");
-        row.append(colSel);
+        row.append(rowField("Column", colSel));
         row._read = () => colSel.value || null;
     }, { addLabel: "Break Column", max: 3 });
 
@@ -95,13 +102,8 @@ export function breakDialog(w) {
 }
 
 export function aggregateDialog(w) {
-    const container = el("div", {});
-    const list = rowList(container, sourceLayer(w.doc).aggregates ?? [], (row, item) => {
-        const colSel = sel(colOptions(w, { none: "— Select —" }), item?.col ?? "");
-        const fnSel = fnSelectFor(w, colSel, item?.fn);
-        row.append(fnSel, el("span", { class: "ir-row-of" }, "of"), colSel);
-        row._read = () => colSel.value && fnSel.value ? { col: colSel.value, fn: fnSel.value } : null;
-    }, { addLabel: "Aggregate" });
+    const { container, list } = aggregateRowList(
+        w, sourceLayer(w.doc).aggregates ?? [], { addLabel: "Aggregate" });
 
     openDialog({
         owner: w,

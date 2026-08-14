@@ -7,7 +7,7 @@ import { canManageCurrentSaved, canManageSaved, saveReport } from "../saved.js";
 export function saveDialog(w, { asNew }) {
     const updating = !asNew && canManageCurrentSaved(w);
     const titleInp = el("input", {
-        class: "ir-input", type: "text", maxLength: 200,
+        class: "ir-input", type: "text", maxLength: 200, required: true,
         value: updating ? w.currentSaved.title : "",
         placeholder: "Saved report name",
     });

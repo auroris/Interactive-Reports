@@ -167,7 +167,9 @@ export function openDialog({
     const restoreFocus = root.activeElement ?? document.activeElement;
     const titleId = `ir-dialog-title-${++titleSequence}`;
 
-    const errorBox = el("div", { class: "ir-dialog-error", hidden: true });
+    const errorBox = el("div", {
+        class: "ir-dialog-error", hidden: true, role: "alert", "aria-atomic": "true",
+    });
     const body = el("div", { class: "ir-dialog-body" });
     let ownedDialogs = null;
     if (owner) {
@@ -210,23 +212,27 @@ export function openDialog({
         },
     };
 
+    let applying = false;
+    const runApply = async () => {
+        if (!onApply || applying) return;
+        applying = true;
+        dlg.setError(null);
+        const buttons = dlg.root.querySelectorAll(".ir-dialog-footer button");
+        buttons.forEach(button => { button.disabled = true; });
+        try {
+            const applied = await onApply(dlg);
+            if (applied !== false) dlg.close();
+        } catch (err) {
+            dlg.setError(err);
+        } finally {
+            applying = false;
+            buttons.forEach(button => { button.disabled = false; });
+        }
+    };
     const applyBtn = onApply
         ? el("button", {
-            type: "button",
+            type: "submit",
             class: "ir-btn ir-btn-primary" + (destructive ? " ir-btn-danger" : ""),
-            onclick: async () => {
-                dlg.setError(null);
-                const buttons = dlg.root.querySelectorAll(".ir-dialog-footer button");
-                buttons.forEach(button => { button.disabled = true; });
-                try {
-                    const applied = await onApply(dlg);
-                    if (applied !== false) dlg.close();
-                } catch (err) {
-                    dlg.setError(err);
-                } finally {
-                    buttons.forEach(button => { button.disabled = false; });
-                }
-            },
         }, applyLabel)
         : null;
 
@@ -259,11 +265,14 @@ export function openDialog({
         dialogProps.role = "dialog";
         dialogProps.popover = "manual";
     }
+    const form = el("form", {
+        class: "ir-dialog-form",
+        onsubmit: event => { event.preventDefault(); void runApply(); },
+    }, body, el("div", { class: "ir-dialog-footer" }, cancelBtn, applyBtn));
     dlg.root = el(modal ? "dialog" : "div", dialogProps,
         titleBar,
         errorBox,
-        body,
-        el("div", { class: "ir-dialog-footer" }, cancelBtn, applyBtn));
+        form);
 
     const onKey = event => {
         if (openDialogs[openDialogs.length - 1] !== dlg) return;
@@ -272,15 +281,6 @@ export function openDialog({
             event.stopImmediatePropagation();
             dlg.close();
             return;
-        }
-        const path = event.composedPath?.() ?? [event.target];
-        if (!path.includes(dlg.root)) return;
-        const target = path[0];
-        if (event.key === "Enter" && applyBtn
-            && target.tagName !== "TEXTAREA" && target.tagName !== "BUTTON"
-            && !target.classList?.contains("ir-dialog-title")) {
-            event.preventDefault();
-            applyBtn.click();
         }
     };
     const onResize = () => {

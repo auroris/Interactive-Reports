@@ -6,7 +6,7 @@
 // normalize/serialize, reportUrl, and the notice slots.
 
 import { api, apiUrl, defaultApiBase } from "../core/api.js";
-import { banner } from "../core/dom.js";
+import { banner, transientBanner } from "../core/dom.js";
 import { createWidgetRoot, disposeWidget, setCustomStyleSheet } from "../core/widget.js";
 import { applyFeatureChrome, buildSkeleton } from "./skeleton.js";
 import { featureEnabled } from "./schema.js";
@@ -45,6 +45,7 @@ export class InteractiveReportElement extends HTMLElement {
         const { root, mount } = createWidgetRoot(this);
         this._root = root;
         this._mount = mount;
+        this._busyTokens = new Set();
         this._seq = 0;
         this._initialized = false;
     }
@@ -78,6 +79,16 @@ export class InteractiveReportElement extends HTMLElement {
     }
 
     // --- lifecycle -----------------------------------------------------------
+
+    beginBusy() {
+        const token = Symbol("report operation");
+        this._busyTokens.add(token);
+        this._mount.setAttribute("aria-busy", "true");
+        return () => {
+            this._busyTokens.delete(token);
+            if (!this._busyTokens.size) this._mount.setAttribute("aria-busy", "false");
+        };
+    }
 
     resetReportContext() {
         setCustomStyleSheet(this, null);
@@ -140,7 +151,7 @@ export class InteractiveReportElement extends HTMLElement {
         this._activeReportName = name;
         this.clearReportView();
         refreshSavedSelect(this);
-        this._mount.classList.add("ir-busy");
+        const finishBusy = this.beginBusy();
 
         try {
             // Schema is the loadability gate. Do not issue saved-state or query
@@ -183,7 +194,7 @@ export class InteractiveReportElement extends HTMLElement {
             if (!quiet && err.name !== "AbortError" && seq === this._seq) this.showError(err);
             return false;
         } finally {
-            if (seq === this._seq) this._mount.classList.remove("ir-busy");
+            finishBusy();
         }
     }
 
@@ -238,7 +249,7 @@ export class InteractiveReportElement extends HTMLElement {
     async runQuery(opts = {}) {
         this._abort?.abort();
         const ctrl = this._abort = new AbortController();
-        this._mount.classList.add("ir-busy");
+        const finishBusy = this.beginBusy();
         try {
             const result = await api(this.reportUrl("query"), {
                 method: "POST", body: this.serialize(), signal: ctrl.signal,
@@ -258,7 +269,7 @@ export class InteractiveReportElement extends HTMLElement {
             if (!opts.quiet) this.showError(err);
             throw err;
         } finally {
-            if (ctrl === this._abort) this._mount.classList.remove("ir-busy");
+            finishBusy();
         }
     }
 
@@ -333,9 +344,7 @@ export class InteractiveReportElement extends HTMLElement {
     clearError() { this.els.errorSlot.replaceChildren(); }
 
     notify(text, kind = "ok") {
-        const node = banner(kind, text);
-        this.els.transientSlot.append(node);
-        setTimeout(() => node.remove(), 4000);
+        transientBanner(this.els.transientSlot, kind, text);
     }
 
     renderIgnored(ignored) {
@@ -349,7 +358,7 @@ export class InteractiveReportElement extends HTMLElement {
     refreshViewButtons() {
         const mode = this.doc ? modeOf(this.doc) : "grid";
         for (const btn of this.els.views.children)
-            btn.classList.toggle("ir-active", btn.dataset.mode === mode);
+            btn.setAttribute("aria-pressed", String(btn.dataset.mode === mode));
     }
 
     switchView(mode) {

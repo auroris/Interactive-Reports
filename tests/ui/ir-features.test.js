@@ -103,6 +103,8 @@ test("a whitelisted report hides the chrome its features do not cover", async ()
     const report = await mount("kiosk");
 
     assert.equal(report.shadowRoot.querySelector(".ir-search").hidden, false, "search stays: whitelisted");
+    assert.equal(report.shadowRoot.querySelector(".ir-search").tagName, "FORM");
+    assert.equal(report.shadowRoot.querySelector(".ir-search").getAttribute("role"), "search");
     assert.equal(report.shadowRoot.querySelector(".ir-viewbtns").hidden, true, "no alternate view feature → the switcher goes");
     assert.equal(report.shadowRoot.querySelector(".ir-actionsbtn").hidden, false);
     assert.equal(requests.some(r => r.url.endsWith("/saved")), false, "savedReports off → the saved list is never fetched");
@@ -112,7 +114,10 @@ test("a whitelisted report hides the chrome its features do not cover", async ()
     assert.deepEqual(labels, ["Sort…", "Report", "Reset", "Download", "CSV"]);
 
     // The header menu only offers what survived: sorting.
-    report.shadowRoot.querySelector("th.ir-th-menu").click();
+    const headerButton = report.shadowRoot.querySelector("th.ir-th-menu .ir-th-button");
+    assert.equal(headerButton.getAttribute("aria-haspopup"), "menu");
+    headerButton.click();
+    assert.equal(headerButton.getAttribute("aria-expanded"), "true");
     const headerLabels = menuLabels(report);
     assert.deepEqual(headerLabels, ["Sort Ascending", "Sort Descending"]);
 
@@ -125,6 +130,7 @@ test("a schema without a features field (older server) leaves everything on", as
 
     assert.equal(report.shadowRoot.querySelector(".ir-search").hidden, false);
     assert.equal(report.shadowRoot.querySelector(".ir-viewbtns").hidden, false);
+    assert.equal(report.shadowRoot.querySelector('.ir-viewbtn[data-mode="grid"]').getAttribute("aria-pressed"), "true");
     assert.equal(requests.some(r => r.url.endsWith("/saved")), true);
 
     report.shadowRoot.querySelector(".ir-actionsbtn").click();

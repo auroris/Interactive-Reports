@@ -68,6 +68,15 @@ test("loads the configured primary report, queries data, paginates from Actions,
     const report = page.locator("interactive-report");
     await expect(report.locator('link[data-ir-custom-styles]')).toHaveAttribute("href", "/report-overrides.css");
     await expect(page.getByRole("columnheader", { name: "Amount", exact: true })).toHaveClass(/amount-column/);
+    const firstHeaderButton = page.getByRole("columnheader", { name: "Order #", exact: true })
+        .getByRole("button");
+    await expect(firstHeaderButton).toHaveAttribute("aria-haspopup", "menu");
+    await firstHeaderButton.focus();
+    await page.keyboard.press("Enter");
+    await expect(firstHeaderButton).toHaveAttribute("aria-expanded", "true");
+    await expect(page.getByRole("menu")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(firstHeaderButton).toHaveAttribute("aria-expanded", "false");
     await expect(page.getByRole("table").locator("tbody a.ir-cell-link").first())
         .toHaveAttribute("href", /^\/orders\/\d+$/);
     await expect(page.getByText("1 – 50 of 500 rows", { exact: true })).toBeVisible();
@@ -202,6 +211,13 @@ test("names highlights and saves their explicit precedence sequence", async ({ p
     await clickAction(page, "Highlight…");
 
     const dialog = page.getByRole("dialog");
+    const scope = dialog.getByRole("combobox", { name: "Apply To", exact: true });
+    const target = dialog.getByRole("combobox", { name: "Highlight Column", exact: true });
+    await expect(target).toBeHidden();
+    await scope.selectOption("cell");
+    await expect(target).toBeVisible();
+    await scope.selectOption("row");
+    await expect(target).toBeHidden();
     await dialog.getByRole("textbox", { name: "Name" }).fill("Large orders");
     await dialog.getByRole("spinbutton", { name: "Sequence" }).fill("40");
     await dialog.getByRole("textbox", { name: "Expression" }).fill("AMOUNT > 5000");
@@ -228,10 +244,20 @@ test("configures an aggregate chart and returns to the data grid", async ({ page
 
     const dialog = page.getByRole("dialog");
     await expect(dialog).toContainText("Chart");
-    const selects = dialog.locator("select");
-    await selects.nth(1).selectOption("STATUS");
-    await selects.nth(3).selectOption("AMOUNT");
-    await selects.nth(2).selectOption("sum");
+    const chartType = dialog.getByRole("combobox", { name: "Chart Type", exact: true });
+    const orientation = dialog.getByRole("combobox", { name: "Orientation", exact: true });
+    await chartType.selectOption("pie");
+    await expect(orientation).toBeHidden();
+    await chartType.selectOption("bar");
+    await expect(orientation).toBeVisible();
+
+    const label = dialog.getByRole("combobox", { name: "Label", exact: true });
+    await dialog.getByRole("button", { name: "Apply", exact: true }).click();
+    await expect(label).toBeFocused();
+    await expect(dialog).toBeVisible();
+    await label.selectOption("STATUS");
+    await dialog.getByRole("combobox", { name: "Column", exact: true }).selectOption("AMOUNT");
+    await dialog.getByRole("combobox", { name: "Function", exact: true }).selectOption("sum");
 
     await runAndWaitForQuery(page, () =>
         dialog.getByRole("button", { name: "Apply", exact: true }).click());
@@ -333,7 +359,7 @@ test("a saved report retains its grid, pivot, and chart configurations with pivo
         const loadResponse = await runAndWaitForQuery(page, () =>
             page.getByRole("combobox", { name: "Saved Report" }).selectOption(savedId));
         expect(modeOf(loadResponse.request().postDataJSON())).toBe("pivot");
-        await expect(page.getByRole("button", { name: "Pivot", exact: true })).toHaveClass(/ir-active/);
+        await expect(page.getByRole("button", { name: "Pivot", exact: true })).toHaveAttribute("aria-pressed", "true");
 
         const reloadedChart = await runAndWaitForQuery(page, () =>
             page.getByRole("button", { name: "Chart", exact: true }).click());

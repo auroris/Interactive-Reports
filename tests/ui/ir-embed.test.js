@@ -190,7 +190,7 @@ test("labels resolve client-side: default report seeds them, rename overrides, c
     assert.equal(headerText(), "Ident", "the default report's labels should drive the header");
 
     const rename = async value => {
-        report.shadowRoot.querySelector("th.ir-th-menu").click();
+        report.shadowRoot.querySelector("th.ir-th-menu .ir-th-button").click();
         [...report.shadowRoot.querySelectorAll(".ir-menu-item")]
             .find(item => item.textContent.includes("Rename"))
             .click();

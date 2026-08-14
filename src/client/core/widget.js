@@ -14,7 +14,7 @@ export function createWidgetRoot(host) {
     const root = host.attachShadow({ mode: "open" });
     const style = el("style", { "data-ir-styles": "" });
     style.textContent = cssText;
-    const mount = el("div", { part: "surface" });
+    const mount = el("div", { part: "surface", "aria-busy": "false" });
     root.append(style, mount);
     return { root, mount };
 }

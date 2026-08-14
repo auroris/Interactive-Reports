@@ -131,7 +131,7 @@ test("column settings write doc.formats and the grid renders mask, alignment, an
     requests.length = 0;
     const report = await mount("orders");
 
-    report.shadowRoot.querySelector("th.ir-th-menu").click();
+    report.shadowRoot.querySelector("th.ir-th-menu .ir-th-button").click();
     clickMenuItem(report, "Column Settings");
     const dialog = report.shadowRoot.querySelector(".ir-dialog");
     assert.equal(!!dialog, true);
@@ -181,7 +181,7 @@ test("column settings configure a link renderer with hidden URL and visible text
     requests.length = 0;
     const report = await mount("links");
 
-    report.shadowRoot.querySelector("th.ir-th-menu").click();
+    report.shadowRoot.querySelector("th.ir-th-menu .ir-th-button").click();
     clickMenuItem(report, "Column Settings");
     const dialog = report.shadowRoot.querySelector(".ir-dialog");
     const column = fieldControl(dialog, "Column");
@@ -212,7 +212,7 @@ test("column settings configure an image renderer", async () => {
     requests.length = 0;
     const report = await mount("images");
 
-    report.shadowRoot.querySelector("th.ir-th-menu").click();
+    report.shadowRoot.querySelector("th.ir-th-menu .ir-th-button").click();
     clickMenuItem(report, "Column Settings");
     const dialog = report.shadowRoot.querySelector(".ir-dialog");
     const column = fieldControl(dialog, "Column");
@@ -282,7 +282,7 @@ test("column settings reject component-reserved CSS classes", async () => {
     requests.length = 0;
     const report = await mount("orders");
 
-    report.shadowRoot.querySelector("th.ir-th-menu").click();
+    report.shadowRoot.querySelector("th.ir-th-menu .ir-th-button").click();
     clickMenuItem(report, "Column Settings");
     const dialog = report.shadowRoot.querySelector(".ir-dialog");
     const classesInp = dialog.querySelector('input[type="text"]');

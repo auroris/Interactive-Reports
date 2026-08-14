@@ -5,7 +5,7 @@
 // this widget simply loses its data (404) for non-administrators.
 
 import { api, apiUrl, defaultApiBase, downloadFile, saveBlob } from "../core/api.js";
-import { el, banner, labeled } from "../core/dom.js";
+import { el, banner, labeled, transientBanner } from "../core/dom.js";
 import { openDialog, confirmDialog } from "../core/dialog.js";
 import { createWidgetRoot, disposeWidget } from "../core/widget.js";
 
@@ -46,14 +46,15 @@ export class InteractiveReportAdminElement extends HTMLElement {
 
         const filter = el("input", {
             class: "ir-input", type: "search", placeholder: "Filter by report, title, owner…",
+            name: "filter", "aria-label": "Filter saved reports",
             oninput: () => this.renderTable(),
         });
         this.els = {
             filter,
             count: el("span", { class: "ir-admin-count" }),
             identity: el("span", { class: "ir-admin-count" }),
-            errorSlot: el("div", {}),
-            transientSlot: el("div", {}),
+            errorSlot: el("div", { role: "alert", "aria-atomic": "true" }),
+            transientSlot: el("div", { role: "status", "aria-live": "polite", "aria-atomic": "true" }),
             body: el("div", { class: "ir-tablewrap", part: "table-container" }),
         };
         this._mount.replaceChildren(
@@ -93,9 +94,7 @@ export class InteractiveReportAdminElement extends HTMLElement {
     }
 
     notify(text) {
-        const node = banner("ok", text);
-        this.els.transientSlot.append(node);
-        setTimeout(() => node.remove(), 4000);
+        transientBanner(this.els.transientSlot, "ok", text);
     }
 
     fail(err) {
@@ -163,7 +162,7 @@ export class InteractiveReportAdminElement extends HTMLElement {
     }
 
     reassign(r) {
-        const ownerInp = el("input", { class: "ir-input", type: "text", value: r.owner });
+        const ownerInp = el("input", { class: "ir-input", type: "text", value: r.owner, required: true });
         openDialog({
             owner: this,
             title: "Reassign Owner",
@@ -206,10 +205,10 @@ export class InteractiveReportAdminElement extends HTMLElement {
     uploadDocument() {
         const reportInp = el("input", {
             class: "ir-input", type: "text", placeholder: "Configured report name",
-            autocomplete: "off",
+            autocomplete: "off", required: true,
         });
         const fileInp = el("input", {
-            class: "ir-input", type: "file", accept: ".json,application/json",
+            class: "ir-input", type: "file", accept: ".json,application/json", required: true,
         });
         openDialog({
             owner: this,

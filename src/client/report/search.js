@@ -34,5 +34,6 @@ export function openSearchScopeMenu(w, anchor) {
 function setSearchScope(w, col) {
     w.searchScopeCol = col;
     w.els.search.placeholder = col ? `Search: ${labelOf(w, col)}` : "Search";
+    w.els.search.setAttribute("aria-label", w.els.search.placeholder);
     w.els.search.focus();
 }

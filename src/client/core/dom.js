@@ -45,6 +45,16 @@ export function banner(kind, text, onDismiss) {
         }, icon("close")) : null);
 }
 
+/// Append a short-lived status message to a persistent live region. Keeping the
+/// role on the slot (rather than on a node inserted with its text already filled)
+/// gives assistive technology a stable region to observe.
+export function transientBanner(slot, kind, text, timeout = 4000) {
+    const node = banner(kind, text);
+    slot.append(node);
+    const timer = setTimeout(() => node.remove(), timeout);
+    return () => { clearTimeout(timer); node.remove(); };
+}
+
 export function labeled(text, control, opts = {}) {
     return el("label", { class: "ir-field" + (opts.inline ? " ir-field-inline" : "") },
         el("span", { class: "ir-field-label" }, text), control);

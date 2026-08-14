@@ -15,6 +15,7 @@ import { colOptions } from "./parts.js";
 import { masksFor } from "../render/format.js";
 import { renderColumnValue } from "../render/column-renderers.js";
 import { columnClasses } from "../classes.js";
+import { presentationStyle } from "../render/presentation.js";
 
 const visibleStageNames = (ctx, w) => {
     const explicit = ctx.columnsLayer?.(w.doc)?.columns;
@@ -61,13 +62,13 @@ export function columnsDialog(w) {
         width: "34rem",
         build: body => body.append(
             el("div", { class: "ir-shuttle" },
-                el("div", { class: "ir-shuttle-col" }, el("div", { class: "ir-shuttle-head" }, "Do Not Display"), hidden),
+                el("label", { class: "ir-shuttle-col" }, el("span", { class: "ir-shuttle-head" }, "Do Not Display"), hidden),
                 el("div", { class: "ir-shuttle-btns" },
                     btn("›", "Display selected", () => move(hidden, shown)),
                     btn("‹", "Hide selected", () => move(shown, hidden)),
                     btn("»", "Display all", () => move(hidden, shown, true)),
                     btn("«", "Hide all", () => move(shown, hidden, true))),
-                el("div", { class: "ir-shuttle-col" }, el("div", { class: "ir-shuttle-head" }, "Display in Report"), shown),
+                el("label", { class: "ir-shuttle-col" }, el("span", { class: "ir-shuttle-head" }, "Display in Report"), shown),
                 el("div", { class: "ir-shuttle-btns" },
                     btn("↑", "Move up", () => nudge(-1)),
                     btn("↓", "Move down", () => nudge(1)))),
@@ -127,9 +128,13 @@ export function columnSettingsDialog(w, initialCol) {
     const boldChk = el("input", { type: "checkbox" });
     const italicChk = el("input", { type: "checkbox" });
     const fgOn = el("input", { type: "checkbox" });
-    const fgInp = el("input", { type: "color", class: "ir-color", value: "#9f1239" });
+    const fgInp = el("input", {
+        type: "color", class: "ir-color", value: "#9f1239", "aria-label": "Text color",
+    });
     const bgOn = el("input", { type: "checkbox" });
-    const bgInp = el("input", { type: "color", class: "ir-color", value: "#fff3cd" });
+    const bgInp = el("input", {
+        type: "color", class: "ir-color", value: "#fff3cd", "aria-label": "Background color",
+    });
     const classesInp = el("input", {
         type: "text", class: "ir-input", maxLength: 500,
         placeholder: "e.g. amount-column emphasized",
@@ -199,11 +204,9 @@ export function columnSettingsDialog(w, initialCol) {
         if (sampleRow[name] === null || sampleRow[name] === undefined)
             sampleRow[name] = sampleFor(name, type);
         preview.replaceChildren(renderColumnValue(w, sampleRow, { name, type }, true, s));
-        preview.style.textAlign = s.align ?? (type === "number" ? "right" : "");
-        preview.style.fontWeight = s.bold ? "600" : "";
-        preview.style.fontStyle = s.italic ? "italic" : "";
-        preview.style.color = s.fg ?? "";
-        preview.style.background = s.bg ?? "";
+        Object.assign(preview.style, presentationStyle(s, {
+            defaultAlign: type === "number" ? "right" : "",
+        }));
         preview.className = "ir-format-preview";
         preview.classList.add(...columnClasses(s.classes));
         urlColumnField.hidden = !s.displayAs;
@@ -260,8 +263,10 @@ export function columnSettingsDialog(w, initialCol) {
                 el("label", { class: "ir-checkline" }, boldChk, "Bold"),
                 el("label", { class: "ir-checkline" }, italicChk, "Italic")),
             el("div", { class: "ir-colors" },
-                el("label", { class: "ir-color-pick" }, fgOn, "Text", fgInp),
-                el("label", { class: "ir-color-pick" }, bgOn, "Background", bgInp)),
+                el("div", { class: "ir-color-pick" },
+                    el("label", { class: "ir-checkline" }, fgOn, "Text"), fgInp),
+                el("div", { class: "ir-color-pick" },
+                    el("label", { class: "ir-checkline" }, bgOn, "Background"), bgInp)),
             labeled("CSS Classes", classesInp),
             el("p", { class: "ir-dialog-note" },
                 "Space-separated classes from the report's configured stylesheet. The ir- prefix is reserved."),
