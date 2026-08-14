@@ -150,6 +150,45 @@ See [Authorization](docs/AUTHORIZATION.md) for complete setup examples for all t
 styles, the action/resource reference, multi-action composition, administrator
 resolution, denial status codes, UI hints, migration guidance, and recommended tests.
 
+## GraphQL adapter
+
+`InteractiveReport.GraphQL` is an optional query-only adapter built on GraphQL.NET.
+It executes any saved report from the same `ISavedReportStore` used by the HTTP API;
+database-authored and configured file-backed reports follow the same lookup and access
+rules. Add and map it separately so applications that do not use GraphQL acquire no
+GraphQL dependency:
+
+```csharp
+using InteractiveReport.GraphQL;
+
+builder.Services.AddInteractiveReports(builder.Configuration);
+builder.Services.AddInteractiveReportGraphQL();
+
+app.MapInteractiveReports("/api/reports");
+app.MapInteractiveReportGraphQL("/graphql");
+```
+
+Execute a saved report by the id returned from the ordinary saved-report API:
+
+```graphql
+query ExecuteSavedReport($id: ID!) {
+  report(id: $id, page: 1, pageSize: 100) {
+    columns { name label type computed }
+    rows
+    page { index size }
+    totalRows
+    elapsedMs
+  }
+}
+```
+
+The adapter accepts every saved-report origin. File-backed reports are strongly
+recommended for durable GraphQL consumers because ordinary users cannot modify their
+state; administrators update the source file deliberately. The resolver enforces both
+`ReadSavedReport` and `Query`, including ownership, publication, report-definition,
+context-parameter, and application authorization rules. See
+[GraphQL adapter](docs/GRAPHQL.md) for the complete contract and operational notes.
+
 To log the exact SQL command text submitted to the configured database, enable Debug
 for the report executor category. Parameter values are never logged:
 

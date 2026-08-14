@@ -70,9 +70,11 @@ still avoiding the worst dialect divergence (native PIVOT syntax) entirely.
 |---|---|
 | `src/InteractiveReport.Core` | State model, validation, expression parser, query composition (SqlKata), execution, schema discovery, highlight evaluation, in-memory pivot, export. No ASP.NET dependencies. |
 | `src/InteractiveReport.AspNetCore` | Endpoint mapping (`MapInteractiveReports`), config-backed definition store, auth integration, JSON protocol shaping, problem+json errors. `Ui/dist` holds the generated client assets (§14), embedded and served by the same mapping. |
+| `src/InteractiveReport.GraphQL` | Optional GraphQL.NET transport over saved reports. Looks up every origin through `ISavedReportStore` and reuses ASP.NET authorization, context resolution, validation, and execution. |
 | `src/client` | Product UI source modules and the three browser-bundle entry points. |
 | `samples/Workbench` | Dev harness: SQLite sample DB. `index.html` and `admin.html` host the packaged report and administration elements. |
 | `tests/InteractiveReport.Core.Tests` | Composer golden tests (state doc → expected SQL, ×4 dialects), expression parser tests, SQLite end-to-end integration tests. |
+| `tests/InteractiveReport.AspNetCore.Tests` | HTTP, saved-report, authorization, configured-document, and GraphQL transport integration tests. |
 
 Target framework: `net8.0` (Umbraco 13 LTS floor; builds under SDK 8/10).
 

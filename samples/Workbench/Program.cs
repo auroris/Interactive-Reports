@@ -1,4 +1,5 @@
 using InteractiveReport.AspNetCore;
+using InteractiveReport.GraphQL;
 using Microsoft.Data.Sqlite;
 using Workbench;
 
@@ -32,6 +33,7 @@ builder.Services
 builder.Services.AddAuthorization(options =>
     options.AddPolicy("WorkbenchAdmins", policy =>
         policy.RequireAssertion(ctx => ctx.User.Identity?.Name == DevAuthHandler.DefaultUser)));
+builder.Services.AddInteractiveReportGraphQL();
 
 var app = builder.Build();
 
@@ -42,5 +44,6 @@ app.UseStaticFiles();
 app.UseAuthentication();
 
 app.MapInteractiveReports("/api/reports");
+app.MapInteractiveReportGraphQL("/graphql");
 
 app.Run();

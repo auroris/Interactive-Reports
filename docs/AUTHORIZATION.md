@@ -5,8 +5,10 @@ authenticate users, issue cookies or tokens, or maintain a second user directory
 Authentication middleware populates `HttpContext.User`; Interactive Reports passes
 that `ClaimsPrincipal` to its authorization gates.
 
-The mapped HTTP API is the security boundary. The caller may be the packaged web
-component, another application, a scheduled process, or a hand-written HTTP client.
+The mapped server API is the security boundary. The caller may be the packaged web
+component, another application, a scheduled process, a hand-written HTTP client, or
+the optional GraphQL adapter.
+
 Authorization never depends on client UI state, navigation history, or how the request
 was produced. For each requested operation the server asks one question:
 
@@ -115,10 +117,10 @@ administrator authority for an empty configured administrator list.
 | Action | Request that emits it | Built-in notes |
 |---|---|---|
 | `ViewReport` | Schema for an ordinary report | Report-definition authentication and policy run first. |
-| `Query` | Query for an ordinary report | The action resource identifies the report, not the submitted state. |
+| `Query` | Query for an ordinary report, or execute a saved report through GraphQL | Ordinary HTTP queries identify the report but not submitted state. GraphQL saved-report queries also supply `SavedReport` metadata. |
 | `Export` | CSV export | The report's `download` feature must also be enabled. Admin-list export emits `ListAllSavedReports` as well. |
 | `ListSavedReports` | List visible saved reports for one report definition | Storage still filters to primary, global, and caller-owned rows. |
-| `ReadSavedReport` | Load one saved report | Public, owner, and administrator access are distinguished from `SavedReport` metadata and the principal. |
+| `ReadSavedReport` | Load one saved report, or execute it through GraphQL | Public, owner, and administrator access are distinguished from `SavedReport` metadata and the principal. |
 | `CreateSavedReport` | Create a saved report | Requires an authenticated canonical owner and the `savedReports` feature. |
 | `UpdateSavedReport` | Update a saved report | Owner or administrator. Global/primary publication remains unchanged unless its separate action also passes. Configured content remains read-only. |
 | `DeleteSavedReport` | Delete a saved report | Owner or administrator. Configured rows remain undeletable even when authorized. |
@@ -138,6 +140,7 @@ One HTTP request can emit several actions. Examples:
   `UpdateSavedReport`, `PublishGlobalReport`, `PublishPrimaryReport`, and
   `ChangeSavedReportOwner`.
 - Exporting the administrator listing emits `ListAllSavedReports` and `Export`.
+- Executing a saved report through GraphQL emits `ReadSavedReport` and `Query`.
 
 Every distinct action must be granted. Evaluation may stop on the first denial, so an
 authorization callback is not a complete audit-event stream. Audit accepted business
@@ -442,7 +445,7 @@ only administrator operations. Therefore:
 
 The final decision is conjunctive across the Interactive Reports pipeline:
 
-- Every action emitted by the HTTP request must pass.
+- Every action emitted by the server operation must pass.
 - Every callback registered with `UseAuthorization` must return `true` for that action.
 - If the native adapter is registered, its ASP.NET Core authorization result must
   succeed for that action.
@@ -528,9 +531,9 @@ and resource again on the server.
 
 ## Testing recommendations
 
-Test through the mapped HTTP endpoints so the report-definition gate, built-in access
-matrix, action mapping, and status translation are exercised together. At minimum,
-cover:
+Test through the mapped HTTP and GraphQL endpoints so the report-definition gate,
+built-in access matrix, action mapping, and status translation are exercised together.
+At minimum, cover:
 
 - An ordinary allowed and denied query.
 - A private saved-report owner update.
@@ -545,4 +548,5 @@ cover:
 - Native handler success and absence of a successful handler.
 
 The repository's end-to-end authorization coverage is in
-`tests/InteractiveReport.AspNetCore.Tests/InteractiveReportAuthorizationHttpTests.cs`.
+`tests/InteractiveReport.AspNetCore.Tests/InteractiveReportAuthorizationHttpTests.cs`
+and `GraphQLHttpTests.cs`.

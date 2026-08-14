@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\InteractiveReport.AspNetCore\InteractiveReport.AspNetCore.csproj" />
+    <ProjectReference Include="..\..\src\InteractiveReport.GraphQL\InteractiveReport.GraphQL.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -5,6 +5,7 @@
   <Folder Name="/src/">
     <Project Path="src/InteractiveReport.AspNetCore/InteractiveReport.AspNetCore.csproj" />
     <Project Path="src/InteractiveReport.Core/InteractiveReport.Core.csproj" />
+    <Project Path="src/InteractiveReport.GraphQL/InteractiveReport.GraphQL.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/InteractiveReport.AspNetCore.Tests/InteractiveReport.AspNetCore.Tests.csproj" />
