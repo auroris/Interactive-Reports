@@ -845,13 +845,17 @@ Layered, default-deny:
    `MapInteractiveReports`; standard ASP.NET Core, so it composes with whatever auth the
    host already has (Umbraco members, cookies, OIDC). The engine has no auth mechanism of
    its own — deliberately.
-2. **Per-report policy** — `authorization.policy` / `roles` in the definition, checked via
+2. **Per-report policy** — `authorization.policy` in the definition, checked via
    `IAuthorizationService` before composition. A failed authenticated request is returned
    as 404 so it does not disclose whether the named report exists.
-3. **Default-deny** — no authorization block ⇒ authenticated-only. Anonymous requires
+3. **Application operation authorization** — optional callbacks and/or native ASP.NET
+   resource handlers receive an `InteractiveReportAction`, the `ClaimsPrincipal`, and
+   current/proposed resource metadata. Every registered authorizer must grant every
+   applicable action. This is an additional restriction over the built-in rules.
+4. **Default-deny** — no authorization block ⇒ authenticated-only. Anonymous requires
    explicit `"allowAnonymous": true`. The lazy path is the safe path.
-4. **Row-level security** — server-resolved `contextParams` (§4).
-5. **Hygiene** — sanitized errors (§6), read-only principal (§11), no-SQL-over-the-wire
+5. **Row-level security** — server-resolved `contextParams` (§4).
+6. **Hygiene** — sanitized errors (§6), read-only principal (§11), no-SQL-over-the-wire
    (§1), CSRF: hosts using cookie auth should apply their antiforgery convention to the
    POST endpoints (documented host responsibility; the mapping API accepts additional
    endpoint conventions so this is one chained call).
@@ -863,7 +867,8 @@ Layered, default-deny:
 `Identity.Name`. That value is saved-report ownership and the administrator match.
 `GET /whoami` (opt-in via `whoamiEnabled`, off by default) exists so an operator can see
 the exact value to put in `administrators` — which is a config list, matched
-case-insensitively exact.
+case-insensitively exact. It also reports whether that list and application operation
+authorization are configured; this is a UI hint, never an authorization decision.
 
 **Storage.** `ISavedReportStore` / `SqlSavedReportStore`: table `IR_SAVED_REPORTS`
 (ID text GUID · REPORT_NAME · TITLE · OWNER · IS_GLOBAL 0/1 · IS_PRIMARY 0/1 · STATE_JSON · MODIFIED_UTC
@@ -918,10 +923,36 @@ owner reaching for admin-only powers (primary, publish, reassign) gets an explic
 Primary and global reports are shared infrastructure: mutating one is admin-only even for its owner.
 Saved-report loads still pass the underlying report definition's authorization gate.
 
-A definition may also declare `authorization.administratorsOnly`: the report-level
-gate then requires membership in `InteractiveReport:Administrators` (401
-unauthenticated, 404 non-admin — the same non-disclosure convention), stacking with
-an optional policy and rejected in combination with `allowAnonymous`. The built-in
+**Application authorization.** `InteractiveReportBuilder.UseAuthorization` registers a
+direct `ValueTask<bool>` callback. `UseAspNetCoreAuthorization` adapts the same request
+to `IAuthorizationService` as an `InteractiveReportAuthorizationRequirement` plus an
+`InteractiveReportAuthorizationResource`; applications implement the normal typed
+`AuthorizationHandler`. A callback can also resolve `IAuthorizationService` through
+`request.RequestServices` and delegate to a named policy. These are adapters over one
+pipeline, not separate security models. Multiple adapters and multiple actions compose
+with AND semantics.
+
+The resource carries the report name, immutable current saved-report metadata, and
+proposed title/state/publication/owner changes. The action vocabulary is ViewReport,
+Query, Export, List/Read/Create/Update/DeleteSavedReport, PublishGlobalReport,
+PublishPrimaryReport, ChangeSavedReportOwner, ListAllSavedReports,
+DownloadReportDocument, and UploadReportDocument. `false` and the dedicated denial
+exception are ordinary denials. Unexpected exceptions are logged and sanitized as 500;
+request cancellation propagates.
+
+For administrator-required operations, a nonempty configured administrator list is
+authoritative. A listed identity must still pass any configured operation authorizer;
+an unlisted identity cannot be promoted by it. If the list is empty, at least one
+operation authorizer must be registered and every one must grant the concrete action.
+No list plus no authorizer is a denial, never a fail-open default. Ordinary owner and
+dataset operations retain their existing behavior when no application authorizer is
+registered.
+
+A definition may also declare `authorization.administratorsOnly`: with a nonempty
+administrator list, the report-level gate requires membership (401 unauthenticated,
+404 non-admin). With an empty list, the concrete application operation must be
+affirmatively authorized, also using non-disclosure. An optional policy stacks with
+either form, and `administratorsOnly` is rejected in combination with `allowAnonymous`. The built-in
 `__saved-reports` listing uses it; hosts get admin-only reports for free. Names
 beginning with `__` are reserved for built-in reports: configuration declaring one
 fails fast, and the built-in listing itself is synthesized in the definition store

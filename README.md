@@ -108,6 +108,52 @@ report's current schema through the same ingestion pipeline as query and export,
 imports it as the administrator's saved report for live testing. The envelope's
 `primary` flag is preserved as the stored primary publication flag.
 
+## Application authorization
+
+Interactive Reports can describe each requested operation to application code. A
+direct callback receives the ASP.NET Core `ClaimsPrincipal`, an action, the report
+name, current saved-report metadata, proposed changes, and the request service
+provider:
+
+```csharp
+var reports = builder.Services.AddInteractiveReports(builder.Configuration)
+    .UseAuthorization(async (request, cancellationToken) =>
+    {
+        var authorization = request.RequestServices
+            .GetRequiredService<IAuthorizationService>();
+        var result = await authorization.AuthorizeAsync(
+            request.User,
+            request.Resource,
+            PolicyFor(request.Action));
+        return result.Succeeded;
+    });
+```
+
+This callback form supports direct claims/role checks and delegation to ordinary
+ASP.NET Core policies. For native resource-based handlers, opt in once:
+
+```csharp
+reports.UseAspNetCoreAuthorization();
+builder.Services.AddScoped<IAuthorizationHandler, ReportAuthorizationHandler>();
+```
+
+The handler receives `InteractiveReportAuthorizationRequirement` and
+`InteractiveReportAuthorizationResource`. Actions distinguish view, query, export,
+saved-report CRUD, primary/global publication, ownership changes, list-all, and
+administrator document upload/download. A mutation that has several meanings, such
+as creating a primary report, must pass every applicable action. Multiple callbacks
+and the native adapter also compose with AND semantics.
+
+Built-in report visibility and saved-report ownership remain in force. A nonempty
+`InteractiveReport:Administrators` list is authoritative: listed identities remain
+eligible for administrator operations and application authorization may restrict
+them further, while an application callback cannot promote an identity outside that
+explicit list. When the list is empty, administrator-required operations need an
+affirmative application authorization decision. With neither mechanism configured,
+they fail closed. `false` or `InteractiveReportAuthorizationDeniedException` is an
+expected denial; cancellation remains cancellation, and other exceptions are logged
+and returned as a sanitized 500 response.
+
 To log the exact SQL command text submitted to the configured database, enable Debug
 for the report executor category. Parameter values are never logged:
 

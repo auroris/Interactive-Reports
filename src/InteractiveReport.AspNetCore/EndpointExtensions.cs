@@ -102,6 +102,12 @@ public static class EndpointExtensions
                     maxRows = def.MaxRows,
                     maxChartPoints = def.MaxChartPoints,
                 },
+                authorization = new
+                {
+                    // A presentation hint, not a grant. Every mutation is still
+                    // evaluated against its concrete action and resource.
+                    mayRequestAdministration = ReportRequestAccess.MayRequestAdministration(ctx),
+                },
             }, IrJson.Options);
         }
         catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)

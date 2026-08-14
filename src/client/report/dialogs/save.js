@@ -2,7 +2,13 @@
 
 import { el, labeled } from "../../core/dom.js";
 import { confirmDialog, openDialog } from "../../core/dialog.js";
-import { canManageCurrentSaved, canManageSaved, sameTitle, saveReport } from "../saved.js";
+import {
+    canManageCurrentSaved,
+    canManageSaved,
+    canRequestAdministration,
+    sameTitle,
+    saveReport,
+} from "../saved.js";
 
 export function saveDialog(w, { asNew }) {
     const updating = !asNew && canManageCurrentSaved(w);
@@ -27,7 +33,7 @@ export function saveDialog(w, { asNew }) {
         applyLabel: "Save",
         build: body => {
             body.append(labeled("Name", titleInp));
-            if (w.whoami?.isAdministrator) {
+            if (canRequestAdministration(w)) {
                 body.append(
                     el("label", { class: "ir-checkline" }, primaryChk,
                         "Primary — visible to everyone with access to this report"),
@@ -64,8 +70,8 @@ export function saveDialog(w, { asNew }) {
             }
             return saveReport(w, {
                 title,
-                isGlobal: w.whoami?.isAdministrator ? globalChk.checked : false,
-                isPrimary: w.whoami?.isAdministrator ? primaryChk.checked : false,
+                isGlobal: canRequestAdministration(w) ? globalChk.checked : false,
+                isPrimary: canRequestAdministration(w) ? primaryChk.checked : false,
                 asNew: !updating,
             });
         },

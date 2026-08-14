@@ -4,6 +4,7 @@ using InteractiveReport.Core.Model;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace InteractiveReport.AspNetCore;
@@ -193,6 +194,24 @@ internal static class ReportRequestAccess
                 title: "Feature disabled",
                 detail: $"'{feature}' is not enabled for this report",
                 statusCode: StatusCodes.Status403Forbidden);
+
+    /// <summary>
+    /// UI hint only. It never grants an operation: configured administrators may ask,
+    /// and an application authorizer may make action-specific decisions when no
+    /// administrator list is configured.
+    /// </summary>
+    public static bool MayRequestAdministration(HttpContext context)
+    {
+        var options = context.RequestServices
+            .GetRequiredService<IOptionsMonitor<InteractiveReportOptions>>().CurrentValue;
+        if (options.Administrators.Count > 0)
+            return ReportIdentity.IsAdministrator(
+                context.User,
+                options.IdentityClaim,
+                options.Administrators);
+        return context.User.Identity?.IsAuthenticated == true
+               && context.RequestServices.GetServices<IInteractiveReportAuthorizer>().Any();
+    }
 
     private static IResult Denied(HttpContext context, bool hide, string? detail)
     {

@@ -56,9 +56,14 @@ export class InteractiveReportAdminElement extends WidgetElement {
             this.els.identity.textContent = `Signed in as ${this.whoami.identity}`;
         // The embedded report answers 404 for non-administrators; when whoami is
         // available, replace that generic denial with precise guidance.
-        if (this.whoami && !this.whoami.isAdministrator) {
+        if (this.whoami?.administratorListConfigured && !this.whoami.isAdministrator) {
             this.els.errorSlot.replaceChildren(banner("error",
                 "Administrator access required. Add your identity to InteractiveReport:Administrators."));
+        } else if (this.whoami
+            && !this.whoami.isAdministrator
+            && !this.whoami.applicationAuthorizationConfigured) {
+            this.els.errorSlot.replaceChildren(banner("error",
+                "Administrator access requires a configured administrator or application authorization."));
         }
     }
 

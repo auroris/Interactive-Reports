@@ -2,6 +2,7 @@ using System.Security.Claims;
 using System.Text.Json;
 using InteractiveReport.Core.SavedReports;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace InteractiveReport.AspNetCore;
 

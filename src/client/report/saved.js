@@ -16,9 +16,17 @@ export function canManageCurrentSaved(w) {
     return canManageSaved(w, w.currentSaved);
 }
 
+export function canRequestAdministration(w) {
+    return !!w.whoami?.isAdministrator
+        || !!w.schema?.authorization?.mayRequestAdministration
+        || (!!w.whoami?.authenticated
+            && !w.whoami?.administratorListConfigured
+            && !!w.whoami?.applicationAuthorizationConfigured);
+}
+
 export function canManageSaved(w, s) {
     if (!s) return false;
-    return !s.isReadOnly && (w.whoami?.isAdministrator || (s.mine && !s.isGlobal && !s.isPrimary));
+    return !s.isReadOnly && (canRequestAdministration(w) || (s.mine && !s.isGlobal && !s.isPrimary));
 }
 
 export function refreshSavedSelect(w) {
@@ -84,7 +92,7 @@ export async function saveReport(w, { title, isGlobal, isPrimary, asNew, target 
         const saved = target ?? w.currentSaved;
         if (!saved) throw new Error("Select a saved report to replace");
         const body = { title, state };
-        if (w.whoami?.isAdministrator) {
+        if (canRequestAdministration(w)) {
             body.isGlobal = isGlobal;
             body.isPrimary = isPrimary;
         }

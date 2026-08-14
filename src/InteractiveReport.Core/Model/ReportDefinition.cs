@@ -129,8 +129,10 @@ public sealed class ReportAuthorization
 
     /// <summary>
     /// Restricts the report to identities in InteractiveReport:Administrators —
-    /// non-administrators receive 404, matching the saved-report admin surface.
-    /// A policy may stack on top. Contradicts AllowAnonymous (rejected at load).
+    /// non-administrators receive 404, matching the saved-report admin surface. If
+    /// that list is empty, the application operation authorizer must affirmatively
+    /// grant each request. A policy may stack on top. Contradicts AllowAnonymous
+    /// (rejected at load).
     /// </summary>
     public bool AdministratorsOnly { get; set; }
 }

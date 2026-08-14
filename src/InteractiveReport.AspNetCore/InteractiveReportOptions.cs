@@ -21,6 +21,9 @@ public sealed class InteractiveReportOptions
     /// Identity values (as resolved by ReportIdentity / shown by whoami) granted
     /// administrator rights: list all saved reports, publish/unpublish globals,
     /// reassign or delete anyone's saved reports. Case-insensitive exact match.
+    /// A nonempty list is authoritative and application authorization may only
+    /// restrict it. When empty, administrator-required actions need an affirmative
+    /// application authorization decision and otherwise fail closed.
     /// </summary>
     public List<string> Administrators { get; set; } = [];
 

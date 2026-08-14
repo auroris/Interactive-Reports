@@ -31,12 +31,18 @@ internal static class SavedReportEndpoints
         if (!opts.WhoamiEnabled) return Results.NotFound();
 
         var identity = ReportIdentity.Resolve(ctx.User, opts.IdentityClaim);
+        var administratorListConfigured = opts.Administrators.Count > 0;
+        var applicationAuthorizationConfigured = ctx.RequestServices
+            .GetServices<IInteractiveReportAuthorizer>()
+            .Any();
         return Results.Json(new
         {
             authenticated = ctx.User.Identity?.IsAuthenticated == true,
             // The exact value to put in InteractiveReport:Administrators.
             identity,
             isAdministrator = ReportIdentity.IsAdministrator(ctx.User, opts.IdentityClaim, opts.Administrators),
+            administratorListConfigured,
+            applicationAuthorizationConfigured,
             name = ctx.User.Identity?.Name,
             authenticationType = ctx.User.Identity?.AuthenticationType,
             claims = ctx.User.Claims.Select(c => new { type = c.Type, value = c.Value }),
@@ -50,7 +56,16 @@ internal static class SavedReportEndpoints
         var store = ctx.RequestServices.GetRequiredService<IReportDefinitionStore>();
         var def = await store.Find(name, ct);
         if (def is null) return Results.NotFound();
-        if (await ReportRequestAccess.Authorize(def, ctx) is { } denied) return denied;
+        if (await ReportRequestAccess.Authorize(
+                def,
+                ctx,
+                [InteractiveReportAction.ListSavedReports],
+                Resource(def.Name),
+                administratorRequired: false,
+                hideDenied: false,
+                denialDetail: null,
+                ct) is { } denied)
+            return denied;
 
         await Synchronizer(ctx).EnsureSynced(ct);
         var identity = Identity(ctx);
@@ -75,7 +90,7 @@ internal static class SavedReportEndpoints
         var store = ctx.RequestServices.GetRequiredService<IReportDefinitionStore>();
         var def = await store.Find(name, ct);
         if (def is null) return Results.NotFound();
-        if (await ReportRequestAccess.Authorize(def, ctx) is { } denied) return denied;
+        if (await ReportRequestAccess.AuthorizeDefinition(def, ctx) is { } denied) return denied;
         // Enforced at creation only: existing saved reports stay governed by the
         // ownership matrix, so a config change never strands unmanageable rows.
         if (ReportRequestAccess.RequireFeature(def, ReportFeatures.SavedReports) is { } featureDenied)
@@ -96,8 +111,28 @@ internal static class SavedReportEndpoints
 
         if (TitleError(request?.Title) is { } titleError) return titleError;
         if (request!.State is null) return BadRequest("Malformed save request", "state is required");
-        if (!IsAdmin(ctx) && (request.IsGlobal || request.IsPrimary))
-            return AdminRequired("publishing a global or primary report requires an administrator");
+        var actions = new List<InteractiveReportAction> { InteractiveReportAction.CreateSavedReport };
+        if (request.IsGlobal) actions.Add(InteractiveReportAction.PublishGlobalReport);
+        if (request.IsPrimary) actions.Add(InteractiveReportAction.PublishPrimaryReport);
+        var changes = new SavedReportAuthorizationChanges
+        {
+            Title = request.Title!.Trim(),
+            IsGlobal = request.IsGlobal,
+            IsPrimary = request.IsPrimary,
+            Owner = identity,
+            StateChanged = true,
+            State = StateElement(request.State),
+        };
+        if (await ReportRequestAccess.AuthorizeOperations(
+                def,
+                ctx,
+                actions,
+                Resource(def.Name, changes: changes),
+                administratorRequired: request.IsGlobal || request.IsPrimary,
+                hideDenied: false,
+                denialDetail: "Publishing a global or primary report requires authorization.",
+                ct) is { } operationDenied)
+            return operationDenied;
         await Synchronizer(ctx).EnsureSynced(ct);
         if (await FindTitleCollision(ctx, def.Name, request.Title!, exceptId: null, ct) is { } collision)
             return TitleConflict(collision, request.Title!);
@@ -123,14 +158,21 @@ internal static class SavedReportEndpoints
         var report = await SavedStore(ctx).Get(id, ct);
         if (report is null) return Results.NotFound();
 
-        var identity = Identity(ctx);
-        if (Denied(SavedReportAccessPolicy.Read(report, identity, IsAdmin(ctx)), "") is { } visibilityDenied)
-            return visibilityDenied;
-
         // Loading a state document still requires access to the underlying report.
         var def = await ctx.RequestServices.GetRequiredService<IReportDefinitionStore>().Find(report.ReportName, ct);
         if (def is null) return Results.NotFound();
-        if (await ReportRequestAccess.Authorize(def, ctx) is { } denied) return denied;
+        var identity = Identity(ctx);
+        var access = SavedReportAccessPolicy.Read(report, identity, administrator: false);
+        if (await ReportRequestAccess.Authorize(
+                def,
+                ctx,
+                [InteractiveReportAction.ReadSavedReport],
+                Resource(def.Name, report),
+                administratorRequired: access != SavedReportAccess.Allowed,
+                hideDenied: true,
+                denialDetail: null,
+                ct) is { } denied)
+            return denied;
 
         using var state = JsonDocument.Parse(report.StateJson);
         return Results.Json(new
@@ -148,7 +190,6 @@ internal static class SavedReportEndpoints
         if (report is null) return Results.NotFound();
 
         var identity = Identity(ctx);
-        var admin = IsAdmin(ctx);
 
         UpdateSavedReportRequest? request;
         try
@@ -161,21 +202,45 @@ internal static class SavedReportEndpoints
         }
         if (request is null) return BadRequest("Malformed update request", "empty body");
 
+        var definition = await ctx.RequestServices.GetRequiredService<IReportDefinitionStore>()
+            .Find(report.ReportName, ct);
+        if (definition is null) return Results.NotFound();
+        if (await ReportRequestAccess.AuthorizeDefinition(definition, ctx) is { } definitionDenied)
+            return definitionDenied;
+
+        var actions = new List<InteractiveReportAction> { InteractiveReportAction.UpdateSavedReport };
+        if (request.IsGlobal.HasValue) actions.Add(InteractiveReportAction.PublishGlobalReport);
+        if (request.IsPrimary.HasValue) actions.Add(InteractiveReportAction.PublishPrimaryReport);
+        if (request.Owner is not null) actions.Add(InteractiveReportAction.ChangeSavedReportOwner);
+        var changes = new SavedReportAuthorizationChanges
+        {
+            Title = request.Title,
+            IsGlobal = request.IsGlobal,
+            IsPrimary = request.IsPrimary,
+            Owner = request.Owner,
+            StateChanged = request.State is not null,
+            State = StateElement(request.State),
+        };
+
         if (report.Origin == SavedReportOrigin.Configured)
         {
-            var definition = await ctx.RequestServices.GetRequiredService<IReportDefinitionStore>()
-                .Find(report.ReportName, ct);
-            if (definition is null) return Results.NotFound();
-            if (await ReportRequestAccess.Authorize(definition, ctx) is { } configuredDenied)
+            if (await ReportRequestAccess.AuthorizeOperations(
+                    definition,
+                    ctx,
+                    actions,
+                    Resource(definition.Name, report, changes),
+                    administratorRequired: true,
+                    hideDenied: false,
+                    denialDetail: "Changing a configured report requires authorization.",
+                    ct) is { } configuredDenied)
                 return configuredDenied;
-            if (!admin)
-                return AdminRequired("changing the primary flag requires an administrator");
+
             if (!request.IsPrimary.HasValue
                 || request.Title is not null
                 || request.State is not null
                 || request.IsGlobal.HasValue
                 || request.Owner is not null)
-                return await ReadOnlyConfiguredResult(report.ReportName, ctx, ct);
+                return ReadOnlyConfiguredResult();
 
             report.IsPrimary = request.IsPrimary.Value;
             return await savedStore.Update(report, ct)
@@ -183,13 +248,20 @@ internal static class SavedReportEndpoints
                 : Results.NotFound();
         }
 
-        if (Denied(
-                SavedReportAccessPolicy.Modify(report, identity, admin),
-                "modifying a global or primary report requires an administrator") is { } denied)
+        var access = SavedReportAccessPolicy.Modify(report, identity, administrator: false);
+        var changesAdministration = request.IsGlobal.HasValue
+                                    || request.IsPrimary.HasValue
+                                    || request.Owner is not null;
+        if (await ReportRequestAccess.AuthorizeOperations(
+                definition,
+                ctx,
+                actions,
+                Resource(definition.Name, report, changes),
+                administratorRequired: access != SavedReportAccess.Allowed || changesAdministration,
+                hideDenied: access == SavedReportAccess.Hidden,
+                denialDetail: "Modifying publication or ownership requires authorization.",
+                ct) is { } denied)
             return denied;
-
-        if (!admin && (request.IsGlobal.HasValue || request.IsPrimary.HasValue || request.Owner is not null))
-            return AdminRequired("changing the global flag, primary flag, or owner requires an administrator");
 
         if (request.Title is not null)
         {
@@ -223,15 +295,28 @@ internal static class SavedReportEndpoints
         var report = await savedStore.Get(id, ct);
         if (report is null) return Results.NotFound();
 
-        if (report.Origin == SavedReportOrigin.Configured)
-            return await ReadOnlyConfiguredResult(report.ReportName, ctx, ct);
-
         var identity = Identity(ctx);
-        var admin = IsAdmin(ctx);
-        if (Denied(
-                SavedReportAccessPolicy.Modify(report, identity, admin),
-                "deleting a global or primary report requires an administrator") is { } denied)
+        var definition = await ctx.RequestServices.GetRequiredService<IReportDefinitionStore>()
+            .Find(report.ReportName, ct);
+        if (definition is null) return Results.NotFound();
+        if (await ReportRequestAccess.AuthorizeDefinition(definition, ctx) is { } definitionDenied)
+            return definitionDenied;
+
+        var access = SavedReportAccessPolicy.Modify(report, identity, administrator: false);
+        if (await ReportRequestAccess.AuthorizeOperations(
+                definition,
+                ctx,
+                [InteractiveReportAction.DeleteSavedReport],
+                Resource(definition.Name, report),
+                administratorRequired: report.Origin != SavedReportOrigin.Configured
+                                       && access != SavedReportAccess.Allowed,
+                hideDenied: access == SavedReportAccess.Hidden,
+                denialDetail: "Deleting a published report requires authorization.",
+                ct) is { } denied)
             return denied;
+
+        if (report.Origin == SavedReportOrigin.Configured)
+            return ReadOnlyConfiguredResult();
 
         return await savedStore.Delete(id, ct) ? Results.NoContent() : Results.NotFound();
     }
@@ -250,12 +335,25 @@ internal static class SavedReportEndpoints
         CancellationToken ct)
     {
         if (Identity(ctx) is null) return Results.Unauthorized();
-        if (!IsAdmin(ctx)) return Results.NotFound();
 
         await Synchronizer(ctx).EnsureSynced(ct);
         var report = await SavedStore(ctx).Get(id, ct);
         if (report is null) return Results.NotFound();
         var reportName = report.ReportName;
+
+        var definition = await ctx.RequestServices.GetRequiredService<IReportDefinitionStore>()
+            .Find(reportName, ct);
+        if (definition is null) return Results.NotFound();
+        if (await ReportRequestAccess.Authorize(
+                definition,
+                ctx,
+                [InteractiveReportAction.DownloadReportDocument],
+                Resource(definition.Name, report),
+                administratorRequired: true,
+                hideDenied: true,
+                denialDetail: null,
+                ct) is { } denied)
+            return denied;
 
         ReportState? state;
         try
@@ -281,11 +379,6 @@ internal static class SavedReportEndpoints
             State = state,
         };
 
-        var definition = await ctx.RequestServices.GetRequiredService<IReportDefinitionStore>()
-            .Find(reportName, ct);
-        if (definition is null) return Results.NotFound();
-        if (await ReportRequestAccess.Authorize(definition, ctx) is { } denied) return denied;
-
         var jsonOptions = new JsonSerializerOptions(IrJson.Options) { WriteIndented = true };
         var bytes = JsonSerializer.SerializeToUtf8Bytes(document, jsonOptions);
         return Results.File(
@@ -308,12 +401,11 @@ internal static class SavedReportEndpoints
     {
         var identity = Identity(ctx);
         if (identity is null) return Results.Unauthorized();
-        if (!IsAdmin(ctx)) return Results.NotFound();
 
         var definition = await ctx.RequestServices.GetRequiredService<IReportDefinitionStore>()
             .Find(name, ct);
         if (definition is null) return Results.NotFound();
-        if (await ReportRequestAccess.Authorize(definition, ctx) is { } denied) return denied;
+        if (await ReportRequestAccess.AuthorizeDefinition(definition, ctx) is { } denied) return denied;
 
         ReportDocumentFile? document;
         try
@@ -331,6 +423,31 @@ internal static class SavedReportEndpoints
         if (TitleError(document?.Title, "Malformed report document") is { } titleError) return titleError;
         if (document!.State is null)
             return BadRequest("Malformed report document", "state is required");
+
+        var uploadActions = new List<InteractiveReportAction>
+        {
+            InteractiveReportAction.UploadReportDocument,
+        };
+        if (document.Primary) uploadActions.Add(InteractiveReportAction.PublishPrimaryReport);
+        var uploadChanges = new SavedReportAuthorizationChanges
+        {
+            Title = document.Title!.Trim(),
+            IsGlobal = false,
+            IsPrimary = document.Primary,
+            Owner = identity,
+            StateChanged = true,
+            State = StateElement(document.State),
+        };
+        if (await ReportRequestAccess.AuthorizeOperations(
+                definition,
+                ctx,
+                uploadActions,
+                Resource(definition.Name, changes: uploadChanges),
+                administratorRequired: true,
+                hideDenied: true,
+                denialDetail: null,
+                ct) is { } uploadDenied)
+            return uploadDenied;
         await Synchronizer(ctx).EnsureSynced(ct);
         if (await FindTitleCollision(ctx, definition.Name, document.Title!, exceptId: null, ct) is { } collision)
             return TitleConflict(collision, document.Title!);
@@ -400,12 +517,6 @@ internal static class SavedReportEndpoints
         return ReportIdentity.Resolve(ctx.User, opts.IdentityClaim);
     }
 
-    private static bool IsAdmin(HttpContext ctx)
-    {
-        var opts = Options(ctx);
-        return ReportIdentity.IsAdministrator(ctx.User, opts.IdentityClaim, opts.Administrators);
-    }
-
     private static SavedReportSummary Summary(SavedReport report, string? caller) => new(
         report.Id,
         report.ReportName,
@@ -416,6 +527,30 @@ internal static class SavedReportEndpoints
         SavedReportAccessPolicy.IsOwner(report, caller),
         IsReadOnly: report.Origin == SavedReportOrigin.Configured,
         report.ModifiedUtc);
+
+    private static InteractiveReportAuthorizationResource Resource(
+        string reportName,
+        SavedReport? report = null,
+        SavedReportAuthorizationChanges? changes = null)
+        => new()
+        {
+            ReportName = reportName,
+            SavedReport = report is null
+                ? null
+                : new SavedReportAuthorizationResource(
+                    report.Id,
+                    report.Title,
+                    report.Owner,
+                    report.IsGlobal,
+                    report.IsPrimary,
+                    report.Origin),
+            Changes = changes,
+        };
+
+    private static JsonElement? StateElement(ReportState? state)
+        => state is null
+            ? null
+            : JsonSerializer.SerializeToElement(state, IrJson.Options);
 
     /// <summary>
     /// Title uniqueness spans one report definition's rows of both origins — synced
@@ -443,20 +578,11 @@ internal static class SavedReportEndpoints
                 detail: $"A saved report named '{title.Trim()}' already exists. Replace it if it is available to you, or choose another title.",
                 statusCode: StatusCodes.Status409Conflict);
 
-    private static async Task<IResult> ReadOnlyConfiguredResult(
-        string reportName,
-        HttpContext ctx,
-        CancellationToken ct)
-    {
-        var definition = await ctx.RequestServices.GetRequiredService<IReportDefinitionStore>()
-            .Find(reportName, ct);
-        if (definition is null) return Results.NotFound();
-        if (await ReportRequestAccess.Authorize(definition, ctx) is { } denied) return denied;
-        return Results.Problem(
+    private static IResult ReadOnlyConfiguredResult()
+        => Results.Problem(
             title: "Read-only report",
             detail: "Configured report documents cannot be updated or deleted. Use Save As to create an editable copy.",
             statusCode: StatusCodes.Status403Forbidden);
-    }
 
     private static IResult? TitleError(string? title, string problemTitle = "Malformed save request")
         => string.IsNullOrWhiteSpace(title) || title.Trim().Length > 200
@@ -465,17 +591,6 @@ internal static class SavedReportEndpoints
 
     private static IResult BadRequest(string title, string detail)
         => Results.Problem(title: title, detail: detail, statusCode: StatusCodes.Status400BadRequest);
-
-    private static IResult AdminRequired(string detail)
-        => Results.Problem(title: "Administrator required", detail: detail, statusCode: StatusCodes.Status403Forbidden);
-
-    private static IResult? Denied(SavedReportAccess access, string administratorDetail) => access switch
-    {
-        SavedReportAccess.Allowed => null,
-        SavedReportAccess.Hidden => Results.NotFound(),
-        SavedReportAccess.AdministratorRequired => AdminRequired(administratorDetail),
-        _ => throw new ArgumentOutOfRangeException(nameof(access)),
-    };
 
     private static string DownloadFileName(string reportName, string title)
     {
