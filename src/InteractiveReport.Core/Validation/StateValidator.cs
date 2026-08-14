@@ -213,6 +213,15 @@ public static class StateValidator
             if (!formats.TryGetValue(column.Name, out var format)) continue;
 
             var renderer = format.DisplayAs?.Trim();
+            if (string.Equals(renderer, "action", StringComparison.OrdinalIgnoreCase))
+            {
+                // The action event needs its key in row data. Unlike link/image,
+                // a blank source binds nothing: the labeled action cell itself is
+                // already displayed, so there is no fallback to add.
+                if (!string.IsNullOrWhiteSpace(format.KeyColumn))
+                    Add(format.KeyColumn, "key", column);
+                continue;
+            }
             if (!string.Equals(renderer, "link", StringComparison.OrdinalIgnoreCase)
                 && !string.Equals(renderer, "image", StringComparison.OrdinalIgnoreCase))
                 continue;

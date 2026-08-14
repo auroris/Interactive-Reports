@@ -55,7 +55,7 @@ test("explains how to build the client when its bundle is missing", async ({ pag
     )).toBeVisible();
 });
 
-test("loads the configured primary report, queries data, paginates from Actions, and changes reports", async ({ page }) => {
+test("loads the stored primary Default, queries data, paginates from Actions, and changes reports", async ({ page }) => {
     await openWorkbench(page);
 
     const catalogResponse = await page.request.get("/api/reports");
@@ -441,7 +441,7 @@ test("Save As confirms and replaces an existing report instead of creating a dup
         const savedId = (await created.json()).id;
 
         await runAndWaitForQuery(page, () =>
-            page.getByRole("combobox", { name: "Saved Report" }).selectOption(""));
+            page.getByRole("combobox", { name: "Saved Report" }).selectOption({ label: "Default" }));
         await search(page, "Acme Corp");
 
         await clickAction(page, "Save As…");
@@ -499,7 +499,7 @@ test("saves and reloads a report, then administers its complete lifecycle", asyn
         await expect(savedSelect.locator(`option[value="${savedId}"]`)).toHaveText(title);
 
         await search(page, "Globex");
-        await runAndWaitForQuery(page, () => savedSelect.selectOption(""));
+        await runAndWaitForQuery(page, () => savedSelect.selectOption({ label: "Default" }));
         await expect(page.getByRole("searchbox", { name: "Search" })).toHaveValue("");
         await runAndWaitForQuery(page, () => page.locator("interactive-report").evaluate(
             (element, savedReport) => element.setAttribute("saved-report", savedReport), title));
@@ -524,6 +524,22 @@ test("saves and reloads a report, then administers its complete lifecycle", asyn
         await expect(stateDialog.locator("pre")).toContainText('"search": "Acme Corp"');
         await stateDialog.getByText("Close", { exact: true }).click();
 
+        const flagResponse = page.waitForResponse(response =>
+            response.request().method() === "PUT"
+            && new URL(response.url()).pathname === `/api/reports/saved/${savedId}`
+            && response.request().postDataJSON().isPrimary === true);
+        await row.getByRole("button", { name: "Make primary", exact: true }).click();
+        expect((await flagResponse).ok()).toBe(true);
+        await expect(row).toContainText("Yes");
+
+        const unflagResponse = page.waitForResponse(response =>
+            response.request().method() === "PUT"
+            && new URL(response.url()).pathname === `/api/reports/saved/${savedId}`
+            && response.request().postDataJSON().isPrimary === false);
+        await row.getByRole("button", { name: "Unflag", exact: true }).click();
+        expect((await unflagResponse).ok()).toBe(true);
+        await expect(row).toContainText("No");
+
         const publishResponse = page.waitForResponse(response =>
             response.request().method() === "PUT"
             && new URL(response.url()).pathname === `/api/reports/saved/${savedId}`);
@@ -531,7 +547,7 @@ test("saves and reloads a report, then administers its complete lifecycle", asyn
         expect((await publishResponse).ok()).toBe(true);
         await expect(row).toContainText("Global");
 
-        await row.getByRole("button", { name: "Reassign…", exact: true }).click();
+        await row.getByRole("button", { name: "Reassign", exact: true }).click();
         const reassignDialog = page.getByRole("dialog");
         await reassignDialog.getByLabel("New owner (identity value)").fill("e2e-owner");
         const reassignResponse = page.waitForResponse(response =>
@@ -541,7 +557,7 @@ test("saves and reloads a report, then administers its complete lifecycle", asyn
         expect((await reassignResponse).ok()).toBe(true);
         await expect(row).toContainText("e2e-owner");
 
-        await row.getByRole("button", { name: "Delete…", exact: true }).click();
+        await row.getByRole("button", { name: "Delete", exact: true }).click();
         const deleteDialog = page.getByRole("dialog");
         const deleteResponse = page.waitForResponse(response =>
             response.request().method() === "DELETE"
@@ -593,6 +609,7 @@ test("admin uploads a validated report document and downloads its canonical file
 
         const row = page.getByRole("row").filter({ hasText: title });
         await expect(row).toContainText("Private");
+        await expect(row).toContainText("Yes");
 
         const downloadPromise = page.waitForEvent("download");
         await row.getByRole("button", { name: "Download", exact: true }).click();
@@ -600,7 +617,7 @@ test("admin uploads a validated report document and downloads its canonical file
         expect(downloaded.suggestedFilename()).toMatch(/^orders\..+\.json$/);
         const document = JSON.parse(await readFile(await downloaded.path(), "utf8"));
         expect(document.title).toBe(title);
-        expect(document.primary).toBe(false);
+        expect(document.primary).toBe(true);
         expect(sourceLayerOf(document.state).filters).toEqual([{ expr: "AMOUNT > 100", enabled: true }]);
     } finally {
         if (importedId)

@@ -3,6 +3,7 @@ using System.Text.Json;
 using InteractiveReport.Core.Definitions;
 using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Model;
+using InteractiveReport.Core.SavedReports;
 using InteractiveReport.Core.Schema;
 using Microsoft.Extensions.Options;
 
@@ -15,35 +16,78 @@ namespace InteractiveReport.AspNetCore;
 public sealed partial class ConfigurationReportDefinitionStore : IReportDefinitionStore, IDisposable
 {
     private readonly IOptionsMonitor<InteractiveReportOptions> _options;
-    private readonly ConfiguredReportDocumentStore? _documents;
+    private readonly ConfiguredReportDocumentSynchronizer? _synchronizer;
+    private readonly ISavedReportStore? _savedReports;
     private readonly IDisposable? _reloadSubscription;
 
     internal ConfigurationReportDefinitionStore(IOptionsMonitor<InteractiveReportOptions> options, SchemaCache schemaCache)
-        : this(options, schemaCache, documents: null!)
+        : this(options, schemaCache, synchronizer: null!, savedReports: null!)
     {
     }
 
     public ConfigurationReportDefinitionStore(
         IOptionsMonitor<InteractiveReportOptions> options,
         SchemaCache schemaCache,
-        ConfiguredReportDocumentStore documents)
+        ConfiguredReportDocumentSynchronizer synchronizer,
+        ISavedReportStore savedReports)
     {
         _options = options;
-        _documents = documents;
+        _synchronizer = synchronizer;
+        _savedReports = savedReports;
         _reloadSubscription = options.OnChange(_ => schemaCache.Clear());
     }
 
-    public ValueTask<ReportDefinition?> Find(string name, CancellationToken ct = default)
+    public async ValueTask<ReportDefinition?> Find(string name, CancellationToken ct = default)
     {
+        if (SavedReportsListingDefinition.Matches(name))
+        {
+            // Reserved: configuration cannot declare or shadow the built-in name.
+            if (_options.CurrentValue.Reports.ContainsKey(name))
+                throw new InvalidOperationException(
+                    $"Report '{name}': this name is reserved for the built-in saved-reports listing.");
+            // Syncing here both freshens configured rows and — via the store's lazy
+            // auto-create on its first operation — guarantees the table exists before
+            // schema discovery probes it. Skipping the built-in definition entirely,
+            // not synthesizing it unsynced, keeps a null synchronizer (internal test
+            // constructor) honest.
+            if (_synchronizer is null) return null;
+            await _synchronizer.EnsureSynced(ct);
+            return SavedReportsListingDefinition.Create(_options.CurrentValue.SavedReports);
+        }
+
         if (!_options.CurrentValue.Reports.TryGetValue(name, out var def))
-            return ValueTask.FromResult<ReportDefinition?>(null);
+            return null;
 
         var snapshot = Snapshot(name, def);
         Validate(snapshot);
-        var primary = _documents?.List(snapshot).SingleOrDefault(document => document.Primary);
-        if (primary is not null)
-            snapshot.DefaultState = primary.State;
-        return ValueTask.FromResult<ReportDefinition?>(snapshot);
+        if (_synchronizer is not null && _savedReports is not null)
+        {
+            await _synchronizer.EnsureSynced(ct);
+            var defaultPrimary = (await _savedReports.ListVisible(snapshot.Name, identity: null, ct: ct))
+                .Where(report => report.IsPrimary
+                    && string.Equals(report.Title, "Default", StringComparison.OrdinalIgnoreCase))
+                // A database-authored report wins if a configured title collision was
+                // introduced outside the normal endpoint uniqueness checks.
+                .OrderBy(report => report.Origin == SavedReportOrigin.User ? 0 : 1)
+                .ThenByDescending(report => report.ModifiedUtc)
+                .FirstOrDefault();
+            if (defaultPrimary is not null)
+            {
+                try
+                {
+                    snapshot.DefaultState = JsonSerializer.Deserialize<ReportState>(
+                        defaultPrimary.StateJson,
+                        IrJson.Options) ?? throw new JsonException("state is null");
+                }
+                catch (JsonException ex)
+                {
+                    throw new InvalidOperationException(
+                        $"Report '{snapshot.Name}': primary Default report '{defaultPrimary.Id}' has an invalid state document.",
+                        ex);
+                }
+            }
+        }
+        return snapshot;
     }
 
     private static ReportDefinition Snapshot(string name, ReportDefinition source)
@@ -62,6 +106,12 @@ public sealed partial class ConfigurationReportDefinitionStore : IReportDefiniti
     {
         if (string.IsNullOrWhiteSpace(def.Name))
             throw new InvalidOperationException("Report name is required.");
+        if (def.Name.StartsWith("__", StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': names beginning with '__' are reserved for built-in reports.");
+        if (def.Authorization is { AllowAnonymous: true, AdministratorsOnly: true })
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': authorization cannot be both allowAnonymous and administratorsOnly.");
         if (string.IsNullOrWhiteSpace(def.Sql))
             throw new InvalidOperationException($"Report '{def.Name}': sql is required.");
         if (string.IsNullOrWhiteSpace(def.Connection))

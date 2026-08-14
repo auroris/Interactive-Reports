@@ -138,5 +138,7 @@ public static class ReportStateResolver
                     DisplayAs = entry.Value.DisplayAs,
                     UrlColumn = entry.Value.UrlColumn,
                     TextColumn = entry.Value.TextColumn,
+                    Command = entry.Value.Command,
+                    KeyColumn = entry.Value.KeyColumn,
                 });
 }

@@ -40,6 +40,47 @@ public sealed class SqliteSavedReportStoreTests : SavedReportStoreCorpus, IDispo
         Assert.Equal("Second", Assert.Single(currentTarget).Title);
     }
 
+    [Fact]
+    public async Task Auto_create_upgrades_an_existing_table_with_the_primary_flag()
+    {
+        await using (var connection = new SqliteConnection(_cs))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                CREATE TABLE IR_OLD_SAVED_REPORTS (
+                    ID TEXT PRIMARY KEY,
+                    REPORT_NAME TEXT NOT NULL,
+                    TITLE TEXT NOT NULL,
+                    OWNER TEXT NULL,
+                    IS_GLOBAL INTEGER NOT NULL,
+                    STATE_JSON TEXT NOT NULL,
+                    MODIFIED_UTC TEXT NOT NULL,
+                    ORIGIN TEXT NOT NULL DEFAULT 'user'
+                );
+                INSERT INTO IR_OLD_SAVED_REPORTS
+                    (ID, REPORT_NAME, TITLE, OWNER, IS_GLOBAL, STATE_JSON, MODIFIED_UTC, ORIGIN)
+                VALUES ('old-1', 'orders', 'Old', 'alice', 0, '{}', '2026-08-14T00:00:00.0000000Z', 'user');
+                """;
+            await command.ExecuteNonQueryAsync();
+        }
+
+        var store = new SqlSavedReportStore(
+            () => new SavedReportStoreConfig(
+                "Saved",
+                ReportDialect.Sqlite,
+                AutoCreate: true,
+                TableName: "IR_OLD_SAVED_REPORTS"),
+            new FixedConnectionFactory(() => new SqliteConnection(_cs)));
+
+        var loaded = Assert.Single(await store.ListAll());
+
+        Assert.False(loaded.IsPrimary);
+        loaded.IsPrimary = true;
+        Assert.True(await store.Update(loaded));
+        Assert.True((await store.Get(loaded.Id))!.IsPrimary);
+    }
+
     public void Dispose() => _keepAlive.Dispose();
 
     private static SavedReport Report(string title) => new()

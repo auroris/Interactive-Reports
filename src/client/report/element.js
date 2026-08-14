@@ -163,10 +163,12 @@ export class InteractiveReportElement extends WidgetElement {
                 this.adoptState(docResponse.state, `Saved report "${docResponse.summary?.title}"`);
             } else {
                 this.adoptState(schema.defaultState, "The default report");
+                this.currentSaved = saved.find(candidate =>
+                    candidate.isPrimary && sameTitle(candidate.title, "Default")) ?? null;
                 if (requestedSaved) {
                     savedWarning = savedMatches.length === 0
-                        ? `Saved report "${requestedSaved}" is not available; loaded Primary Report.`
-                        : `Saved report name "${requestedSaved}" is ambiguous; loaded Primary Report.`;
+                        ? `Saved report "${requestedSaved}" is not available; loaded Default.`
+                        : `Saved report name "${requestedSaved}" is ambiguous; loaded Default.`;
                 }
             }
             refreshSavedSelect(this);

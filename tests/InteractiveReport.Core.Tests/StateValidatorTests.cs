@@ -229,6 +229,56 @@ public class StateValidatorTests
     }
 
     [Fact]
+    public void Action_key_is_a_projection_column_not_a_display_column()
+    {
+        var result = Validate(Doc(source: new StageLayer
+        {
+            Columns = ["STATUS"],
+            Formats = new()
+            {
+                ["STATUS"] = new ColumnFormat { DisplayAs = "action", Command = "open", KeyColumn = "ORDER_ID" },
+            },
+        }));
+
+        Assert.Equal(["STATUS"], result.SelectColumns.Select(c => c.Name));
+        Assert.Equal(["STATUS", "ORDER_ID"], result.ProjectionColumns.Select(c => c.Name));
+    }
+
+    [Fact]
+    public void Unknown_action_key_is_ignored_before_query_composition()
+    {
+        var result = Validate(Doc(source: new StageLayer
+        {
+            Columns = ["STATUS"],
+            Formats = new()
+            {
+                ["STATUS"] = new ColumnFormat { DisplayAs = "action", Command = "open", KeyColumn = "GHOST" },
+            },
+        }));
+
+        Assert.Equal(["STATUS"], result.ProjectionColumns.Select(c => c.Name));
+        Assert.Contains(result.Ignored, i => i.Kind == "format" && i.Detail.Contains("GHOST"));
+    }
+
+    [Fact]
+    public void Action_without_key_binds_nothing_and_never_reads_link_sources()
+    {
+        // Unlike link/image, a blank key has no fallback-to-self, and url/text
+        // sources belong to other renderers even when present on the format.
+        var result = Validate(Doc(source: new StageLayer
+        {
+            Columns = ["STATUS"],
+            Formats = new()
+            {
+                ["STATUS"] = new ColumnFormat { DisplayAs = "action", Command = "open", UrlColumn = "NOTES", TextColumn = "CUSTOMER" },
+            },
+        }));
+
+        Assert.Equal(["STATUS"], result.ProjectionColumns.Select(c => c.Name));
+        Assert.Empty(result.Ignored);
+    }
+
+    [Fact]
     public void Labels_resolve_at_ingestion_but_never_touch_query_surfaces()
     {
         // Unknown keys included on purpose: the map is display state, not a program —

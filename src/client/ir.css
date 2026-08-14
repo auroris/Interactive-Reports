@@ -263,6 +263,7 @@
 .ir-table tr.ir-row:hover td { background-color: #f5f9fd; }
 .ir-cell-link { color: var(--ir-accent); text-decoration: underline; text-underline-offset: 2px; }
 .ir-cell-image { display: block; max-width: 100%; max-height: 8rem; width: auto; height: auto; }
+.ir-cell-action { padding: 1px 8px; font-size: 12px; }
 
 .ir-table tr.ir-break-header td {
     background: #e9eef4;
@@ -527,27 +528,6 @@ dialog.ir-dialog::backdrop {
 /* --- admin widget ---------------------------------------------------------------- */
 
 .ir-admin-count { color: var(--ir-text-muted); font-size: 12px; }
-.ir-badge {
-    display: inline-block;
-    font-size: 11px;
-    padding: 1px 8px;
-    border-radius: 9px;
-    border: 1px solid;
-}
-.ir-badge-global { background: #e3f0fb; border-color: #b7d6f2; color: #0b5394; }
-.ir-badge-private { background: #f1f2f3; border-color: #d9dcdf; color: #555e66; }
-.ir-linkbtn {
-    background: none;
-    border: none;
-    font: inherit;
-    font-size: 12px;
-    color: var(--ir-accent);
-    cursor: pointer;
-    padding: 1px 3px;
-}
-.ir-linkbtn:hover { text-decoration: underline; }
-.ir-linkbtn-danger { color: var(--ir-danger); }
-.ir-actions-cell { white-space: nowrap; }
 .ir-state-pre {
     background: var(--ir-bg-soft);
     border: 1px solid var(--ir-border-light);

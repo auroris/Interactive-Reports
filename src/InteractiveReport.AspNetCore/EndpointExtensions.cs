@@ -47,7 +47,6 @@ public static class EndpointExtensions
         group.MapGet("/saved/{id}", SavedReportEndpoints.Load);
         group.MapPut("/saved/{id}", SavedReportEndpoints.Update);
         group.MapDelete("/saved/{id}", SavedReportEndpoints.Delete);
-        group.MapGet("/admin/saved", SavedReportEndpoints.AdminListAll);
         group.MapGet("/admin/saved/{id}/document", SavedReportEndpoints.AdminDownloadDocument);
         group.MapPost("/admin/{name}/documents", SavedReportEndpoints.AdminUploadDocument);
 
@@ -59,7 +58,19 @@ public static class EndpointExtensions
         var store = ctx.RequestServices.GetRequiredService<IReportDefinitionStore>();
         var def = await store.Find(name, ct);
         if (def is null) return Results.NotFound();
-        if (await ReportRequestAccess.Authorize(def, ctx) is { } denied) return denied;
+        var actions = SavedReportsListingDefinition.Matches(def.Name)
+            ? new[] { InteractiveReportAction.ListAllSavedReports }
+            : new[] { InteractiveReportAction.ViewReport };
+        if (await ReportRequestAccess.Authorize(
+                def,
+                ctx,
+                actions,
+                new InteractiveReportAuthorizationResource { ReportName = def.Name },
+                administratorRequired: false,
+                hideDenied: def.Authorization?.AdministratorsOnly == true,
+                denialDetail: null,
+                ct) is { } denied)
+            return denied;
 
         try
         {
@@ -105,7 +116,7 @@ public static class EndpointExtensions
 
     /// <summary>
     /// The default report the schema endpoint sends down — always complete, never null.
-    /// An unconfigured effective primary synthesizes to an empty state (every schema
+    /// An unconfigured effective Default synthesizes to an empty state (every schema
     /// column in database order), and the definition's columnLabels become the default
     /// report's labels unless the effective state carries its own. Query responses
     /// never apply labels; the document ingestion pipeline mirrors this same layering
@@ -138,6 +149,7 @@ public static class EndpointExtensions
             name,
             ctx,
             "query",
+            InteractiveReportAction.Query,
             preflight: null,
             static async (_, definition, executor, state, contextParams, token) =>
             {
@@ -157,6 +169,7 @@ public static class EndpointExtensions
             name,
             ctx,
             "export",
+            InteractiveReportAction.Export,
             static (context, definition) =>
             {
                 if (ReportRequestAccess.RequireFeature(definition, ReportFeatures.Download) is { } disabled)
@@ -187,6 +200,7 @@ public static class EndpointExtensions
         string name,
         HttpContext ctx,
         string operationName,
+        InteractiveReportAction action,
         Func<HttpContext, ReportDefinition, IResult?>? preflight,
         StateOperation operation,
         CancellationToken ct)
@@ -194,7 +208,22 @@ public static class EndpointExtensions
         var store = ctx.RequestServices.GetRequiredService<IReportDefinitionStore>();
         var definition = await store.Find(name, ct);
         if (definition is null) return Results.NotFound();
-        if (await ReportRequestAccess.Authorize(definition, ctx) is { } denied) return denied;
+        IReadOnlyCollection<InteractiveReportAction> actions =
+            SavedReportsListingDefinition.Matches(definition.Name)
+                ? action == InteractiveReportAction.Export
+                    ? [InteractiveReportAction.ListAllSavedReports, InteractiveReportAction.Export]
+                    : [InteractiveReportAction.ListAllSavedReports]
+                : [action];
+        if (await ReportRequestAccess.Authorize(
+                definition,
+                ctx,
+                actions,
+                new InteractiveReportAuthorizationResource { ReportName = definition.Name },
+                administratorRequired: false,
+                hideDenied: definition.Authorization?.AdministratorsOnly == true,
+                denialDetail: null,
+                ct) is { } denied)
+            return denied;
         if (preflight?.Invoke(ctx, definition) is { } rejected) return rejected;
 
         ReportState state;

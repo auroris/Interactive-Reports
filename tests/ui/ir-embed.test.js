@@ -258,12 +258,43 @@ test("saved-report loads a uniquely named saved report before the initial query"
     assert.equal(report.shadowRoot.querySelector(".ir-saved-select").value, "saved-1");
     assert.ok(requests.some(r => r.url === "/custom-report-api/saved/saved-1"));
     const queries = requests.filter(r => r.url === "/custom-report-api/orders/query");
-    assert.equal(queries.length, 1, "the primary report should not be queried first");
+    assert.equal(queries.length, 1, "Default should not be queried before the requested saved report");
     assert.equal(JSON.parse(queries[0].body).search, "Acme");
 
     report.remove();
     savedReports = [];
     savedDocuments = new Map();
+});
+
+test("a primary saved report named Default represents the schema Default", async () => {
+    requests.length = 0;
+    savedReports = [{
+        id: "default-1", reportName: "orders", title: "Default",
+        isGlobal: false, isPrimary: true, owner: "admin", mine: false,
+    }, {
+        id: "primary-2", reportName: "orders", title: "Executive",
+        isGlobal: false, isPrimary: true, owner: "admin", mine: false,
+    }];
+
+    const report = document.createElement("interactive-report");
+    report.setAttribute("report", "orders");
+    report.setAttribute("api-base", "/custom-report-api");
+    document.body.append(report);
+
+    for (let attempt = 0; attempt < 20 && !requests.some(r => r.url.endsWith("/orders/query")); attempt++)
+        await new Promise(resolve => setTimeout(resolve, 1));
+
+    const select = report.shadowRoot.querySelector(".ir-saved-select");
+    assert.equal(select.value, "default-1");
+    assert.equal(select.options[0].text, "Default");
+    assert.equal(select.options[0].value, "default-1");
+    assert.equal(select.querySelector('optgroup[label="Primary"] option')?.text, "Executive");
+    assert.equal(report.currentSaved?.id, "default-1");
+    assert.equal(requests.some(r => r.url.endsWith("/saved/default-1")), false,
+        "the schema already carries the resolved Default state");
+
+    report.remove();
+    savedReports = [];
 });
 
 test("a read-only saved report never offers Save or Delete, even to an administrator", async () => {

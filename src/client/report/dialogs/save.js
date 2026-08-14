@@ -15,6 +15,10 @@ export function saveDialog(w, { asNew }) {
         type: "checkbox",
         checked: updating ? !!w.currentSaved.isGlobal : false,
     });
+    const primaryChk = el("input", {
+        type: "checkbox",
+        checked: updating ? !!w.currentSaved.isPrimary : false,
+    });
 
     openDialog({
         owner: w,
@@ -23,8 +27,13 @@ export function saveDialog(w, { asNew }) {
         applyLabel: "Save",
         build: body => {
             body.append(labeled("Name", titleInp));
-            if (w.whoami?.isAdministrator)
-                body.append(el("label", { class: "ir-checkline" }, globalChk, "Global — visible to everyone with access to this report"));
+            if (w.whoami?.isAdministrator) {
+                body.append(
+                    el("label", { class: "ir-checkline" }, primaryChk,
+                        "Primary — visible to everyone with access to this report"),
+                    el("label", { class: "ir-checkline" }, globalChk,
+                        "Global — visible to everyone with access to this report"));
+            }
         },
         onApply: async () => {
             const title = titleInp.value.trim();
@@ -46,6 +55,7 @@ export function saveDialog(w, { asNew }) {
                     await saveReport(w, {
                         title: target.title,
                         isGlobal: target.isGlobal,
+                        isPrimary: target.isPrimary,
                         asNew: false,
                         target,
                     });
@@ -55,6 +65,7 @@ export function saveDialog(w, { asNew }) {
             return saveReport(w, {
                 title,
                 isGlobal: w.whoami?.isAdministrator ? globalChk.checked : false,
+                isPrimary: w.whoami?.isAdministrator ? primaryChk.checked : false,
                 asNew: !updating,
             });
         },

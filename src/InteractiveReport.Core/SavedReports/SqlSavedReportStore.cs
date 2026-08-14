@@ -1,6 +1,5 @@
 using System.Data.Common;
 using System.Globalization;
-using System.Text.RegularExpressions;
 using InteractiveReport.Core.Composition;
 using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Model;
@@ -15,7 +14,7 @@ namespace InteractiveReport.Core.SavedReports;
 /// the report data. Values are stored cross-dialect-uniform: timestamps as ISO-8601 UTC
 /// text (sortable), the global flag as 0/1.
 /// </summary>
-public sealed partial class SqlSavedReportStore : ISavedReportStore
+public sealed class SqlSavedReportStore : ISavedReportStore
 {
     private const int TimeoutSeconds = 30;
     private static readonly IReadOnlyDictionary<string, object?> NoParams = new Dictionary<string, object?>();
@@ -33,13 +32,9 @@ public sealed partial class SqlSavedReportStore : ISavedReportStore
 
     private static SavedReportStoreConfig Validated(SavedReportStoreConfig cfg)
     {
-        if (!TableNamePattern().IsMatch(cfg.TableName))
-            throw new InvalidOperationException($"Saved-report table name '{cfg.TableName}' is not a plain identifier.");
+        SavedReportStoreConfig.EnsureValidTableName(cfg.TableName);
         return cfg;
     }
-
-    [GeneratedRegex("^[A-Za-z_][A-Za-z0-9_]*$")]
-    private static partial Regex TableNamePattern();
 
     public async Task<SavedReport?> Get(string id, CancellationToken ct = default)
     {
@@ -52,10 +47,10 @@ public sealed partial class SqlSavedReportStore : ISavedReportStore
         {
             q.Where("REPORT_NAME", reportName);
             if (identity is null)
-                q.Where("IS_GLOBAL", 1);
+                q.Where(sub => sub.Where("IS_PRIMARY", 1).OrWhere("IS_GLOBAL", 1));
             else
-                q.Where(sub => sub.Where("IS_GLOBAL", 1).OrWhere("OWNER", identity));
-            return q.OrderByDesc("IS_GLOBAL").OrderBy("TITLE");
+                q.Where(sub => sub.Where("IS_PRIMARY", 1).OrWhere("IS_GLOBAL", 1).OrWhere("OWNER", identity));
+            return q.OrderByDesc("IS_PRIMARY").OrderByDesc("IS_GLOBAL").OrderBy("TITLE");
         }, ct);
 
     public Task<IReadOnlyList<SavedReport>> ListAll(CancellationToken ct = default)
@@ -77,6 +72,25 @@ public sealed partial class SqlSavedReportStore : ISavedReportStore
             ct) == 1;
     }
 
+    public async Task Put(SavedReport report, CancellationToken ct = default)
+    {
+        var row = ToRow(report);
+        var update = new Dictionary<string, object?>(row);
+        update.Remove("ID");
+        if (await Execute(config => new Query(config.TableName).Where("ID", report.Id).AsUpdate(update), ct) == 1)
+            return;
+        try
+        {
+            await Execute(config => new Query(config.TableName).AsInsert(row), ct);
+        }
+        catch (DbException)
+        {
+            // Lost a concurrent first-insert race — the row exists now, so the
+            // idempotent path is to update it.
+            await Execute(config => new Query(config.TableName).Where("ID", report.Id).AsUpdate(update), ct);
+        }
+    }
+
     public async Task<bool> Delete(string id, CancellationToken ct = default)
         => await Execute(
             config => new Query(config.TableName).Where("ID", id).AsDelete(),
@@ -84,22 +98,32 @@ public sealed partial class SqlSavedReportStore : ISavedReportStore
 
     // --- plumbing ------------------------------------------------------------
 
-    private static Dictionary<string, object> ToRow(SavedReport r) => new()
+    private static string OriginText(SavedReportOrigin origin)
+        => origin == SavedReportOrigin.Configured ? "configured" : "user";
+
+    private static SavedReportOrigin OriginFrom(string text)
+        => string.Equals(text, "configured", StringComparison.OrdinalIgnoreCase)
+            ? SavedReportOrigin.Configured
+            : SavedReportOrigin.User;
+
+    private static Dictionary<string, object?> ToRow(SavedReport r) => new()
     {
         ["ID"] = r.Id,
         ["REPORT_NAME"] = r.ReportName,
         ["TITLE"] = r.Title,
         ["OWNER"] = r.Owner,
         ["IS_GLOBAL"] = r.IsGlobal ? 1 : 0,
+        ["IS_PRIMARY"] = r.IsPrimary ? 1 : 0,
         ["STATE_JSON"] = r.StateJson,
         ["MODIFIED_UTC"] = r.ModifiedUtc.ToString("o", CultureInfo.InvariantCulture),
+        ["ORIGIN"] = OriginText(r.Origin),
     };
 
     private async Task<IReadOnlyList<SavedReport>> Select(Func<Query, Query> shape, CancellationToken ct)
     {
         var cfg = Validated(_config());
         var query = shape(new Query(cfg.TableName)
-            .Select("ID", "REPORT_NAME", "TITLE", "OWNER", "IS_GLOBAL", "STATE_JSON", "MODIFIED_UTC"));
+            .Select("ID", "REPORT_NAME", "TITLE", "OWNER", "IS_GLOBAL", "IS_PRIMARY", "STATE_JSON", "MODIFIED_UTC", "ORIGIN"));
 
         await using var conn = await OpenConnection(cfg, ct);
         var compiled = DialectSupport.GetCompiler(cfg.Dialect).Compile(query);
@@ -114,10 +138,12 @@ public sealed partial class SqlSavedReportStore : ISavedReportStore
                 Id = reader.GetString(0),
                 ReportName = reader.GetString(1),
                 Title = reader.GetString(2),
-                Owner = reader.GetString(3),
+                Owner = reader.IsDBNull(3) ? null : reader.GetString(3),
                 IsGlobal = Convert.ToBoolean(reader.GetValue(4), CultureInfo.InvariantCulture),
-                StateJson = reader.GetString(5),
-                ModifiedUtc = DateTime.Parse(reader.GetString(6), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                IsPrimary = Convert.ToBoolean(reader.GetValue(5), CultureInfo.InvariantCulture),
+                StateJson = reader.GetString(6),
+                ModifiedUtc = DateTime.Parse(reader.GetString(7), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                Origin = OriginFrom(reader.GetString(8)),
             });
         }
         return result;
@@ -162,6 +188,20 @@ public sealed partial class SqlSavedReportStore : ISavedReportStore
             await using var cmd = conn.CreateCommand();
             cmd.CommandText = CreateTableSql(cfg);
             await cmd.ExecuteNonQueryAsync(ct);
+            if (cfg.Dialect == ReportDialect.Sqlite)
+            {
+                cmd.CommandText = $"SELECT COUNT(*) FROM pragma_table_info('{cfg.TableName}') WHERE name = 'IS_PRIMARY'";
+                if (Convert.ToInt32(await cmd.ExecuteScalarAsync(ct), CultureInfo.InvariantCulture) == 0)
+                {
+                    cmd.CommandText = $"ALTER TABLE {cfg.TableName} ADD COLUMN IS_PRIMARY INTEGER NOT NULL DEFAULT 0";
+                    await cmd.ExecuteNonQueryAsync(ct);
+                }
+            }
+            else
+            {
+                cmd.CommandText = AddPrimaryColumnSql(cfg);
+                await cmd.ExecuteNonQueryAsync(ct);
+            }
             _createdTargets.Add(target);
         }
         finally
@@ -172,39 +212,47 @@ public sealed partial class SqlSavedReportStore : ISavedReportStore
 
     private static string CreateTableSql(SavedReportStoreConfig cfg) => cfg.Dialect switch
     {
+        // ID is 80 wide: configured-document ids are 68 chars ("cfg_" + SHA-256 hex).
+        // OWNER is nullable: configured rows have no owner.
         ReportDialect.Sqlite => $"""
             CREATE TABLE IF NOT EXISTS {cfg.TableName} (
                 ID           TEXT PRIMARY KEY,
                 REPORT_NAME  TEXT NOT NULL,
                 TITLE        TEXT NOT NULL,
-                OWNER        TEXT NOT NULL,
+                OWNER        TEXT NULL,
                 IS_GLOBAL    INTEGER NOT NULL,
+                IS_PRIMARY   INTEGER NOT NULL DEFAULT 0,
                 STATE_JSON   TEXT NOT NULL,
-                MODIFIED_UTC TEXT NOT NULL
+                MODIFIED_UTC TEXT NOT NULL,
+                ORIGIN       TEXT NOT NULL DEFAULT 'user'
             )
             """,
         ReportDialect.SqlServer => $"""
             IF OBJECT_ID(N'{cfg.TableName}', N'U') IS NULL
             CREATE TABLE {cfg.TableName} (
-                ID           NVARCHAR(64) PRIMARY KEY,
+                ID           NVARCHAR(80) PRIMARY KEY,
                 REPORT_NAME  NVARCHAR(200) NOT NULL,
                 TITLE        NVARCHAR(200) NOT NULL,
-                OWNER        NVARCHAR(400) NOT NULL,
+                OWNER        NVARCHAR(400) NULL,
                 IS_GLOBAL    INT NOT NULL,
+                IS_PRIMARY   INT NOT NULL DEFAULT 0,
                 STATE_JSON   NVARCHAR(MAX) NOT NULL,
-                MODIFIED_UTC NVARCHAR(40) NOT NULL
+                MODIFIED_UTC NVARCHAR(40) NOT NULL,
+                ORIGIN       NVARCHAR(20) NOT NULL DEFAULT 'user'
             )
             """,
         ReportDialect.Oracle => $"""
             BEGIN
                 EXECUTE IMMEDIATE 'CREATE TABLE {cfg.TableName} (
-                    ID           VARCHAR2(64) PRIMARY KEY,
+                    ID           VARCHAR2(80) PRIMARY KEY,
                     REPORT_NAME  VARCHAR2(200) NOT NULL,
                     TITLE        VARCHAR2(200) NOT NULL,
-                    OWNER        VARCHAR2(400) NOT NULL,
+                    OWNER        VARCHAR2(400) NULL,
                     IS_GLOBAL    NUMBER(1) NOT NULL,
+                    IS_PRIMARY   NUMBER(1) DEFAULT 0 NOT NULL,
                     STATE_JSON   CLOB NOT NULL,
-                    MODIFIED_UTC VARCHAR2(40) NOT NULL
+                    MODIFIED_UTC VARCHAR2(40) NOT NULL,
+                    ORIGIN       VARCHAR2(20) DEFAULT ''user'' NOT NULL
                 )';
             EXCEPTION WHEN OTHERS THEN
                 IF SQLCODE != -955 THEN RAISE; END IF;
@@ -214,14 +262,42 @@ public sealed partial class SqlSavedReportStore : ISavedReportStore
         // match the quoted uppercase identifiers SqlKata emits in queries.
         ReportDialect.Postgres => $"""
             CREATE TABLE IF NOT EXISTS "{cfg.TableName}" (
-                "ID"           VARCHAR(64) PRIMARY KEY,
+                "ID"           VARCHAR(80) PRIMARY KEY,
                 "REPORT_NAME"  VARCHAR(200) NOT NULL,
                 "TITLE"        VARCHAR(200) NOT NULL,
-                "OWNER"        VARCHAR(400) NOT NULL,
+                "OWNER"        VARCHAR(400) NULL,
                 "IS_GLOBAL"    INT NOT NULL,
+                "IS_PRIMARY"   INT NOT NULL DEFAULT 0,
                 "STATE_JSON"   TEXT NOT NULL,
-                "MODIFIED_UTC" VARCHAR(40) NOT NULL
+                "MODIFIED_UTC" VARCHAR(40) NOT NULL,
+                "ORIGIN"       VARCHAR(20) NOT NULL DEFAULT 'user'
             )
+            """,
+        _ => throw new ArgumentOutOfRangeException(nameof(cfg), cfg.Dialect, null),
+    };
+
+    /// <summary>
+    /// Auto-created stores from earlier versions already have a table, so CREATE IF
+    /// NOT EXISTS cannot add the new publication flag. Each dialect gets an
+    /// idempotent, in-place upgrade; externally managed stores (AutoCreate=false)
+    /// remain the host application's responsibility.
+    /// </summary>
+    private static string AddPrimaryColumnSql(SavedReportStoreConfig cfg) => cfg.Dialect switch
+    {
+        ReportDialect.Sqlite => throw new InvalidOperationException("SQLite primary-column upgrades are inspected before ALTER TABLE."),
+        ReportDialect.SqlServer => $"""
+            IF COL_LENGTH(N'{cfg.TableName}', N'IS_PRIMARY') IS NULL
+                ALTER TABLE {cfg.TableName} ADD IS_PRIMARY INT NOT NULL DEFAULT 0
+            """,
+        ReportDialect.Oracle => $"""
+            BEGIN
+                EXECUTE IMMEDIATE 'ALTER TABLE {cfg.TableName} ADD (IS_PRIMARY NUMBER(1) DEFAULT 0 NOT NULL)';
+            EXCEPTION WHEN OTHERS THEN
+                IF SQLCODE != -1430 THEN RAISE; END IF;
+            END;
+            """,
+        ReportDialect.Postgres => $"""
+            ALTER TABLE "{cfg.TableName}" ADD COLUMN IF NOT EXISTS "IS_PRIMARY" INT NOT NULL DEFAULT 0
             """,
         _ => throw new ArgumentOutOfRangeException(nameof(cfg), cfg.Dialect, null),
     };

@@ -95,7 +95,7 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
             [$"InteractiveReport:Reports:{ReportName}:Dialect"] = "Sqlite",
             [$"InteractiveReport:Reports:{ReportName}:Sql"] = "SELECT ID, LABEL FROM ORDERS",
             [$"InteractiveReport:Reports:{ReportName}:Authorization:AllowAnonymous"] = "true",
-            // The checked-in primary must supersede this legacy inline default.
+            // This is the generated Default until a primary row titled Default exists.
             [$"InteractiveReport:Reports:{ReportName}:DefaultState:Search"] = "inline default",
             [$"InteractiveReport:Reports:{ReportName}:DocumentFiles:0"] = "ReportDocuments/orders.primary.json",
             [$"InteractiveReport:Reports:{ReportName}:DocumentFiles:1"] = "ReportDocuments/orders.regional.json",
@@ -133,22 +133,11 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Configured_primary_replaces_inline_default_for_schema_and_query_ingestion()
+    public async Task A_primary_with_another_title_does_not_replace_Default()
     {
         var schema = await GetJson($"/api/reports/{ReportName}/schema");
         var defaultState = schema.GetProperty("defaultState");
-        Assert.False(defaultState.TryGetProperty("search", out _));
-        var sourceLayer = defaultState.GetProperty("pipeline")[0].GetProperty("layer");
-        Assert.Equal(["LABEL"], sourceLayer.GetProperty("columns").EnumerateArray()
-            .Select(value => value.GetString()).ToArray());
-        Assert.Equal("ID", sourceLayer.GetProperty("sorts")[0].GetProperty("col").GetString());
-
-        using var response = await _client.PostAsync(
-            $"/api/reports/{ReportName}/query", JsonContent.Create(new { }));
-        var query = await ReadJson(response);
-        Assert.Equal(["LABEL"], query.GetProperty("columns").EnumerateArray()
-            .Select(column => column.GetProperty("name").GetString()).ToArray());
-        Assert.Equal("second", query.GetProperty("rows")[0].GetProperty("LABEL").GetString());
+        Assert.Equal("inline default", defaultState.GetProperty("search").GetString());
     }
 
     [Fact]
@@ -167,7 +156,10 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
         Assert.True(configured.GetProperty("isGlobal").GetBoolean());
         Assert.True(configured.GetProperty("isReadOnly").GetBoolean());
         Assert.False(configured.GetProperty("mine").GetBoolean());
-        Assert.Equal(2, visible.GetArrayLength());
+        var configuredPrimary = visible.EnumerateArray()
+            .Single(summary => summary.GetProperty("title").GetString() == "Committed Primary");
+        Assert.True(configuredPrimary.GetProperty("isPrimary").GetBoolean());
+        Assert.Equal(3, visible.GetArrayLength());
 
         var id = configured.GetProperty("id").GetString()!;
         var loaded = await GetJson($"/api/reports/saved/{id}");
@@ -209,9 +201,43 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
             JsonContent.Create(new { title = "REGIONAL VIEW", state = new { v = 3 } }));
         Assert.Equal(HttpStatusCode.Conflict, collision.StatusCode);
 
-        var admin = await GetJson("/api/reports/admin/saved");
-        Assert.Equal(2, admin.EnumerateArray().Count(summary => string.Equals(
-            summary.GetProperty("title").GetString(), "Regional View", StringComparison.OrdinalIgnoreCase)));
+        var admin = await GetAdminRows();
+        Assert.Equal(2, admin.Count(row => string.Equals(
+            row.GetProperty("TITLE").GetString(), "Regional View", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [Fact]
+    public async Task Editing_a_document_file_resyncs_its_row_and_hostile_titles_stay_data()
+    {
+        var before = await GetAdminRows();
+        var regional = before.Single(row => row.GetProperty("TITLE").GetString() == "Regional View");
+        var id = regional.GetProperty("ID").GetString()!;
+
+        // A title a careless operator might commit from a downloaded envelope: quotes,
+        // brackets, SQL keywords. It must flow file → sync → listing as inert data.
+        var hostile = "Renamed'; DROP TABLE [X] -- View";
+        var regionalPath = Path.Combine(_tempRoot, "ReportDocuments", "orders.regional.json");
+        await File.WriteAllTextAsync(regionalPath, $$"""
+            {
+              "title": {{JsonSerializer.Serialize(hostile)}},
+              "state": {
+                "v": 3,
+                "pipeline": [ { "shape": { "kind": "source" }, "layer": {} } ]
+              }
+            }
+            """);
+        File.SetLastWriteTimeUtc(regionalPath, DateTime.UtcNow.AddMinutes(1));
+
+        var after = await GetAdminRows();
+        var renamed = Assert.Single(after, row => row.GetProperty("ID").GetString() == id);
+        Assert.Equal(hostile, renamed.GetProperty("TITLE").GetString());
+        Assert.Equal("Read only", renamed.GetProperty("SCOPE").GetString());
+        Assert.DoesNotContain(after, row => row.GetProperty("TITLE").GetString() == "Regional View");
+
+        // The synced row still refuses mutation and still serves the new state.
+        using var update = await _client.PutAsJsonAsync(
+            $"/api/reports/saved/{id}", new { title = "Takeover", state = new { v = 3 } });
+        Assert.Equal(HttpStatusCode.Forbidden, update.StatusCode);
     }
 
     [Fact]
@@ -251,12 +277,11 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
     [Fact]
     public async Task Administrator_can_download_a_canonical_configured_report_document()
     {
-        var admin = await GetJson("/api/reports/admin/saved");
-        var configured = admin.EnumerateArray()
-            .Single(summary => summary.GetProperty("title").GetString() == "Regional View");
+        var admin = await GetAdminRows();
+        var configured = admin.Single(row => row.GetProperty("TITLE").GetString() == "Regional View");
 
         using var response = await _client.GetAsync(
-            $"/api/reports/admin/saved/{configured.GetProperty("id").GetString()}/document");
+            $"/api/reports/admin/saved/{configured.GetProperty("ID").GetString()}/document");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
@@ -322,6 +347,7 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
         Assert.Equal(title, imported.GetProperty("title").GetString());
         Assert.Equal(Identity, imported.GetProperty("owner").GetString());
         Assert.False(imported.GetProperty("isGlobal").GetBoolean());
+        Assert.True(imported.GetProperty("isPrimary").GetBoolean());
 
         var id = imported.GetProperty("id").GetString();
         var loaded = await GetJson($"/api/reports/saved/{id}");
@@ -332,13 +358,49 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
             $"/api/reports/admin/saved/{id}/document");
         var downloaded = await ReadJson(downloadResponse);
         Assert.Equal(title, downloaded.GetProperty("title").GetString());
-        // Primary is meaningful only in a configured file, not in the imported
-        // private saved copy.
-        Assert.False(downloaded.GetProperty("primary").GetBoolean());
+        Assert.True(downloaded.GetProperty("primary").GetBoolean());
 
-        var admin = await GetJson("/api/reports/admin/saved");
-        Assert.DoesNotContain(admin.EnumerateArray(), summary =>
-            summary.GetProperty("title").GetString() == "Broken Candidate");
+        var admin = await GetAdminRows();
+        Assert.DoesNotContain(admin, row =>
+            row.GetProperty("TITLE").GetString() == "Broken Candidate");
+    }
+
+    [Fact]
+    public async Task Primary_Default_overrides_the_generated_Default_until_unflagged()
+    {
+        using var saveResponse = await _client.PostAsync(
+            $"/api/reports/{ReportName}/saved",
+            JsonContent.Create(new
+            {
+                title = "Default",
+                isPrimary = true,
+                state = new { v = 3, search = "database default" },
+            }));
+        Assert.Equal(HttpStatusCode.Created, saveResponse.StatusCode);
+        var saved = await ReadJson(saveResponse);
+        Assert.True(saved.GetProperty("isPrimary").GetBoolean());
+
+        var overridden = await GetJson($"/api/reports/{ReportName}/schema");
+        Assert.Equal("database default", overridden.GetProperty("defaultState").GetProperty("search").GetString());
+
+        using var unflag = await _client.PutAsJsonAsync(
+            $"/api/reports/saved/{saved.GetProperty("id").GetString()}",
+            new { isPrimary = false });
+        Assert.Equal(HttpStatusCode.OK, unflag.StatusCode);
+
+        var restored = await GetJson($"/api/reports/{ReportName}/schema");
+        Assert.Equal("inline default", restored.GetProperty("defaultState").GetProperty("search").GetString());
+    }
+
+    private async Task<JsonElement[]> GetAdminRows()
+    {
+        var schema = await GetJson("/api/reports/__saved-reports/schema");
+        using var response = await _client.PostAsync(
+            "/api/reports/__saved-reports/query",
+            JsonContent.Create(schema.GetProperty("defaultState")));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var result = await ReadJson(response);
+        return result.GetProperty("rows").EnumerateArray().Select(row => row.Clone()).ToArray();
     }
 
     private async Task<JsonElement> GetJson(string path)

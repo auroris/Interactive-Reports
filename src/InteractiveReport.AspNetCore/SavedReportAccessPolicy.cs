@@ -13,7 +13,7 @@ internal enum SavedReportAccess
 internal static class SavedReportAccessPolicy
 {
     public static SavedReportAccess Read(SavedReport report, string? identity, bool administrator)
-        => administrator || report.IsGlobal || IsOwner(report, identity)
+        => administrator || report.IsPrimary || report.IsGlobal || IsOwner(report, identity)
             ? SavedReportAccess.Allowed
             : SavedReportAccess.Hidden;
 
@@ -21,7 +21,9 @@ internal static class SavedReportAccessPolicy
     {
         if (administrator) return SavedReportAccess.Allowed;
         if (!IsOwner(report, identity)) return SavedReportAccess.Hidden;
-        return report.IsGlobal ? SavedReportAccess.AdministratorRequired : SavedReportAccess.Allowed;
+        return report.IsPrimary || report.IsGlobal
+            ? SavedReportAccess.AdministratorRequired
+            : SavedReportAccess.Allowed;
     }
 
     public static bool IsOwner(SavedReport report, string? identity)

@@ -175,7 +175,7 @@ public sealed class ColumnFormat
     /// </summary>
     public List<string>? Classes { get; set; }
 
-    /// <summary>"link" or "image"; null/unknown values render as ordinary text.</summary>
+    /// <summary>"link", "image", or "action"; null/unknown values render as ordinary text.</summary>
     public string? DisplayAs { get; set; }
 
     /// <summary>
@@ -189,6 +189,20 @@ public sealed class ColumnFormat
     /// Ignored by image and ordinary-text renderers.
     /// </summary>
     public string? TextColumn { get; set; }
+
+    /// <summary>
+    /// Opaque host command token for the action renderer. The cell's own value is
+    /// the button label; a null/blank label renders no button. Presentation data —
+    /// never validated against the schema.
+    /// </summary>
+    public string? Command { get; set; }
+
+    /// <summary>
+    /// Row column whose value an action event must carry (typically a row id).
+    /// Delivered as a hidden projection column, like <see cref="UrlColumn"/>;
+    /// null binds nothing.
+    /// </summary>
+    public string? KeyColumn { get; set; }
 }
 
 /// <summary>

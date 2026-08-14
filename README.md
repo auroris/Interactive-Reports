@@ -42,12 +42,12 @@ the host's content root unless absolute:
 }
 ```
 
-Each file contains its selector title, whether it supplies Primary Report, and the
+Each file contains its selector title, an optional initial primary flag, and the
 normal versioned state document:
 
 ```json
 {
-  "title": "Primary Report",
+  "title": "Default",
   "primary": true,
   "state": {
     "v": 2,
@@ -69,22 +69,44 @@ normal versioned state document:
 }
 ```
 
-At most one file may be primary. It overrides the inline `defaultState` and synthetic
-default; other files appear as global saved reports. Configured documents are always
-read-only, including for report administrators, although Save As can create an editable
-database copy under another title. A configured title takes precedence over an existing
-database report with the same title, and new title collisions are rejected. Ensure the
-host project copies these files to its build and publish output; the Workbench project
-shows one way to do that.
+All files appear as global saved reports and are synced into the saved-report store
+whenever they change, as rows marked with a configured origin. A file's `primary`
+value seeds the row when it is first synchronized; after that an administrator can
+flag or unflag it without editing the file. File content remains read-only, although
+Save As can create an editable database copy under another title. A configured title
+takes precedence over an existing database report with the same title, and new title
+collisions are rejected. Ensure the host project copies these files to its build and
+publish output; the Workbench project shows one way to do that.
 
-The packaged administration panel can download any listed report as this canonical
-`{ title, primary, state }` JSON envelope. This makes a database-backed saved report
-ready to add to `documentFiles` without manually reconstructing the file. **Upload
-JSON…** takes a configured report name and one of these envelopes, validates its state
-against that report's current schema through the same ingestion pipeline as query and
-export, and imports it as the administrator's private saved report for live testing.
-The envelope's `primary` flag remains publication metadata and does not make an
-uploaded database copy primary.
+Auto-created stores add `IS_PRIMARY` to an existing current-shape table in place.
+Hosts with `savedReports.autoCreate: false` must add the non-null 0/1 column themselves.
+
+Primary is an administrator-controlled publication flag. Every primary report is
+visible to anyone who can access the underlying dataset. The generated report named
+`Default` always exists; a stored primary report whose title is `Default`
+(case-insensitive) replaces that generated state. Unflagging or deleting it restores
+the generated Default. Other primary reports remain selectable alternatives.
+
+The packaged administration panel lists every saved report through an embedded
+`<interactive-report>` bound to the built-in, administrator-only `__saved-reports`
+definition — the listing is a report like any other, so searching, sorting, column
+tools, pagination, and CSV export all apply to it. Per-row actions (Publish/Unpublish,
+Make primary/Unflag, Reassign, State, Download, Delete) are action-renderer cells;
+configured rows permit the primary action while their file-backed content remains
+read-only. Report names beginning with `__` are reserved. A definition
+may also declare `"authorization": { "administratorsOnly": true }` to restrict any
+report to `InteractiveReport:Administrators` the same way. Because the admin element
+nests the report inside its own shadow root, theme tokens set on
+`<interactive-report-admin>` do not reach the embedded listing; it renders with the
+packaged default theme.
+
+The panel can download any listed report as the canonical `{ title, primary, state }`
+JSON envelope. This makes a database-backed saved report ready to add to
+`documentFiles` without manually reconstructing the file. **Upload JSON…** takes a
+configured report name and one of these envelopes, validates its state against that
+report's current schema through the same ingestion pipeline as query and export, and
+imports it as the administrator's saved report for live testing. The envelope's
+`primary` flag is preserved as the stored primary publication flag.
 
 To log the exact SQL command text submitted to the configured database, enable Debug
 for the report executor category. Parameter values are never logged:
@@ -123,6 +145,13 @@ HTML fragment shown in the browser: `<a class="ir-cell-link">` or
 URLs are accepted for both renderers;
 links additionally accept `mailto:` and `tel:`. Active or embedded-content schemes
 such as `javascript:` and `data:` render as ordinary text instead.
+
+A fourth renderer, `displayAs: "action"`, is definition-authored only (Column
+Settings never offers it, but preserves it across restyles): the cell's value is a
+button label — a NULL label renders no button — and clicking dispatches a composed
+`ir-action` CustomEvent from the report element with `{ command, row, column }`,
+where the row includes the format's schema-bound `keyColumn` value. The built-in
+admin listing is its first consumer; in CSV an action cell exports its raw label.
 
 Number masks cover grouped integers and one through four fixed decimal places,
 invariant two-place decimals, CAD/USD/EUR/GBP/JPY currency, and zero through two-place
@@ -209,8 +238,8 @@ group crosses a page boundary, and grand totals appear only on the report's fina
 
 `saved-report` is optional. When present, the component finds a visible saved report by
 its title (case-insensitive) and loads it before the first query. The title must identify
-exactly one visible saved report. A missing or ambiguous title loads Primary Report and
-shows a warning. Omit the attribute to start from Primary Report.
+exactly one visible saved report. A missing or ambiguous title loads Default and shows
+a warning. Omit the attribute to start from Default.
 
 `api-base` may be a relative path or an absolute URL. If it is omitted, the
 component infers the API prefix from the script URL. The older `base` attribute

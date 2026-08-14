@@ -127,6 +127,8 @@ public sealed class ReportStateResolverTests
                         DisplayAs = "link",
                         UrlColumn = "NOTES",
                         TextColumn = "CUSTOMER",
+                        Command = "open",
+                        KeyColumn = "ORDER_ID",
                     },
                 },
                 Highlights =
@@ -157,6 +159,8 @@ public sealed class ReportStateResolverTests
         Assert.Equal("link", sourceLayer.Formats["AMOUNT"].DisplayAs);
         Assert.Equal("NOTES", sourceLayer.Formats["AMOUNT"].UrlColumn);
         Assert.Equal("CUSTOMER", sourceLayer.Formats["AMOUNT"].TextColumn);
+        Assert.Equal("open", sourceLayer.Formats["AMOUNT"].Command);
+        Assert.Equal("ORDER_ID", sourceLayer.Formats["AMOUNT"].KeyColumn);
         Assert.Equal(("h1", "Big", 10), (sourceLayer.Highlights[0].Id, sourceLayer.Highlights[0].Name, sourceLayer.Highlights[0].Sequence));
         Assert.Equal(("m1", "AMOUNT", AggregateFn.Sum), (
             resolved.Pipeline[1].Shape!.Values![0].Id,

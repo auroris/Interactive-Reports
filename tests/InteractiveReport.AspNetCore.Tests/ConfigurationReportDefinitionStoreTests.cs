@@ -258,6 +258,132 @@ public sealed class ConfigurationReportDefinitionStoreTests
         Assert.Contains("maxChartPoints", error.Message);
     }
 
+    [Fact]
+    public async Task Builtin_saved_reports_name_is_reserved_and_unavailable_without_a_synchronizer()
+    {
+        var options = new InteractiveReportOptions();
+        using var store = new ConfigurationReportDefinitionStore(
+            new OptionsMonitorStub(options),
+            new SchemaCache());
+
+        // The internal test constructor wires no synchronizer: the built-in is
+        // absent rather than synthesized against a store nobody prepared.
+        Assert.Null(await store.Find("__saved-reports"));
+
+        options.Reports["__saved-reports"] = new ReportDefinition
+        {
+            Connection = "db",
+            Dialect = ReportDialect.Sqlite,
+            Sql = "select 1",
+        };
+        var reserved = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await store.Find("__saved-reports"));
+        Assert.Contains("reserved", reserved.Message);
+    }
+
+    [Fact]
+    public async Task Reserved_prefix_and_contradictory_authorization_fail_fast()
+    {
+        var options = new InteractiveReportOptions();
+        options.Reports["__mine"] = new ReportDefinition
+        {
+            Connection = "db",
+            Dialect = ReportDialect.Sqlite,
+            Sql = "select 1",
+        };
+        using var store = new ConfigurationReportDefinitionStore(
+            new OptionsMonitorStub(options),
+            new SchemaCache());
+        var reserved = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await store.Find("__mine"));
+        Assert.Contains("reserved for built-in", reserved.Message);
+
+        var contradictory = new InteractiveReportOptions();
+        contradictory.Reports["orders"] = new ReportDefinition
+        {
+            Connection = "db",
+            Dialect = ReportDialect.Sqlite,
+            Sql = "select 1",
+            Authorization = new ReportAuthorization { AllowAnonymous = true, AdministratorsOnly = true },
+        };
+        using var conflicted = new ConfigurationReportDefinitionStore(
+            new OptionsMonitorStub(contradictory),
+            new SchemaCache());
+        var conflict = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await conflicted.Find("orders"));
+        Assert.Contains("allowAnonymous and administratorsOnly", conflict.Message);
+    }
+
+    [Fact]
+    public void Builtin_definition_synthesizes_from_the_saved_reports_options()
+    {
+        var definition = SavedReportsListingDefinition.Create(new SavedReportsOptions());
+
+        Assert.Equal("__saved-reports", definition.Name);
+        Assert.Equal(ServiceCollectionExtensions.DefaultSavedReportsConnection, definition.Connection);
+        Assert.Equal(ReportDialect.Sqlite, definition.Dialect);
+        Assert.True(definition.Authorization!.AdministratorsOnly);
+        Assert.False(definition.Authorization.AllowAnonymous);
+        Assert.Null(definition.Features);
+
+        var layer = definition.DefaultState!.Pipeline![0].Layer!;
+        Assert.DoesNotContain("ID", layer.Columns!);
+        Assert.Equal(
+            ["toggleGlobal", "togglePrimary", "reassign", "openState", "download", "delete"],
+            new[] { "ACTION_PUBLISH", "ACTION_PRIMARY", "ACTION_REASSIGN", "ACTION_STATE", "ACTION_DOWNLOAD", "ACTION_DELETE" }
+                .Select(column => layer.Formats![column].Command));
+        Assert.All(layer.Formats!.Values, format =>
+        {
+            Assert.Equal("action", format.DisplayAs);
+            Assert.Equal("ID", format.KeyColumn);
+        });
+
+        var explicitTarget = SavedReportsListingDefinition.Create(new SavedReportsOptions
+        {
+            Connection = "ReportsDb",
+            Dialect = ReportDialect.SqlServer,
+            TableName = "SAVED",
+        });
+        Assert.Equal("ReportsDb", explicitTarget.Connection);
+        Assert.Equal(ReportDialect.SqlServer, explicitTarget.Dialect);
+        Assert.Contains("FROM SAVED", explicitTarget.Sql);
+        Assert.Contains("SUBSTRING", explicitTarget.Sql);
+
+        Assert.Throws<InvalidOperationException>(() => SavedReportsListingDefinition.Create(
+            new SavedReportsOptions { Connection = "x", TableName = "bad name" }));
+    }
+
+    [Theory]
+    [InlineData(ReportDialect.Sqlite)]
+    [InlineData(ReportDialect.SqlServer)]
+    [InlineData(ReportDialect.Oracle)]
+    [InlineData(ReportDialect.Postgres)]
+    public void Builtin_sql_is_a_plain_select_safe_for_raw_composition(ReportDialect dialect)
+    {
+        var definition = SavedReportsListingDefinition.Create(new SavedReportsOptions
+        {
+            Connection = "ReportsDb",
+            Dialect = dialect,
+        });
+        var sql = definition.Sql;
+
+        // The composer wraps this text as a derived table and SqlKata rewrites
+        // bracket/brace characters even inside raw SQL — none may appear, and a
+        // top-level ORDER BY would break SQL Server.
+        Assert.DoesNotContain("[", sql);
+        Assert.DoesNotContain("{", sql);
+        Assert.DoesNotContain("ORDER BY", sql, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("IR_SAVED_REPORTS", sql);
+        foreach (var column in new[]
+        {
+            "SCOPE", "PRIMARY_STATUS", "MODIFIED", "ACTION_PUBLISH", "ACTION_PRIMARY", "ACTION_REASSIGN",
+            "ACTION_STATE", "ACTION_DOWNLOAD", "ACTION_DELETE",
+        })
+            Assert.Contains(column, sql);
+        if (dialect == ReportDialect.Postgres)
+            Assert.Contains("FROM \"IR_SAVED_REPORTS\"", sql);
+    }
+
     private sealed class OptionsMonitorStub(InteractiveReportOptions options)
         : IOptionsMonitor<InteractiveReportOptions>
     {

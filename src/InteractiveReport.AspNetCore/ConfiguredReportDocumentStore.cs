@@ -74,7 +74,6 @@ public sealed class ConfiguredReportDocumentStore : IDisposable
         var documents = new List<ConfiguredReportDocument>(configuredPaths.Count);
         var paths = new HashSet<string>(PathComparer);
         var titles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var primaryCount = 0;
 
         foreach (var configuredPath in configuredPaths)
         {
@@ -91,10 +90,6 @@ public sealed class ConfiguredReportDocumentStore : IDisposable
             if (!titles.Add(source.Title))
                 throw new InvalidOperationException(
                     $"Report '{reportName}': configured report document title '{source.Title}' is duplicated (titles are case-insensitive).");
-            if (source.Primary && ++primaryCount > 1)
-                throw new InvalidOperationException(
-                    $"Report '{reportName}': only one configured report document may be primary.");
-
             var state = JsonSerializer.Deserialize<ReportState>(source.StateJson, IrJson.Options)
                 ?? throw new InvalidOperationException(
                     $"Report '{reportName}': document file '{configuredPath}' has no state.");
@@ -104,7 +99,9 @@ public sealed class ConfiguredReportDocumentStore : IDisposable
                 source.Title,
                 source.Primary,
                 state,
-                source.ModifiedUtc));
+                source.StateJson,
+                source.ModifiedUtc,
+                source.Length));
         }
 
         return documents;
@@ -188,4 +185,6 @@ internal sealed record ConfiguredReportDocument(
     string Title,
     bool Primary,
     ReportState State,
-    DateTime ModifiedUtc);
+    string StateJson,
+    DateTime ModifiedUtc,
+    long Length);

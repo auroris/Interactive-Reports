@@ -143,6 +143,7 @@ export function columnSettingsDialog(w, initialCol) {
 
     const read = () => ({
         visible: canHide ? visChk.checked : undefined,
+        action: settingsFor(active).action,
         displayAs: withDisplayAs ? (displayAsSel.value || null) : null,
         urlColumn: urlColumnSel.value || colSel.value,
         textColumn: textColumnSel.value || colSel.value,
@@ -165,6 +166,9 @@ export function columnSettingsDialog(w, initialCol) {
         const displayAs = typeof fmt.displayAs === "string" ? fmt.displayAs.toLowerCase() : "";
         return {
             visible: originallyVisible.includes(name),
+            // Definition-authored action renderers are not editable here (the select
+            // offers Text/Link/Image), but they must survive an unrelated restyle.
+            action: displayAs === "action" ? { command: fmt.command, keyColumn: fmt.keyColumn } : null,
             displayAs: withDisplayAs && ["link", "image"].includes(displayAs) ? displayAs : null,
             urlColumn: canonicalName(fmt.urlColumn) ?? name,
             textColumn: canonicalName(fmt.textColumn) ?? name,
@@ -289,6 +293,10 @@ export function columnSettingsDialog(w, initialCol) {
                         entry.displayAs = s.displayAs;
                         entry.urlColumn = s.urlColumn || name;
                         if (s.displayAs === "link") entry.textColumn = s.textColumn || name;
+                    } else if (s.action) {
+                        entry.displayAs = "action";
+                        if (s.action.command) entry.command = s.action.command;
+                        if (s.action.keyColumn) entry.keyColumn = s.action.keyColumn;
                     }
                     const classes = columnClasses(s.classes, { strict: true });
                     if (classes.length) entry.classes = classes;

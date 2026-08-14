@@ -52,6 +52,10 @@ internal static class GridExportRenderer
         bool decimalColumn)
     {
         var renderer = format?.DisplayAs?.Trim();
+        // A command button has no CSV shape: the label (the cell's own value)
+        // exports as plain text, and a NULL label stays an empty field.
+        if (string.Equals(renderer, "action", StringComparison.OrdinalIgnoreCase))
+            return value;
         if (!string.Equals(renderer, "link", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(renderer, "image", StringComparison.OrdinalIgnoreCase))
             return value;

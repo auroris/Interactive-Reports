@@ -133,6 +133,62 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         Assert.All(export.Rows, exported => Assert.DoesNotContain("c1", exported.Keys));
     }
 
+    /// An action-labeled column: CASE labels some rows and leaves the rest NULL
+    /// (the blank-label-means-no-button convention).
+    private ReportDefinition ActionDefinition => new()
+    {
+        Name = "orders-actions-e2e",
+        Connection = "E2E",
+        Dialect = ReportDialect.Sqlite,
+        Sql = "SELECT ORDER_ID, CUSTOMER, STATUS, "
+            + "CASE WHEN STATUS = 'PENDING' THEN 'Approve' END AS ACTION_APPROVE FROM ORDERS",
+    };
+
+    [Fact]
+    public async Task Action_rows_carry_the_hidden_key_and_export_the_raw_label()
+    {
+        var state = Doc(source: new StageLayer
+        {
+            Columns = ["CUSTOMER", "ACTION_APPROVE"],
+            Sorts = [new SortRule { Col = "ORDER_ID" }],
+            Formats = new()
+            {
+                ["ACTION_APPROVE"] = new ColumnFormat
+                {
+                    DisplayAs = "action",
+                    Command = "approve",
+                    KeyColumn = "ORDER_ID",
+                },
+            },
+        });
+
+        var result = await _executor.Query(ActionDefinition, state, NoParams);
+        Assert.Equal(["CUSTOMER", "ACTION_APPROVE"], result.Columns.Select(c => c.Name));
+        Assert.All(result.Rows, row => Assert.Equal(["CUSTOMER", "ACTION_APPROVE", "ORDER_ID"], row.Keys));
+        Assert.Contains(result.Rows, row => Equals(row["ACTION_APPROVE"], "Approve"));
+
+        var export = await _executor.Export(ActionDefinition, state, NoParams);
+        Assert.Equal(["CUSTOMER", "ACTION_APPROVE"], export.Columns.Select(c => c.Name));
+        Assert.All(export.Rows, row => Assert.DoesNotContain("ORDER_ID", row.Keys));
+        // Labels export as their raw value — never an HTML fragment; NULL stays empty.
+        Assert.Contains(export.Rows, row => Equals(row["ACTION_APPROVE"], "Approve"));
+        Assert.Contains(export.Rows, row => row["ACTION_APPROVE"] is null);
+    }
+
+    [Fact]
+    public async Task Sqlite_discovery_types_expression_columns_as_other()
+    {
+        // Microsoft.Data.Sqlite has no decltype for expression columns on the
+        // zero-row probe, so CASE/literal columns discover as Other. The admin
+        // listing's SCOPE/ACTION_* columns depend on this staying contained
+        // (renderers key off the format, never the kind) — pin it so a provider
+        // change is loud.
+        var schema = await _executor.GetSchema(ActionDefinition, NoParams);
+
+        Assert.Equal(ColumnKind.Other, schema.Lookup["ACTION_APPROVE"].Kind);
+        Assert.Equal(ColumnKind.Text, schema.Lookup["CUSTOMER"].Kind);
+    }
+
     [Fact]
     public async Task Grid_export_renderers_emit_browser_like_encoded_html()
     {

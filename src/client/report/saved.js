@@ -18,21 +18,23 @@ export function canManageCurrentSaved(w) {
 
 export function canManageSaved(w, s) {
     if (!s) return false;
-    return !s.isReadOnly && (w.whoami?.isAdministrator || (s.mine && !s.isGlobal));
+    return !s.isReadOnly && (w.whoami?.isAdministrator || (s.mine && !s.isGlobal && !s.isPrimary));
 }
 
 export function refreshSavedSelect(w) {
     const { savedSel, savedWrap } = w.els;
-    savedSel.replaceChildren(new Option("Primary Report", ""));
+    const defaultSaved = (w.savedList ?? []).find(s => s.isPrimary && sameTitle(s.title, "Default"));
+    savedSel.replaceChildren(new Option("Default", defaultSaved?.id ?? ""));
     const group = (label, items) => {
         if (!items.length) return;
         const g = el("optgroup", { label });
-        for (const s of items) g.append(new Option(s.title + (s.mine || s.isGlobal ? "" : ` (${s.owner})`), s.id));
+        for (const s of items) g.append(new Option(s.title + (s.mine || s.isGlobal || s.isPrimary ? "" : ` (${s.owner})`), s.id));
         savedSel.append(g);
     };
-    group("Global", w.savedList.filter(s => s.isGlobal));
-    group("Private", w.savedList.filter(s => !s.isGlobal));
-    savedSel.value = w.currentSaved?.id ?? "";
+    group("Primary", w.savedList.filter(s => s.isPrimary && s !== defaultSaved));
+    group("Global", w.savedList.filter(s => !s.isPrimary && s.isGlobal));
+    group("Private", w.savedList.filter(s => !s.isPrimary && !s.isGlobal));
+    savedSel.value = w.currentSaved?.id ?? defaultSaved?.id ?? "";
     savedWrap.hidden = w.savedList.length === 0 || !featureEnabled(w, "savedReports");
 }
 
@@ -56,7 +58,7 @@ export async function loadSavedById(w, id) {
 }
 
 export function resetToPrimary(w) {
-    w.currentSaved = null;
+    w.currentSaved = (w.savedList ?? []).find(s => s.isPrimary && sameTitle(s.title, "Default")) ?? null;
     w.adoptState(w.schema?.defaultState, "The default report");
     refreshSavedSelect(w);
     w.runQuery().catch(() => {});
@@ -69,20 +71,23 @@ export async function resetWorkingCopy(w) {
     else resetToPrimary(w);
 }
 
-export async function saveReport(w, { title, isGlobal, asNew, target = null }) {
+export async function saveReport(w, { title, isGlobal, isPrimary, asNew, target = null }) {
     // A save asserts "this configuration is valid against this schema" — stamp
     // the live snapshot so future loads can detect drift.
     w.doc.schema = schemaSnapshot(w.schema?.columns);
     const state = w.serialize();
     if (asNew) {
         w.currentSaved = await api(w.reportUrl("saved"), {
-            method: "POST", body: { title, state, isGlobal },
+            method: "POST", body: { title, state, isGlobal, isPrimary },
         });
     } else {
         const saved = target ?? w.currentSaved;
         if (!saved) throw new Error("Select a saved report to replace");
         const body = { title, state };
-        if (w.whoami?.isAdministrator) body.isGlobal = isGlobal;
+        if (w.whoami?.isAdministrator) {
+            body.isGlobal = isGlobal;
+            body.isPrimary = isPrimary;
+        }
         w.currentSaved = await api(apiUrl(w.base, "saved", saved.id), {
             method: "PUT", body,
         });

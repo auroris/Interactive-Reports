@@ -38,7 +38,7 @@ public sealed class ReportDefinition
     /// Column name → friendly display label, for base queries whose column names are
     /// not presentable. Never applied to the engine's schema or query results: it is
     /// delivered to the client as the labels of the default report the schema endpoint
-    /// sends down (an effective primary state with its own labels wins), and it plays
+    /// sends down (an effective Default state with its own labels wins), and it plays
     /// the same default-report role as the bottom layer of document-label resolution
     /// at ingestion, so an unlabeled export matches an untouched client. Column
     /// references crossing the wire always use the real name.
@@ -89,14 +89,17 @@ public sealed class ReportDefinition
 
     public int CommandTimeoutSeconds { get; set; } = 30;
 
-    /// <summary>The developer's default view (APEX "Primary Report").</summary>
+    /// <summary>
+    /// The developer's generated Default view. An administrator-controlled primary
+    /// saved report titled "Default" replaces it until that report is unflagged.
+    /// </summary>
     public ReportState? DefaultState { get; set; }
 
     /// <summary>
     /// Report-document JSON files, resolved relative to the host content root unless
-    /// absolute. A file marked primary replaces <see cref="DefaultState"/>; the other
-    /// files are exposed as global, read-only saved reports. Configured documents take
-    /// precedence over database reports with the same title.
+    /// absolute. Files are exposed as global, read-only saved reports. Their primary
+    /// value seeds the stored administrator-controlled flag on first synchronization;
+    /// configured documents take precedence over database reports with the same title.
     /// </summary>
     public List<string>? DocumentFiles { get; set; }
 
@@ -123,4 +126,11 @@ public sealed class ReportAuthorization
 {
     public string? Policy { get; set; }
     public bool AllowAnonymous { get; set; }
+
+    /// <summary>
+    /// Restricts the report to identities in InteractiveReport:Administrators —
+    /// non-administrators receive 404, matching the saved-report admin surface.
+    /// A policy may stack on top. Contradicts AllowAnonymous (rejected at load).
+    /// </summary>
+    public bool AdministratorsOnly { get; set; }
 }

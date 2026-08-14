@@ -116,7 +116,7 @@ public interface IReportDefinitionStore
 ```json
 // ReportDocuments/open-orders.primary.json
 {
-  "title": "Primary Report",
+  "title": "Default",
   "primary": true,
   "state": {
     "v": 2,
@@ -162,12 +162,13 @@ Notes:
   the same rule). Validated at definition load with a clear error.
 - `documentFiles` paths are relative to the host content root unless absolute. Each
   file is a `{ title, primary, state }` envelope around the ordinary versioned state
-  document. At most one may be primary; it replaces the legacy inline `defaultState`
-  and the synthetic fallback. Non-primary files join the saved-report selector as
-  global read-only documents. They shadow database reports by case-insensitive title;
-  the administrator list retains shadowed rows so they can be renamed or removed.
-  PUT/DELETE of a configured document return 403, while Save As remains available.
-  Hosts must include the referenced files in their build/publish output.
+  document. Every file joins the saved-report selector as a global read-only document.
+  `primary` seeds the stored flag on first synchronization; administrators may later
+  flag or unflag the row without modifying the file. Configured titles shadow database
+  reports by case-insensitive title; the administrator list retains shadowed rows so
+  they can be renamed or removed. PUT may change only the primary flag; other updates
+  and DELETE return 403, while Save As remains available. Hosts must include the
+  referenced files in their build/publish output.
 - `styleSheet` is a relative or HTTP(S) URL chosen by the report developer. The schema
   delivers it to the component, which links it inside the shadow root after the
   packaged styles. Relative URLs resolve against the host page; CSP `style-src` still
@@ -321,7 +322,7 @@ provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
   **export**: rendering a file is rendering the user's screen, and the posted
   document's labels apply to its headers and synthetic labels (the active document
   may never have been saved, so nothing can be looked up server-side). Ingestion
-  resolves source labels once for every path — request `??` effective primary state
+  resolves source labels once for every path — request `??` effective Default state
   `??` the definition's `columnLabels` — mirroring the default report the schema
   endpoint delivers. A computed column still names itself on its own rule. Like
   every state property, a present map replaces the default wholesale and `{}`
@@ -330,7 +331,7 @@ provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
   displayAs, urlColumn, textColumn }`) is the
   second presentation map, written by the Column Settings dialog and following every
   labels inheritance rule: wholesale-replace with `{}`
-  as the explicit clear, resolvable from the effective primary state so definitions
+  as the explicit clear, resolvable from the effective Default state so definitions
   can ship default formatting. Masks are a closed client-side token vocabulary per
   column type (`integer`, `decimal1`…`decimal4`, `plain`, `currency:CAD|USD|EUR|GBP|JPY`,
   and `percent0`…`percent2` for numbers; `date`, `datetime`, `datetimeSeconds`, `time`,
@@ -341,16 +342,23 @@ provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
   definition's trusted shadow-root `styleSheet`; the client accepts conservative CSS
   identifier tokens, drops malformed/reserved state, and refuses the component's
   `ir-` namespace in the dialog. A report document can select classes but cannot carry
-  CSS or a URL. `displayAs` chooses ordinary text, link, or image rendering. Links
-  identify URL and text source columns; images identify a URL source. The server
-  consumes only those source names: it schema-binds them and adds valid dependencies
-  to the grid row projection without adding them to displayed column metadata. Unknown
-  dependencies become `ignored[]`. The client constructs DOM nodes directly and
-  permits relative/HTTP(S) URLs, plus `mailto:`/`tel:` for links; active-content and
-  embedded-content schemes fall back to text. Grid CSV exports serialize Display As
-  cells to the same encoded `<a class="ir-cell-link">` / `<img class="ir-cell-image">`
-  fragments the browser constructs; ordinary cells stay raw, and hidden renderer
-  sources never become exported columns. Highlight styles win over column styles where
+  CSS or a URL. `displayAs` chooses ordinary text, link, image, or action rendering.
+  Links identify URL and text source columns; images identify a URL source; actions
+  carry `{ command, keyColumn }` — the cell's own value is the button label (a
+  NULL/blank label renders no button, which is how a definition withholds an action
+  from individual rows), and clicking dispatches a composed `ir-action` CustomEvent
+  from the host element with `{ command, row, column }`, the row copy including the
+  schema-bound `keyColumn` value. Actions are definition-authored: Column Settings
+  never offers them, but preserves them across unrelated restyles. The server
+  consumes only renderer source names: it schema-binds them and adds valid
+  dependencies to the grid row projection without adding them to displayed column
+  metadata. Unknown dependencies become `ignored[]`. The client constructs DOM nodes
+  directly and permits relative/HTTP(S) URLs, plus `mailto:`/`tel:` for links;
+  active-content and embedded-content schemes fall back to text. Grid CSV exports
+  serialize Display As cells to the same encoded `<a class="ir-cell-link">` /
+  `<img class="ir-cell-image">` fragments the browser constructs; action cells export
+  their raw label text (a command button has no CSV shape); ordinary cells stay raw,
+  and hidden renderer sources never become exported columns. Highlight styles win over column styles where
   both apply. Text is the base renderer and owns masks; link text composes the base
   renderer, including the selected text source column's own mask. `displayAs` and its
   renderer source columns are a **source-layer** affordance only — an aggregate is
@@ -359,8 +367,8 @@ provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
   column's effective format as `terminal-stage formats[name] ?? source-layer formats
   [formatSource ?? pass-through name] ?? default` — a metric inherits its source
   column's currency mask until the view overrides it.
-- A partial request resolves over the effective primary state once: a configured
-  primary file, then inline `defaultState`, then the synthetic empty state. `search`
+- A partial request resolves over the effective Default state once: a stored primary
+  report titled `Default`, then inline `defaultState`, then the synthetic empty state. `search`
   and `page` resolve property-wise (missing inherits, explicit empty clears);
   `pipeline`, `shelf`, and `schema` replace the default **wholesale** when present —
   stage arrays do not merge, matching the existing list semantics.
@@ -370,7 +378,7 @@ provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
   remain inert until their stage is terminal again.
 - `GET /{name}/schema` always returns a complete `defaultState`, and it is the one
   place friendly names leave the server: a definition's `columnLabels` become the
-  default report's source-layer `labels` unless the effective primary state carries
+  default report's source-layer `labels` unless the effective Default state carries
   its own. When no default is configured the server synthesizes an empty pipeline
   (`[source]`, empty layer) — which, by the null-columns rule, means every schema
   column in database order, flavored by the mapping — and stamps it with the current
@@ -485,10 +493,10 @@ Mounted by the host: `app.MapInteractiveReports("/api/reports").RequireAuthoriza
 | `GET  /api/reports/{name}/schema` | Column metadata + default state + capabilities + resolved feature whitelist (§4). |
 | `POST /api/reports/{name}/query` | Body = state document → page of results. |
 | `GET  /api/reports/whoami` | The caller's canonical identity value (only when `whoamiEnabled`). |
-| `GET  /api/reports/{name}/saved` | Visible reports: configured read-only alternatives + database globals + the caller's own. Configured titles win. |
-| `POST /api/reports/{name}/saved` | Save the posted state under a title (global publish = admin). 403 when `savedReports` is not whitelisted (§4). |
+| `GET  /api/reports/{name}/saved` | Visible reports: primary and global reports + configured read-only alternatives + the caller's own. Configured titles win. |
+| `POST /api/reports/{name}/saved` | Save the posted state under a title (global/primary publication = admin). 403 when `savedReports` is not whitelisted (§4). |
 | `GET/PUT/DELETE /api/reports/saved/{id}` | Load / modify / delete one report document (matrix in §13; configured documents reject mutation). |
-| `GET  /api/reports/admin/saved` | Administrator: every saved report in the system. |
+| `GET/POST /api/reports/__saved-reports/{schema,query}` | Administrator listing through the ordinary report pipeline; action cells carry saved-report ids. |
 | `GET  /api/reports/admin/saved/{id}/document` | Administrator: download a canonical `{ title, primary, state }` source-file envelope. |
 | `POST /api/reports/admin/{name}/documents` | Administrator: validate a source-file envelope against the named report and import a private saved copy for testing. |
 | `POST /api/reports/{name}/export` | Same state, same gate, no paging → CSV (UTF-8 BOM; headers are the posted document's display labels, §5), capped at `maxRows` with `X-IR-Truncated` header. 403 when `download` is not whitelisted (§4). XLSX/HTML later. |
@@ -545,7 +553,7 @@ resolve definition (store)                         404 if absent
 → resolve context params (claims/resolver)
 → ingest document (one pipeline, query + export):
     discover/fetch cached schema
-    resolve doc over effective primary state (source labels: … ?? columnLabels)
+    resolve doc over effective Default state (source labels: … ?? columnLabels)
     walk the stage pipeline:                       400 problem+json (precise)
         source: validate layer against base ∪ source computed (effective schema)
         group:  derive static output schema (dims + __count + metrics by id
@@ -858,7 +866,7 @@ the exact value to put in `administrators` — which is a config list, matched
 case-insensitively exact.
 
 **Storage.** `ISavedReportStore` / `SqlSavedReportStore`: table `IR_SAVED_REPORTS`
-(ID text GUID · REPORT_NAME · TITLE · OWNER · IS_GLOBAL 0/1 · STATE_JSON · MODIFIED_UTC
+(ID text GUID · REPORT_NAME · TITLE · OWNER · IS_GLOBAL 0/1 · IS_PRIMARY 0/1 · STATE_JSON · MODIFIED_UTC
 ISO-8601 text). Cross-dialect-uniform storage types on purpose; auto-created unless
 `autoCreate` is disabled. Location via `savedReports.connection` (a named connection —
 point it at the data database to co-locate saved reports with report data), defaulting
@@ -872,26 +880,55 @@ PUT to its stable id; the server rejects duplicate creates and colliding renames
 409 even when a different client bypasses that UI.
 
 **Configured documents.** A report definition's `documentFiles` are loaded from the
-host content root, assigned stable opaque `cfg_…` endpoint ids, and exposed through the
-same summaries and load endpoint as database reports. Summaries carry `isReadOnly`;
-database rows report `false`, configured files `true`. The UI uses that generic
-capability without needing file-origin knowledge. File length and last-write timestamp
-invalidate the parsed cache. A non-primary configured title shadows a database title in
-the end-user list and blocks creation/rename to that title; the admin list shows both.
+host content root, assigned stable opaque `cfg_…` endpoint ids, and **synced into the
+saved-report store** as rows with
+`ORIGIN = 'configured'` whenever a file signature (length + last-write) changes.
+The files remain the source of truth: sync upserts under the stable id, removes
+configured rows whose file left the configuration, and never stamps timestamps (rows
+carry the file's mtime). The store is therefore the single listing surface — the
+end-user list, the admin list, and the built-in `__saved-reports` report all read
+rows, and provenance is a column: summaries derive `isReadOnly` from origin. The
+endpoints allow an administrator to change only `isPrimary`; content mutations and
+deletion return 403 because the next sync would resurrect them. A file's primary bit
+seeds a new row, while subsequent syncs preserve the administrator's stored override.
+Canonical envelope downloads reflect the stored flag. A configured title shadows a
+database title in the end-user list and blocks creation/rename to that title; the admin
+list shows both.
+
+**Primary and Default.** `IS_PRIMARY` is independent of global/private scope and is
+administrator-controlled. It makes a saved report visible to every caller authorized
+for the underlying definition. The schema resolver looks for a primary row titled
+`Default` (case-insensitive) and uses its state as `defaultState`; without one, the
+definition's configured/generated Default remains in force. Unflagging or deleting
+that row therefore restores the generated Default. Other primary rows are public
+selectable alternatives and do not affect default-state resolution.
 
 **Authorization matrix** (enforced at the endpoint layer; the store is dumb):
 
 | Actor | May |
 |---|---|
 | Owner (private) | read, update title/state, delete |
-| Anyone with report access | read globals for that report |
-| Administrator | everything: list all, publish/unpublish global, reassign owner, update/delete any |
-| Anyone, including administrators (configured file) | read and Save As; never update/delete the configured source |
+| Anyone with report access | read primary and global reports for that definition |
+| Administrator | everything: list all, flag/unflag primary, publish/unpublish global, reassign owner, update/delete any database row |
+| Anyone (configured file) | read and Save As; never update/delete the configured source |
+| Administrator (configured file) | additionally flag/unflag primary; never edit/delete file-backed content |
 
 Denials hide existence (404) except where the caller provably knows the resource — an
-owner reaching for admin-only powers (publish, reassign) gets an explicit 403. Global
-reports are shared infrastructure: mutating one is admin-only even for its owner.
+owner reaching for admin-only powers (primary, publish, reassign) gets an explicit 403.
+Primary and global reports are shared infrastructure: mutating one is admin-only even for its owner.
 Saved-report loads still pass the underlying report definition's authorization gate.
+
+A definition may also declare `authorization.administratorsOnly`: the report-level
+gate then requires membership in `InteractiveReport:Administrators` (401
+unauthenticated, 404 non-admin — the same non-disclosure convention), stacking with
+an optional policy and rejected in combination with `allowAnonymous`. The built-in
+`__saved-reports` listing uses it; hosts get admin-only reports for free. Names
+beginning with `__` are reserved for built-in reports: configuration declaring one
+fails fast, and the built-in listing itself is synthesized in the definition store
+from the live SavedReports options — a plain per-dialect SELECT over the store table
+whose SCOPE and action-label columns are CASE expressions over ORIGIN, resolved only
+after the configured-document sync has run (which also guarantees the lazily created
+table exists before schema discovery).
 
 ## 14. Packaged UI
 
@@ -916,7 +953,7 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   `report` is required and is requested directly; no report catalog or report selector
   is exposed. The optional `saved-report` attribute selects an initially loaded saved
   report by case-insensitive title. Exactly one visible saved report must match;
-  otherwise the widget loads Primary Report and displays a warning. Changing `report`,
+  otherwise the widget loads Default and displays a warning. Changing `report`,
   `saved-report`, or the API location re-initializes in place. Consumers need no build
   step.
 - Each element renders into its own shadow root, including menus and dialog windows. Editor
@@ -971,7 +1008,7 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   group/spread/chart stages and shelf entries outright (T0 coarse invalidation, §5);
   break groups with per-column subtotal rows and grand-total rows; row/cell highlights;
   group/spread rendering; saved-report select
-  (Primary Report + Global/Private groups); `ignored[]` and problem+json surfaced as
+  (Default + Primary/Global/Private groups); `ignored[]` and problem+json surfaced as
   notices — validation problems render *inside* the originating dialog, which stays
   open (apply is optimistic: mutate, re-query, roll back on failure). Menus are
   **stage-aware**: Columns, Column Settings, Compute, Highlight, and Sort operate on
@@ -1080,7 +1117,7 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 - **M10 — Friendly names** ✅ *(2026-08-07)*: client-side display names over a unified
   document flow. A definition's `columnLabels` and a state's `labels` map (additive
   field, no version bump) carry real column name → display label; the schema endpoint
-  always returns a complete effective `defaultState` (configured file, inline state,
+  always returns a complete effective `defaultState` (stored primary `Default`, inline state,
   or synthetic fallback) whose
   labels deliver the mapping to the client. Document ingestion is one pipeline
   (`ReportExecutor.IngestDocument` → `StateValidator`) that resolves labels for every
@@ -1099,15 +1136,15 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   increment.
 - **M12 — Source-controlled report documents** ✅ *(2026-08-07)*: per-definition
   `documentFiles` load `{ title, primary, state }` envelopes from the host content
-  root. A configured primary participates in the same default-resolution pipeline;
-  alternatives share the saved-report API with stable opaque ids and `isReadOnly`
-  summaries. File titles precede database titles, mutation is server-refused, Save As
-  remains available, and the packaged report/admin clients suppress invalid controls.
+  root. All documents share the saved-report store with stable opaque ids and
+  `isReadOnly` summaries; the file primary bit seeds administrator-controlled stored
+  metadata. File titles precede database titles, content mutation is server-refused,
+  Save As remains available, and the packaged report/admin clients suppress invalid controls.
 - **M13 — Column settings** ✅ *(2026-08-07)*: per-column presentation via the state
   document's second map, `formats` (§5) — closed-vocabulary format masks, alignment,
   bold/italic, text/background colors — plus a Column Settings dialog (feature token
   `columnSettings`) whose Visible checkbox writes the `doc.columns` list itself.
-  Masks and styling remain client-only; definitions ship default formatting through the effective primary state,
+  Masks and styling remain client-only; definitions ship default formatting through the effective Default state,
   with no new config surface. Remaining per-column configuration candidates: LOVs,
   help text, per-column sort/filter permissions.
 - **M14 — Trusted custom CSS** ✅ *(2026-08-07)*: a definition-owned `styleSheet`
@@ -1168,6 +1205,7 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 | Saved-report ids are text GUIDs | identity/sequence columns | One DDL shape across SQLite/SqlServer/Oracle; no sequence plumbing. |
 | Timestamps as ISO text, flags as 0/1 | native per-dialect types | Uniform semantics and sorting across dialects for an engine-internal table. |
 | Global mutations admin-only, even for the owner | owner-managed globals | A published report is shared infrastructure; publishing and unpublishing are curation acts. |
+| Primary is a separate admin-controlled flag; primary `Default` overrides generated Default | configured-file primary is the default | Several curated reports may be primary and public, while one stable title controls default-state replacement and unflagging restores the generated fallback. |
 | Configured report files use the saved-report protocol with `isReadOnly` | separate configured-report API or expose file origin | One selector and load path keeps the document model coherent. Generic mutability is what clients need; the storage source remains a server concern. |
 | Microsoft.Data.Sqlite dependency in the AspNetCore package | host-supplied providers only | The zero-config default saved-report store must work with no host setup; report-data connections remain host-supplied. |
 | Decimal parameters bind as double on SQLite | decimal-as-TEXT (provider default) | The provider's TEXT binding breaks comparisons against affinity-less expressions (computed columns) via SQLite's cross-type ordering; double is SQLite's native numeric storage, so the conversion is faithful to the engine. |

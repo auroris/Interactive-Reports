@@ -90,6 +90,24 @@ const renderers = {
             decoding: "async",
         });
     },
+
+    /// A command button. The cell's own value is the label — a blank label renders
+    /// as ordinary (empty) text, which is how a definition withholds an action from
+    /// individual rows. Clicking dispatches ir-action from the host element; the
+    /// row copy includes hidden keyColumn values the host's handler needs.
+    action(w, row, col, decimal, format) {
+        const label = renderTextValue(w, row, col, decimal, format);
+        if (!label) return label;
+        return el("button", {
+            type: "button",
+            class: "ir-btn ir-cell-action",
+            onclick: () => w.dispatchEvent(new CustomEvent("ir-action", {
+                bubbles: true,
+                composed: true,
+                detail: { command: format?.command ?? "", row: { ...row }, column: col.name },
+            })),
+        }, label);
+    },
 };
 
 /// Every cell enters here. Text is the base renderer and owns all scalar mask

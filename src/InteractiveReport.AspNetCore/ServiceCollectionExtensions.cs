@@ -4,6 +4,7 @@ using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.SavedReports;
 using InteractiveReport.Core.Schema;
 using Microsoft.Data.Sqlite;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -43,17 +44,23 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IContextParameterResolver, ClaimContextParameterResolver>();
 
         services.AddSingleton<ISavedReportStore>(sp => new SqlSavedReportStore(
-            () =>
-            {
-                var saved = sp.GetRequiredService<IOptionsMonitor<InteractiveReportOptions>>().CurrentValue.SavedReports;
-                return saved.Connection is null
-                    ? new SavedReportStoreConfig(DefaultSavedReportsConnection, Core.Model.ReportDialect.Sqlite, saved.AutoCreate, saved.TableName)
-                    : new SavedReportStoreConfig(saved.Connection, saved.Dialect, saved.AutoCreate, saved.TableName);
-            },
+            () => ResolveStoreConfig(
+                sp.GetRequiredService<IOptionsMonitor<InteractiveReportOptions>>().CurrentValue.SavedReports),
             sp.GetRequiredService<IReportConnectionFactory>()));
+        services.AddSingleton<ConfiguredReportDocumentSynchronizer>();
 
         return builder;
     }
+
+    /// <summary>
+    /// The one mapping from SavedReports options to a concrete store target. The
+    /// store, the configured-document synchronizer, and the built-in saved-reports
+    /// listing definition must all agree on it.
+    /// </summary>
+    internal static SavedReportStoreConfig ResolveStoreConfig(SavedReportsOptions saved)
+        => saved.Connection is null
+            ? new SavedReportStoreConfig(DefaultSavedReportsConnection, Core.Model.ReportDialect.Sqlite, saved.AutoCreate, saved.TableName)
+            : new SavedReportStoreConfig(saved.Connection, saved.Dialect, saved.AutoCreate, saved.TableName);
 }
 
 public sealed class InteractiveReportBuilder
@@ -77,6 +84,33 @@ public sealed class InteractiveReportBuilder
         where TResolver : class, IContextParameterResolver
     {
         _services.Replace(ServiceDescriptor.Singleton<IContextParameterResolver, TResolver>());
+        return this;
+    }
+
+    /// <summary>
+    /// Adds an application authorization callback. Multiple callbacks and the native
+    /// ASP.NET Core adapter compose with AND semantics. Built-in ownership and
+    /// configured-administrator rules remain in force.
+    /// </summary>
+    public InteractiveReportBuilder UseAuthorization(InteractiveReportAuthorizationCallback callback)
+    {
+        ArgumentNullException.ThrowIfNull(callback);
+        _services.AddSingleton<IInteractiveReportAuthorizer>(
+            new CallbackInteractiveReportAuthorizer(callback));
+        return this;
+    }
+
+    /// <summary>
+    /// Sends each operation through ASP.NET Core resource-based authorization using
+    /// InteractiveReportAuthorizationRequirement and
+    /// InteractiveReportAuthorizationResource.
+    /// </summary>
+    public InteractiveReportBuilder UseAspNetCoreAuthorization()
+    {
+        _services.AddAuthorization();
+        _services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IInteractiveReportAuthorizer,
+            AspNetCoreInteractiveReportAuthorizer>());
         return this;
     }
 }
