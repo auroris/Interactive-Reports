@@ -4,7 +4,7 @@
 // Everything in this module speaks the SOURCE table's terms; stage-scoped
 // universes live in stage.js.
 
-import { sourceLayer } from "./state.js";
+import { lookupValue, sourceLayer } from "./state.js";
 
 /// Server column metadata with the report's own display labels applied. Labels
 /// are client-side presentation: the server sends real names and neutral labels;
@@ -14,7 +14,10 @@ export function pickable(w) {
     const columns = w.lastResult?.availableColumns ?? w.schema?.columns ?? [];
     const labels = w.doc ? sourceLayer(w.doc).labels : null;
     if (!labels) return columns;
-    return columns.map(c => labels[c.name] ? { ...c, label: labels[c.name] } : c);
+    return columns.map(c => {
+        const label = lookupValue(labels, c.name);
+        return label ? { ...c, label } : c;
+    });
 }
 
 export function columnOf(w, name) {

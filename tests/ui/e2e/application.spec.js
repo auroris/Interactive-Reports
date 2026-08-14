@@ -118,6 +118,23 @@ test("loads the configured primary report, queries data, paginates from Actions,
     await expect(page.getByText("1 – 50 of 500 rows", { exact: true })).toBeVisible();
 });
 
+test("menus close on Tab and hand focus back to their trigger on pick", async ({ page }) => {
+    await openWorkbench(page);
+    const actions = page.getByRole("button", { name: "Actions", exact: true });
+
+    await actions.click();
+    await expect(page.getByRole("menu")).toBeVisible();
+    await page.keyboard.press("Tab");
+    await expect(page.getByRole("menu")).toHaveCount(0);
+    await expect(actions).toHaveAttribute("aria-expanded", "false");
+
+    await actions.click();
+    const download = page.waitForEvent("download");
+    await page.getByRole("menuitem", { name: "CSV", exact: true }).click();
+    await download;
+    await expect(actions).toBeFocused();
+});
+
 test("editor windows are named, modeless, movable, and leave the report interactive", async ({ page }) => {
     await openWorkbench(page);
     await clickAction(page, "Pagination…");
@@ -399,7 +416,7 @@ test("deleting a computed column also deletes its references", async ({ page }) 
     const computed = page.locator('.ir-chip[data-kind="computed"]');
     await expect(computed).toContainText("With Tax");
     const response = await runAndWaitForQuery(page, () =>
-        computed.getByRole("button", { name: "Remove", exact: true }).click());
+        computed.getByRole("button", { name: "Remove ƒ With Tax", exact: true }).click());
     const layer = sourceLayerOf(response.request().postDataJSON());
 
     expect(layer.computed).toEqual([]);

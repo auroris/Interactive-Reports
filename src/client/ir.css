@@ -146,6 +146,10 @@
     from { transform: translateX(-100%); }
     to { transform: translateX(350%); }
 }
+@media (prefers-reduced-motion: reduce) {
+    /* Busy state stays visible as a static bar instead of a moving one. */
+    [aria-busy="true"] .ir-busybar::after { animation: none; width: 100%; }
+}
 
 /* --- notices ---------------------------------------------------------------- */
 

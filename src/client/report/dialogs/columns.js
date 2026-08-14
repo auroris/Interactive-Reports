@@ -10,7 +10,7 @@ import { el, labeled, sel } from "../../core/dom.js";
 import { openDialog } from "../../core/dialog.js";
 import { featureEnabled, typeOf } from "../schema.js";
 import { stageContext, visibleStageColumnNames } from "../stage.js";
-import { sameColumn, sourceLayer } from "../state.js";
+import { lookupValue, sameColumn, setMapEntry, sourceLayer } from "../state.js";
 import { colorPick, colOptions } from "./parts.js";
 import { masksFor } from "../render/format.js";
 import { renderColumnValue } from "../render/column-renderers.js";
@@ -155,15 +155,19 @@ export function columnSettingsDialog(w, initialCol) {
         classes: classesInp.value.trim(),
     });
 
+    // Saved documents may key formats or source columns under different casing
+    // than the live schema; resolve everything to canonical names so the staged
+    // edits and the final write land on one entry.
+    const canonicalName = value => universe.find(c => sameColumn(c.name, value))?.name;
     const settingsFor = name => {
         if (staged.has(name)) return staged.get(name);
-        const fmt = formatsOf(w.doc)[name] ?? {};
+        const fmt = lookupValue(formatsOf(w.doc), name) ?? {};
         const displayAs = typeof fmt.displayAs === "string" ? fmt.displayAs.toLowerCase() : "";
         return {
             visible: originallyVisible.includes(name),
             displayAs: withDisplayAs && ["link", "image"].includes(displayAs) ? displayAs : null,
-            urlColumn: byName.has(fmt.urlColumn) ? fmt.urlColumn : name,
-            textColumn: byName.has(fmt.textColumn) ? fmt.textColumn : name,
+            urlColumn: canonicalName(fmt.urlColumn) ?? name,
+            textColumn: canonicalName(fmt.textColumn) ?? name,
             mask: fmt.mask ?? null,
             align: fmt.align ?? null,
             bold: !!fmt.bold,
@@ -288,8 +292,7 @@ export function columnSettingsDialog(w, initialCol) {
                     }
                     const classes = columnClasses(s.classes, { strict: true });
                     if (classes.length) entry.classes = classes;
-                    if (Object.keys(entry).length) formats[name] = entry;
-                    else delete formats[name];
+                    setMapEntry(formats, name, Object.keys(entry).length ? entry : undefined);
                 }
                 if (visibilityChanged) ctx.columnsLayer(d).columns = columns;
             });
@@ -315,10 +318,10 @@ export function renameDialog(w, col) {
         : w.schema?.columns?.find(c => sameColumn(c.name, col))?.label ?? column?.label ?? col;
 
     const currentOverride = ctx.mode === "grid"
-        ? (gridSourceRule ? gridSourceRule.label ?? "" : sourceLayer(w.doc).labels?.[col] ?? "")
+        ? (gridSourceRule ? gridSourceRule.label ?? "" : lookupValue(sourceLayer(w.doc).labels, col) ?? "")
         : stageRule
             ? stageRule.label ?? ""
-            : ctx.labelsLayer(w.doc).labels?.[col] ?? "";
+            : lookupValue(ctx.labelsLayer(w.doc).labels, col) ?? "";
 
     const input = el("input", {
         class: "ir-input", type: "text",
@@ -346,9 +349,9 @@ export function renameDialog(w, col) {
                 }
                 const layer = ctx.mode === "grid" ? sourceLayer(d) : ctx.labelsLayer(d);
                 if (!label || label === schemaDefault) {
-                    if (layer.labels) delete layer.labels[col];
+                    if (layer.labels) setMapEntry(layer.labels, col, undefined);
                 } else {
-                    (layer.labels ??= {})[col] = label;
+                    setMapEntry(layer.labels ??= {}, col, label);
                 }
             });
         },

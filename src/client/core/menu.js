@@ -64,7 +64,7 @@ export function popupMenu(anchor, items) {
             class: "ir-menu-item" + (item.checked ? " ir-checked" : ""),
             role: "menuitem",
             disabled: item.disabled === true,
-            onclick: () => { closePopups(); item.onPick?.(); },
+            onclick: () => { closePopups(); anchor.focus?.(); item.onPick?.(); },
         }, el("span", { class: "ir-menu-check", "aria-hidden": "true" }, item.checked ? "✓" : ""),
            el("span", { class: "ir-menu-label" }, item.label),
            item.hint ? el("span", { class: "ir-menu-hint" }, item.hint) : null);
@@ -114,6 +114,13 @@ export function popupMenu(anchor, items) {
     menu.addEventListener("keydown", event => {
         if (event.key === "Escape") {
             event.preventDefault();
+            closePopups();
+            anchor.focus?.();
+            return;
+        }
+        if (event.key === "Tab") {
+            // Menus are not a tab stop: close, and let the un-prevented Tab
+            // continue from the anchor to its natural neighbor.
             closePopups();
             anchor.focus?.();
             return;

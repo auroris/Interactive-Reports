@@ -230,7 +230,8 @@ test("column settings configure an image renderer", async () => {
 
     const image = report.shadowRoot.querySelectorAll("tbody tr td")[1].querySelector("img.ir-cell-image");
     assert.equal(image.getAttribute("src"), "https://images.example/42.png");
-    assert.equal(image.getAttribute("alt"), "");
+    assert.equal(image.getAttribute("alt"), "Name",
+        "an image cell is data, not decoration — the column heading describes it");
     assert.equal(report.shadowRoot.querySelectorAll("th").length, 2, "the image URL source remains hidden");
 
     report.remove();

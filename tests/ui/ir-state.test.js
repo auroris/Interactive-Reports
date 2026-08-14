@@ -15,6 +15,7 @@ import {
     schemaSnapshot,
     scopedSearchExpression,
     serializeReportState,
+    setMapEntry,
     sourceLayer,
     stageOf,
     tailOf,
@@ -294,8 +295,17 @@ test("case-insensitive state lookup and generated ids share their canonical help
     assert.equal(nextFreeId(new Set(["c1", "c3"]), "c"), "c2");
 });
 
-test("visible stage columns discard stale explicit names", () => {
-    const w = { doc: { layer: { columns: ["ORDER_ID", "REMOVED"] } } };
+test("map writes remove case-variant keys so stale entries cannot shadow new settings", () => {
+    const formats = { amount: { mask: "integer" }, OTHER: { bold: true } };
+    setMapEntry(formats, "AMOUNT", { mask: "currency:CAD" });
+    assert.deepEqual(formats, { OTHER: { bold: true }, AMOUNT: { mask: "currency:CAD" } });
+    assert.deepEqual(lookupValue(formats, "amount"), { mask: "currency:CAD" });
+    setMapEntry(formats, "Amount", undefined);
+    assert.deepEqual(formats, { OTHER: { bold: true } });
+});
+
+test("visible stage columns discard stale explicit names and canonicalize casing", () => {
+    const w = { doc: { layer: { columns: ["order_id", "REMOVED"] } } };
     const ctx = {
         columns: [{ name: "ORDER_ID" }, { name: "CUSTOMER" }],
         columnsLayer: doc => doc.layer,

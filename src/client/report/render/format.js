@@ -83,12 +83,26 @@ function localizedMagnitude(parts, grouping) {
     return fraction ? `${integer}${grouping ? decimalSeparator : "."}${fraction}` : integer;
 }
 
+// Intl formatter construction dominates per-cell formatting cost (an order of
+// magnitude over formatting itself), so instances are cached per shape. The
+// closed mask vocabulary keeps both caches tiny.
+const decorationFormats = new Map();
+function decorationFormat(style, currency, fractionDigits) {
+    const key = `${style}:${currency ?? ""}:${fractionDigits}`;
+    let format = decorationFormats.get(key);
+    if (!format) {
+        const options = { style, minimumFractionDigits: fractionDigits, maximumFractionDigits: fractionDigits };
+        if (currency) options.currency = currency;
+        format = new Intl.NumberFormat(undefined, options);
+        decorationFormats.set(key, format);
+    }
+    return format;
+}
+
 // Obtain signs, spacing, currency placement, and percent placement from Intl, but
 // replace its numeric run with our exact string. Intl never receives the real value.
 function decorateNumber(numberText, negative, style, currency, fractionDigits) {
-    const options = { style, minimumFractionDigits: fractionDigits, maximumFractionDigits: fractionDigits };
-    if (currency) options.currency = currency;
-    const parts = new Intl.NumberFormat(undefined, options).formatToParts(negative ? -1 : 1);
+    const parts = decorationFormat(style, currency, fractionDigits).formatToParts(negative ? -1 : 1);
     let inserted = false;
     let result = "";
     for (const part of parts) {
@@ -114,6 +128,24 @@ function exactNumber(value, { minimum = 0, maximum = minimum, grouping = true, s
     const magnitude = localizedMagnitude(parts, grouping);
     if (!grouping && style === "decimal") return `${parts.negative ? "-" : ""}${magnitude}`;
     return decorateNumber(magnitude, parts.negative, style, currency, parts.fraction.length);
+}
+
+const LOCALIZED_DATE_MASKS = {
+    time: { hour: "numeric", minute: "2-digit" },
+    timeSeconds: { hour: "numeric", minute: "2-digit", second: "2-digit" },
+    dateMedium: { year: "numeric", month: "short", day: "numeric" },
+    dateLong: { year: "numeric", month: "long", day: "numeric" },
+    dateTimeMedium: { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" },
+    dateTimeLong: { year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" },
+};
+const dateMaskFormats = new Map();
+function dateMaskFormat(mask) {
+    let format = dateMaskFormats.get(mask);
+    if (!format) {
+        format = new Intl.DateTimeFormat(undefined, LOCALIZED_DATE_MASKS[mask]);
+        dateMaskFormats.set(mask, format);
+    }
+    return format;
 }
 
 /// Dates travel as session-local text (YYYY-MM-DD[ T]HH:MM:SS…). Parse the parts
@@ -167,17 +199,8 @@ export function applyMask(value, type, mask) {
             case "date": return parsed.text;
             case "datetime": return `${parsed.text} ${parsed.time}`;
             case "datetimeSeconds": return `${parsed.text} ${parsed.timeSeconds}`;
-            case "time": return parsed.date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-            case "timeSeconds": return parsed.date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", second: "2-digit" });
-            case "dateMedium":
-                return parsed.date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
-            case "dateLong":
-                return parsed.date.toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
-            case "dateTimeMedium":
-                return parsed.date.toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-            case "dateTimeLong":
-                return parsed.date.toLocaleString(undefined, { year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" });
         }
+        if (Object.hasOwn(LOCALIZED_DATE_MASKS, mask)) return dateMaskFormat(mask).format(parsed.date);
     }
     return null;
 }

@@ -147,6 +147,15 @@ export function lookupValue(map, name) {
     return key === undefined ? undefined : map[key];
 }
 
+/// Write or clear a map entry by case-insensitive key. Every case-variant of
+/// name is removed first, so lookupValue can never resolve a stale duplicate
+/// left under different casing. Pass undefined to clear the entry.
+export function setMapEntry(map, name, value) {
+    for (const key of Object.keys(map))
+        if (sameColumn(key, name)) delete map[key];
+    if (value !== undefined) map[name] = value;
+}
+
 export function nextFreeId(usedLowercase, prefix) {
     let next = 1;
     while (usedLowercase.has(`${prefix}${next}`)) next++;

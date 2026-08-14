@@ -199,12 +199,17 @@ export function stageContext(w) {
 }
 
 /// The terminal table's currently visible, still-valid column names. An explicit
-/// list can outlive a removed column in a saved report, so every caller gets the
-/// same self-healing view before it edits visibility.
+/// list can outlive a removed column or record a different casing in a saved
+/// report, so every caller gets the same self-healing view — stale names dropped,
+/// survivors resolved to the stage universe's canonical casing — before it edits
+/// visibility.
 export function visibleStageColumnNames(ctx, w) {
     const explicit = ctx.columnsLayer?.(w.doc)?.columns;
-    if (explicit?.length)
-        return explicit.filter(name => ctx.columns.some(column => sameColumn(column.name, name)));
+    if (explicit?.length) {
+        return explicit
+            .map(name => ctx.columns.find(column => sameColumn(column.name, name))?.name)
+            .filter(name => name !== undefined);
+    }
     return ctx.columns.map(column => column.name);
 }
 

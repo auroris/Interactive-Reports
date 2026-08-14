@@ -97,7 +97,9 @@ export function renderChart(canvas, spec) {
         options: {
             responsive: true,
             maintainAspectRatio: false,
-            animation: { duration: 300 },
+            animation: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+                ? false
+                : { duration: 300 },
             indexAxis: horizontal ? "y" : "x",
             interaction: pie || spec.type === "bar"
                 ? { mode: "nearest", intersect: true }

@@ -5,7 +5,7 @@
 import { el } from "../../core/dom.js";
 import { labelOf } from "../schema.js";
 import { stageContext } from "../stage.js";
-import { modeOf, sourceLayer } from "../state.js";
+import { modeOf, sameColumn, sourceLayer } from "../state.js";
 import { formatAgg, formatInteger, hasFraction, parseReportNumber, FN_LABELS, FN_ORDER } from "./format.js";
 import { formatForColumn, renderColumnValue } from "./column-renderers.js";
 import { headerMenuAvailable, openHeaderMenu } from "../menus.js";
@@ -164,7 +164,7 @@ export function renderGrid(w, table) {
                 if (style.bg) tr.style.background = style.bg;
                 if (style.fg) tr.style.color = style.fg;
             } else {
-                const idx = columns.findIndex(c => c.name === hit.col);
+                const idx = columns.findIndex(c => sameColumn(c.name, hit.col));
                 if (idx >= 0) {
                     if (style.bg) tr.children[idx].style.background = style.bg;
                     if (style.fg) tr.children[idx].style.color = style.fg;

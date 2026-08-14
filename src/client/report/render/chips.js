@@ -99,10 +99,15 @@ function chipEdit(w, kind, index) {
 
 function chip({ w, kind, index, text, colLabel, off, toggleable = true, removable = true, editable = true, swatch }) {
     const node = el("span", { class: "ir-chip" + (off ? " ir-chip-off" : ""), dataset: { kind } });
+    // The setting's full description names the checkbox and remove button, so
+    // assistive tech hears WHICH setting each control governs; the titles stay
+    // short for pointer tooltips.
+    const name = [colLabel, text].filter(Boolean).join(" ");
     if (toggleable) {
         node.append(el("input", {
             type: "checkbox", class: "ir-chip-check", checked: !off,
             title: off ? "Enable" : "Disable",
+            "aria-label": name,
             onchange: e => chipToggle(w, kind, index, e.target.checked),
         }));
     }
@@ -118,7 +123,7 @@ function chip({ w, kind, index, text, colLabel, off, toggleable = true, removabl
     node.append(label);
     if (removable) {
         node.append(el("button", {
-            type: "button", class: "ir-chip-x", "aria-label": "Remove", title: "Remove",
+            type: "button", class: "ir-chip-x", "aria-label": `Remove ${name}`, title: "Remove",
             onclick: () => chipRemove(w, kind, index),
         }, icon("close")));
     }
@@ -127,7 +132,9 @@ function chip({ w, kind, index, text, colLabel, off, toggleable = true, removabl
 
 const highlightChip = (w, kind, lock) => ({ h, i, sequence }) => chip({
     w, kind, index: i, off: h.enabled === false,
-    swatch: h.style?.bg ?? "#fff3a0",
+    // Preview whichever color the rule actually sets; the dialog's default
+    // background is the last resort for legacy rules with no style at all.
+    swatch: h.style?.bg ?? h.style?.fg ?? "#fff3cd",
     colLabel: h.name ?? h.id ?? "Highlight",
     text: `#${sequence} · ${h.expr}` + (h.scope === "cell" ? ` (${h.col} cell)` : " (row)"),
     ...lock,

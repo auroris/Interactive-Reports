@@ -83,7 +83,9 @@ const renderers = {
         return el("img", {
             class: "ir-cell-image",
             src,
-            alt: "",
+            // The cell's only content is the image, so it is not decorative; the
+            // column heading is the most honest description available.
+            alt: String(col.label ?? col.name),
             loading: "lazy",
             decoding: "async",
         });
