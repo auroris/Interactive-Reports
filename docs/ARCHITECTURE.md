@@ -851,7 +851,9 @@ Layered, default-deny:
 3. **Application operation authorization** — optional callbacks and/or native ASP.NET
    resource handlers receive an `InteractiveReportAction`, the `ClaimsPrincipal`, and
    current/proposed resource metadata. Every registered authorizer must grant every
-   applicable action. This is an additional restriction over the built-in rules.
+   applicable action. This is an additional restriction over the built-in rules and
+   the fallback administrator authority when the legacy list is empty. See
+   [Authorization](AUTHORIZATION.md).
 4. **Default-deny** — no authorization block ⇒ authenticated-only. Anonymous requires
    explicit `"allowAnonymous": true`. The lazy path is the safe path.
 5. **Row-level security** — server-resolved `contextParams` (§4).
@@ -912,7 +914,7 @@ selectable alternatives and do not affect default-state resolution.
 
 | Actor | May |
 |---|---|
-| Owner (private) | read, update title/state, delete |
+| Owner | read, update title/state, delete, regardless of publication status |
 | Anyone with report access | read primary and global reports for that definition |
 | Administrator | everything: list all, flag/unflag primary, publish/unpublish global, reassign owner, update/delete any database row |
 | Anyone (configured file) | read and Save As; never update/delete the configured source |
@@ -920,7 +922,8 @@ selectable alternatives and do not affect default-state resolution.
 
 Denials hide existence (404) except where the caller provably knows the resource — an
 owner reaching for admin-only powers (primary, publish, reassign) gets an explicit 403.
-Primary and global reports are shared infrastructure: mutating one is admin-only even for its owner.
+Primary/global publication and ownership changes are administrator-only. Publication
+does not remove the owner's ability to update the report's title/state or delete it.
 Saved-report loads still pass the underlying report definition's authorization gate.
 
 **Application authorization.** `InteractiveReportBuilder.UseAuthorization` registers a
@@ -940,13 +943,17 @@ DownloadReportDocument, and UploadReportDocument. `false` and the dedicated deni
 exception are ordinary denials. Unexpected exceptions are logged and sanitized as 500;
 request cancellation propagates.
 
-For administrator-required operations, a nonempty configured administrator list is
+For operations requiring administrator authority, a nonempty configured administrator list is
 authoritative. A listed identity must still pass any configured operation authorizer;
 an unlisted identity cannot be promoted by it. If the list is empty, at least one
 operation authorizer must be registered and every one must grant the concrete action.
 No list plus no authorizer is a denial, never a fail-open default. Ordinary owner and
 dataset operations retain their existing behavior when no application authorizer is
 registered.
+
+The complete integrator guide, including direct callbacks, native resource handlers,
+policy delegation, action/resource contracts, composition, and HTTP results, is
+[Authorization](AUTHORIZATION.md).
 
 A definition may also declare `authorization.administratorsOnly`: with a nonempty
 administrator list, the report-level gate requires membership (401 unauthenticated,
@@ -1235,7 +1242,7 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 | Admin match case-insensitive exact | case-sensitive | Operator-friendly for emails/usernames; GUID-style values don't collide under folding. |
 | Saved-report ids are text GUIDs | identity/sequence columns | One DDL shape across SQLite/SqlServer/Oracle; no sequence plumbing. |
 | Timestamps as ISO text, flags as 0/1 | native per-dialect types | Uniform semantics and sorting across dialects for an engine-internal table. |
-| Global mutations admin-only, even for the owner | owner-managed globals | A published report is shared infrastructure; publishing and unpublishing are curation acts. |
+| Global/primary flags admin-only; content remains owner-managed | all published mutations admin-only | Publication is a curation act, while title/state and deletion remain owner actions. |
 | Primary is a separate admin-controlled flag; primary `Default` overrides generated Default | configured-file primary is the default | Several curated reports may be primary and public, while one stable title controls default-state replacement and unflagging restores the generated fallback. |
 | Configured report files use the saved-report protocol with `isReadOnly` | separate configured-report API or expose file origin | One selector and load path keeps the document model coherent. Generic mutability is what clients need; the storage source remains a server concern. |
 | Microsoft.Data.Sqlite dependency in the AspNetCore package | host-supplied providers only | The zero-config default saved-report store must work with no host setup; report-data connections remain host-supplied. |

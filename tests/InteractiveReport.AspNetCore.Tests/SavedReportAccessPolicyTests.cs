@@ -21,7 +21,7 @@ public sealed class SavedReportAccessPolicyTests
     [InlineData(false, null, false, (int)SavedReportAccess.Hidden)]
     [InlineData(false, "other", false, (int)SavedReportAccess.Hidden)]
     [InlineData(false, "OWNER", false, (int)SavedReportAccess.Allowed)]
-    [InlineData(true, "owner", false, (int)SavedReportAccess.AdministratorRequired)]
+    [InlineData(true, "owner", false, (int)SavedReportAccess.Allowed)]
     [InlineData(true, "other", true, (int)SavedReportAccess.Allowed)]
     public void Modify_encodes_ownership_and_global_matrix(
         bool global,
@@ -31,13 +31,13 @@ public sealed class SavedReportAccessPolicyTests
         => Assert.Equal((SavedReportAccess)expected, SavedReportAccessPolicy.Modify(Report(global), identity, administrator));
 
     [Fact]
-    public void Primary_is_public_but_administrator_managed()
+    public void Primary_is_public_and_remains_owner_managed()
     {
         var report = Report(global: false);
         report.IsPrimary = true;
 
         Assert.Equal(SavedReportAccess.Allowed, SavedReportAccessPolicy.Read(report, identity: null, administrator: false));
-        Assert.Equal(SavedReportAccess.AdministratorRequired,
+        Assert.Equal(SavedReportAccess.Allowed,
             SavedReportAccessPolicy.Modify(report, "owner", administrator: false));
         Assert.Equal(SavedReportAccess.Allowed,
             SavedReportAccessPolicy.Modify(report, "other", administrator: true));

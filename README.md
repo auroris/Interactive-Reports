@@ -110,49 +110,45 @@ imports it as the administrator's saved report for live testing. The envelope's
 
 ## Application authorization
 
-Interactive Reports can describe each requested operation to application code. A
-direct callback receives the ASP.NET Core `ClaimsPrincipal`, an action, the report
-name, current saved-report metadata, proposed changes, and the request service
-provider:
+Interactive Reports describes every requested operation with an action, the ASP.NET
+Core `ClaimsPrincipal`, and current/proposed resource metadata. It makes no assumption
+about which client called the endpoint or how the caller reached it. Integrators can
+use any of three equivalent styles:
+
+1. A direct `UseAuthorization(...)` callback.
+2. `UseAspNetCoreAuthorization()` with a typed ASP.NET Core resource handler.
+3. A `UseAuthorization(...)` callback that delegates to named ASP.NET Core policies.
+
+The direct callback is a resource decision:
 
 ```csharp
-var reports = builder.Services.AddInteractiveReports(builder.Configuration)
-    .UseAuthorization(async (request, cancellationToken) =>
-    {
-        var authorization = request.RequestServices
-            .GetRequiredService<IAuthorizationService>();
-        var result = await authorization.AuthorizeAsync(
-            request.User,
-            request.Resource,
-            PolicyFor(request.Action));
-        return result.Succeeded;
-    });
+var reports = builder.Services.AddInteractiveReports(builder.Configuration);
+
+reports.UseAuthorization((request, cancellationToken) =>
+    ValueTask.FromResult(ApplicationReportAcl.Allows(
+        request.User,
+        request.Action,
+        request.Resource)));
 ```
-
-This callback form supports direct claims/role checks and delegation to ordinary
-ASP.NET Core policies. For native resource-based handlers, opt in once:
-
-```csharp
-reports.UseAspNetCoreAuthorization();
-builder.Services.AddScoped<IAuthorizationHandler, ReportAuthorizationHandler>();
-```
-
-The handler receives `InteractiveReportAuthorizationRequirement` and
-`InteractiveReportAuthorizationResource`. Actions distinguish view, query, export,
-saved-report CRUD, primary/global publication, ownership changes, list-all, and
-administrator document upload/download. A mutation that has several meanings, such
-as creating a primary report, must pass every applicable action. Multiple callbacks
-and the native adapter also compose with AND semantics.
 
 Built-in report visibility and saved-report ownership remain in force. A nonempty
 `InteractiveReport:Administrators` list is authoritative: listed identities remain
 eligible for administrator operations and application authorization may restrict
 them further, while an application callback cannot promote an identity outside that
-explicit list. When the list is empty, administrator-required operations need an
+explicit list. When the list is empty, operations requiring administrator authority need an
 affirmative application authorization decision. With neither mechanism configured,
 they fail closed. `false` or `InteractiveReportAuthorizationDeniedException` is an
 expected denial; cancellation remains cancellation, and other exceptions are logged
 and returned as a sanitized 500 response.
+
+Saved-report decisions are resource-based: public, owner, or administrator may read;
+owner or administrator may update title/state or delete; and the explicit global,
+primary, ownership, list-all, upload, and download actions require administrator
+authority. The API applies these rules regardless of which client issued the request.
+
+See [Authorization](docs/AUTHORIZATION.md) for complete setup examples for all three
+styles, the action/resource reference, multi-action composition, administrator
+resolution, denial status codes, UI hints, migration guidance, and recommended tests.
 
 To log the exact SQL command text submitted to the configured database, enable Debug
 for the report executor category. Parameter values are never logged:

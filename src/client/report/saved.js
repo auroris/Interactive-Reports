@@ -26,7 +26,7 @@ export function canRequestAdministration(w) {
 
 export function canManageSaved(w, s) {
     if (!s) return false;
-    return !s.isReadOnly && (canRequestAdministration(w) || (s.mine && !s.isGlobal && !s.isPrimary));
+    return !s.isReadOnly && (canRequestAdministration(w) || s.mine);
 }
 
 export function refreshSavedSelect(w) {

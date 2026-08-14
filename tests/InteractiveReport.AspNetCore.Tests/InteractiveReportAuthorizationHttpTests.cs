@@ -368,7 +368,9 @@ public sealed class InteractiveReportAuthorizationHttpTests
             InteractiveReportAuthorizationResource>
     {
         private readonly HashSet<InteractiveReportAction> _allowed = [.. allowed];
-        public ConcurrentQueue<(InteractiveReportAction Action, InteractiveReportAuthorizationResource Resource)> Seen
+        public ConcurrentQueue<(
+            InteractiveReportAction Action,
+            InteractiveReportAuthorizationResource Resource)> Seen
             { get; } = new();
 
         protected override Task HandleRequirementAsync(

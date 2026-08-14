@@ -14,8 +14,8 @@ namespace InteractiveReport.AspNetCore;
 /// Identity + saved-report endpoints.
 ///
 /// Authorization matrix:
-///   owner (private report)  → read, update title/state, delete
-///   anyone (global report)  → read
+///   owner                    → read, update title/state, delete
+///   anyone (global/primary) → read
 ///   administrator           → everything: list all, publish/unpublish global,
 ///                             reassign owner, update or delete any report
 /// Denials hide existence (404) except where the caller already provably knows the
@@ -311,7 +311,7 @@ internal static class SavedReportEndpoints
                 administratorRequired: report.Origin != SavedReportOrigin.Configured
                                        && access != SavedReportAccess.Allowed,
                 hideDenied: access == SavedReportAccess.Hidden,
-                denialDetail: "Deleting a published report requires authorization.",
+                denialDetail: "Deleting another owner's report requires authorization.",
                 ct) is { } denied)
             return denied;
 

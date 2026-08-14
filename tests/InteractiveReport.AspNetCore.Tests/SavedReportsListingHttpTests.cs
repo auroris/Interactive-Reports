@@ -252,6 +252,33 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Owner_can_update_and_delete_their_published_report_without_changing_publication()
+    {
+        using var save = await _client.SendAsync(Request(
+            HttpMethod.Post, "/api/reports/orders/saved", User,
+            new { title = "Owned", state = new { v = 3 } }));
+        Assert.Equal(HttpStatusCode.Created, save.StatusCode);
+        var id = (await ReadJson(save)).GetProperty("id").GetString()!;
+
+        using var publish = await _client.SendAsync(Request(
+            HttpMethod.Put, $"/api/reports/saved/{id}", Admin,
+            new { isGlobal = true, isPrimary = true }));
+        Assert.Equal(HttpStatusCode.OK, publish.StatusCode);
+
+        using var update = await _client.SendAsync(Request(
+            HttpMethod.Put, $"/api/reports/saved/{id}", User,
+            new { title = "Owned Updated", state = new { v = 3 } }));
+        Assert.Equal(HttpStatusCode.OK, update.StatusCode);
+        var updated = await ReadJson(update);
+        Assert.True(updated.GetProperty("isGlobal").GetBoolean());
+        Assert.True(updated.GetProperty("isPrimary").GetBoolean());
+
+        using var delete = await _client.SendAsync(Request(
+            HttpMethod.Delete, $"/api/reports/saved/{id}", User));
+        Assert.Equal(HttpStatusCode.NoContent, delete.StatusCode);
+    }
+
+    [Fact]
     public async Task Listing_exports_action_labels_as_plain_csv()
     {
         using var schemaResponse = await _client.SendAsync(
