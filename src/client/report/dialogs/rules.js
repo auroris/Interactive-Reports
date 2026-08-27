@@ -8,6 +8,7 @@
 
 import { el, labeled, sel } from "../../core/dom.js";
 import { openDialog } from "../../core/dialog.js";
+import { filterableColumns } from "../schema.js";
 import { stageContext } from "../stage.js";
 import { nextFreeId, sourceLayer } from "../state.js";
 import { colorPick, expressionEditor, colOptions } from "./parts.js";
@@ -18,6 +19,9 @@ export function filterDialog(w, { editIndex, col } = {}) {
         initial: existing?.expr ?? (col ? `${col} = ` : ""),
         placeholder: "e.g. AMOUNT > 1000 AND STATUS <> 'CANCELLED'",
         result: "predicate",
+        // Token buttons omit definition-restricted columns; a typed reference
+        // still reaches the server, which strips the rule into ignored[].
+        columns: filterableColumns(w),
     });
 
     openDialog({

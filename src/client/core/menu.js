@@ -41,6 +41,7 @@ function placeFallback(menu, anchor) {
  * items: array of
  *   { label, onPick, disabled?, checked?, hint? }  — an actionable entry
  *   { heading }                                    — a non-interactive section label
+ *   { note }                                       — non-interactive wrapping text (column help)
  *   "-"                                            — a separator
  */
 export function popupMenu(anchor, items) {
@@ -57,6 +58,14 @@ export function popupMenu(anchor, items) {
         if (item === "-") { menu.append(el("div", { class: "ir-menu-sep", role: "separator" })); continue; }
         if (item.heading !== undefined) {
             menu.append(el("div", { class: "ir-menu-heading" }, item.heading));
+            continue;
+        }
+        if (item.note !== undefined) {
+            // Announced as a disabled item; the arrow-key cycle skips it because
+            // the focus query targets .ir-menu-item only.
+            menu.append(el("div", {
+                class: "ir-menu-note", role: "menuitem", "aria-disabled": "true",
+            }, item.note));
             continue;
         }
         const btn = el("button", {

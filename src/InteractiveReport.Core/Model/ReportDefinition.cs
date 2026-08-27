@@ -110,6 +110,91 @@ public sealed class ReportDefinition
     /// Relative URLs resolve against the host page.
     /// </summary>
     public string? StyleSheet { get; set; }
+
+    /// <summary>
+    /// APEX-style per-row edit pencil, rendered by the client as a leading synthetic
+    /// grid column. Definition chrome like styleSheet — not report state and not a
+    /// feature token; configuring it is what enables it.
+    /// </summary>
+    public ReportEditLink? EditLink { get; set; }
+
+    /// <summary>
+    /// Per-column presentation and behavior overrides, keyed by base column name
+    /// (case-insensitive). Unknown names are tolerated like columnLabels (schema
+    /// drift); labels here supersede columnLabels, and configuring the same column's
+    /// label in both maps is rejected at load.
+    /// </summary>
+    public Dictionary<string, ReportColumnOverride>? Columns { get; set; }
+
+    /// <summary>
+    /// columnLabels overlaid with columns[*].label (overrides win). Null when neither
+    /// map contributes a label — callers keep their existing null-means-absent paths.
+    /// </summary>
+    public Dictionary<string, string>? GetEffectiveColumnLabels()
+    {
+        Dictionary<string, string>? merged = null;
+        if (ColumnLabels is { Count: > 0 })
+            merged = new Dictionary<string, string>(ColumnLabels, StringComparer.OrdinalIgnoreCase);
+        if (Columns is not null)
+        {
+            foreach (var (name, over) in Columns)
+            {
+                if (string.IsNullOrWhiteSpace(over?.Label)) continue;
+                merged ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                merged[name] = over.Label;
+            }
+        }
+        return merged;
+    }
+}
+
+/// <summary>
+/// The definition's edit pencil. The URL template's {COLUMN} placeholders reference
+/// base schema columns; the referenced values are projected as hidden row data and
+/// substituted client-side with URL encoding, so no markup ever crosses the wire.
+/// </summary>
+public sealed class ReportEditLink
+{
+    /// <summary>
+    /// URL template, e.g. "/orders/{ORDER_ID}/edit". At least one placeholder is
+    /// required; a row whose placeholder value is null renders no pencil.
+    /// </summary>
+    public string UrlTemplate { get; set; } = "";
+
+    /// <summary>Accessible name and tooltip of the pencil. Default "Edit".</summary>
+    public string? Label { get; set; }
+
+    /// <summary>"_self" (default) or "_blank" (the client adds rel="noopener").</summary>
+    public string? Target { get; set; }
+}
+
+/// <summary>One column's developer-set overrides. Absent properties change nothing.</summary>
+public sealed class ReportColumnOverride
+{
+    /// <summary>Display-name override; supersedes columnLabels. Blank is rejected.</summary>
+    public string? Label { get; set; }
+
+    /// <summary>
+    /// Render the table header cell without visible text (the accessible name and
+    /// every menu, dialog, and picker keep the real label) — the APEX empty-heading
+    /// pattern without the ambiguity of a report full of unnameable columns.
+    /// </summary>
+    public bool? HideLabel { get; set; }
+
+    /// <summary>
+    /// False removes the column's sort controls (and control breaks, which imply
+    /// sorting); the server strips violating state into ignored[]. Null = allowed.
+    /// </summary>
+    public bool? Sortable { get; set; }
+
+    /// <summary>
+    /// False removes the column's filter controls; filter rules referencing the
+    /// column are stripped into ignored[]. Null = allowed.
+    /// </summary>
+    public bool? Filterable { get; set; }
+
+    /// <summary>Shown as a note at the bottom of the column's header menu.</summary>
+    public string? HelpText { get; set; }
 }
 
 public sealed class ContextParamSpec

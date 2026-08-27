@@ -250,6 +250,43 @@ button label — a NULL label renders no button — and clicking dispatches a co
 where the row includes the format's schema-bound `keyColumn` value. The built-in
 admin listing is its first consumer; in CSV an action cell exports its raw label.
 
+A definition can also declare an APEX-style edit pencil and per-column overrides —
+configuration, not report state:
+
+```json
+"orders": {
+  "connection": "MainDb",
+  "dialect": "SqlServer",
+  "sql": "SELECT ORDER_ID, CUSTOMER, AMOUNT, NOTES FROM ORDERS",
+  "editLink": {
+    "urlTemplate": "/orders/{ORDER_ID}/edit",
+    "label": "Edit order"
+  },
+  "columns": {
+    "AMOUNT": { "helpText": "Order total before tax." },
+    "NOTES": { "hideLabel": true, "sortable": false, "filterable": false }
+  }
+}
+```
+
+`editLink` renders a leading pencil column in grid view. Its `{COLUMN}` placeholders
+reference base schema columns; the referenced values travel as hidden row data (like
+renderer source columns), are URL-encoded into the template client-side, and the
+result is an ordinary anchor — middle-click and open-in-new-tab work, `target:
+"_blank"` adds `rel="noopener"`, and a row whose placeholder value is NULL shows no
+pencil. The edit column has an empty heading (its `label` is the accessible name and
+tooltip), never appears in column pickers, search, sorts, or filters, and is absent
+from CSV exports and grouped/pivoted/charted views.
+
+`columns` overrides one column at a time: `label` replaces `columnLabels` for that
+column (configuring both is rejected), `hideLabel` blanks the table heading while
+menus and dialogs keep the real name, `sortable: false` / `filterable: false` remove
+those controls (control breaks count as sorting; computed columns are always exempt),
+and `helpText` appears as a note in the column's header menu. The server also strips
+sorts, breaks, and filter rules that violate the restrictions from incoming documents
+into `ignored[]`, so saved reports created before a restriction degrade gracefully
+instead of erroring.
+
 Number masks cover grouped integers and one through four fixed decimal places,
 invariant two-place decimals, CAD/USD/EUR/GBP/JPY currency, and zero through two-place
 percentages. Date masks cover ISO dates and date-times, localized medium/long dates,
@@ -316,6 +353,10 @@ The widget adapts to the definition's `features` whitelist (docs/ARCHITECTURE.md
 menu entries, view buttons, the search bar, and the saved-report select render only
 for whitelisted features, and the server additionally refuses CSV export and
 saved-report creation for reports that do not whitelist `download` / `savedReports`.
+
+A definition's `editLink` pencil navigates like an ordinary anchor — relative
+templates resolve against the host page, and routing to the edit form is entirely
+the host application's concern.
 
 Page size is configured through **Actions → Pagination**. The standard choices are
 10, 50, 100, 500, 1000, and All; numeric choices above a definition's `maxPageSize`

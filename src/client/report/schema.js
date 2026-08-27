@@ -55,6 +55,26 @@ export function featureEnabled(w, feature) {
     return !features || features.includes(feature);
 }
 
+/// The definition's per-column overrides, delivered on the schema payload keyed
+/// by canonical base-column name (behavior flags only — labels ride the default
+/// report's labels channel). A missing map or entry means unrestricted, which
+/// also covers computed columns and stage synthetics: their names never appear
+/// in the map because the server filters it to live base schema columns.
+export function columnOverride(w, name) {
+    return lookupValue(w.schema?.columnOverrides, name) ?? null;
+}
+
+export function columnSortable(w, name) { return columnOverride(w, name)?.sortable !== false; }
+export function columnFilterable(w, name) { return columnOverride(w, name)?.filterable !== false; }
+export function columnHelp(w, name) { return columnOverride(w, name)?.helpText ?? null; }
+
+/// The header cell renders no visible text; the accessible name and every menu,
+/// dialog, and picker keep the real label.
+export function headerLabelHidden(w, name) { return columnOverride(w, name)?.hideLabel === true; }
+
+export function sortableColumns(w) { return pickable(w).filter(c => columnSortable(w, c.name)); }
+export function filterableColumns(w) { return pickable(w).filter(c => columnFilterable(w, c.name)); }
+
 /// Whether the working document can diverge at all. Download is the one feature
 /// that never mutates the doc; anything else makes Reset worth offering.
 export function anyMutableFeature(w) {

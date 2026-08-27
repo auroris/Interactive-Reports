@@ -1266,4 +1266,185 @@ public class StateValidatorTests
 
         Assert.Contains(ex.Errors, e => e.Path == "pipeline[1].shape.label" && e.Message.Contains("cannot label"));
     }
+
+    // ---- definition edit link (hidden template-column projection) ----
+
+    private static ReportDefinition EditLinkDefinition(string template)
+    {
+        var def = OrdersDefinition(ReportDialect.Sqlite);
+        def.EditLink = new ReportEditLink { UrlTemplate = template };
+        return def;
+    }
+
+    [Fact]
+    public void Edit_link_template_columns_join_the_projection_but_not_display_metadata()
+    {
+        var result = Validate(
+            Doc(source: new StageLayer { Columns = ["CUSTOMER"] }),
+            EditLinkDefinition("/orders/{order_id}/edit?r={REGION}"));
+
+        Assert.Equal(["CUSTOMER"], result.SelectColumns.Select(c => c.Name));
+        // Case-insensitive binding resolves to canonical casing.
+        Assert.Equal(["CUSTOMER", "ORDER_ID", "REGION"], result.ProjectionColumns.Select(c => c.Name));
+        Assert.Empty(result.Ignored);
+    }
+
+    [Fact]
+    public void Edit_link_columns_already_displayed_are_not_duplicated()
+    {
+        var result = Validate(
+            Doc(source: new StageLayer { Columns = ["ORDER_ID", "CUSTOMER"] }),
+            EditLinkDefinition("/orders/{ORDER_ID}/edit"));
+
+        Assert.Equal(["ORDER_ID", "CUSTOMER"], result.ProjectionColumns.Select(c => c.Name));
+    }
+
+    [Fact]
+    public void Edit_link_with_unknown_placeholder_degrades_into_ignored()
+    {
+        var result = Validate(
+            Doc(source: new StageLayer { Columns = ["CUSTOMER"] }),
+            EditLinkDefinition("/orders/{GHOST}/edit"));
+
+        Assert.Equal(["CUSTOMER"], result.ProjectionColumns.Select(c => c.Name));
+        var item = Assert.Single(result.Ignored);
+        Assert.Equal("editLink", item.Kind);
+        Assert.Contains("GHOST", item.Detail);
+    }
+
+    [Fact]
+    public void Edit_link_binding_only_runs_in_grid_mode()
+    {
+        // An unresolvable placeholder proves it: grid mode reports it through
+        // ignored[], a group tail never even binds the template.
+        var grouped = Validate(
+            Doc(tail: [Group(by: ["REGION"])]),
+            EditLinkDefinition("/orders/{GHOST}/edit"));
+
+        Assert.Equal(ViewMode.GroupBy, grouped.View.Mode);
+        Assert.DoesNotContain(grouped.Ignored, i => i.Kind == "editLink");
+    }
+
+    // ---- per-column overrides (sort/filter/break enforcement) ----
+
+    private static ReportDefinition RestrictedDefinition(
+        string column,
+        bool? sortable = null,
+        bool? filterable = null)
+    {
+        var def = OrdersDefinition(ReportDialect.Sqlite);
+        def.Columns = new()
+        {
+            [column] = new ReportColumnOverride { Sortable = sortable, Filterable = filterable },
+        };
+        return def;
+    }
+
+    [Fact]
+    public void Sorts_on_a_non_sortable_column_are_stripped_into_ignored()
+    {
+        var result = Validate(
+            Doc(source: new StageLayer
+            {
+                Sorts = [new SortRule { Col = "notes", Dir = SortDir.Desc }, new SortRule { Col = "CUSTOMER" }],
+            }),
+            RestrictedDefinition("NOTES", sortable: false));
+
+        var sort = Assert.Single(result.Sorts);
+        Assert.Equal("CUSTOMER", sort.Column.Name);
+        var item = Assert.Single(result.Ignored);
+        Assert.Equal("sort", item.Kind);
+        Assert.Equal("column 'NOTES' is not sortable", item.Detail);
+    }
+
+    [Fact]
+    public void Group_layer_sorts_on_a_non_sortable_dim_are_stripped_too()
+    {
+        var result = Validate(
+            Doc(tail:
+            [
+                Group(
+                    by: ["REGION"],
+                    layer: new StageLayer { Sorts = [new SortRule { Col = "REGION" }] }),
+            ]),
+            RestrictedDefinition("REGION", sortable: false));
+
+        // Grouping by the column stays allowed — only its ordering is withdrawn.
+        Assert.Equal(ViewMode.GroupBy, result.View.Mode);
+        Assert.Empty(result.View.GroupLayer!.Sorts);
+        Assert.Contains(result.Ignored, i => i.Kind == "sort" && i.Detail.Contains("REGION"));
+    }
+
+    [Fact]
+    public void Breaks_on_a_non_sortable_column_are_stripped_and_stop_forcing_selection()
+    {
+        var result = Validate(
+            Doc(source: new StageLayer { Columns = ["CUSTOMER"], Breaks = ["NOTES"] }),
+            RestrictedDefinition("NOTES", sortable: false));
+
+        Assert.Empty(result.Breaks);
+        Assert.Equal(["CUSTOMER"], result.SelectColumns.Select(c => c.Name));
+        var item = Assert.Single(result.Ignored);
+        Assert.Equal("break", item.Kind);
+        Assert.Contains("control breaks imply sorting", item.Detail);
+    }
+
+    [Fact]
+    public void Filters_referencing_a_non_filterable_column_are_dropped_whole()
+    {
+        var result = Validate(
+            Doc(source: new StageLayer
+            {
+                Filters = [Filter("AMOUNT > 100 AND STATUS = 'X'"), Filter("STATUS = 'SHIPPED'")],
+            }),
+            RestrictedDefinition("AMOUNT", filterable: false));
+
+        var kept = Assert.Single(result.Rules.RowPredicates);
+        Assert.NotNull(kept.Expression.Ast);
+        var item = Assert.Single(result.Ignored);
+        Assert.Equal("filter", item.Kind);
+        Assert.Equal("filter references non-filterable column 'AMOUNT'", item.Detail);
+    }
+
+    [Fact]
+    public void Computed_columns_stay_sortable_and_filterable_despite_restricted_inputs()
+    {
+        var def = RestrictedDefinition("AMOUNT", sortable: false, filterable: false);
+        var result = Validate(
+            Doc(source: new StageLayer
+            {
+                Computed = [new ComputedColumn { Id = "c1", Expr = "AMOUNT * 2" }],
+                Filters = [Filter("c1 > 100")],
+                Sorts = [new SortRule { Col = "c1" }],
+            }),
+            def);
+
+        Assert.Single(result.Rules.RowPredicates);
+        Assert.Equal("c1", Assert.Single(result.Sorts).Column.Name);
+        Assert.Empty(result.Ignored);
+    }
+
+    [Fact]
+    public void Malformed_filters_still_error_before_restriction_stripping()
+    {
+        var ex = Assert.Throws<ReportValidationException>(() =>
+            Validate(
+                Doc(source: new StageLayer { Filters = [Filter("NO_SUCH = 1")] }),
+                RestrictedDefinition("AMOUNT", filterable: false)));
+
+        Assert.Contains(ex.Errors, e => e.Path == "pipeline[0].layer.filters[0].expr");
+    }
+
+    [Fact]
+    public void Definition_labels_merge_column_overrides_over_column_labels()
+    {
+        var def = OrdersDefinition(ReportDialect.Sqlite);
+        def.ColumnLabels = new() { ["AMOUNT"] = "Total" };
+        def.Columns = new() { ["ORDER_ID"] = new ReportColumnOverride { Label = "Order #" } };
+
+        var result = Validate(Doc(), def);
+
+        Assert.Equal("Total", result.Labels["AMOUNT"]);
+        Assert.Equal("Order #", result.Labels["ORDER_ID"]);
+    }
 }

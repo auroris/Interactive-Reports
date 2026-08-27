@@ -84,6 +84,8 @@ public static class EndpointExtensions
                 title = def.Title ?? ColumnModel.Prettify(def.Name),
                 styleSheet = def.StyleSheet?.Trim(),
                 columns = columns.Select(c => new ColumnInfo(c.Name, c.Label, c.KindName, c.IsComputed)),
+                editLink = ResolveEditLink(def, columns, ctx),
+                columnOverrides = ResolveColumnOverrides(def, columns),
                 defaultState = SchemaDefaultState(def, columns),
                 stateVersion = ReportState.CurrentVersion,
                 capabilities = new
@@ -121,12 +123,75 @@ public static class EndpointExtensions
     }
 
     /// <summary>
+    /// Delivers the definition's edit link with placeholders rewritten to canonical
+    /// schema casing (so client row lookups hit row keys directly) and defaults
+    /// resolved. An unresolvable template disables the edit column for this schema —
+    /// omitted from the payload, with the problem logged; the query path surfaces the
+    /// same binding failure to users through ignored[].
+    /// </summary>
+    private static object? ResolveEditLink(ReportDefinition def, Core.Schema.ReportSchema schema, HttpContext ctx)
+    {
+        if (def.EditLink is not { } editLink) return null;
+
+        var placeholders = EditLinkTemplate.Parse(editLink.UrlTemplate, out var error);
+        var unknown = placeholders?.FirstOrDefault(name => !schema.TryGetValue(name, out _));
+        if (placeholders is null || unknown is not null)
+        {
+            ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("InteractiveReport").LogWarning(
+                "Report {Report}: editLink.urlTemplate {Problem}; the edit column is disabled.",
+                def.Name,
+                placeholders is null ? $"is invalid — {error}" : $"references unknown column '{unknown}'");
+            return null;
+        }
+
+        return new
+        {
+            urlTemplate = EditLinkTemplate.Rewrite(
+                editLink.UrlTemplate,
+                name => schema.TryGetValue(name, out var col) ? col.Name : name),
+            label = string.IsNullOrWhiteSpace(editLink.Label) ? "Edit" : editLink.Label.Trim(),
+            target = string.Equals(editLink.Target, "_blank", StringComparison.OrdinalIgnoreCase)
+                ? "_blank"
+                : "_self",
+        };
+    }
+
+    /// <summary>
+    /// Per-column behavior flags for the client, filtered to live schema columns and
+    /// keyed by canonical name. Labels are deliberately absent — they ride the default
+    /// report's labels channel like columnLabels always has — so this map only exists
+    /// when a column carries behavior the client must gate on.
+    /// </summary>
+    private static object? ResolveColumnOverrides(ReportDefinition def, Core.Schema.ReportSchema schema)
+    {
+        if (def.Columns is not { Count: > 0 }) return null;
+
+        var result = new Dictionary<string, object>();
+        foreach (var (name, over) in def.Columns)
+        {
+            if (over is null || !schema.TryGetValue(name, out var col)) continue;
+            var helpText = string.IsNullOrWhiteSpace(over.HelpText) ? null : over.HelpText.Trim();
+            if (over.HideLabel != true && over.Sortable != false && over.Filterable != false && helpText is null)
+                continue;
+            result[col.Name] = new
+            {
+                hideLabel = over.HideLabel == true ? (bool?)true : null,
+                sortable = over.Sortable == false ? (bool?)false : null,
+                filterable = over.Filterable == false ? (bool?)false : null,
+                helpText,
+            };
+        }
+        return result.Count > 0 ? result : null;
+    }
+
+    /// <summary>
     /// The default report the schema endpoint sends down — always complete, never null.
     /// An unconfigured effective Default synthesizes to an empty state (every schema
-    /// column in database order), and the definition's columnLabels become the default
-    /// report's labels unless the effective state carries its own. Query responses
-    /// never apply labels; the document ingestion pipeline mirrors this same layering
-    /// so exports render what an equivalent client displays.
+    /// column in database order), and the definition's labels (columnLabels overlaid
+    /// with columns[*].label) become the default report's labels unless the effective
+    /// state carries its own. Query responses never apply labels; the document
+    /// ingestion pipeline mirrors this same layering so exports render what an
+    /// equivalent client displays.
     /// </summary>
     internal static ReportState SchemaDefaultState(ReportDefinition def, Core.Schema.ReportSchema schema)
     {
@@ -137,8 +202,8 @@ public static class EndpointExtensions
             state.Pipeline = [new PipelineStage { Shape = new StageShape { Kind = "source" } }];
         var source = state.Pipeline[0];
         source.Layer ??= new StageLayer();
-        if (source.Layer.Labels is null && def.ColumnLabels is not null)
-            source.Layer.Labels = new(def.ColumnLabels);
+        if (source.Layer.Labels is null && def.GetEffectiveColumnLabels() is { } definitionLabels)
+            source.Layer.Labels = new(definitionLabels);
 
         // The delivered default is the client's drift-proof reset terminus: a document
         // that never recorded a snapshot gets stamped with the live schema, so the

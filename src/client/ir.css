@@ -265,6 +265,19 @@
 .ir-cell-image { display: block; max-width: 100%; max-height: 8rem; width: auto; height: auto; }
 .ir-cell-action { padding: 1px 8px; font-size: 12px; }
 
+/* The definition's edit pencil: a narrow leading column, icon-only anchor. */
+.ir-table th.ir-th-edit { width: 1%; }
+.ir-table td.ir-td-edit { text-align: center; padding: 5px 6px; }
+.ir-cell-edit {
+    display: inline-flex;
+    align-items: center;
+    color: var(--ir-accent);
+    padding: 2px;
+    border-radius: 3px;
+}
+.ir-cell-edit:hover { background: var(--ir-accent-soft); }
+.ir-cell-edit:focus-visible { outline: 2px solid var(--ir-accent); outline-offset: 0; }
+
 .ir-table tr.ir-break-header td {
     background: #e9eef4;
     border-top: 1px solid #c9d4de;
@@ -370,6 +383,14 @@
     color: var(--ir-text-muted);
 }
 .ir-menu-sep { height: 1px; background: var(--ir-border-light); margin: 4px 0; }
+.ir-menu-note {
+    padding: 6px 12px 6px 8px;
+    max-width: 18rem;
+    white-space: normal;
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--ir-text-muted);
+}
 
 /* --- dialog windows --------------------------------------------------------- */
 

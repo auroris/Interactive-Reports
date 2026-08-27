@@ -683,6 +683,73 @@ test("column settings restyle a column from the header menu", async ({ page }) =
         .toHaveCSS("text-align", "center");
 });
 
+test("a definition edit link and per-column overrides shape the managed report", async ({ page }) => {
+    await openWorkbench(page);
+    await runAndWaitForQuery(page, () =>
+        page.locator("interactive-report").evaluate(element => element.setAttribute("report", "orders-managed")));
+
+    // The pencil column leads the grid: an accessibly named, visually empty
+    // header and a real same-tab anchor per row, its URL canonical-cased from
+    // the lowercase {order_id} placeholder in configuration.
+    const editHeader = page.getByRole("columnheader", { name: "Edit order", exact: true });
+    await expect(editHeader).toHaveText("");
+    const pencil = page.getByRole("table").locator("tbody a.ir-cell-edit").first();
+    await expect(pencil).toHaveAttribute("href", /^\/orders\/\d+\/edit$/);
+    await expect(pencil).toHaveAttribute("aria-label", "Edit order");
+    expect(await pencil.getAttribute("target")).toBeNull();
+
+    // hideLabel: the NOTES header shows no text but keeps its accessible name,
+    // and its menu offers no sort, filter, or break — presentation survives.
+    const notesButton = page.getByRole("columnheader", { name: "Notes", exact: true }).getByRole("button");
+    await expect(notesButton).toHaveText("");
+    await notesButton.click();
+    const notesMenu = page.getByRole("menu");
+    await expect(notesMenu).toBeVisible();
+    await expect(notesMenu.getByRole("menuitem", { name: "Rename…", exact: true })).toBeVisible();
+    await expect(notesMenu.getByRole("menuitem", { name: /^Sort/ })).toHaveCount(0);
+    await expect(notesMenu.getByRole("menuitem", { name: "Filter…", exact: true })).toHaveCount(0);
+    await expect(notesMenu.getByRole("menuitem", { name: /Control Break/ })).toHaveCount(0);
+    await page.keyboard.press("Escape");
+
+    // helpText renders as a note at the bottom of the column's menu.
+    await page.getByRole("columnheader", { name: "Order #", exact: true }).getByRole("button").click();
+    await expect(page.getByRole("menu")).toContainText("Internal order number assigned at intake.");
+    await page.keyboard.press("Escape");
+
+    // The Sort dialog's column picker omits the restricted column.
+    await clickAction(page, "Sort…");
+    const sortDialog = page.getByRole("dialog", { name: "Sort", exact: true });
+    const sortOptions = await sortDialog.getByRole("combobox", { name: "Column" }).first()
+        .locator("option").allTextContents();
+    expect(sortOptions).toContain("Customer");
+    expect(sortOptions).not.toContain("Notes");
+    await sortDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+
+    // The Filter dialog's column tokens omit non-filterable columns.
+    await clickAction(page, "Filter…");
+    const filterDialog = page.getByRole("dialog", { name: "Add Filter", exact: true });
+    await expect(filterDialog.getByRole("button", { name: "Customer", exact: true })).toBeVisible();
+    await expect(filterDialog.getByRole("button", { name: "Notes", exact: true })).toHaveCount(0);
+    await filterDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+
+    // Exports carry data columns only — the pencil is chrome, like APEX's.
+    const downloadPromise = page.waitForEvent("download");
+    await clickAction(page, "CSV");
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toBe("orders-managed.csv");
+    const lines = (await readFile(await download.path(), "utf8")).trim().split(/\r?\n/);
+    expect(lines[0]).toBe("Order #,Customer,Region,Status,Amount,Order Date,Notes");
+
+    // A stale saved document sorting on the restricted column degrades into
+    // ignored[] instead of erroring.
+    const stale = await page.request.post("/api/reports/orders-managed/query", {
+        data: { v: 3, pipeline: [{ shape: { kind: "source" }, layer: { sorts: [{ col: "NOTES" }] } }] },
+    });
+    expect(stale.ok()).toBe(true);
+    const staleResult = await stale.json();
+    expect(staleResult.ignored).toEqual([{ kind: "sort", detail: "column 'NOTES' is not sortable" }]);
+});
+
 test.describe("non-administrator", () => {
     test.use({ extraHTTPHeaders: { "X-Workbench-User": "ordinary-user" } });
 

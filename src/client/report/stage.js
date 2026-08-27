@@ -13,7 +13,7 @@
 //             GROUP layer — pre-spread computed metrics and row-dim ordering.
 //   chart   → no table; only source-level features apply.
 
-import { columnOf, labelOf, pickable, typeOf, featureEnabled } from "./schema.js";
+import { columnOf, columnSortable, labelOf, pickable, sortableColumns, typeOf, featureEnabled } from "./schema.js";
 import { FN_LABELS } from "./render/format.js";
 import {
     lookupValue,
@@ -136,7 +136,10 @@ export function stageContext(w) {
             sortLayer: groupLayer,
             highlightLayer: groupLayer,
             computeTokens: groupStageColumns(w, { includeComputed: false }),
-            sortColumns: columns,
+            // Dims are pass-through base columns, so definition sort restrictions
+            // reach them; stage synthetics (__count, metrics, computed) never
+            // match an override and stay sortable.
+            sortColumns: columns.filter(c => columnSortable(w, c.name)),
             caps: caps(w, {
                 columns: true, columnSettings: true, rename: true, compute: true,
                 highlight: true, sort: true, visibility: true, displayAs: false,
@@ -157,7 +160,7 @@ export function stageContext(w) {
             computeLayer: groupLayer,
             sortLayer: groupLayer,
             computeTokens: groupStageColumns(w, { includeComputed: false }),
-            sortColumns: pivotRowColumns(w),
+            sortColumns: pivotRowColumns(w).filter(c => columnSortable(w, c.name)),
             caps: caps(w, {
                 columns: false, columnSettings: true, rename: true, compute: true,
                 highlight: false, sort: true, visibility: false, displayAs: false,
@@ -189,7 +192,7 @@ export function stageContext(w) {
         sortLayer: source,
         highlightLayer: source,
         computeTokens: pickable(w).filter(c => !c.computed),
-        sortColumns: pickable(w),
+        sortColumns: sortableColumns(w),
         caps: caps(w, {
             columns: true, columnSettings: true, rename: true, compute: true,
             highlight: true, sort: true, visibility: true, displayAs: true,

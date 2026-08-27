@@ -39,9 +39,11 @@ public static class StateValidator
         // Display labels resolve here — one ingestion path for every consumer — but
         // they are presentation, not a program: never validated against the schema
         // (unknown keys are unused display data) and never applied to query surfaces.
-        // The definition's columnLabels are the bottom default layer, mirroring the
-        // default report the schema endpoint delivers.
-        var labels = ResolveLabels(source.Labels ?? def.ColumnLabels);
+        // The definition's labels (columnLabels overlaid with columns[*].label) are
+        // the bottom default layer, mirroring the default report the schema endpoint
+        // delivers.
+        var labels = ResolveLabels(source.Labels ?? def.GetEffectiveColumnLabels());
+        var policy = ColumnPolicy.From(def);
 
         // Source computed columns validate first against the BASE schema, then join the
         // effective schema — everything after this line treats them as ordinary columns.
@@ -60,7 +62,8 @@ public static class StateValidator
             ExpressionRequirement.Predicate,
             prepareEffect: static (_, _) => _ => new IncludeRowEffect(),
             errors);
-        var view = PipelineValidator.ValidateTail(stages, def.Name, effectiveSchema, errors, ignored);
+        filters = StripRestrictedFilters(filters, policy, effectiveSchema, ignored);
+        var view = PipelineValidator.ValidateTail(stages, def.Name, effectiveSchema, errors, ignored, policy);
 
         // A report retains independent settings for every stage. Bind only the settings
         // the terminal stage consumes; an inactive source configuration must neither
@@ -72,7 +75,7 @@ public static class StateValidator
             effectiveSchema,
             gridMode ? ignored : inactive);
         var sorts = gridMode
-            ? ValidateSorts(source.Sorts, effectiveSchema, ignored)
+            ? ValidateSorts(source.Sorts, effectiveSchema, ignored, policy)
             : [];
         var aggregates = gridMode
             ? AggregateRuleValidator.Validate(
@@ -83,7 +86,7 @@ public static class StateValidator
                 ignored)
             : [];
         var breaks = gridMode
-            ? ValidateBreaks(source.Breaks, effectiveSchema, ignored)
+            ? ValidateBreaks(source.Breaks, effectiveSchema, ignored, policy)
             : [];
         var highlights = gridMode
             ? HighlightRuleValidator.Validate(
@@ -105,10 +108,14 @@ public static class StateValidator
 
         // A renderer may read a different row column than the displayed slot. Keep
         // those dependencies out of Columns/result metadata, but bind every identifier
-        // through the discovered schema before it reaches query composition.
+        // through the discovered schema before it reaches query composition. The
+        // definition's edit link widens the projection the same way: its template
+        // columns ride as hidden row data whether or not the view displays them.
         var projectionColumns = gridMode
             ? ResolveRendererColumns(formats, columns, effectiveSchema, ignored)
             : columns.ToList();
+        if (gridMode && def.EditLink is not null)
+            AddEditLinkColumns(def.EditLink, projectionColumns, schema, ignored);
 
         var search = string.IsNullOrWhiteSpace(resolved.Search) ? null : resolved.Search.Trim();
         if (search is not null && !columns.Any(c => c.Kind == ColumnKind.Text))
@@ -162,7 +169,8 @@ public static class StateValidator
     private static List<ColumnModel> ValidateBreaks(
         List<string>? requested,
         ReportSchema schema,
-        List<IgnoredItem> ignored)
+        List<IgnoredItem> ignored,
+        ColumnPolicy? policy = null)
     {
         var result = new List<ColumnModel>();
         if (requested is null) return result;
@@ -175,10 +183,81 @@ public static class StateValidator
                 ignored.Add(new IgnoredItem("break", $"unknown column '{name}'"));
                 continue;
             }
+            if (policy?.IsSortable(col) == false)
+            {
+                ignored.Add(new IgnoredItem(
+                    "break",
+                    $"column '{col.Name}' is not sortable (control breaks imply sorting)"));
+                continue;
+            }
             if (seen.Add(col.Name))
                 result.Add(col);
         }
         return result;
+    }
+
+    /// <summary>
+    /// Drops filter rules that reference a non-filterable base column. Runs after
+    /// compilation so malformed expressions still surface as precise errors, and
+    /// reads the bound AST so references resolve to canonical columns (a filter on
+    /// a computed column stays, even when the computation reads restricted inputs).
+    /// </summary>
+    private static List<CompiledRule<IncludeRowEffect>> StripRestrictedFilters(
+        List<CompiledRule<IncludeRowEffect>> filters,
+        ColumnPolicy policy,
+        ReportSchema schema,
+        List<IgnoredItem> ignored)
+    {
+        if (filters.Count == 0 || !policy.HasFilterRestrictions) return filters;
+
+        var kept = new List<CompiledRule<IncludeRowEffect>>(filters.Count);
+        foreach (var rule in filters)
+        {
+            var blocked = ExprColumns.Collect(rule.Expression.Ast)
+                .FirstOrDefault(name => schema.TryGetValue(name, out var col) && !policy.IsFilterable(col));
+            if (blocked is null)
+            {
+                kept.Add(rule);
+                continue;
+            }
+            ignored.Add(new IgnoredItem(
+                "filter",
+                $"filter references non-filterable column '{blocked}'"));
+        }
+        return kept;
+    }
+
+    /// <summary>
+    /// Appends the edit link's template columns to the grid projection so their values
+    /// ride as hidden row data — same mechanics as renderer source columns. Binding is
+    /// against the base schema: the template is definition-authored, and computed ids
+    /// are document-scoped names the definition cannot know.
+    /// </summary>
+    private static void AddEditLinkColumns(
+        ReportEditLink editLink,
+        List<ColumnModel> projection,
+        ReportSchema baseSchema,
+        List<IgnoredItem> ignored)
+    {
+        var placeholders = EditLinkTemplate.Parse(editLink.UrlTemplate, out var error);
+        if (placeholders is null)
+        {
+            // Configuration validation rejects malformed templates; an in-code
+            // definition can still carry one — degrade, never fail the query.
+            ignored.Add(new IgnoredItem("editLink", $"invalid urlTemplate — {error}"));
+            return;
+        }
+
+        var seen = new HashSet<string>(projection.Select(c => c.Name), StringComparer.OrdinalIgnoreCase);
+        foreach (var name in placeholders)
+        {
+            if (!baseSchema.TryGetValue(name, out var col))
+            {
+                ignored.Add(new IgnoredItem("editLink", $"references unknown column '{name}'"));
+                continue;
+            }
+            if (seen.Add(col.Name)) projection.Add(col);
+        }
     }
 
     private static readonly IReadOnlyDictionary<string, ColumnFormat> NoFormats =
@@ -267,7 +346,8 @@ public static class StateValidator
     internal static List<ValidSort> ValidateSorts(
         List<SortRule>? sorts,
         ReportSchema schema,
-        List<IgnoredItem> ignored)
+        List<IgnoredItem> ignored,
+        ColumnPolicy? policy = null)
     {
         var result = new List<ValidSort>();
         if (sorts is null) return result;
@@ -278,6 +358,11 @@ public static class StateValidator
             if (!schema.TryGetValue(s.Col, out var col))
             {
                 ignored.Add(new IgnoredItem("sort", $"unknown column '{s.Col}'"));
+                continue;
+            }
+            if (policy?.IsSortable(col) == false)
+            {
+                ignored.Add(new IgnoredItem("sort", $"column '{col.Name}' is not sortable"));
                 continue;
             }
             if (seen.Add(col.Name))

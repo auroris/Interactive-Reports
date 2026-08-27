@@ -3,11 +3,12 @@
 // Pure DOM out of the widget's state — no fetching in here.
 
 import { el } from "../../core/dom.js";
-import { labelOf } from "../schema.js";
+import { columnSortable, headerLabelHidden, labelOf } from "../schema.js";
 import { stageContext } from "../stage.js";
 import { modeOf, sameColumn, sourceLayer } from "../state.js";
 import { formatAgg, formatInteger, hasFraction, parseReportNumber, FN_LABELS, FN_ORDER } from "./format.js";
 import { formatForColumn, renderColumnValue } from "./column-renderers.js";
+import { activeEditLink, renderEditCell } from "./edit-link.js";
 import { headerMenuAvailable, openHeaderMenu } from "../menus.js";
 import { columnClasses } from "../classes.js";
 import { alignmentStyle, presentationStyle } from "./presentation.js";
@@ -17,6 +18,10 @@ export function renderGrid(w, table) {
     if (!result) { table.replaceChildren(); return; }
     const ctx = stageContext(w);
     const mode = ctx.mode;
+    // The definition's edit pencil leads every grid row. One synthetic cell in
+    // front of the data columns — every index/colSpan below carries the offset.
+    const editLink = activeEditLink(w, mode);
+    const cellOffset = editLink ? 1 : 0;
     const requestedBreaks = mode === "grid" ? (sourceLayer(w.doc).breaks ?? []) : [];
     const breaks = requestedBreaks.map(name =>
         result.columns.find(column => column.name.toLowerCase() === name.toLowerCase())?.name ?? name);
@@ -41,15 +46,23 @@ export function renderGrid(w, table) {
         stageColumnByName.get(col.name.toLowerCase())?.label ?? col.label;
 
     // Header. Sort indicators come from the stage that owns ordering: the source
-    // layer in grid, the group layer under a group or spread tail.
-    const activeSorts = ctx.sortLayer ? (ctx.sortLayer(w.doc).sorts ?? []) : [];
+    // layer in grid, the group layer under a group or spread tail. A sort the
+    // server strips (definition-restricted column in a stale document) must not
+    // draw its glyph, so restricted entries drop out of the indicator map.
+    const activeSorts = (ctx.sortLayer ? (ctx.sortLayer(w.doc).sorts ?? []) : [])
+        .filter(s => columnSortable(w, s.col));
     const sortOrd = new Map(activeSorts.map((s, i) => [s.col.toLowerCase(), { dir: s.dir ?? "asc", ord: i + 1 }]));
     const menuAvailable = headerMenuAvailable(w, mode);
     const headRow = el("tr", {});
+    if (editLink)
+        headRow.append(el("th", { class: "ir-th-edit", scope: "col", "aria-label": editLink.label ?? "Edit" }));
     for (const col of columns) {
         const interactive = menuAvailable && mode !== "chart";
         const s = sortOrd.get(col.name.toLowerCase());
-        const inner = el("span", { class: "ir-th-inner" }, displayLabel(col));
+        // hideLabel: no visible header text, accessible name preserved on the
+        // interactive element (menus and dialogs keep showing the real label).
+        const hideLabel = headerLabelHidden(w, col.name);
+        const inner = el("span", { class: "ir-th-inner" }, hideLabel ? null : displayLabel(col));
         if (s) {
             inner.append(el("span", { class: "ir-sort-dir", "aria-hidden": "true" }, s.dir === "desc" ? "▼" : "▲"));
             if (activeSorts.length > 1)
@@ -60,6 +73,7 @@ export function renderGrid(w, table) {
             scope: "col",
             style: alignStyle(col),
             "aria-sort": s ? (s.dir === "desc" ? "descending" : "ascending") : undefined,
+            "aria-label": hideLabel && !interactive ? displayLabel(col) : undefined,
         });
         if (interactive) {
             const button = el("button", {
@@ -67,6 +81,7 @@ export function renderGrid(w, table) {
                 class: "ir-th-button",
                 "aria-haspopup": "menu",
                 "aria-expanded": "false",
+                "aria-label": hideLabel ? displayLabel(col) : undefined,
                 onclick: () => openHeaderMenu(w, col.name, button),
             }, inner);
             th.append(button);
@@ -101,6 +116,7 @@ export function renderGrid(w, table) {
         const fns = FN_ORDER.filter(fn => Object.values(aggregates ?? {}).some(byFn => fn in byFn));
         for (const fn of fns) {
             const tr = el("tr", { class: cls });
+            if (editLink) tr.append(el("td", { class: "ir-td-edit" }));
             columns.forEach((col, idx) => {
                 const has = aggregates[col.name] && fn in aggregates[col.name];
                 const fmt = formatFor(col);
@@ -140,13 +156,14 @@ export function renderGrid(w, table) {
                 const bt = totalsByKey.get(key);
                 const label = breaks.map(b => `${labelOf(w, b)}: ${row[b] ?? "(blank)"}`).join("  ·  ");
                 bodyRows.push(el("tr", { class: "ir-break-header" },
-                    el("td", { colSpan: Math.max(columns.length, 1) },
+                    el("td", { colSpan: Math.max(columns.length, 1) + cellOffset },
                         el("span", {}, label),
                         bt ? el("span", { class: "ir-break-count" }, `${formatInteger(bt.rows)} rows`) : null)));
                 currentKey = key;
             }
         }
         const tr = el("tr", { class: "ir-row" });
+        if (editLink) tr.append(el("td", { class: "ir-td-edit" }, renderEditCell(editLink, row)));
         for (const col of columns) {
             const fmt = formatFor(col);
             const cls = classesFor(
@@ -166,8 +183,8 @@ export function renderGrid(w, table) {
             } else {
                 const idx = columns.findIndex(c => sameColumn(c.name, hit.col));
                 if (idx >= 0) {
-                    if (style.bg) tr.children[idx].style.background = style.bg;
-                    if (style.fg) tr.children[idx].style.color = style.fg;
+                    if (style.bg) tr.children[idx + cellOffset].style.background = style.bg;
+                    if (style.fg) tr.children[idx + cellOffset].style.color = style.fg;
                 }
             }
         }
@@ -187,7 +204,7 @@ export function renderGrid(w, table) {
 
     if (!result.rows.length)
         bodyRows.push(el("tr", { class: "ir-empty" },
-            el("td", { colSpan: Math.max(columns.length, 1) }, "No data found.")));
+            el("td", { colSpan: Math.max(columns.length, 1) + cellOffset }, "No data found.")));
 
     table.replaceChildren(el("thead", {}, headRow), el("tbody", {}, ...bodyRows));
 }

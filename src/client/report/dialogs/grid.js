@@ -5,6 +5,7 @@
 
 import { el, labeled, sel } from "../../core/dom.js";
 import { openDialog } from "../../core/dialog.js";
+import { sortableColumns } from "../schema.js";
 import { stageContext } from "../stage.js";
 import { sourceLayer } from "../state.js";
 import {
@@ -84,7 +85,9 @@ export function sortDialog(w) {
 export function breakDialog(w) {
     const container = el("div", {});
     const list = rowList(container, (sourceLayer(w.doc).breaks ?? []).map(b => ({ col: b })), (row, item) => {
-        const colSel = sel(colOptions(w, { none: "— Select —" }), item?.col ?? "");
+        // Breaks force sorting, so a definition sort restriction removes the
+        // column here too.
+        const colSel = sel(colOptions(w, { none: "— Select —", columns: sortableColumns(w) }), item?.col ?? "");
         row.append(rowField("Column", colSel));
         row._read = () => colSel.value || null;
     }, { addLabel: "Break Column", max: 3 });

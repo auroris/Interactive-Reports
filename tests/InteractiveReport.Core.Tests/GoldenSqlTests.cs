@@ -131,6 +131,22 @@ public class GoldenSqlTests
     }
 
     [Fact]
+    public void Grid_query_projects_edit_link_template_columns_without_display_metadata()
+    {
+        var def = OrdersDefinition(ReportDialect.Sqlite);
+        def.EditLink = new ReportEditLink { UrlTemplate = "/orders/{ORDER_ID}/edit" };
+        var validated = StateValidator.Validate(
+            def,
+            Doc(source: new StageLayer { Columns = ["CUSTOMER"] }),
+            OrdersSchema);
+        var composed = QueryComposer.Compose(def, validated);
+
+        var page = DialectSupport.GetCompiler(ReportDialect.Sqlite).Compile(composed.Page);
+
+        Assert.StartsWith("SELECT \"CUSTOMER\", \"ORDER_ID\"", page.Sql);
+    }
+
+    [Fact]
     public void Contains_is_case_insensitive_with_lowered_binding()
     {
         var (page, _) = Compile(ReportDialect.Sqlite, Doc(source: new StageLayer

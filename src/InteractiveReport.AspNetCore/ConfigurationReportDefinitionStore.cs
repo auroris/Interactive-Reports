@@ -220,6 +220,105 @@ public sealed partial class ConfigurationReportDefinitionStore : IReportDefiniti
                 throw new InvalidOperationException(
                     $"Report '{def.Name}': styleSheet absolute URLs must use http or https.");
         }
+
+        ValidateEditLink(def);
+        ValidateColumnOverrides(def);
+    }
+
+    private static void ValidateEditLink(ReportDefinition def)
+    {
+        if (def.EditLink is not { } editLink) return;
+
+        if (string.IsNullOrWhiteSpace(editLink.UrlTemplate))
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': editLink.urlTemplate is required.");
+        if (editLink.UrlTemplate.Length > 2048)
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': editLink.urlTemplate must be at most 2048 characters.");
+        var placeholders = EditLinkTemplate.Parse(editLink.UrlTemplate, out var templateError);
+        if (placeholders is null)
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': editLink.urlTemplate is invalid — {templateError}.");
+        if (placeholders.Count == 0)
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': editLink.urlTemplate needs at least one {{COLUMN}} placeholder — a constant URL is not a per-row edit link.");
+        // Same rule as styleSheet, probed with placeholders neutralized: relative URLs
+        // (the primary case) always pass, and substituted values cannot introduce a
+        // scheme because the client URL-encodes them.
+        var probe = EditLinkTemplate.Rewrite(editLink.UrlTemplate, _ => "x").Replace("{", "").Replace("}", "");
+        if (Uri.TryCreate(probe, UriKind.RelativeOrAbsolute, out var probeUri)
+            && probeUri.IsAbsoluteUri
+            && !string.Equals(probeUri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(probeUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': editLink.urlTemplate absolute URLs must use http or https.");
+
+        if (editLink.Label is not null && string.IsNullOrWhiteSpace(editLink.Label))
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': editLink.label must not be blank.");
+        if (editLink.Label is { Length: > 200 })
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': editLink.label must be at most 200 characters.");
+        if (editLink.Target is not null
+            && !string.Equals(editLink.Target, "_self", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(editLink.Target, "_blank", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': editLink.target must be '_self' or '_blank'.");
+    }
+
+    private static void ValidateColumnOverrides(ReportDefinition def)
+    {
+        if (def.Columns is null) return;
+
+        // Unknown column names stay tolerated (schema drift, same as columnLabels);
+        // blank keys, case collisions, and double-configured labels fail fast.
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (name, over) in def.Columns)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                throw new InvalidOperationException(
+                    $"Report '{def.Name}': columns contains a blank column name.");
+            if (!names.Add(name))
+                throw new InvalidOperationException(
+                    $"Report '{def.Name}': columns contains duplicate column '{name}' (names are case-insensitive).");
+            if (over is null) continue;
+            if (over.Label is not null && string.IsNullOrWhiteSpace(over.Label))
+                throw new InvalidOperationException(
+                    $"Report '{def.Name}': columns['{name}'].label must not be blank — use hideLabel to suppress the header text.");
+            if (over.Label is { Length: > 200 })
+                throw new InvalidOperationException(
+                    $"Report '{def.Name}': columns['{name}'].label must be at most 200 characters.");
+            if (over.Label is not null && def.ColumnLabels?.Keys.Any(k => string.Equals(k, name, StringComparison.OrdinalIgnoreCase)) == true)
+                throw new InvalidOperationException(
+                    $"Report '{def.Name}': column '{name}' has a label in both columnLabels and columns — configure it in one place.");
+            if (over.HelpText is not null && string.IsNullOrWhiteSpace(over.HelpText))
+                throw new InvalidOperationException(
+                    $"Report '{def.Name}': columns['{name}'].helpText must not be blank.");
+            if (over.HelpText is { Length: > 1000 })
+                throw new InvalidOperationException(
+                    $"Report '{def.Name}': columns['{name}'].helpText must be at most 1000 characters.");
+        }
+
+        // A definition contradicting itself is a config mistake, not saved-state drift:
+        // the default view must not sort or break on a column the definition locks.
+        // (Default-state filters are expressions needing the schema; they degrade into
+        // ignored[] at query time instead.)
+        var restricted = new HashSet<string>(
+            def.Columns.Where(e => e.Value?.Sortable == false).Select(e => e.Key),
+            StringComparer.OrdinalIgnoreCase);
+        if (restricted.Count == 0) return;
+        var source = def.DefaultState?.Pipeline is { Count: > 0 } pipeline
+            && string.Equals((pipeline[0].Shape?.Kind ?? "source").Trim(), "source", StringComparison.OrdinalIgnoreCase)
+                ? pipeline[0].Layer
+                : null;
+        var sorted = source?.Sorts?.FirstOrDefault(s => restricted.Contains(s.Col));
+        if (sorted is not null)
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': defaultState sorts on '{sorted.Col}' but columns['{sorted.Col}'] is not sortable.");
+        var broken = source?.Breaks?.FirstOrDefault(restricted.Contains);
+        if (broken is not null)
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': defaultState breaks on '{broken}' but columns['{broken}'] is not sortable (control breaks imply sorting).");
     }
 
     [GeneratedRegex(@"\bORDER\s+BY\b", RegexOptions.IgnoreCase)]

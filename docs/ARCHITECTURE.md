@@ -99,6 +99,15 @@ public interface IReportDefinitionStore
       "dialect": "SqlServer",            // SqlServer | Oracle | Sqlite | Postgres
       "sql": "SELECT o.ORDER_ID, o.CUSTOMER, o.AMOUNT, o.ORDER_DATE FROM ORDERS o WHERE o.SALES_REP = @currentUser",
       "columnLabels": { "ORDER_ID": "Order #", "CUSTOMER": "Customer Name" },
+      "editLink": {
+        "urlTemplate": "/orders/{ORDER_ID}/edit",  // {COLUMN} = base schema columns
+        "label": "Edit order",                     // pencil aria-label/tooltip; default "Edit"
+        "target": "_self"                          // or "_blank" (rendered with rel="noopener")
+      },
+      "columns": {
+        "AMOUNT": { "helpText": "Order total before tax." },
+        "NOTES": { "hideLabel": true, "sortable": false, "filterable": false }
+      },
       "contextParams": { "currentUser": { "claim": "sub" } },
       "authorization": { "policy": "SalesRead" },
       "features": [ "search", "filter", "sort", "pagination", "savedReports", "download" ],
@@ -176,6 +185,42 @@ Notes:
   packaged styles. Relative URLs resolve against the host page; CSP `style-src` still
   applies. The URL never enters report state, so saved/global reports cannot redirect
   CSS loading.
+- `editLink` renders APEX's edit pencil: a leading synthetic grid column whose anchor
+  navigates to `urlTemplate` with `{COLUMN}` placeholders substituted from the row
+  (values URL-encoded; the result still passes the renderer protocol allowlist).
+  Definition chrome like `styleSheet` — not a feature token, never in report state,
+  and independent of the user's column selection: template columns are schema-bound
+  and projected as hidden row data exactly like renderer source columns, so hiding a
+  referenced column never breaks the pencil. The header is visually empty with the
+  label as its accessible name; a row whose placeholder value is NULL renders no
+  pencil (`CASE`-null a key in the base SQL to withhold rows, as the actions
+  convention does); the column never appears in pickers, search, sorts, filters, or
+  exports, and only grid mode shows it — grouped and pivoted rows have no single
+  source row to edit. Template syntax fails fast at load (unmatched/empty/nested
+  braces, zero placeholders, non-http(s) absolute URLs); a placeholder naming no
+  live schema column disables the pencil for that schema (omitted from the payload,
+  logged, and surfaced as an `ignored[]` notice on queries) rather than erroring.
+  Config keys cannot express column names containing `:` (a configuration-binder
+  limitation shared with `columnLabels`).
+- `columns` is the per-column override map (keyed by base column name,
+  case-insensitive; unknown names tolerated like `columnLabels`): `label` supersedes
+  `columnLabels` — configuring the same column's label in both maps fails fast, and
+  `columnLabels` remains supported as the label-only shorthand; `hideLabel` blanks
+  the table header cell while menus, dialogs, pickers, break headings, and the
+  accessible name keep the real label (labels can never be blank — this flag is the
+  APEX empty-heading pattern without unnameable columns); `sortable: false` removes
+  the column's sort controls and control breaks (breaks force `ORDER BY`);
+  `filterable: false` removes its filter controls and expression tokens;
+  `helpText` renders as a note at the bottom of the column's header menu (a report
+  whose whitelist removes every header-menu feature has no menu to carry it).
+  Computed columns are always exempt — restrictions bind to base columns, so
+  `c1 = AMOUNT * 2` stays sortable while `AMOUNT` is not, with no transitive
+  analysis to reason about. Enforcement follows the whitelist philosophy: the
+  client hides the controls, and the server strips violating sorts, breaks, and
+  filter rules from incoming documents into `ignored[]` — stale saved reports
+  degrade visibly instead of erroring — while a `defaultState` that contradicts
+  its own definition fails fast at load. This is presentation-level courtesy, not
+  a data boundary (context params, §12, remain the security story).
 - Definitions version in git and deploy with the app: schema changes and report changes travel together.
 
 ## 5. Report state document
@@ -1242,6 +1287,21 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   battery updated but not yet run. Remaining post-T0 candidates: group-stage filters
   (HAVING), aggregates/breaks on the group stage, cross-cell pivot expressions,
   dependency-aware snapshot pruning.
+- **M20 — Definition edit link + per-column overrides** ✅ *(2026-08-27)*: APEX's
+  edit pencil as definition config — `editLink.urlTemplate` with schema-bound
+  `{COLUMN}` placeholders, delivered canonical-cased on the schema payload, rendered
+  client-side as a leading icon-only anchor (URL-encoded substitution, protocol
+  allowlist, NULL value ⇒ no pencil, grid only, never in metadata/pickers/exports);
+  template columns ride the existing hidden-projection channel. Plus the anticipated
+  per-column attribute map (`columns`): `label` (supersedes `columnLabels`),
+  `hideLabel` (blank header, accessible name kept), `sortable`/`filterable` (controls
+  hidden client-side across header menus, dialogs, and pickers; server strips
+  violating sorts/breaks/filter rules into `ignored[]`; computed columns exempt;
+  breaks count as sorting), and `helpText` (header-menu note). No state-model or
+  `stateVersion` change; query payloads untouched. Verified: template parse/binding
+  units, golden projection SQL, config fail-fast matrix + snapshot round-trip, HTTP
+  schema/query/enforcement suite, packaged-UI unit suites (direct-import renderer +
+  built-bundle mount), Playwright e2e against the live Workbench.
 
 ## Appendix: decision log
 
@@ -1311,5 +1371,7 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 | Mode is derived from the pipeline tail | a stored `view` field | A stored mode can disagree with the stages; the tail cannot. Toolbar switching is tail-swapping against the shelf. |
 | Metrics carry explicit ids (`m1`); spread cells are `{metricId}@{JSON values}` | positional `v0..vN` / `p{k}_{v}` names | Positional names silently change meaning when the values list reorders or data shifts — the failure class this engine exists to prevent. Value-derived cell names make never-validated presentation maps naturally dormant/revivable under data drift. |
 | Schema snapshot lives in the state document; the client checks and resets | definition-side snapshot; server-side enforcement | The document is the thing that was authored against a schema, so it records which one; both comparison inputs already reach the client. T0 mismatch = don't run, explain, reset the working copy (stored rows untouched); the same diff powers post-T0 dependency-aware pruning with no protocol change. |
+| Edit link is a constrained URL template in the definition | explicit source columns only (the M15 renderer rule) | A scoped reversal, not a repeal: M15's rejection targeted templates in *report state* — untrusted documents. The definition author already writes the raw SQL, so the trust boundary is unchanged; the template is URL-only (no HTML), placeholders are schema-bound and URL-encoded at substitution, the result still passes the protocol allowlist, and the template never enters report state — the M15 rule keeps holding for documents. Computing URLs in SQL instead would pollute the discovered schema with a link column every picker shows. |
+| Per-column overrides are a definition map delivered beside the schema (`columnOverrides`) | extend `ColumnInfo`; put flags in the state document | The per-column attribute model M11 anticipated. `ColumnInfo` is shared with query responses (and `availableColumns` overlays schema columns client-side, which would erase flags after the first query), so a parallel map keeps query payloads byte-identical. Labels ride the existing `columnLabels`/default-report channel so precedence has one implementation; sort/filter restrictions follow the whitelist philosophy — client hides controls, server strips violations into `ignored[]` so stale saved reports degrade instead of erroring — and computed columns are exempt to keep the rule predictable without transitive analysis. |
 | Group-stage filters reserved but not populated at T0 | ship HAVING filters now; forbid forever | Filtering means "which rows exist" (stage 1) in the user's model today; the layer slot makes group filters a dialog-UX task later, not a pipeline change. |
 | v1/v2 documents rejected outright | migrate v2 into v3 | Owner-confirmed: nothing external consumes documents or the wire protocol; a migrator would be dead code the day it lands. |

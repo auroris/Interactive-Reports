@@ -7,7 +7,7 @@
 // edits the source stage.
 
 import { popupMenu } from "../core/menu.js";
-import { anyMutableFeature, featureEnabled } from "./schema.js";
+import { anyMutableFeature, columnFilterable, columnHelp, columnSortable, featureEnabled } from "./schema.js";
 import { stageContext, visibleStageColumnNames } from "./stage.js";
 import { sameColumn } from "./state.js";
 import { columnSettingsDialog, columnsDialog, renameDialog } from "./dialogs/columns.js";
@@ -94,9 +94,11 @@ export function openHeaderMenu(w, col, anchor) {
 
     // Sorting: grid sorts the source table; group/pivot sort through the group
     // layer (pivot restricted to row dims — cells have no single order column).
-    const sortable = ctx.mode === "grid"
-        || (ctx.mode === "groupBy" && ctx.caps.sort)
-        || (ctx.mode === "pivot" && ctx.caps.sort && isDim);
+    // The definition's per-column override gates on top of the mode rule.
+    const sortable = columnSortable(w, col)
+        && (ctx.mode === "grid"
+            || (ctx.mode === "groupBy" && ctx.caps.sort)
+            || (ctx.mode === "pivot" && ctx.caps.sort && isDim));
     const sortItems = sortable
         ? feature("sort",
             {
@@ -132,7 +134,7 @@ export function openHeaderMenu(w, col, anchor) {
         }));
     }
 
-    if (ctx.mode === "grid") {
+    if (ctx.mode === "grid" && columnSortable(w, col)) {
         const breaking = (ctx.columnsLayer(w.doc).breaks ?? []).some(b => sameColumn(b, col));
         presentation.push(...feature("controlBreak", {
             label: breaking ? "Remove Control Break" : "Control Break",
@@ -147,12 +149,19 @@ export function openHeaderMenu(w, col, anchor) {
     }
 
     // Filter always targets the source stage; offer it where the clicked column
-    // exists there (grid columns; group/pivot pass-through dims).
-    const filterable = ctx.mode === "grid" || (isDim && !column?.metric);
+    // exists there (grid columns; group/pivot pass-through dims), unless the
+    // definition's per-column override withdraws it.
+    const filterable = columnFilterable(w, col)
+        && (ctx.mode === "grid" || (isDim && !column?.metric));
     const filterItems = filterable
         ? feature("filter", { label: "Filter…", onPick: () => filterDialog(w, { col }) })
         : [];
 
     const items = joinSections([sortItems, presentation, filterItems]);
+    // The definition's help text closes the menu — reachable wherever the menu
+    // itself is (a report whose whitelist empties the menu offers no help path;
+    // accepted and documented).
+    const help = columnHelp(w, col);
+    if (help) items.push(...(items.length ? ["-"] : []), { note: help });
     if (items.length) popupMenu(anchor, items);
 }

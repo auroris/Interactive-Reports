@@ -384,6 +384,233 @@ public sealed class ConfigurationReportDefinitionStoreTests
             Assert.Contains("FROM \"IR_SAVED_REPORTS\"", sql);
     }
 
+    // ---- definition edit link + per-column overrides ----
+
+    private static ConfigurationReportDefinitionStore StoreFor(ReportDefinition def)
+    {
+        var options = new InteractiveReportOptions();
+        options.Reports["orders"] = def;
+        return new ConfigurationReportDefinitionStore(new OptionsMonitorStub(options), new SchemaCache());
+    }
+
+    private static ReportDefinition OrdersDefinition() => new()
+    {
+        Connection = "db",
+        Dialect = ReportDialect.Sqlite,
+        Sql = "select 1 as ORDER_ID, 'x' as NOTES",
+    };
+
+    [Theory]
+    [InlineData(" ", "editLink.urlTemplate is required")]
+    [InlineData("/orders/edit", "at least one {COLUMN} placeholder")]
+    [InlineData("/orders/{}/edit", "empty placeholder")]
+    [InlineData("/orders/{ORDER_ID/edit", "'{' without a matching '}'")]
+    [InlineData("/orders/{A{B}}/edit", "nested '{'")]
+    [InlineData("javascript:{ORDER_ID}", "must use http or https")]
+    [InlineData("file:///orders/{ORDER_ID}", "must use http or https")]
+    public async Task Invalid_edit_link_templates_fail_fast(string template, string expected)
+    {
+        var def = OrdersDefinition();
+        def.EditLink = new ReportEditLink { UrlTemplate = template };
+        using var store = StoreFor(def);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await store.Find("orders"));
+
+        Assert.Contains(expected, error.Message);
+    }
+
+    [Fact]
+    public async Task Oversized_edit_link_template_fails_fast()
+    {
+        var def = OrdersDefinition();
+        def.EditLink = new ReportEditLink { UrlTemplate = "/o/{ID}/" + new string('x', 2048) };
+        using var store = StoreFor(def);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await store.Find("orders"));
+
+        Assert.Contains("at most 2048 characters", error.Message);
+    }
+
+    [Theory]
+    [InlineData(" ", null, "editLink.label must not be blank")]
+    [InlineData(null, "middle", "editLink.target must be '_self' or '_blank'")]
+    public async Task Invalid_edit_link_label_or_target_fails_fast(string? label, string? target, string expected)
+    {
+        var def = OrdersDefinition();
+        def.EditLink = new ReportEditLink { UrlTemplate = "/orders/{ORDER_ID}/edit", Label = label, Target = target };
+        using var store = StoreFor(def);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await store.Find("orders"));
+
+        Assert.Contains(expected, error.Message);
+    }
+
+    [Fact]
+    public async Task Edit_link_accepts_relative_and_absolute_http_templates()
+    {
+        foreach (var template in new[]
+        {
+            "/orders/{ORDER_ID}/edit",
+            "orders/edit?id={ORDER_ID}",
+            "https://apps.example.com/orders/{ORDER_ID}",
+            "{ORDER_ID}/edit",
+        })
+        {
+            var def = OrdersDefinition();
+            def.EditLink = new ReportEditLink { UrlTemplate = template, Label = "Edit order", Target = "_BLANK" };
+            using var store = StoreFor(def);
+
+            var snapshot = await store.Find("orders");
+
+            Assert.Equal(template, snapshot!.EditLink!.UrlTemplate);
+        }
+    }
+
+    [Theory]
+    [InlineData(" ", "blank column name")]
+    [InlineData("ORDER_ID", "must not be blank — use hideLabel")]
+    public async Task Blank_column_override_entries_fail_fast(string name, string expected)
+    {
+        var def = OrdersDefinition();
+        def.Columns = new() { [name] = new ReportColumnOverride { Label = name == " " ? "Fine" : " " } };
+        using var store = StoreFor(def);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await store.Find("orders"));
+
+        Assert.Contains(expected, error.Message);
+    }
+
+    [Fact]
+    public async Task Case_colliding_column_override_keys_fail_fast()
+    {
+        var def = OrdersDefinition();
+        def.Columns = new Dictionary<string, ReportColumnOverride>(StringComparer.Ordinal)
+        {
+            ["ORDER_ID"] = new() { Sortable = false },
+            ["order_id"] = new() { Filterable = false },
+        };
+        using var store = StoreFor(def);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await store.Find("orders"));
+
+        Assert.Contains("duplicate column", error.Message);
+    }
+
+    [Fact]
+    public async Task Blank_help_text_fails_fast()
+    {
+        var def = OrdersDefinition();
+        def.Columns = new() { ["ORDER_ID"] = new ReportColumnOverride { HelpText = "  " } };
+        using var store = StoreFor(def);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await store.Find("orders"));
+
+        Assert.Contains("helpText must not be blank", error.Message);
+    }
+
+    [Fact]
+    public async Task A_label_in_both_maps_fails_fast()
+    {
+        var def = OrdersDefinition();
+        def.ColumnLabels = new() { ["ORDER_ID"] = "Order #" };
+        def.Columns = new() { ["order_id"] = new ReportColumnOverride { Label = "Ticket" } };
+        using var store = StoreFor(def);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await store.Find("orders"));
+
+        Assert.Contains("configure it in one place", error.Message);
+    }
+
+    [Fact]
+    public async Task Default_state_contradicting_a_sort_restriction_fails_fast()
+    {
+        var sortingDef = OrdersDefinition();
+        sortingDef.Columns = new() { ["NOTES"] = new ReportColumnOverride { Sortable = false } };
+        sortingDef.DefaultState = new ReportState
+        {
+            Pipeline =
+            [
+                new PipelineStage
+                {
+                    Shape = new StageShape { Kind = "source" },
+                    Layer = new StageLayer { Sorts = [new SortRule { Col = "NOTES" }] },
+                },
+            ],
+        };
+        using var sorting = StoreFor(sortingDef);
+        var sortError = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await sorting.Find("orders"));
+        Assert.Contains("is not sortable", sortError.Message);
+
+        var breakingDef = OrdersDefinition();
+        breakingDef.Columns = new() { ["NOTES"] = new ReportColumnOverride { Sortable = false } };
+        breakingDef.DefaultState = new ReportState
+        {
+            Pipeline =
+            [
+                new PipelineStage
+                {
+                    Shape = new StageShape { Kind = "source" },
+                    Layer = new StageLayer { Breaks = ["notes"] },
+                },
+            ],
+        };
+        using var breaking = StoreFor(breakingDef);
+        var breakError = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await breaking.Find("orders"));
+        Assert.Contains("control breaks imply sorting", breakError.Message);
+    }
+
+    [Fact]
+    public async Task Edit_link_and_column_overrides_round_trip_the_snapshot()
+    {
+        var def = OrdersDefinition();
+        def.EditLink = new ReportEditLink
+        {
+            UrlTemplate = "/orders/{ORDER_ID}/edit",
+            Label = "Edit order",
+            Target = "_blank",
+        };
+        def.Columns = new()
+        {
+            ["NOTES"] = new ReportColumnOverride
+            {
+                HideLabel = true,
+                Sortable = false,
+                Filterable = false,
+                HelpText = "Free-form notes.",
+            },
+            ["ORDER_ID"] = new ReportColumnOverride { Label = "Order #" },
+        };
+        using var store = StoreFor(def);
+
+        var snapshot = await store.Find("orders");
+
+        // Snapshot() serializes through IrJson — a property this drops is silently
+        // lost on every Find, so the round-trip is the load-bearing assertion.
+        Assert.NotNull(snapshot);
+        Assert.NotSame(def.EditLink, snapshot.EditLink);
+        Assert.Equal("/orders/{ORDER_ID}/edit", snapshot.EditLink!.UrlTemplate);
+        Assert.Equal("Edit order", snapshot.EditLink.Label);
+        Assert.Equal("_blank", snapshot.EditLink.Target);
+        Assert.NotSame(def.Columns, snapshot.Columns);
+        Assert.Contains("NOTES", snapshot.Columns!.Keys);   // map key casing intact
+        var notes = snapshot.Columns["NOTES"];
+        Assert.True(notes.HideLabel);
+        Assert.False(notes.Sortable);
+        Assert.False(notes.Filterable);
+        Assert.Equal("Free-form notes.", notes.HelpText);
+        Assert.Equal("Order #", snapshot.Columns["ORDER_ID"].Label);
+        Assert.Equal("Order #", snapshot.GetEffectiveColumnLabels()!["ORDER_ID"]);
+    }
+
     private sealed class OptionsMonitorStub(InteractiveReportOptions options)
         : IOptionsMonitor<InteractiveReportOptions>
     {

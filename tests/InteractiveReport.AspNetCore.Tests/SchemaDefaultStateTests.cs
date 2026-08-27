@@ -152,6 +152,31 @@ public sealed class SchemaDefaultStateTests
     }
 
     [Fact]
+    public void Column_override_labels_merge_over_column_labels_into_the_mapping()
+    {
+        var def = Definition();                                       // columnLabels: ORDER_ID → "Order #"
+        def.Columns = new() { ["LABEL"] = new ReportColumnOverride { Label = "Caption" } };
+
+        var state = EndpointExtensions.SchemaDefaultState(def, LiveSchema());
+
+        var labels = state.Pipeline![0].Layer!.Labels!;
+        Assert.Equal("Order #", labels["ORDER_ID"]);
+        Assert.Equal("Caption", labels["LABEL"]);
+    }
+
+    [Fact]
+    public void Override_only_labels_seed_the_mapping_without_column_labels()
+    {
+        var def = Definition();
+        def.ColumnLabels = null;
+        def.Columns = new() { ["ORDER_ID"] = new ReportColumnOverride { Label = "Ticket" } };
+
+        var state = EndpointExtensions.SchemaDefaultState(def, LiveSchema());
+
+        Assert.Equal("Ticket", state.Pipeline![0].Layer!.Labels!["ORDER_ID"]);
+    }
+
+    [Fact]
     public void Response_shaping_never_mutates_the_definition()
     {
         var def = Definition();

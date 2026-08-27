@@ -82,14 +82,15 @@ internal static partial class PipelineValidator
         string reportName,
         ReportSchema effectiveSchema,
         List<ValidationError> errors,
-        List<IgnoredItem> ignored)
+        List<IgnoredItem> ignored,
+        ColumnPolicy? policy = null)
     {
         if (stages.Chart is { } chart)
             return ValidateChart(chart, effectiveSchema.Lookup, errors);
         if (stages.Group is null)
             return ValidView.Grid;
 
-        return ValidateGroupTail(stages, reportName, effectiveSchema, errors, ignored);
+        return ValidateGroupTail(stages, reportName, effectiveSchema, errors, ignored, policy);
     }
 
     private static ValidView ValidateGroupTail(
@@ -97,7 +98,8 @@ internal static partial class PipelineValidator
         string reportName,
         ReportSchema effectiveSchema,
         List<ValidationError> errors,
-        List<IgnoredItem> ignored)
+        List<IgnoredItem> ignored,
+        ColumnPolicy? policy)
     {
         var shape = stages.Group!;
         var before = errors.Count;
@@ -183,7 +185,8 @@ internal static partial class PipelineValidator
             dims,
             rows,
             errors,
-            ignored);
+            ignored,
+            policy);
 
         if (errors.Count > before)
             return ValidView.Grid;
@@ -247,7 +250,8 @@ internal static partial class PipelineValidator
         IReadOnlyList<ColumnModel> dims,
         IReadOnlyList<ColumnModel> spreadRowDims,
         List<ValidationError> errors,
-        List<IgnoredItem> ignored)
+        List<IgnoredItem> ignored,
+        ColumnPolicy? policy)
     {
         var layer = stages.GroupLayer ?? new StageLayer();
         var terminal = !stages.HasSpread;
@@ -261,7 +265,9 @@ internal static partial class PipelineValidator
             $"{reportName}#group",
             computed.Select(rule => rule.Effect.Column));
 
-        var sorts = StateValidator.ValidateSorts(layer.Sorts, extended, ignored);
+        // The policy reaches pass-through dims here: a dim is the base ColumnModel
+        // itself, so a non-sortable base column stays unsortable under a group tail.
+        var sorts = StateValidator.ValidateSorts(layer.Sorts, extended, ignored, policy);
         if (stages.HasSpread)
         {
             // Under a spread, ordering can only choose row order: sorts on metrics or
