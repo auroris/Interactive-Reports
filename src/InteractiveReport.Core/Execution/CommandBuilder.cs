@@ -22,7 +22,7 @@ internal static class CommandBuilder
         IReadOnlyDictionary<string, object?> contextParams,
         ReportDefinition def,
         ILogger? logger = null)
-        => Build(connection, compiled, contextParams, def.CommandTimeoutSeconds, def.Dialect, logger);
+        => Build(connection, compiled, contextParams, def.CommandTimeoutSeconds, def.GetEffectiveDialect(), logger);
 
     public static DbCommand Build(
         DbConnection connection,

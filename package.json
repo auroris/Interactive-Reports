@@ -13,7 +13,8 @@
     "test": "npm run build:client && npm run test:unit",
     "test:unit": "node --test tests/ui/*.test.js",
     "test:ui": "npm run build:client && playwright test",
-    "verify": "npm test && npm run test:ui"
+    "verify": "npm test && npm run test:ui",
+    "pack": "pwsh scripts/pack.ps1"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",

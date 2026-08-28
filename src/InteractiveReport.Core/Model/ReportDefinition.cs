@@ -11,10 +11,41 @@ public sealed class ReportDefinition
 
     public string? Title { get; set; }
 
-    /// <summary>Named connection resolved through IReportConnectionFactory.</summary>
+    /// <summary>
+    /// Named connection resolved through IReportConnectionFactory. Registered in code
+    /// (AddConnection) — the programmatic alternative to <see cref="DataSource"/>;
+    /// a definition sets exactly one of the two.
+    /// </summary>
     public string Connection { get; set; } = "";
 
-    public ReportDialect Dialect { get; set; }
+    /// <summary>
+    /// The report's data source: a value containing '=' is a literal ADO.NET
+    /// connection string; a value without '=' is the name of an entry under the
+    /// standard ConnectionStrings configuration section (a missing name is a
+    /// configuration error — it is never treated as a literal).
+    /// </summary>
+    public string? DataSource { get; set; }
+
+    /// <summary>
+    /// ADO.NET provider token for <see cref="DataSource"/>: sqlite, sqlServer,
+    /// postgres, or oracle. Optional when the data source is a ConnectionStrings
+    /// name with a {name}_ProviderName companion entry (the Umbraco/legacy
+    /// convention); required for literal connection strings.
+    /// </summary>
+    public string? Provider { get; set; }
+
+    /// <summary>
+    /// The SQL dialect. Derived from the data source or connection — the definition
+    /// store stamps it before execution, superseding any configured value (dialect is
+    /// a property of the connection, not a per-report choice). Hosts that resolve
+    /// definitions themselves must assign it before execution.
+    /// </summary>
+    public ReportDialect? Dialect { get; set; }
+
+    /// <summary>The resolved dialect; execution surfaces call this, never the raw property.</summary>
+    public ReportDialect GetEffectiveDialect()
+        => Dialect ?? throw new InvalidOperationException(
+            $"Report '{Name}': dialect is unresolved — resolve it from the report's connection before execution.");
 
     /// <summary>
     /// Optional session timezone (a region name like "Pacific/Auckland" or an offset

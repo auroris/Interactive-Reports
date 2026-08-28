@@ -1,6 +1,7 @@
 using System.Data.Common;
 using InteractiveReport.Core.Definitions;
 using InteractiveReport.Core.Execution;
+using InteractiveReport.Core.Model;
 using InteractiveReport.Core.SavedReports;
 using InteractiveReport.Core.Schema;
 using Microsoft.Data.Sqlite;
@@ -28,6 +29,8 @@ public static class ServiceCollectionExtensions
         var builder = new InteractiveReportBuilder(services);
 
         // Zero-config default for saved reports: a local SQLite file under App_Data.
+        // The dialect is declared, never sniffed — the factory has a directory-creating
+        // side effect that dialect detection must not trigger.
         builder.Connections[DefaultSavedReportsConnection] = sp =>
         {
             var env = sp.GetRequiredService<IHostEnvironment>();
@@ -35,32 +38,38 @@ public static class ServiceCollectionExtensions
             Directory.CreateDirectory(dir);
             return new SqliteConnection($"Data Source={Path.Combine(dir, "interactivereport.saved.db")}");
         };
+        builder.ConnectionDialects[DefaultSavedReportsConnection] = ReportDialect.Sqlite;
 
         services.AddSingleton<SchemaCache>();
         services.AddSingleton<ConfiguredReportDocumentStore>();
-        services.AddSingleton<IReportDefinitionStore, ConfigurationReportDefinitionStore>();
-        services.AddSingleton<IReportConnectionFactory>(sp => new DelegateConnectionFactory(builder.Connections, sp));
+        services.AddSingleton(sp => new ReportConnectionRegistry(
+            builder.Connections,
+            builder.ConnectionDialects,
+            sp,
+            sp.GetRequiredService<IConfiguration>()));
+        services.AddSingleton<IReportConnectionFactory>(sp => sp.GetRequiredService<ReportConnectionRegistry>());
+        services.AddSingleton<IReportDefinitionStore>(sp => new ConfigurationReportDefinitionStore(
+            sp.GetRequiredService<IOptionsMonitor<InteractiveReportOptions>>(),
+            sp.GetRequiredService<SchemaCache>(),
+            sp.GetRequiredService<ReportConnectionRegistry>(),
+            sp.GetRequiredService<ConfiguredReportDocumentSynchronizer>(),
+            sp.GetRequiredService<ISavedReportStore>()));
         services.AddSingleton<ReportExecutor>();
         services.TryAddSingleton<IContextParameterResolver, ClaimContextParameterResolver>();
 
         services.AddSingleton<ISavedReportStore>(sp => new SqlSavedReportStore(
-            () => ResolveStoreConfig(
+            () => sp.GetRequiredService<ReportConnectionRegistry>().ResolveStoreConfig(
                 sp.GetRequiredService<IOptionsMonitor<InteractiveReportOptions>>().CurrentValue.SavedReports),
             sp.GetRequiredService<IReportConnectionFactory>()));
-        services.AddSingleton<ConfiguredReportDocumentSynchronizer>();
+        services.AddSingleton(sp => new ConfiguredReportDocumentSynchronizer(
+            sp.GetRequiredService<ConfiguredReportDocumentStore>(),
+            sp.GetRequiredService<ISavedReportStore>(),
+            sp.GetRequiredService<IOptionsMonitor<InteractiveReportOptions>>(),
+            sp.GetRequiredService<ReportConnectionRegistry>()));
+        services.AddHostedService<InteractiveReportStartupValidator>();
 
         return builder;
     }
-
-    /// <summary>
-    /// The one mapping from SavedReports options to a concrete store target. The
-    /// store, the configured-document synchronizer, and the built-in saved-reports
-    /// listing definition must all agree on it.
-    /// </summary>
-    internal static SavedReportStoreConfig ResolveStoreConfig(SavedReportsOptions saved)
-        => saved.Connection is null
-            ? new SavedReportStoreConfig(DefaultSavedReportsConnection, Core.Model.ReportDialect.Sqlite, saved.AutoCreate, saved.TableName)
-            : new SavedReportStoreConfig(saved.Connection, saved.Dialect, saved.AutoCreate, saved.TableName);
 }
 
 public sealed class InteractiveReportBuilder
@@ -70,12 +79,37 @@ public sealed class InteractiveReportBuilder
     internal Dictionary<string, Func<IServiceProvider, DbConnection>> Connections { get; }
         = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>Dialects declared at registration; connections absent here are sniffed by connection type.</summary>
+    internal Dictionary<string, ReportDialect> ConnectionDialects { get; }
+        = new(StringComparer.OrdinalIgnoreCase);
+
     internal InteractiveReportBuilder(IServiceCollection services) => _services = services;
 
-    /// <summary>Maps a definition's named connection to a DbConnection factory (returned unopened).</summary>
+    /// <summary>
+    /// Maps a definition's named connection to a DbConnection factory (returned
+    /// unopened). The SQL dialect is detected from the factory's connection type —
+    /// one unopened instance is created and disposed the first time it is needed.
+    /// </summary>
     public InteractiveReportBuilder AddConnection(string name, Func<IServiceProvider, DbConnection> factory)
     {
         Connections[name] = factory;
+        ConnectionDialects.Remove(name);   // re-registration is last-write-wins for the dialect too
+        return this;
+    }
+
+    /// <summary>
+    /// Like <see cref="AddConnection(string, Func{IServiceProvider, DbConnection})"/>,
+    /// declaring the dialect explicitly — for factories returning wrapper or custom
+    /// connection types (profilers, instrumentation) that dialect detection cannot
+    /// recognize, or whose creation has side effects detection should not trigger.
+    /// </summary>
+    public InteractiveReportBuilder AddConnection(
+        string name,
+        Func<IServiceProvider, DbConnection> factory,
+        ReportDialect dialect)
+    {
+        Connections[name] = factory;
+        ConnectionDialects[name] = dialect;
         return this;
     }
 

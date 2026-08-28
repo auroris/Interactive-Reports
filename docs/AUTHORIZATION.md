@@ -225,7 +225,10 @@ events at the application boundary where appropriate.
 
 ## Option 1: direct callback
 
-Register a callback on the builder returned by `AddInteractiveReports`:
+Register a callback on the builder returned by `AddInteractiveReports`. (The
+`AddConnection` factory here is illustrative — a connection-string-backed source is
+normally just the definition's `dataSource`, with no code at all; code registration
+remains for custom factories and wrapper connection types.)
 
 ```csharp
 var reports = builder.Services

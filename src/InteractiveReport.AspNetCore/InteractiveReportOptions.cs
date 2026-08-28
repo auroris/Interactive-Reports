@@ -34,19 +34,39 @@ public sealed class InteractiveReportOptions
     public string? IdentityClaim { get; set; }
 
     public SavedReportsOptions SavedReports { get; set; } = new();
+
+    /// <summary>
+    /// Serve the packaged browser pages — GET {prefix}/{name}/view and
+    /// GET {prefix}/admin. On by default; the pages are anonymous shells (the data
+    /// endpoints keep their own authorization), so disabling them only matters to
+    /// hosts that author every page themselves.
+    /// </summary>
+    public bool ViewerPagesEnabled { get; set; } = true;
 }
 
+/// <summary>
+/// Saved-report storage. The dialect is always derived from the target connection —
+/// it is not configured here.
+/// </summary>
 public sealed class SavedReportsOptions
 {
     /// <summary>
-    /// Named connection (see AddConnection) for saved-report storage. Null = the
-    /// zero-config default: a local SQLite database under App_Data. Point it at your
+    /// Data source for saved-report storage: a ConnectionStrings name (no '=') or a
+    /// literal connection string, exactly as on a report definition. Set this or
+    /// <see cref="Connection"/>, not both. Null/absent with no Connection = the
+    /// zero-config default: a local SQLite database under App_Data.
+    /// </summary>
+    public string? DataSource { get; set; }
+
+    /// <summary>Provider token for <see cref="DataSource"/> (sqlite, sqlServer, postgres, oracle); same resolution rules as a report definition's.</summary>
+    public string? Provider { get; set; }
+
+    /// <summary>
+    /// Named connection (see AddConnection) for saved-report storage — the
+    /// programmatic alternative to <see cref="DataSource"/>. Point either at your
     /// data connection to keep saved reports in the same database as the report data.
     /// </summary>
     public string? Connection { get; set; }
-
-    /// <summary>Dialect of the saved-report connection. Only relevant when Connection is set.</summary>
-    public ReportDialect Dialect { get; set; } = ReportDialect.Sqlite;
 
     /// <summary>Create the table automatically if missing. Disable if DDL is operator-managed.</summary>
     public bool AutoCreate { get; set; } = true;

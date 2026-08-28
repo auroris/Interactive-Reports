@@ -35,7 +35,7 @@ public static class SchemaDiscovery
             .FromRaw($"({def.Sql}) {QueryComposer.BaseAlias}") // no AS: Oracle table aliases
             .WhereRaw("1 = 0");
 
-        var compiled = DialectSupport.GetCompiler(def.Dialect).Compile(probe);
+        var compiled = DialectSupport.GetCompiler(def.GetEffectiveDialect()).Compile(probe);
 
         await using var cmd = CommandBuilder.Build(connection, compiled, contextParams, def, logger);
         await using var reader = await cmd.ExecuteReaderAsync(CommandBehavior.SchemaOnly, ct);

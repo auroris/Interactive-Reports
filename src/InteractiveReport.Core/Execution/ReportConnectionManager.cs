@@ -43,7 +43,7 @@ internal sealed class ReportConnectionManager(
         if (string.IsNullOrWhiteSpace(definition.TimeZone)) return;
 
         var timeZone = definition.TimeZone.Trim().Replace("'", "''");
-        var sql = definition.Dialect switch
+        var sql = definition.GetEffectiveDialect() switch
         {
             ReportDialect.Oracle => $"ALTER SESSION SET TIME_ZONE = '{timeZone}'",
             ReportDialect.Postgres => $"SET TIME ZONE '{timeZone}'",

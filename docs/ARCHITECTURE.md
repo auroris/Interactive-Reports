@@ -76,7 +76,13 @@ still avoiding the worst dialect divergence (native PIVOT syntax) entirely.
 | `tests/InteractiveReport.Core.Tests` | Composer golden tests (state doc → expected SQL, ×4 dialects), expression parser tests, SQLite end-to-end integration tests. |
 | `tests/InteractiveReport.AspNetCore.Tests` | HTTP, saved-report, authorization, configured-document, and GraphQL transport integration tests. |
 
-Target framework: `net8.0` (Umbraco 13 LTS floor; builds under SDK 8/10).
+Target framework: `net8.0` (Umbraco 13 LTS floor; builds under SDK 8/10). Package
+dependencies pin 8.0.x for the same reason. Shared NuGet metadata (MIT, repo URL,
+Source Link, snupkg symbols, version) lives in the root `Directory.Build.props`;
+`scripts/pack.ps1` (`npm run pack`) and the tag-triggered
+`.github/workflows/release.yml` build the client bundles, run the fast test layers,
+and pack the three `src/` projects — an MSBuild guard fails Release builds and packs
+when `Ui/dist` is empty, so a UI-less package cannot ship.
 
 ## 4. Report definitions
 
@@ -95,8 +101,7 @@ public interface IReportDefinitionStore
   "Reports": {
     "open-orders": {
       "title": "Open Orders",
-      "connection": "MainDb",
-      "dialect": "SqlServer",            // SqlServer | Oracle | Sqlite | Postgres
+      "dataSource": "MainDb",            // ConnectionStrings name (no '='), or a literal connection string
       "sql": "SELECT o.ORDER_ID, o.CUSTOMER, o.AMOUNT, o.ORDER_DATE FROM ORDERS o WHERE o.SALES_REP = @currentUser",
       "columnLabels": { "ORDER_ID": "Order #", "CUSTOMER": "Customer Name" },
       "editLink": {
@@ -138,6 +143,29 @@ public interface IReportDefinitionStore
 ```
 
 Notes:
+- `dataSource` is the report's database, one property with two forms discriminated
+  by `=` (every valid ADO.NET connection string is key=value pairs): a bare value
+  names an entry under the standard `ConnectionStrings` section — a missing name is
+  a fail-fast error, never silently a literal — and a value containing `=` is the
+  literal string. The ADO.NET provider resolves from an explicit one-word
+  `provider` (`sqlite` | `sqlServer` | `postgres` | `oracle`), else from the
+  `ConnectionStrings:{name}_ProviderName` companion entry (the Umbraco/classic
+  convention), else a fail-fast error listing the tokens. Only SQLite is a hard
+  package dependency; the other drivers load reflectively from the host's own
+  dependency graph, and a missing one fails at startup naming the exact package.
+  The alternative is a code-registered named `connection`
+  (`AddConnection(name, factory)`); a definition sets exactly one of the two, and
+  connection names beginning `__ir:` are reserved.
+- **Dialect is derived, never configured.** It is a property of the connection: a
+  `dataSource`'s provider token fixes it, and a code-registered factory's dialect is
+  detected from the connection type it creates (one unopened instance, zero I/O,
+  cached; wrapper/profiler types the detector cannot recognize declare it at
+  registration — `AddConnection(name, factory, ReportDialect.X)`). The definition
+  store stamps the resolved dialect onto every snapshot before execution; a leftover
+  `dialect` key in old configuration binds but is superseded. Configuration is
+  validated at startup by a hosted service (host fails to start naming the fix);
+  mistakes introduced later by a live config reload surface per request as the
+  standard sanitized problem document.
 - `contextParams` values resolve **server-side only** (claims by default; host may register
   an `IContextParameterResolver` for anything else). Client-supplied values can never bind
   to them — they are a separate parameter class from filter values. This is the
@@ -1084,9 +1112,22 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   Feature modules are free functions over the widget instance `w` — nothing
   imports the element class except its entry, so the graph stays acyclic.
   `npm run build` uses esbuild to compile the stylesheet and modules into three
-  self-contained entry bundles in `Ui/dist`. The generated assets are ignored; the
-  release pipeline builds them before packing, so package consumers do not require
-  Node.js.
+  self-contained entry bundles in `Ui/dist`. The generated assets are ignored;
+  `scripts/pack.ps1` and the release workflow build them before packing, and an
+  MSBuild guard fails Release builds and packs when they are missing — package
+  consumers do not require Node.js, and a UI-less package cannot ship silently.
+- **Packaged pages**: `GET {prefix}/{name}/view` hosts `<interactive-report>` and
+  `GET {prefix}/admin` hosts `<interactive-report-admin>` — minimal shells emitting
+  an absolute-prefix script URL so the client's script-relative api-base inference
+  resolves with no `api-base` attribute. Served anonymously for the same reason the
+  assets are: a shell is public package markup with zero data, and it renders
+  identically for any name, so it discloses nothing — the element's schema request
+  is the actual gate. Injected values (report name, `?saved-report=`) are
+  HTML-encoded; `Cache-Control: no-store`; disabled via
+  `InteractiveReport:ViewerPagesEnabled`. Literal-first routing means the existing
+  `ui`/`saved` segments shadow reports with those names, as the data routes always
+  have; `admin` and `whoami` join that reserved-in-practice set. Embedding in host
+  pages remains the primary consumption path.
 - **Feature surface**: scoped toolbar search (all text columns or one typed column → expression filter);
   Actions menu (Columns shuttle, Column Settings, Filter, Sort, Control Break, Highlight, Aggregate,
   Compute with token-insert helpers, Group By, Pivot, Chart, Save/Save As/Delete/Reset,
@@ -1302,6 +1343,26 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   units, golden projection SQL, config fail-fast matrix + snapshot round-trip, HTTP
   schema/query/enforcement suite, packaged-UI unit suites (direct-import renderer +
   built-bundle mount), Playwright e2e against the live Workbench.
+- **M21 — Redistributable package** ✅ *(2026-08-28)*: the NuGet story. Per-report
+  `dataSource` (ConnectionStrings name or literal string, `=`-discriminated) with
+  reflective provider tokens and startup fail-fast naming the missing driver
+  package; **dialect derived from the connection** (provider token, or sniffing a
+  code-registered factory's unopened connection type; wrapper escape hatch
+  `AddConnection(name, factory, dialect)`) and gone from every config surface —
+  `ReportDefinition.Dialect` is nullable and stamped by the store, superseding
+  leftovers; `SavedReportsOptions.Dialect` removed; `SavedReports.DataSource`
+  added. Startup validator (config mistakes fail boot); definition resolution
+  wrapped in problem-document shaping for post-reload breakage. Packaged
+  anonymous viewer/admin pages (`/{name}/view`, `/admin`) with an admin
+  whoami-off guidance banner (which also surfaced and fixed the admin element's
+  `remove()` method shadowing `Element.remove()`). MIT + full nuget.org metadata
+  at 0.9.0 via `Directory.Build.props`, 8.0.x dependency pins, `Ui/dist` pack
+  guard, `scripts/pack.ps1`, tag-triggered release workflow, README rewritten
+  package-first with an Umbraco 13 quickstart. Verified: 354 Core + 166
+  AspNetCore + 2 offline live-project tests, 62 packaged-UI unit tests, 22
+  Playwright e2e (three new packaged-page scenarios; Workbench reports run
+  dialect-less, one via a `_ProviderName` dataSource), pack smoke with nuspec
+  inspection and a negative guard check.
 
 ## Appendix: decision log
 
@@ -1373,5 +1434,11 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 | Schema snapshot lives in the state document; the client checks and resets | definition-side snapshot; server-side enforcement | The document is the thing that was authored against a schema, so it records which one; both comparison inputs already reach the client. T0 mismatch = don't run, explain, reset the working copy (stored rows untouched); the same diff powers post-T0 dependency-aware pruning with no protocol change. |
 | Edit link is a constrained URL template in the definition | explicit source columns only (the M15 renderer rule) | A scoped reversal, not a repeal: M15's rejection targeted templates in *report state* — untrusted documents. The definition author already writes the raw SQL, so the trust boundary is unchanged; the template is URL-only (no HTML), placeholders are schema-bound and URL-encoded at substitution, the result still passes the protocol allowlist, and the template never enters report state — the M15 rule keeps holding for documents. Computing URLs in SQL instead would pollute the discovered schema with a link column every picker shows. |
 | Per-column overrides are a definition map delivered beside the schema (`columnOverrides`) | extend `ColumnInfo`; put flags in the state document | The per-column attribute model M11 anticipated. `ColumnInfo` is shared with query responses (and `availableColumns` overlays schema columns client-side, which would erase flags after the first query), so a parallel map keeps query payloads byte-identical. Labels ride the existing `columnLabels`/default-report channel so precedence has one implementation; sort/filter restrictions follow the whitelist philosophy — client hides controls, server strips violations into `ignored[]` so stale saved reports degrade instead of erroring — and computed columns are exempt to keep the rule predictable without transitive analysis. |
+| Dialect is a property of the connection, derived from the driver | per-report `dialect` as source of truth; derived-with-cross-check | A report's dialect can never legitimately differ from its connection's — the old per-report field only ever produced silently wrong SQL, and an omitted value silently bound as enum 0 (SqlServer). Provider tokens fix it statically; code factories are sniffed from one unopened connection (zero I/O); wrappers declare it where the wrapper is created (`AddConnection` overload). Leftover config keys are superseded, not rejected: the derived value is correct by construction, and removing vestigial config surface beats building rejection machinery for it. |
+| Per-report `dataSource` with `=`-discrimination | a named Connections config section; nested report groups | Matches the owner's model — a report is a name, a connection string, and a SELECT — with one property and zero indirection. A bare name references the standard `ConnectionStrings` section (never silently a literal), so Umbraco's `umbracoDbDSN` + `_ProviderName` convention works untouched; resolved sources become content-addressed internal connections, so a config edit rolls the schema-cache identity for free. Code-registered `connection` names remain the programmatic path. |
+| Providers load reflectively from the host's dependency graph | hard provider references; per-dialect adapter packages | The engine needs only name → unopened `DbConnection` (the Oracle BindByName reflection set the precedent). Tokens map to assembly-qualified types; a missing driver fails at startup naming the exact package. No dependency bloat for hosts that never touch a given engine, no extra packages to version, and Umbraco hosts already ship SqlClient + Sqlite. |
+| Packaged pages serve an anonymous shell for any name | 404 unknown names; gate the page like the data | The shell is public package markup with zero data — rendering identically for every name is what makes it disclose nothing, and the element's schema call is the real gate (an auth-gated page could not even tell a signed-out user to sign in). Same rationale as the AllowAnonymous assets. |
+| Source maps stay embedded in the package | strip maps on pack | One hermetic build shape (content-hash ETags stay honest across dev and package), and readable stack traces from the minified bundles during production support are worth ~2 MB in a server-side package. |
+| MIT + full nuget.org metadata at 0.9.0, shared via `Directory.Build.props` | per-project metadata; private-feed-first | One file owns identity/license/Source Link/symbols for all three packages; 0.9.0 signals pre-1.0 while the package soaks in a real host. Dependencies pin 8.0.x so the packages do not drag 10.x `Microsoft.Extensions.*` into Umbraco 13's 8.x graph. |
 | Group-stage filters reserved but not populated at T0 | ship HAVING filters now; forbid forever | Filtering means "which rows exist" (stage 1) in the user's model today; the layer slot makes group filters a dialog-UX task later, not a pipeline change. |
 | v1/v2 documents rejected outright | migrate v2 into v3 | Owner-confirmed: nothing external consumes documents or the wire protocol; a migrator would be dead code the day it lands. |

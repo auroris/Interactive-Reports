@@ -1,28 +1,87 @@
 # InteractiveReports
 
-## Client build
+APEX-style interactive reports for ASP.NET Core. A **report definition** is
+developer-owned configuration — a name, a data source, and a SELECT; from it users
+get an auto-generated **default report** (every column the SELECT brings up, with
+search, filters, sorting, control breaks, computed columns, highlighting, group by,
+pivot, charts, and CSV export) and can layer their own **saved reports** on top.
+The browser UI ships inside the package as a custom element plus ready-made pages —
+consumers need no Node.js and no frontend build.
 
-The client-side source is in `src/client`; generated browser assets are written to
-`src/InteractiveReport.AspNetCore/Ui/dist` for embedding by the server project. Install
-the toolchain and create the browser bundles with:
+## Getting started
 
-```sh
-npm ci
-npm run build
+1. Add the package:
+
+   ```sh
+   dotnet add package InteractiveReport.AspNetCore
+   ```
+
+2. Configure a report — a data source and a SELECT. No dialect, ever: it is derived
+   from the data source's driver.
+
+   ```json
+   "InteractiveReport": {
+     "Reports": {
+       "orders": {
+         "dataSource": "MainDb",
+         "sql": "SELECT ORDER_ID, CUSTOMER, AMOUNT, ORDER_DATE FROM ORDERS",
+         "authorization": { "allowAnonymous": true }
+       }
+     }
+   }
+   ```
+
+   `dataSource` is one property with two forms: a value **without `=`** names an
+   entry under the standard `ConnectionStrings` section (above, `MainDb`); a value
+   **with `=`** is a literal connection string. The ADO.NET provider resolves from
+   the `ConnectionStrings:{name}_ProviderName` companion entry when present (the
+   Umbraco and classic-ASP.NET convention), or from an explicit one-word
+   `"provider"` — `sqlite`, `sqlServer`, `postgres`, or `oracle`. SQLite works out
+   of the box; the other drivers come from your app's own package graph, and a
+   missing one fails at startup naming the exact package to add (for example
+   `Microsoft.Data.SqlClient`). Reports are authenticated-only by default —
+   `allowAnonymous` is the deliberate opt-out.
+
+3. Wire it up in `Program.cs` — two lines:
+
+   ```csharp
+   builder.Services.AddInteractiveReports(builder.Configuration);
+   // …
+   app.MapInteractiveReports("/reports");
+   ```
+
+4. Done — browse **`/reports/orders/view`**. The packaged page hosts the report;
+   embedding `<interactive-report>` in your own pages (below) remains the primary
+   path for real applications. The saved-report administration page is at
+   `/reports/admin`; to use it, list administrator identities in
+   `InteractiveReport:Administrators` and set `InteractiveReport:WhoamiEnabled` so
+   the page can show precise identity guidance. Configuration mistakes fail at
+   startup with an error naming the fix; avoid the report names `ui`, `saved`,
+   `admin`, and `whoami`, which collide with the endpoint namespace. The packaged
+   pages can be turned off with `InteractiveReport:ViewerPagesEnabled: false`.
+
+Saved reports are stored zero-config in a local SQLite database under
+`App_Data/interactivereport.saved.db`; point `InteractiveReport:SavedReports` at a
+`dataSource` (same two forms) to keep them in your own database instead.
+
+### Umbraco 13
+
+An Umbraco site already carries the SQL Server and SQLite drivers and already has
+its connection string under `ConnectionStrings:umbracoDbDSN` with the
+`umbracoDbDSN_ProviderName` companion — so a report over the Umbraco database is
+exactly the minimal configuration above with `"dataSource": "umbracoDbDSN"`, and the
+two `Program.cs` lines slot in beside the Umbraco pipeline (map after `app.UseUmbraco(...)`).
+Members-only reports can use `"authorization": { "policy": "..." }` against any
+policy the site registers.
+
+For programmatic connections (custom factories, wrapper/profiler connection types),
+register them in code instead of configuration:
+
+```csharp
+builder.Services.AddInteractiveReports(builder.Configuration)
+    .AddConnection("MainDb", sp => new SqlConnection(...))                       // dialect detected from the type
+    .AddConnection("Profiled", sp => new ProfiledDbConnection(...), ReportDialect.SqlServer); // wrapper: declare it
 ```
-
-`npm run dev` rebuilds on changes. `npm test` builds the client and runs the fast
-DOM unit tests. Browser automation is configured with Playwright; install Chromium
-once with `npx playwright install chromium`, then run `npm run test:ui`.
-`npm run verify` runs both test layers.
-
-The generated `src/InteractiveReport.AspNetCore/Ui/dist/ir.js`, `ir-admin.js`, and
-`ir-chart.js` files are embedded in the ASP.NET Core assembly. Generated bundles are
-deliberately not committed: the release pipeline builds them before packing the .NET
-projects. Package consumers therefore do not require Node.js, while source checkouts
-must run the client build before packing or running the packaged UI. `ir-chart.js` (the
-Chart.js-based chart renderer) is fetched on demand the first time a report enters
-chart view; pages that never chart never load it.
 
 ## Configured report documents
 
@@ -407,3 +466,32 @@ structural parts are `surface`, `toolbar`, `notices`, `chips`,
 `table-container`, `chart-container`, `table`, `pager`, `menu`,
 and `dialog`. Editor dialogs are movable, modeless windows, so the report remains
 available while they are open. Short destructive confirmations remain modal.
+
+## Developing
+
+The client-side source is in `src/client`; generated browser assets are written to
+`src/InteractiveReport.AspNetCore/Ui/dist` for embedding by the server project. Install
+the toolchain and create the browser bundles with:
+
+```sh
+npm ci
+npm run build
+```
+
+`npm run dev` rebuilds on changes. `npm test` builds the client and runs the fast
+DOM unit tests. Browser automation is configured with Playwright; install Chromium
+once with `npx playwright install chromium`, then run `npm run test:ui`.
+`npm run verify` runs both test layers.
+
+The generated `src/InteractiveReport.AspNetCore/Ui/dist/ir.js`, `ir-admin.js`, and
+`ir-chart.js` files are embedded in the ASP.NET Core assembly and are deliberately
+not committed. A source checkout must run the client build before a Release build,
+a pack, or a run of the packaged UI — `dotnet pack` and `dotnet build -c Release`
+fail with instructions when the bundles are missing, so a UI-less package cannot
+ship silently. `scripts/pack.ps1` (also `npm run pack`) chains the client build, the
+fast test layers, and `dotnet pack` for the three distributable projects into
+`artifacts/packages`; the tag-triggered `.github/workflows/release.yml` runs the
+same sequence and pushes to nuget.org when a `NUGET_API_KEY` secret is configured.
+Package consumers never need Node.js. `ir-chart.js` (the Chart.js-based chart
+renderer) is fetched on demand the first time a report enters chart view; pages
+that never chart never load it.

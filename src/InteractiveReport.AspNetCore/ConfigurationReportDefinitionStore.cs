@@ -16,22 +16,28 @@ namespace InteractiveReport.AspNetCore;
 public sealed partial class ConfigurationReportDefinitionStore : IReportDefinitionStore, IDisposable
 {
     private readonly IOptionsMonitor<InteractiveReportOptions> _options;
+    private readonly ReportConnectionRegistry _registry;
     private readonly ConfiguredReportDocumentSynchronizer? _synchronizer;
     private readonly ISavedReportStore? _savedReports;
     private readonly IDisposable? _reloadSubscription;
 
-    internal ConfigurationReportDefinitionStore(IOptionsMonitor<InteractiveReportOptions> options, SchemaCache schemaCache)
-        : this(options, schemaCache, synchronizer: null!, savedReports: null!)
+    internal ConfigurationReportDefinitionStore(
+        IOptionsMonitor<InteractiveReportOptions> options,
+        SchemaCache schemaCache,
+        ReportConnectionRegistry registry)
+        : this(options, schemaCache, registry, synchronizer: null!, savedReports: null!)
     {
     }
 
-    public ConfigurationReportDefinitionStore(
+    internal ConfigurationReportDefinitionStore(
         IOptionsMonitor<InteractiveReportOptions> options,
         SchemaCache schemaCache,
+        ReportConnectionRegistry registry,
         ConfiguredReportDocumentSynchronizer synchronizer,
         ISavedReportStore savedReports)
     {
         _options = options;
+        _registry = registry;
         _synchronizer = synchronizer;
         _savedReports = savedReports;
         _reloadSubscription = options.OnChange(_ => schemaCache.Clear());
@@ -52,7 +58,8 @@ public sealed partial class ConfigurationReportDefinitionStore : IReportDefiniti
             // constructor) honest.
             if (_synchronizer is null) return null;
             await _synchronizer.EnsureSynced(ct);
-            return SavedReportsListingDefinition.Create(_options.CurrentValue.SavedReports);
+            return SavedReportsListingDefinition.Create(
+                _registry.ResolveStoreConfig(_options.CurrentValue.SavedReports));
         }
 
         if (!_options.CurrentValue.Reports.TryGetValue(name, out var def))
@@ -60,6 +67,7 @@ public sealed partial class ConfigurationReportDefinitionStore : IReportDefiniti
 
         var snapshot = Snapshot(name, def);
         Validate(snapshot);
+        ResolveConnection(snapshot, _registry);
         if (_synchronizer is not null && _savedReports is not null)
         {
             await _synchronizer.EnsureSynced(ct);
@@ -90,7 +98,28 @@ public sealed partial class ConfigurationReportDefinitionStore : IReportDefiniti
         return snapshot;
     }
 
-    private static ReportDefinition Snapshot(string name, ReportDefinition source)
+    /// <summary>
+    /// Stamps the resolved connection name and dialect onto the detached snapshot
+    /// before anything downstream sees it. The dialect assignment is unconditional:
+    /// dialect is a property of the connection, so a configured value (a leftover
+    /// from before it was derived) is simply superseded, never validated. Shared
+    /// with the startup validator, which runs the same pipeline without Find's
+    /// saved-report side effects.
+    /// </summary>
+    internal static void ResolveConnection(ReportDefinition def, ReportConnectionRegistry registry)
+    {
+        if (!string.IsNullOrWhiteSpace(def.DataSource))
+        {
+            var (connectionName, dialect) = registry.ResolveDataSource(
+                $"Report '{def.Name}'", def.DataSource, def.Provider);
+            def.Connection = connectionName;
+            def.Dialect = dialect;
+            return;
+        }
+        def.Dialect = registry.ResolveDialect(def.Connection);
+    }
+
+    internal static ReportDefinition Snapshot(string name, ReportDefinition source)
     {
         // OptionsMonitor owns and may replace its object graph. Returning a detached
         // snapshot prevents request code from mutating configuration or observing a
@@ -102,7 +131,7 @@ public sealed partial class ConfigurationReportDefinitionStore : IReportDefiniti
         return snapshot;
     }
 
-    private static void Validate(ReportDefinition def)
+    internal static void Validate(ReportDefinition def)
     {
         if (string.IsNullOrWhiteSpace(def.Name))
             throw new InvalidOperationException("Report name is required.");
@@ -114,8 +143,22 @@ public sealed partial class ConfigurationReportDefinitionStore : IReportDefiniti
                 $"Report '{def.Name}': authorization cannot be both allowAnonymous and administratorsOnly.");
         if (string.IsNullOrWhiteSpace(def.Sql))
             throw new InvalidOperationException($"Report '{def.Name}': sql is required.");
-        if (string.IsNullOrWhiteSpace(def.Connection))
-            throw new InvalidOperationException($"Report '{def.Name}': connection is required.");
+
+        var hasDataSource = !string.IsNullOrWhiteSpace(def.DataSource);
+        var hasConnection = !string.IsNullOrWhiteSpace(def.Connection);
+        if (hasDataSource && hasConnection)
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': set dataSource or connection, not both.");
+        if (!hasDataSource && !hasConnection)
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': a data source is required — set dataSource (a ConnectionStrings name or a "
+                + "literal connection string) or connection (a name registered with AddConnection).");
+        if (!hasDataSource && !string.IsNullOrWhiteSpace(def.Provider))
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': provider applies to dataSource — remove it, or replace connection with dataSource.");
+        if (hasConnection && def.Connection.StartsWith("__ir:", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': connection names beginning with '__ir:' are reserved.");
 
         if (def.MaxRows is < 1 or int.MaxValue)
             throw new InvalidOperationException(

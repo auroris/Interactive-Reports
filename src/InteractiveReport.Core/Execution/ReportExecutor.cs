@@ -141,7 +141,7 @@ public sealed class ReportExecutor
             return new ExportResult(chart.Columns, chart.Rows, Truncated: false);
         }
 
-        var compiler = DialectSupport.GetCompiler(definition.Dialect);
+        var compiler = DialectSupport.GetCompiler(definition.GetEffectiveDialect());
         await using var connection = await _connections.Open(definition, ct);
         var reader = CreateReader(connection, compiler, definition, contextParams);
 
@@ -172,7 +172,7 @@ public sealed class ReportExecutor
         CancellationToken ct)
     {
         var composed = QueryComposer.Compose(definition, state);
-        var compiler = DialectSupport.GetCompiler(definition.Dialect);
+        var compiler = DialectSupport.GetCompiler(definition.GetEffectiveDialect());
 
         await using var connection = await _connections.Open(definition, ct);
         var reader = CreateReader(connection, compiler, definition, contextParams);
@@ -230,7 +230,7 @@ public sealed class ReportExecutor
         CancellationToken ct)
     {
         var (page, count) = QueryComposer.ComposeGroupStage(definition, state);
-        var compiler = DialectSupport.GetCompiler(definition.Dialect);
+        var compiler = DialectSupport.GetCompiler(definition.GetEffectiveDialect());
         var layer = state.View.GroupLayer!;
 
         await using var connection = await _connections.Open(definition, ct);
@@ -271,7 +271,7 @@ public sealed class ReportExecutor
         var chart = state.View.Chart!;
         var maxPoints = definition.MaxChartPoints;
         var query = QueryComposer.ComposeChartView(definition, state, maxPoints);
-        var compiler = DialectSupport.GetCompiler(definition.Dialect);
+        var compiler = DialectSupport.GetCompiler(definition.GetEffectiveDialect());
 
         List<ChartPoint> rows;
         await using (var connection = await _connections.Open(definition, ct))
@@ -339,7 +339,7 @@ public sealed class ReportExecutor
         var view = state.View;
         var layer = view.GroupLayer!;
         var source = QueryComposer.ComposeSpreadSource(definition, state, MaxPivotGroups);
-        var compiler = DialectSupport.GetCompiler(definition.Dialect);
+        var compiler = DialectSupport.GetCompiler(definition.GetEffectiveDialect());
         var valueCount = view.Values.Count + layer.Computed.Count;
 
         List<PivotGroup> groups;

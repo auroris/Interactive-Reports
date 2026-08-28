@@ -40,6 +40,14 @@ public static class EndpointExtensions
         // Packaged UI assets. Anonymous even when the host locks the group — see UiEndpoints.
         group.MapGet("/ui/{file}", UiEndpoints.Serve).AllowAnonymous();
 
+        // Packaged pages: anonymous shells like the assets — identical for any name
+        // (no existence disclosure; the element's schema call is the gate). Disabled
+        // via InteractiveReport:ViewerPagesEnabled. Literal-first routing means the
+        // existing /ui and /saved segments shadow reports with those names at /view,
+        // as they already do on the data routes.
+        group.MapGet("/{name}/view", ViewerPageEndpoints.Report).AllowAnonymous();
+        group.MapGet("/admin", ViewerPageEndpoints.Admin).AllowAnonymous();
+
         // Identity + saved reports (literal segments win over {name} in ASP.NET routing).
         group.MapGet("/whoami", SavedReportEndpoints.Whoami);
         group.MapGet("/{name}/saved", SavedReportEndpoints.ListForReport);
@@ -56,7 +64,8 @@ public static class EndpointExtensions
     private static async Task<IResult> GetSchema(string name, HttpContext ctx, CancellationToken ct)
     {
         var store = ctx.RequestServices.GetRequiredService<IReportDefinitionStore>();
-        var def = await store.Find(name, ct);
+        var (def, findError) = await FindDefinition(store, name, ctx, ct);
+        if (findError is not null) return findError;
         if (def is null) return Results.NotFound();
         var actions = SavedReportsListingDefinition.Matches(def.Name)
             ? new[] { InteractiveReportAction.ListAllSavedReports }
@@ -277,7 +286,8 @@ public static class EndpointExtensions
         CancellationToken ct)
     {
         var store = ctx.RequestServices.GetRequiredService<IReportDefinitionStore>();
-        var definition = await store.Find(name, ct);
+        var (definition, findError) = await FindDefinition(store, name, ctx, ct);
+        if (findError is not null) return findError;
         if (definition is null) return Results.NotFound();
         IReadOnlyCollection<InteractiveReportAction> actions =
             SavedReportsListingDefinition.Matches(definition.Name)
@@ -343,6 +353,33 @@ public static class EndpointExtensions
             .GroupBy(error => error.Path)
             .ToDictionary(group => group.Key, group => group.Select(error => error.Message).ToArray());
         return Results.ValidationProblem(errors, title: "Report state failed validation");
+    }
+
+    /// <summary>
+    /// Definition resolution behind error shaping. Find validates configuration and
+    /// synchronizes configured documents, so a mistake introduced by a live config
+    /// reload must surface as the standard sanitized problem document rather than an
+    /// unhandled 500. (Startup-time mistakes fail the host before traffic — see
+    /// InteractiveReportStartupValidator.)
+    /// </summary>
+    internal static async Task<(ReportDefinition? Definition, IResult? Error)> FindDefinition(
+        IReportDefinitionStore store,
+        string name,
+        HttpContext ctx,
+        CancellationToken ct)
+    {
+        try
+        {
+            return (await store.Find(name, ct), null);
+        }
+        catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return (null, ServerError(ctx, name, "definition resolution", ex));
+        }
     }
 
     internal static IResult ServerError(HttpContext ctx, string reportName, string operation, Exception ex)

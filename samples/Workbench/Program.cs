@@ -8,6 +8,18 @@ var builder = WebApplication.CreateBuilder(args);
 var dbPath = Path.Combine(builder.Environment.ContentRootPath, "App_Data", "sample.db");
 var connectionString = $"Data Source={dbPath}";
 
+// The sample database path is computed at runtime, so the ConnectionStrings entry
+// the "order-feed" report's dataSource references is injected here rather than
+// written into appsettings.json. The _ProviderName companion is the same convention
+// Umbraco uses, and it is what lets that report configure no provider and no dialect.
+builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+{
+    ["ConnectionStrings:SampleDb"] = connectionString,
+    ["ConnectionStrings:SampleDb_ProviderName"] = "Microsoft.Data.Sqlite",
+});
+
+// The code-registered connection declares no dialect: the engine detects it from
+// the factory's connection type (see the redistributable-package milestone).
 var interactiveReports = builder.Services.AddInteractiveReports(builder.Configuration)
     .AddConnection("SampleDb", _ => new SqliteConnection(connectionString));
 

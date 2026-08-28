@@ -55,12 +55,17 @@ export class InteractiveReportAdminElement extends WidgetElement {
         if (this.whoami?.identity)
             this.els.identity.textContent = `Signed in as ${this.whoami.identity}`;
         // The embedded report answers 404 for non-administrators; when whoami is
-        // available, replace that generic denial with precise guidance.
-        if (this.whoami?.administratorListConfigured && !this.whoami.isAdministrator) {
+        // available, replace that generic denial with precise guidance. When it is
+        // not (WhoamiEnabled is off — the default), say what this page needs instead
+        // of leaving a bare listing error.
+        if (this.whoami === null) {
+            this.els.errorSlot.replaceChildren(banner("warn",
+                "This page requires a signed-in administrator (InteractiveReport:Administrators). "
+                + "Enable InteractiveReport:WhoamiEnabled for precise identity guidance here."));
+        } else if (this.whoami.administratorListConfigured && !this.whoami.isAdministrator) {
             this.els.errorSlot.replaceChildren(banner("error",
                 "Administrator access required. Add your identity to InteractiveReport:Administrators."));
-        } else if (this.whoami
-            && !this.whoami.isAdministrator
+        } else if (!this.whoami.isAdministrator
             && !this.whoami.applicationAuthorizationConfigured) {
             this.els.errorSlot.replaceChildren(banner("error",
                 "Administrator access requires a configured administrator or application authorization."));
@@ -95,7 +100,7 @@ export class InteractiveReportAdminElement extends WidgetElement {
                 case "reassign": this.reassign(id, row); break;
                 case "openState": await this.viewState(id, row); break;
                 case "download": await this.downloadDocument(id, row); break;
-                case "delete": await this.remove(id, row); break;
+                case "delete": await this.deleteSavedReport(id, row); break;
             }
         } catch (err) {
             this.fail(err);
@@ -157,7 +162,10 @@ export class InteractiveReportAdminElement extends WidgetElement {
         saveBlob(file.blob, file.filename ?? `${row.REPORT_NAME}.report.json`);
     }
 
-    async remove(id, row) {
+    // Not named `remove`: that would shadow Element.remove() and turn a host's
+    // ordinary element removal into a phantom delete action (found by a test that
+    // unmounted the element).
+    async deleteSavedReport(id, row) {
         const scope = row.SCOPE === "Global" ? "the GLOBAL report" : `${row.OWNER}'s report`;
         if (!await confirmDialog(this, "Delete Saved Report", `Delete ${scope} "${row.TITLE}"? This cannot be undone.`)) return;
         await api(apiUrl(this.base, "saved", id), { method: "DELETE" });

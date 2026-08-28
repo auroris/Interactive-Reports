@@ -55,7 +55,8 @@ internal static class SavedReportEndpoints
     internal static async Task<IResult> ListForReport(string name, HttpContext ctx, CancellationToken ct)
     {
         var store = ctx.RequestServices.GetRequiredService<IReportDefinitionStore>();
-        var def = await store.Find(name, ct);
+        var (def, findError) = await EndpointExtensions.FindDefinition(store, name, ctx, ct);
+        if (findError is not null) return findError;
         if (def is null) return Results.NotFound();
         if (await ReportRequestAccess.Authorize(
                 def,
@@ -89,7 +90,8 @@ internal static class SavedReportEndpoints
     internal static async Task<IResult> Save(string name, HttpContext ctx, CancellationToken ct)
     {
         var store = ctx.RequestServices.GetRequiredService<IReportDefinitionStore>();
-        var def = await store.Find(name, ct);
+        var (def, findError) = await EndpointExtensions.FindDefinition(store, name, ctx, ct);
+        if (findError is not null) return findError;
         if (def is null) return Results.NotFound();
         if (await ReportRequestAccess.AuthorizeDefinition(def, ctx) is { } denied) return denied;
         // Enforced at creation only: existing saved reports stay governed by the
@@ -167,7 +169,9 @@ internal static class SavedReportEndpoints
         if (report is null) return Results.NotFound();
 
         // Loading a state document still requires access to the underlying report.
-        var def = await ctx.RequestServices.GetRequiredService<IReportDefinitionStore>().Find(report.ReportName, ct);
+        var (def, findError) = await EndpointExtensions.FindDefinition(
+            ctx.RequestServices.GetRequiredService<IReportDefinitionStore>(), report.ReportName, ctx, ct);
+        if (findError is not null) return findError;
         if (def is null) return Results.NotFound();
         var identity = Identity(ctx);
         var access = SavedReportAccessPolicy.Read(report, identity, administrator: false);
@@ -210,8 +214,9 @@ internal static class SavedReportEndpoints
         }
         if (request is null) return BadRequest("Malformed update request", "empty body");
 
-        var definition = await ctx.RequestServices.GetRequiredService<IReportDefinitionStore>()
-            .Find(report.ReportName, ct);
+        var (definition, findError) = await EndpointExtensions.FindDefinition(
+            ctx.RequestServices.GetRequiredService<IReportDefinitionStore>(), report.ReportName, ctx, ct);
+        if (findError is not null) return findError;
         if (definition is null) return Results.NotFound();
         if (await ReportRequestAccess.AuthorizeDefinition(definition, ctx) is { } definitionDenied)
             return definitionDenied;
@@ -295,8 +300,9 @@ internal static class SavedReportEndpoints
         if (report is null) return Results.NotFound();
 
         var identity = Identity(ctx);
-        var definition = await ctx.RequestServices.GetRequiredService<IReportDefinitionStore>()
-            .Find(report.ReportName, ct);
+        var (definition, findError) = await EndpointExtensions.FindDefinition(
+            ctx.RequestServices.GetRequiredService<IReportDefinitionStore>(), report.ReportName, ctx, ct);
+        if (findError is not null) return findError;
         if (definition is null) return Results.NotFound();
         if (await ReportRequestAccess.AuthorizeDefinition(definition, ctx) is { } definitionDenied)
             return definitionDenied;
@@ -340,8 +346,9 @@ internal static class SavedReportEndpoints
         if (report is null) return Results.NotFound();
         var reportName = report.ReportName;
 
-        var definition = await ctx.RequestServices.GetRequiredService<IReportDefinitionStore>()
-            .Find(reportName, ct);
+        var (definition, findError) = await EndpointExtensions.FindDefinition(
+            ctx.RequestServices.GetRequiredService<IReportDefinitionStore>(), reportName, ctx, ct);
+        if (findError is not null) return findError;
         if (definition is null) return Results.NotFound();
         if (await ReportRequestAccess.Authorize(
                 definition,
@@ -401,8 +408,9 @@ internal static class SavedReportEndpoints
         var identity = Identity(ctx);
         if (identity is null) return Results.Unauthorized();
 
-        var definition = await ctx.RequestServices.GetRequiredService<IReportDefinitionStore>()
-            .Find(name, ct);
+        var (definition, findError) = await EndpointExtensions.FindDefinition(
+            ctx.RequestServices.GetRequiredService<IReportDefinitionStore>(), name, ctx, ct);
+        if (findError is not null) return findError;
         if (definition is null) return Results.NotFound();
         if (await ReportRequestAccess.AuthorizeDefinition(definition, ctx) is { } denied) return denied;
 

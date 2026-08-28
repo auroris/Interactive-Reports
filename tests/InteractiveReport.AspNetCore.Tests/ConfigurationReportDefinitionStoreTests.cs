@@ -1,11 +1,36 @@
+using System.Data.Common;
 using InteractiveReport.Core.Model;
+using InteractiveReport.Core.SavedReports;
 using InteractiveReport.Core.Schema;
+using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 
 namespace InteractiveReport.AspNetCore.Tests;
 
 public sealed class ConfigurationReportDefinitionStoreTests
 {
+    /// <summary>A registry with one declared connection, "db" — what every fixture definition names.</summary>
+    private static ReportConnectionRegistry TestRegistry()
+    {
+        var factories = new Dictionary<string, Func<IServiceProvider, DbConnection>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["db"] = _ => new SqliteConnection("Data Source=:memory:"),
+        };
+        var dialects = new Dictionary<string, ReportDialect>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["db"] = ReportDialect.Sqlite,
+        };
+        return new ReportConnectionRegistry(
+            factories, dialects, NullServices.Instance, new ConfigurationBuilder().Build());
+    }
+
+    private sealed class NullServices : IServiceProvider
+    {
+        public static readonly NullServices Instance = new();
+        public object? GetService(Type serviceType) => null;
+    }
+
     [Fact]
     public async Task Find_returns_a_detached_snapshot_without_mutating_options()
     {
@@ -32,7 +57,7 @@ public sealed class ConfigurationReportDefinitionStoreTests
         options.Reports["orders"] = configured;
         using var store = new ConfigurationReportDefinitionStore(
             new OptionsMonitorStub(options),
-            new SchemaCache());
+            new SchemaCache(), TestRegistry());
 
         var snapshot = await store.Find("orders");
 
@@ -64,7 +89,7 @@ public sealed class ConfigurationReportDefinitionStoreTests
         options.Reports["orders"] = configured;
         using var store = new ConfigurationReportDefinitionStore(
             new OptionsMonitorStub(options),
-            new SchemaCache());
+            new SchemaCache(), TestRegistry());
 
         var snapshot = await store.Find("orders");
 
@@ -89,7 +114,7 @@ public sealed class ConfigurationReportDefinitionStoreTests
         };
         using var store = new ConfigurationReportDefinitionStore(
             new OptionsMonitorStub(options),
-            new SchemaCache());
+            new SchemaCache(), TestRegistry());
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(
             async () => await store.Find("orders"));
@@ -114,7 +139,7 @@ public sealed class ConfigurationReportDefinitionStoreTests
         };
         using var store = new ConfigurationReportDefinitionStore(
             new OptionsMonitorStub(options),
-            new SchemaCache());
+            new SchemaCache(), TestRegistry());
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(
             async () => await store.Find("orders"));
@@ -137,7 +162,7 @@ public sealed class ConfigurationReportDefinitionStoreTests
         };
         using var store = new ConfigurationReportDefinitionStore(
             new OptionsMonitorStub(options),
-            new SchemaCache());
+            new SchemaCache(), TestRegistry());
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(
             async () => await store.Find("orders"));
@@ -158,7 +183,7 @@ public sealed class ConfigurationReportDefinitionStoreTests
         };
         using var store = new ConfigurationReportDefinitionStore(
             new OptionsMonitorStub(options),
-            new SchemaCache());
+            new SchemaCache(), TestRegistry());
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(
             async () => await store.Find("orders"));
@@ -179,7 +204,7 @@ public sealed class ConfigurationReportDefinitionStoreTests
         };
         using var store = new ConfigurationReportDefinitionStore(
             new OptionsMonitorStub(options),
-            new SchemaCache());
+            new SchemaCache(), TestRegistry());
 
         var snapshot = await store.Find("orders");
 
@@ -204,7 +229,7 @@ public sealed class ConfigurationReportDefinitionStoreTests
         };
         using var store = new ConfigurationReportDefinitionStore(
             new OptionsMonitorStub(options),
-            new SchemaCache());
+            new SchemaCache(), TestRegistry());
 
         var snapshot = await store.Find("orders");
 
@@ -229,7 +254,7 @@ public sealed class ConfigurationReportDefinitionStoreTests
         };
         using var store = new ConfigurationReportDefinitionStore(
             new OptionsMonitorStub(options),
-            new SchemaCache());
+            new SchemaCache(), TestRegistry());
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(
             async () => await store.Find("orders"));
@@ -250,7 +275,7 @@ public sealed class ConfigurationReportDefinitionStoreTests
         };
         using var store = new ConfigurationReportDefinitionStore(
             new OptionsMonitorStub(options),
-            new SchemaCache());
+            new SchemaCache(), TestRegistry());
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(
             async () => await store.Find("orders"));
@@ -264,7 +289,7 @@ public sealed class ConfigurationReportDefinitionStoreTests
         var options = new InteractiveReportOptions();
         using var store = new ConfigurationReportDefinitionStore(
             new OptionsMonitorStub(options),
-            new SchemaCache());
+            new SchemaCache(), TestRegistry());
 
         // The internal test constructor wires no synchronizer: the built-in is
         // absent rather than synthesized against a store nobody prepared.
@@ -293,7 +318,7 @@ public sealed class ConfigurationReportDefinitionStoreTests
         };
         using var store = new ConfigurationReportDefinitionStore(
             new OptionsMonitorStub(options),
-            new SchemaCache());
+            new SchemaCache(), TestRegistry());
         var reserved = await Assert.ThrowsAsync<InvalidOperationException>(
             async () => await store.Find("__mine"));
         Assert.Contains("reserved for built-in", reserved.Message);
@@ -308,16 +333,17 @@ public sealed class ConfigurationReportDefinitionStoreTests
         };
         using var conflicted = new ConfigurationReportDefinitionStore(
             new OptionsMonitorStub(contradictory),
-            new SchemaCache());
+            new SchemaCache(), TestRegistry());
         var conflict = await Assert.ThrowsAsync<InvalidOperationException>(
             async () => await conflicted.Find("orders"));
         Assert.Contains("allowAnonymous and administratorsOnly", conflict.Message);
     }
 
     [Fact]
-    public void Builtin_definition_synthesizes_from_the_saved_reports_options()
+    public void Builtin_definition_synthesizes_from_the_resolved_store_config()
     {
-        var definition = SavedReportsListingDefinition.Create(new SavedReportsOptions());
+        var definition = SavedReportsListingDefinition.Create(new SavedReportStoreConfig(
+            ServiceCollectionExtensions.DefaultSavedReportsConnection, ReportDialect.Sqlite));
 
         Assert.Equal("__saved-reports", definition.Name);
         Assert.Equal(ServiceCollectionExtensions.DefaultSavedReportsConnection, definition.Connection);
@@ -338,19 +364,15 @@ public sealed class ConfigurationReportDefinitionStoreTests
             Assert.Equal("ID", format.KeyColumn);
         });
 
-        var explicitTarget = SavedReportsListingDefinition.Create(new SavedReportsOptions
-        {
-            Connection = "ReportsDb",
-            Dialect = ReportDialect.SqlServer,
-            TableName = "SAVED",
-        });
+        var explicitTarget = SavedReportsListingDefinition.Create(new SavedReportStoreConfig(
+            "ReportsDb", ReportDialect.SqlServer, TableName: "SAVED"));
         Assert.Equal("ReportsDb", explicitTarget.Connection);
         Assert.Equal(ReportDialect.SqlServer, explicitTarget.Dialect);
         Assert.Contains("FROM SAVED", explicitTarget.Sql);
         Assert.Contains("SUBSTRING", explicitTarget.Sql);
 
         Assert.Throws<InvalidOperationException>(() => SavedReportsListingDefinition.Create(
-            new SavedReportsOptions { Connection = "x", TableName = "bad name" }));
+            new SavedReportStoreConfig("x", ReportDialect.Sqlite, TableName: "bad name")));
     }
 
     [Theory]
@@ -360,11 +382,8 @@ public sealed class ConfigurationReportDefinitionStoreTests
     [InlineData(ReportDialect.Postgres)]
     public void Builtin_sql_is_a_plain_select_safe_for_raw_composition(ReportDialect dialect)
     {
-        var definition = SavedReportsListingDefinition.Create(new SavedReportsOptions
-        {
-            Connection = "ReportsDb",
-            Dialect = dialect,
-        });
+        var definition = SavedReportsListingDefinition.Create(
+            new SavedReportStoreConfig("ReportsDb", dialect));
         var sql = definition.Sql;
 
         // The composer wraps this text as a derived table and SqlKata rewrites
@@ -390,7 +409,7 @@ public sealed class ConfigurationReportDefinitionStoreTests
     {
         var options = new InteractiveReportOptions();
         options.Reports["orders"] = def;
-        return new ConfigurationReportDefinitionStore(new OptionsMonitorStub(options), new SchemaCache());
+        return new ConfigurationReportDefinitionStore(new OptionsMonitorStub(options), new SchemaCache(), TestRegistry());
     }
 
     private static ReportDefinition OrdersDefinition() => new()
@@ -609,6 +628,112 @@ public sealed class ConfigurationReportDefinitionStoreTests
         Assert.Equal("Free-form notes.", notes.HelpText);
         Assert.Equal("Order #", snapshot.Columns["ORDER_ID"].Label);
         Assert.Equal("Order #", snapshot.GetEffectiveColumnLabels()!["ORDER_ID"]);
+    }
+
+    // ---- dataSource + derived dialect ----
+
+    private static ConfigurationReportDefinitionStore StoreWith(
+        ReportDefinition def,
+        params (string Key, string Value)[] configuration)
+    {
+        var options = new InteractiveReportOptions();
+        options.Reports["orders"] = def;
+        var registry = new ReportConnectionRegistry(
+            new Dictionary<string, Func<IServiceProvider, System.Data.Common.DbConnection>>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["db"] = _ => new SqliteConnection("Data Source=:memory:"),
+            },
+            new Dictionary<string, ReportDialect>(StringComparer.OrdinalIgnoreCase),
+            NullServices.Instance,
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(configuration.ToDictionary(p => p.Key, p => (string?)p.Value))
+                .Build());
+        return new ConfigurationReportDefinitionStore(new OptionsMonitorStub(options), new SchemaCache(), registry);
+    }
+
+    [Fact]
+    public async Task Data_source_and_connection_are_exclusive_and_one_is_required()
+    {
+        using var both = StoreWith(new ReportDefinition
+        {
+            Connection = "db",
+            DataSource = "Data Source=:memory:",
+            Sql = "select 1 as ID",
+        });
+        var bothError = await Assert.ThrowsAsync<InvalidOperationException>(async () => await both.Find("orders"));
+        Assert.Contains("not both", bothError.Message);
+
+        using var neither = StoreWith(new ReportDefinition { Sql = "select 1 as ID" });
+        var neitherError = await Assert.ThrowsAsync<InvalidOperationException>(async () => await neither.Find("orders"));
+        Assert.Contains("a data source is required", neitherError.Message);
+        Assert.Contains("dataSource", neitherError.Message);
+    }
+
+    [Fact]
+    public async Task Provider_belongs_to_data_sources_and_reserved_connection_prefixes_fail()
+    {
+        using var withProvider = StoreWith(new ReportDefinition
+        {
+            Connection = "db",
+            Provider = "sqlite",
+            Sql = "select 1 as ID",
+        });
+        var providerError = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await withProvider.Find("orders"));
+        Assert.Contains("provider applies to dataSource", providerError.Message);
+
+        using var reserved = StoreWith(new ReportDefinition
+        {
+            Connection = "__ir:ds:abc",
+            Sql = "select 1 as ID",
+        });
+        var reservedError = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await reserved.Find("orders"));
+        Assert.Contains("'__ir:' are reserved", reservedError.Message);
+    }
+
+    [Fact]
+    public async Task Dialects_derive_from_the_connection_and_supersede_configured_leftovers()
+    {
+        // No dialect configured — the new normal.
+        using var derived = StoreWith(new ReportDefinition { Connection = "db", Sql = "select 1 as ID" });
+        var snapshot = await derived.Find("orders");
+        Assert.Equal(ReportDialect.Sqlite, snapshot!.Dialect);
+        Assert.Equal(ReportDialect.Sqlite, snapshot.GetEffectiveDialect());
+
+        // A leftover configured dialect — even a wrong one — is silently superseded
+        // by the connection's own: dialect stopped being a per-report choice.
+        using var leftover = StoreWith(new ReportDefinition
+        {
+            Connection = "db",
+            Dialect = ReportDialect.Oracle,
+            Sql = "select 1 as ID",
+        });
+        var corrected = await leftover.Find("orders");
+        Assert.Equal(ReportDialect.Sqlite, corrected!.Dialect);
+    }
+
+    [Fact]
+    public async Task Data_source_reports_resolve_to_synthetic_connections()
+    {
+        using var literal = StoreWith(new ReportDefinition
+        {
+            DataSource = "Data Source=:memory:",
+            Provider = "sqlite",
+            Sql = "select 1 as ID",
+        });
+        var snapshot = await literal.Find("orders");
+        Assert.StartsWith("__ir:ds:", snapshot!.Connection);
+        Assert.Equal(ReportDialect.Sqlite, snapshot.Dialect);
+
+        using var named = StoreWith(
+            new ReportDefinition { DataSource = "AppDb", Sql = "select 1 as ID" },
+            ("ConnectionStrings:AppDb", "Data Source=:memory:"),
+            ("ConnectionStrings:AppDb_ProviderName", "Microsoft.Data.Sqlite"));
+        var resolved = await named.Find("orders");
+        Assert.StartsWith("__ir:ds:", resolved!.Connection);
+        Assert.Equal(ReportDialect.Sqlite, resolved.Dialect);
+        Assert.Equal("AppDb", resolved.DataSource);
     }
 
     private sealed class OptionsMonitorStub(InteractiveReportOptions options)

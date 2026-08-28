@@ -56,7 +56,7 @@ public sealed class SchemaCache
         public static SchemaCacheKey From(ReportDefinition definition) => new(
             definition.Name.ToUpperInvariant(),
             definition.Connection,
-            definition.Dialect,
+            definition.GetEffectiveDialect(),
             definition.Sql,
             string.Join(
                 "\n",

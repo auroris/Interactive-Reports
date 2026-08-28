@@ -28,8 +28,8 @@ public static class QueryComposer
 
         // Aggregates and break totals compute over the whole filtered set — they derive
         // from the pre-select, pre-order, pre-paging core, same as count.
-        var aggregates = state.Aggregates.Count > 0 ? BuildAggregates(core, state, def.Dialect) : null;
-        var breakTotals = state.Breaks.Count > 0 ? BuildBreakTotals(core, state, def.Dialect) : null;
+        var aggregates = state.Aggregates.Count > 0 ? BuildAggregates(core, state, def.GetEffectiveDialect()) : null;
+        var breakTotals = state.Breaks.Count > 0 ? BuildBreakTotals(core, state, def.GetEffectiveDialect()) : null;
 
         var page = core.Clone()
             .Select(state.ProjectionColumns.Select(c => c.Name).ToArray());
@@ -38,10 +38,10 @@ public static class QueryComposer
         // their truth values as private markers so every expression function and
         // dialect rule is evaluated by the database, not reimplemented in C#.
         foreach (var rule in state.Rules.Decorations)
-            ExpressionRuleSqlApplicator.ApplyDecoration(page, rule, def.Dialect);
+            ExpressionRuleSqlApplicator.ApplyDecoration(page, rule, def.GetEffectiveDialect());
 
         foreach (var sort in EffectiveSorts(state))
-            ApplySort(page, sort, def.Dialect);
+            ApplySort(page, sort, def.GetEffectiveDialect());
 
         if (!state.PageAll)
         {
@@ -77,7 +77,7 @@ public static class QueryComposer
             // resolve against the case-folded IR_BASE on Oracle (ORA-00904).
             inner.SelectRaw($"{BaseAlias}.*");
             foreach (var rule in state.Rules.Definitions)
-                ExpressionRuleSqlApplicator.ApplyDefinition(inner, rule, def.Dialect);
+                ExpressionRuleSqlApplicator.ApplyDefinition(inner, rule, def.GetEffectiveDialect());
             core = new Query().From(inner.As(CalcAlias));
         }
         else
@@ -86,7 +86,7 @@ public static class QueryComposer
         }
 
         foreach (var rule in state.Rules.RowPredicates)
-            ExpressionRuleSqlApplicator.ApplyRowPredicate(core, rule, def.Dialect);
+            ExpressionRuleSqlApplicator.ApplyRowPredicate(core, rule, def.GetEffectiveDialect());
 
         if (state.Search is not null)
             ApplySearch(core, state);
@@ -98,7 +98,7 @@ public static class QueryComposer
     public static (Query Page, Query Count) ComposeGroupStage(ReportDefinition def, ValidatedState state)
     {
         var core = BuildFilteredCore(def, state);
-        var page = BuildGroupStagePage(core, state, def.Dialect);
+        var page = BuildGroupStagePage(core, state, def.GetEffectiveDialect());
         if (!state.PageAll)
             page.ForPage(state.PageIndex, state.PageSize);
 
@@ -113,7 +113,7 @@ public static class QueryComposer
     public static Query ComposeGroupStageExport(ReportDefinition def, ValidatedState state, int maxRows)
     {
         var core = BuildFilteredCore(def, state);
-        return BuildGroupStagePage(core, state, def.Dialect).Limit(maxRows + 1);
+        return BuildGroupStagePage(core, state, def.GetEffectiveDialect()).Limit(maxRows + 1);
     }
 
     /// <summary>
@@ -163,11 +163,11 @@ public static class QueryComposer
             dims,
             MetricValues(view),
             view.GroupLayer!,
-            def.Dialect,
+            def.GetEffectiveDialect(),
             includeDecorations: false,
             sorts);
         foreach (var sort in sorts)
-            ApplySort(query, sort, def.Dialect);
+            ApplySort(query, sort, def.GetEffectiveDialect());
         return query.Limit(maxGroups + 1);
     }
 
@@ -192,11 +192,11 @@ public static class QueryComposer
             view.PivotCols,
             MetricValues(view),
             view.GroupLayer! with { Computed = totalsComputed, Decorations = [], Sorts = [] },
-            def.Dialect,
+            def.GetEffectiveDialect(),
             includeDecorations: false,
             sorts);
         foreach (var sort in sorts)
-            ApplySort(query, sort, def.Dialect);
+            ApplySort(query, sort, def.GetEffectiveDialect());
         return query;
     }
 
@@ -294,7 +294,7 @@ public static class QueryComposer
             IReadOnlyList<GroupedValue> values = chart.Value is null
                 ? []
                 : [new GroupedValue("m0", chart.Value, fn)];
-            q = BuildGrouped(core, [chart.Label], values, def.Dialect);
+            q = BuildGrouped(core, [chart.Label], values, def.GetEffectiveDialect());
             metricAlias = chart.Value is null ? "__count" : "m0";
         }
         else
@@ -324,7 +324,7 @@ public static class QueryComposer
         var core = BuildFilteredCore(def, state);
         var q = core.Clone().Select(state.ProjectionColumns.Select(c => c.Name).ToArray());
         foreach (var sort in EffectiveSorts(state))
-            ApplySort(q, sort, def.Dialect);
+            ApplySort(q, sort, def.GetEffectiveDialect());
         return q.Limit(maxRows + 1);
     }
 

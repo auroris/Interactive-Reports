@@ -45,7 +45,20 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
         var monitor = new MonitorStub(OptionsWith(documentFiles));
         var documents = new ConfiguredReportDocumentStore(monitor, new EnvStub(_root));
         var store = new RecordingStore();
-        return (new ConfiguredReportDocumentSynchronizer(documents, store, monitor), store, monitor);
+        // Default SavedReports options resolve to the sentinel store target, so the
+        // registry never needs a real connection here.
+        var registry = new ReportConnectionRegistry(
+            new Dictionary<string, Func<IServiceProvider, System.Data.Common.DbConnection>>(StringComparer.OrdinalIgnoreCase),
+            new Dictionary<string, ReportDialect>(StringComparer.OrdinalIgnoreCase),
+            EmptyServices.Instance,
+            new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build());
+        return (new ConfiguredReportDocumentSynchronizer(documents, store, monitor, registry), store, monitor);
+    }
+
+    private sealed class EmptyServices : IServiceProvider
+    {
+        public static readonly EmptyServices Instance = new();
+        public object? GetService(Type serviceType) => null;
     }
 
     [Fact]

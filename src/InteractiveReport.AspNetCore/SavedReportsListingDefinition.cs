@@ -22,9 +22,8 @@ internal static class SavedReportsListingDefinition
     internal static bool Matches(string name)
         => string.Equals(name, Name, StringComparison.OrdinalIgnoreCase);
 
-    internal static ReportDefinition Create(SavedReportsOptions saved)
+    internal static ReportDefinition Create(SavedReportStoreConfig cfg)
     {
-        var cfg = ServiceCollectionExtensions.ResolveStoreConfig(saved);
         SavedReportStoreConfig.EnsureValidTableName(cfg.TableName);
         return new ReportDefinition
         {

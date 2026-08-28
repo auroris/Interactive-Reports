@@ -18,18 +18,21 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
     private readonly ConfiguredReportDocumentStore _documents;
     private readonly ISavedReportStore _store;
     private readonly IOptionsMonitor<InteractiveReportOptions> _options;
+    private readonly ReportConnectionRegistry _registry;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private readonly IDisposable? _reloadSubscription;
     private string? _applied;
 
-    public ConfiguredReportDocumentSynchronizer(
+    internal ConfiguredReportDocumentSynchronizer(
         ConfiguredReportDocumentStore documents,
         ISavedReportStore store,
-        IOptionsMonitor<InteractiveReportOptions> options)
+        IOptionsMonitor<InteractiveReportOptions> options,
+        ReportConnectionRegistry registry)
     {
         _documents = documents;
         _store = store;
         _options = options;
+        _registry = registry;
         _reloadSubscription = options.OnChange(_ => Volatile.Write(ref _applied, null));
     }
 
@@ -99,7 +102,7 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
     /// </summary>
     private string Signature()
     {
-        var cfg = ServiceCollectionExtensions.ResolveStoreConfig(_options.CurrentValue.SavedReports);
+        var cfg = _registry.ResolveStoreConfig(_options.CurrentValue.SavedReports);
         var parts = _documents.ListAll()
             .Select(document => $"{document.Id}:{document.Length}:{document.ModifiedUtc.Ticks}")
             .OrderBy(part => part, StringComparer.Ordinal);

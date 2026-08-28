@@ -1,0 +1,26 @@
+<Project>
+
+  <!-- Shared package identity for every project in the repository. Only the three
+       src\ projects are packable (samples and tests set IsPackable=false or are
+       never packed); the metadata is harmless elsewhere. -->
+  <PropertyGroup>
+    <Version>0.9.0</Version>
+    <Authors>auroris</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/auroris/Interactive-Reports</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/auroris/Interactive-Reports</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>reporting;interactive-report;apex;grid;sql;aspnetcore;umbraco</PackageTags>
+
+    <!-- Source Link: the .NET 8+ SDK embeds GitHub source-link support natively. -->
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- Public members are documented where it matters; exhaustive coverage is not a goal. -->
+    <NoWarn>$(NoWarn);CS1591;CS1573</NoWarn>
+  </PropertyGroup>
+
+</Project>
