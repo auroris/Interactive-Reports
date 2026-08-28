@@ -86,13 +86,23 @@ public sealed class ReportExecutor
         var stopwatch = Stopwatch.StartNew();
         var validated = await IngestDocument(definition, state, contextParams, ct);
 
-        return validated.View.Mode switch
+        try
         {
-            ViewMode.GroupBy => await QueryGroupStage(definition, validated, contextParams, stopwatch, ct),
-            ViewMode.Pivot => await QuerySpread(definition, validated, contextParams, stopwatch, ct),
-            ViewMode.Chart => await QueryChart(definition, validated, contextParams, stopwatch, ct),
-            _ => await QueryGrid(definition, validated, contextParams, stopwatch, ct),
-        };
+            return validated.View.Mode switch
+            {
+                ViewMode.GroupBy => await QueryGroupStage(definition, validated, contextParams, stopwatch, ct),
+                ViewMode.Pivot => await QuerySpread(definition, validated, contextParams, stopwatch, ct),
+                ViewMode.Chart => await QueryChart(definition, validated, contextParams, stopwatch, ct),
+                _ => await QueryGrid(definition, validated, contextParams, stopwatch, ct),
+            };
+        }
+        catch (DbException ex)
+        {
+            // Self-heals a snapshot capability withdrawn mid-run (SQL Server 3952):
+            // this request still fails loudly; the next one re-probes and degrades.
+            _connections.NoteReadFailure(definition, ex);
+            throw;
+        }
     }
 
     /// <summary>
@@ -174,8 +184,12 @@ public sealed class ReportExecutor
         var composed = QueryComposer.Compose(definition, state);
         var compiler = DialectSupport.GetCompiler(definition.GetEffectiveDialect());
 
+        // Count, aggregates, break totals, and page rows are separate statements; the
+        // consistent-read transaction (where available) makes them one snapshot, so
+        // totalRows can never disagree with the rows a concurrent commit changed.
         await using var connection = await _connections.Open(definition, ct);
-        var reader = CreateReader(connection, compiler, definition, contextParams);
+        await using var transaction = await _connections.TryBeginConsistentRead(connection, definition, ct);
+        var reader = CreateReader(connection, compiler, definition, contextParams, transaction);
 
         var totalRows = await reader.ReadCount(composed.Count, ct);
         var aggregates = composed.Aggregates is null
@@ -195,6 +209,7 @@ public sealed class ReportExecutor
             breakContinues = executionRows.Count > 0
                 && SameBreakKey(executionRows[^1], boundary, state.Breaks);
         }
+        if (transaction is not null) await transaction.CommitAsync(ct);
         var highlights = state.Rules.Decorations.Count > 0
             ? HighlightEvaluator.Evaluate(state.Rules.Decorations, executionRows)
             : [];
@@ -233,10 +248,13 @@ public sealed class ReportExecutor
         var compiler = DialectSupport.GetCompiler(definition.GetEffectiveDialect());
         var layer = state.View.GroupLayer!;
 
+        // Group count and page rows share one snapshot, exactly like the grid path.
         await using var connection = await _connections.Open(definition, ct);
-        var reader = CreateReader(connection, compiler, definition, contextParams);
+        await using var transaction = await _connections.TryBeginConsistentRead(connection, definition, ct);
+        var reader = CreateReader(connection, compiler, definition, contextParams, transaction);
         var totalGroups = await reader.ReadCount(count, ct);
         var executionRows = (await reader.ReadRows(page, maxRows: null, ct)).Rows;
+        if (transaction is not null) await transaction.CommitAsync(ct);
         var highlights = layer.Decorations.Count > 0
             ? HighlightEvaluator.Evaluate(layer.Decorations, executionRows)
             : [];
@@ -347,7 +365,10 @@ public sealed class ReportExecutor
         IReadOnlyList<CompiledRule<DefineColumnEffect>> totalsComputed = [];
         await using (var connection = await _connections.Open(definition, ct))
         {
-            var reader = CreateReader(connection, compiler, definition, contextParams);
+            // Source groups and the totals re-aggregation read the same snapshot, so
+            // totals rows always sum exactly what the matrix shows.
+            await using var transaction = await _connections.TryBeginConsistentRead(connection, definition, ct);
+            var reader = CreateReader(connection, compiler, definition, contextParams, transaction);
             groups = await reader.ReadPivotGroups(
                 source,
                 view.PivotRows.Count,
@@ -373,6 +394,8 @@ public sealed class ReportExecutor
                     view.Values.Count + totalsComputed.Count,
                     ct);
             }
+
+            if (transaction is not null) await transaction.CommitAsync(ct);
         }
 
         var pivot = PivotTableBuilder.Build(
@@ -412,8 +435,9 @@ public sealed class ReportExecutor
         DbConnection connection,
         Compiler compiler,
         ReportDefinition definition,
-        IReadOnlyDictionary<string, object?> contextParams)
-        => new(connection, compiler, contextParams, definition, _logger);
+        IReadOnlyDictionary<string, object?> contextParams,
+        DbTransaction? transaction = null)
+        => new(connection, compiler, contextParams, definition, _logger, transaction);
 
     private static PageRequest Page(ValidatedState state)
         => new() { Index = state.PageIndex, Size = state.PageAll ? 0 : state.PageSize };

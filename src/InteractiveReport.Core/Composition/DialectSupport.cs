@@ -1,3 +1,4 @@
+using System.Data;
 using InteractiveReport.Core.Model;
 using SqlKata.Compilers;
 
@@ -11,6 +12,23 @@ public static class DialectSupport
         ReportDialect.Oracle => new OracleCompiler(),
         ReportDialect.Sqlite => new SqliteCompiler(),
         ReportDialect.Postgres => new PostgresCompiler(),
+        _ => throw new ArgumentOutOfRangeException(nameof(dialect), dialect, null),
+    };
+
+    /// <summary>
+    /// The isolation level that gives one request's multiple read statements a single
+    /// consistent view of the data, without read locks where the engine offers a
+    /// snapshot: Postgres REPEATABLE READ and Oracle SERIALIZABLE are snapshot reads,
+    /// SQLite transactions always read one snapshot, and SQL Server needs SNAPSHOT
+    /// (gated on ALLOW_SNAPSHOT_ISOLATION — see ReportConnectionManager's probe;
+    /// REPEATABLE READ there would take shared locks and still admit phantoms).
+    /// </summary>
+    public static IsolationLevel ConsistentReadIsolation(ReportDialect dialect) => dialect switch
+    {
+        ReportDialect.SqlServer => IsolationLevel.Snapshot,
+        ReportDialect.Oracle => IsolationLevel.Serializable,
+        ReportDialect.Sqlite => IsolationLevel.Serializable,
+        ReportDialect.Postgres => IsolationLevel.RepeatableRead,
         _ => throw new ArgumentOutOfRangeException(nameof(dialect), dialect, null),
     };
 

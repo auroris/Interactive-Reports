@@ -62,10 +62,16 @@ public sealed partial class ConfigurationReportDefinitionStore : IReportDefiniti
                 _registry.ResolveStoreConfig(_options.CurrentValue.SavedReports));
         }
 
-        if (!_options.CurrentValue.Reports.TryGetValue(name, out var def))
+        var reports = _options.CurrentValue.Reports;
+        if (!reports.TryGetValue(name, out var def))
             return null;
 
-        var snapshot = Snapshot(name, def);
+        // The lookup accepts any casing, but the configured key is the canonical name:
+        // it becomes REPORT_NAME in saved-report rows and the filter that finds them
+        // again, so it must be a single spelling on case-sensitive databases.
+        var configuredName = reports.Keys.FirstOrDefault(key => string.Equals(key, name, StringComparison.Ordinal))
+            ?? reports.Keys.First(key => string.Equals(key, name, StringComparison.OrdinalIgnoreCase));
+        var snapshot = Snapshot(configuredName, def);
         Validate(snapshot);
         ResolveConnection(snapshot, _registry);
         if (_synchronizer is not null && _savedReports is not null)
@@ -138,6 +144,10 @@ public sealed partial class ConfigurationReportDefinitionStore : IReportDefiniti
         if (def.Name.StartsWith("__", StringComparison.Ordinal))
             throw new InvalidOperationException(
                 $"Report '{def.Name}': names beginning with '__' are reserved for built-in reports.");
+        if (ReservedRouteNames.Contains(def.Name, StringComparer.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': this name is shadowed by a built-in endpoint route and would be "
+                + $"unreachable — reserved names are {string.Join(", ", ReservedRouteNames)}.");
         if (def.Authorization is { AllowAnonymous: true, AdministratorsOnly: true })
             throw new InvalidOperationException(
                 $"Report '{def.Name}': authorization cannot be both allowAnonymous and administratorsOnly.");
@@ -181,11 +191,10 @@ public sealed partial class ConfigurationReportDefinitionStore : IReportDefiniti
             throw new InvalidOperationException(
                 $"Report '{def.Name}': commandTimeoutSeconds must be at least 1.");
         // The base SELECT becomes a derived table; a trailing ORDER BY breaks that on
-        // SQL Server (APEX imposes the same rule). Heuristic: an ORDER BY after the last
-        // closing paren is top-level.
-        var sql = def.Sql.TrimEnd().TrimEnd(';');
-        var lastOrderBy = OrderByPattern().Matches(sql).LastOrDefault()?.Index ?? -1;
-        if (lastOrderBy >= 0 && lastOrderBy > sql.LastIndexOf(')'))
+        // SQL Server (APEX imposes the same rule). The scanner is comment-, string-,
+        // and quoted-identifier-aware, so 'order by' as data or documentation never
+        // trips this — only the real clause at parenthesis depth 0 does.
+        if (SqlTopLevelScanner.HasTopLevelOrderBy(def.Sql))
             throw new InvalidOperationException(
                 $"Report '{def.Name}': base query must not end with ORDER BY — sorting belongs to report state.");
 
@@ -364,8 +373,12 @@ public sealed partial class ConfigurationReportDefinitionStore : IReportDefiniti
                 $"Report '{def.Name}': defaultState breaks on '{broken}' but columns['{broken}'] is not sortable (control breaks imply sorting).");
     }
 
-    [GeneratedRegex(@"\bORDER\s+BY\b", RegexOptions.IgnoreCase)]
-    private static partial Regex OrderByPattern();
+    /// <summary>
+    /// First-segment literals of the mounted endpoint routes. ASP.NET's literal-first
+    /// routing makes a report with one of these names unreachable (or, worse,
+    /// partially reachable), so configuration fails fast instead.
+    /// </summary>
+    private static readonly string[] ReservedRouteNames = ["ui", "saved", "whoami", "admin"];
 
     [GeneratedRegex(@"^p\d+$", RegexOptions.IgnoreCase)]
     private static partial Regex ReservedParamPattern();

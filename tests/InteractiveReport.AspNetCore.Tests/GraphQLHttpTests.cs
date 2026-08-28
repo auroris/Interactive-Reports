@@ -226,6 +226,29 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
             .GetProperty("extensions").GetProperty("code").GetString());
     }
 
+    [Fact]
+    public async Task Row_values_carry_the_rest_protocols_exact_number_semantics()
+    {
+        var id = await CreatePrivateReport("alice", "Exact Numbers");
+
+        using var response = await GraphQL(id, "alice");
+        var body = await ReadJson(response);
+        var result = body.GetProperty("data").GetProperty("report");
+
+        // SQLite INTEGER surfaces as Int64: a string on the wire (columns still say
+        // "number") so JavaScript clients cannot lose digits to doubles — the same
+        // contract IrJson gives REST. Typed Long scalars keep number semantics.
+        var id0 = result.GetProperty("rows")[0].GetProperty("ID");
+        Assert.Equal(JsonValueKind.String, id0.ValueKind);
+        Assert.True(long.TryParse(id0.GetString(), out _));
+        Assert.Equal(JsonValueKind.Number, result.GetProperty("totalRows").ValueKind);
+        Assert.Equal(
+            "number",
+            result.GetProperty("columns").EnumerateArray()
+                .Single(column => column.GetProperty("name").GetString() == "ID")
+                .GetProperty("type").GetString());
+    }
+
     private async Task<string> CreatePrivateReport(string owner, string title)
     {
         using var response = await Send(

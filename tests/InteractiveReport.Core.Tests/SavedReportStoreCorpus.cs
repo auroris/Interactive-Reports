@@ -158,6 +158,81 @@ public abstract class SavedReportStoreCorpus
         Assert.Null(await Store.Get(report.Id));
     }
 
+    [SkippableFact]
+    public async Task Duplicate_user_titles_for_one_report_are_rejected_atomically()
+    {
+        await Store.Create(Make("West region", "alice"));
+
+        // Same normalized title (trim + case): the unique index is the atomic
+        // backstop behind the endpoints' advisory pre-check.
+        await Assert.ThrowsAsync<SavedReportTitleConflictException>(
+            () => Store.Create(Make("  west REGION ", "bob")));
+
+        // A different report definition keeps its own title namespace.
+        await Store.Create(Make("West region", "bob", report: "big-orders"));
+    }
+
+    [SkippableFact]
+    public async Task Renaming_onto_an_existing_title_is_rejected()
+    {
+        await Store.Create(Make("Keep", "alice"));
+        var other = Make("Rename me", "alice");
+        await Store.Create(other);
+
+        other.Title = "keep";
+
+        await Assert.ThrowsAsync<SavedReportTitleConflictException>(() => Store.Update(other));
+    }
+
+    [SkippableFact]
+    public async Task Configured_rows_may_shadow_a_user_title_without_tripping_uniqueness()
+    {
+        // A checked-in document deliberately wins over a same-titled user row (the
+        // listing dedupes it); synchronization must never fail on that collision,
+        // so only user-origin rows live under the unique index.
+        await Store.Create(Make("Shared title", "alice"));
+        await Store.Put(new SavedReport
+        {
+            Id = "cfg_" + new string('b', 64),
+            ReportName = "orders",
+            Title = "Shared title",
+            Owner = null,
+            IsGlobal = true,
+            StateJson = "{}",
+            ModifiedUtc = DateTime.UtcNow,
+            Origin = SavedReportOrigin.Configured,
+        });
+
+        Assert.Equal(2, (await Store.ListVisible("orders", "alice")).Count);
+    }
+
+    [SkippableFact]
+    public async Task Put_propagates_non_uniqueness_insert_failures()
+    {
+        // A broken row (null STATE_JSON) must never be reported as applied: treating
+        // every DbException as a lost insert race would let the synchronizer mark a
+        // missing row as synced. (Store is touched outside the assertion lambda so
+        // an unconfigured live target skips instead of failing the type check.)
+        var store = Store;
+        var broken = Make("Broken", "alice");
+        broken.StateJson = null!;
+
+        await Assert.ThrowsAnyAsync<DbException>(() => store.Put(broken));
+        Assert.Null(await store.Get(broken.Id));
+    }
+
+    [SkippableFact]
+    public async Task ListVisible_matches_the_owner_case_insensitively_on_every_dialect()
+    {
+        // Database equality is collation-dependent; visibility must use the same
+        // OrdinalIgnoreCase semantics as direct-resource authorization.
+        await Store.Create(Make("Cased", "Alice@Example.test"));
+
+        var visible = await Store.ListVisible("orders", "alice@example.TEST");
+
+        Assert.Equal("Cased", Assert.Single(visible).Title);
+    }
+
     protected sealed class FixedConnectionFactory(Func<DbConnection> open) : IReportConnectionFactory
     {
         public DbConnection CreateConnection(string name) => open();

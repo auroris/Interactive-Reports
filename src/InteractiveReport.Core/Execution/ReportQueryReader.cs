@@ -10,14 +10,16 @@ namespace InteractiveReport.Core.Execution;
 /// <summary>
 /// Compiles and materializes report queries over one prepared connection. This keeps
 /// provider command handling and ordinal-based result layouts out of the request
-/// orchestrator.
+/// orchestrator. When the orchestrator opened a consistent-read transaction, every
+/// command joins it (providers require the enlistment to be explicit).
 /// </summary>
 internal sealed class ReportQueryReader(
     DbConnection connection,
     Compiler compiler,
     IReadOnlyDictionary<string, object?> contextParams,
     ReportDefinition definition,
-    ILogger? logger)
+    ILogger? logger,
+    DbTransaction? transaction = null)
 {
     public async Task<long> ReadCount(Query query, CancellationToken ct)
     {
@@ -128,7 +130,11 @@ internal sealed class ReportQueryReader(
     }
 
     private DbCommand Build(Query query)
-        => CommandBuilder.Build(connection, compiler.Compile(query), contextParams, definition, logger);
+    {
+        var command = CommandBuilder.Build(connection, compiler.Compile(query), contextParams, definition, logger);
+        command.Transaction = transaction;
+        return command;
+    }
 
     private static object?[] ReadKey(DbDataReader reader, int offset, int count)
     {

@@ -736,6 +736,96 @@ public sealed class ConfigurationReportDefinitionStoreTests
         Assert.Equal("AppDb", resolved.DataSource);
     }
 
+    // ---- canonical names, reserved routes, ORDER BY lint ----
+
+    [Fact]
+    public async Task Find_returns_the_configured_casing_as_the_canonical_name()
+    {
+        var options = new InteractiveReportOptions();
+        options.Reports["Orders"] = new ReportDefinition
+        {
+            Connection = "db",
+            Sql = "select 1 as ID",
+        };
+        using var store = new ConfigurationReportDefinitionStore(
+            new OptionsMonitorStub(options),
+            new SchemaCache(), TestRegistry());
+
+        var snapshot = await store.Find("oRdErS");
+
+        // The configured key becomes REPORT_NAME in saved-report rows and the filter
+        // that finds them again: alternate casing stays accepted at the boundary but
+        // must never leak into persistence on case-sensitive databases.
+        Assert.NotNull(snapshot);
+        Assert.Equal("Orders", snapshot.Name);
+    }
+
+    [Theory]
+    [InlineData("ui")]
+    [InlineData("Saved")]
+    [InlineData("whoami")]
+    [InlineData("ADMIN")]
+    public async Task Route_shadowed_report_names_fail_fast(string name)
+    {
+        var options = new InteractiveReportOptions();
+        options.Reports[name] = new ReportDefinition
+        {
+            Connection = "db",
+            Sql = "select 1 as ID",
+        };
+        using var store = new ConfigurationReportDefinitionStore(
+            new OptionsMonitorStub(options),
+            new SchemaCache(), TestRegistry());
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await store.Find(name));
+
+        Assert.Contains("reserved names are ui, saved, whoami, admin", error.Message);
+    }
+
+    [Theory]
+    [InlineData("SELECT 'order by' AS TXT FROM T", false)]
+    [InlineData("SELECT 1 AS ID -- order by note", false)]
+    [InlineData("SELECT 1 AS ID /* order by note */", false)]
+    [InlineData("SELECT \"ORDER BY\" FROM T", false)]
+    [InlineData("SELECT [order by] FROM T", false)]
+    [InlineData("SELECT * FROM (SELECT ID FROM T ORDER BY ID) Q", false)]
+    [InlineData("SELECT SUM(X) OVER (ORDER BY ID) AS R FROM T", false)]
+    [InlineData("/* /* nested */ order by */ SELECT 1 AS ID", false)]
+    [InlineData("SELECT ID FROM T ORDER BY ID", true)]
+    [InlineData("SELECT ID FROM T ORDER/* split */BY ID", true)]
+    [InlineData("SELECT (1) AS X /* ) */ FROM T ORDER BY 1", true)]
+    [InlineData("SELECT 1 UNION SELECT 2 ORDER BY 1", true)]
+    [InlineData("SELECT ID FROM T ORDER BY ID;", true)]
+    public void Top_level_order_by_detection_is_comment_and_string_aware(string sql, bool detected)
+    {
+        Assert.Equal(detected, SqlTopLevelScanner.HasTopLevelOrderBy(sql));
+    }
+
+    [Fact]
+    public async Task Order_by_lint_accepts_the_phrase_as_data_and_rejects_the_clause()
+    {
+        var options = new InteractiveReportOptions();
+        options.Reports["good"] = new ReportDefinition
+        {
+            Connection = "db",
+            Sql = "SELECT 'order by' AS HINT FROM T",
+        };
+        options.Reports["bad"] = new ReportDefinition
+        {
+            Connection = "db",
+            Sql = "SELECT ID FROM T ORDER BY ID",
+        };
+        using var store = new ConfigurationReportDefinitionStore(
+            new OptionsMonitorStub(options),
+            new SchemaCache(), TestRegistry());
+
+        Assert.NotNull(await store.Find("good"));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await store.Find("bad"));
+        Assert.Contains("must not end with ORDER BY", error.Message);
+    }
+
     private sealed class OptionsMonitorStub(InteractiveReportOptions options)
         : IOptionsMonitor<InteractiveReportOptions>
     {

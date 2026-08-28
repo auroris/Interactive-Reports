@@ -95,6 +95,13 @@ in `columns`. Report projections, computed columns, grouping, charts, and pivots
 change the row shape at runtime, so the adapter does not pretend those rows have one
 static GraphQL object type.
 
+Row values follow the same exact-number contract as the HTTP API: 64-bit integers and
+decimals are serialized as invariant strings so JavaScript clients never round them
+through IEEE-754 doubles, while the corresponding `columns` entry still reports
+`type: "number"`. Ordinary 32-bit integers and floating-point values remain JSON
+numbers. The typed scalar fields (`totalRows`, `elapsedMs`) are GraphQL `Long` values
+and stay numbers.
+
 ## Eligible reports and stability
 
 Every saved report in `ISavedReportStore` is eligible:

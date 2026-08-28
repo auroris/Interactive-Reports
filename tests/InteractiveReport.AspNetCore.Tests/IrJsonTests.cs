@@ -161,5 +161,19 @@ public sealed class IrJsonTests
         Assert.DoesNotContain("schema", JsonSerializer.Serialize(state, IrJson.Options));
     }
 
+    [Fact]
+    public void Numeric_enum_values_are_rejected_as_malformed()
+    {
+        // The serializer only ever writes camelCase strings for enums, so a numeric
+        // token (dir: 99) is foreign input; accepting it would deserialize an
+        // undefined member that downstream code silently reinterprets.
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<ReportState>(
+            """{"v":3,"pipeline":[{"shape":{"kind":"source"},"layer":{"sorts":[{"col":"A","dir":99}]}}]}""",
+            IrJson.Options));
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<ReportState>(
+            """{"v":3,"pipeline":[{"shape":{"kind":"group","by":["A"],"values":[{"id":"m1","col":"A","fn":3}]}}]}""",
+            IrJson.Options));
+    }
+
     private sealed record WireNumbers(long Signed, ulong Unsigned, decimal Precise);
 }

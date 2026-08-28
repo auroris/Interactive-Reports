@@ -30,6 +30,18 @@ public static class StateValidator
                     $"state version {state.V} is not supported; this server requires version {ReportState.CurrentVersion} pipeline documents")]);
         }
 
+        // Structural nulls crash the resolver's deep copy before any schema check runs,
+        // so they gate here. A structurally broken caller document is the caller's 400;
+        // a broken default state is server-side data and fails as a configuration error.
+        var structural = StateStructureValidator.Collect(state);
+        if (structural.Count > 0)
+            throw new ReportValidationException(structural);
+        if (def.DefaultState is not null
+            && StateStructureValidator.Collect(def.DefaultState) is { Count: > 0 } defaultErrors)
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': the default state document is structurally invalid — "
+                + $"{defaultErrors[0].Path}: {defaultErrors[0].Message}.");
+
         var errors = new List<ValidationError>();
         var ignored = new List<IgnoredItem>();
         var resolved = ReportStateResolver.Resolve(def.DefaultState, state);

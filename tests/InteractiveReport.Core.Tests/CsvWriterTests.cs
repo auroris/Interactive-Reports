@@ -55,4 +55,55 @@ public class CsvWriterTests
         Assert.Contains("x,1234.56", csv);
         Assert.DoesNotContain("1234,56", csv);
     }
+
+    [Fact]
+    public void Formula_triggering_text_cells_get_the_apostrophe_guard_by_default()
+    {
+        // RFC 4180 quoting does not stop Excel from evaluating these; the leading
+        // apostrophe (Excel's text marker) does.
+        var csv = WriteString(
+            Row("=SUM(A1:A9)", 1m),
+            Row("+curse", 2m),
+            Row("-minus", 3m),
+            Row("@at", 4m),
+            Row("\ttabbed", 5m),
+            Row("\rreturned", 6m));
+
+        Assert.Contains("'=SUM(A1:A9),1", csv);
+        Assert.Contains("'+curse,2", csv);
+        Assert.Contains("'-minus,3", csv);
+        Assert.Contains("'@at,4", csv);
+        Assert.Contains("'\ttabbed,5", csv);
+        Assert.Contains("\"'\rreturned\",6", csv);   // CR still forces RFC 4180 quoting
+    }
+
+    [Fact]
+    public void Non_text_values_keep_full_fidelity_under_the_safe_policy()
+    {
+        var csv = WriteString(Row("x", -1234.5m));
+
+        Assert.Contains("x,-1234.5", csv);
+        Assert.DoesNotContain("'-1234.5", csv);
+    }
+
+    [Fact]
+    public void Dangerous_header_labels_are_guarded_too()
+    {
+        var columns = new List<ColumnInfo> { new("A", "=EvilLabel", "text", false) };
+
+        var bytes = CsvWriter.Write(columns, []);
+        var csv = Encoding.UTF8.GetString(bytes, 3, bytes.Length - 3);
+
+        Assert.StartsWith("'=EvilLabel\r\n", csv);
+    }
+
+    [Fact]
+    public void Verbatim_policy_emits_text_exactly_as_stored()
+    {
+        var bytes = CsvWriter.Write(Columns, [Row("=SUM(A1)", 1m)], CsvCellPolicy.Verbatim);
+        var csv = Encoding.UTF8.GetString(bytes, 3, bytes.Length - 3);
+
+        Assert.Contains("=SUM(A1),1", csv);
+        Assert.DoesNotContain("'=SUM(A1)", csv);
+    }
 }

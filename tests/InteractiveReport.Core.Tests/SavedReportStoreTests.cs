@@ -81,6 +81,75 @@ public sealed class SqliteSavedReportStoreTests : SavedReportStoreCorpus, IDispo
         Assert.True((await store.Get(loaded.Id))!.IsPrimary);
     }
 
+    [Fact]
+    public async Task Auto_create_upgrades_an_existing_table_with_title_keys_and_the_unique_index()
+    {
+        await CreateLegacyTable("IR_LEGACY_TITLES", ("old-1", "Legacy View"));
+
+        var store = new SqlSavedReportStore(
+            () => new SavedReportStoreConfig(
+                "Saved",
+                ReportDialect.Sqlite,
+                AutoCreate: true,
+                TableName: "IR_LEGACY_TITLES"),
+            new FixedConnectionFactory(() => new SqliteConnection(_cs)));
+
+        // The first operation upgrades in place: TITLE_KEY backfilled from TITLE in
+        // code, then the unique index makes the legacy row collide with new saves.
+        Assert.Single(await store.ListAll());
+        await Assert.ThrowsAsync<SavedReportTitleConflictException>(
+            () => store.Create(Report("  legacy VIEW ")));
+        await store.Create(Report("A fresh title"));
+    }
+
+    [Fact]
+    public async Task Upgrade_over_preexisting_duplicate_titles_fails_with_guidance()
+    {
+        await CreateLegacyTable("IR_LEGACY_DUPES", ("old-1", "Twin"), ("old-2", "twin"));
+
+        var store = new SqlSavedReportStore(
+            () => new SavedReportStoreConfig(
+                "Saved",
+                ReportDialect.Sqlite,
+                AutoCreate: true,
+                TableName: "IR_LEGACY_DUPES"),
+            new FixedConnectionFactory(() => new SqliteConnection(_cs)));
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => store.ListAll());
+
+        Assert.Contains("title uniqueness index", error.Message);
+        Assert.Contains("duplicate user-saved titles", error.Message);
+    }
+
+    private async Task CreateLegacyTable(string tableName, params (string Id, string Title)[] rows)
+    {
+        await using var connection = new SqliteConnection(_cs);
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"""
+            CREATE TABLE {tableName} (
+                ID TEXT PRIMARY KEY,
+                REPORT_NAME TEXT NOT NULL,
+                TITLE TEXT NOT NULL,
+                OWNER TEXT NULL,
+                IS_GLOBAL INTEGER NOT NULL,
+                STATE_JSON TEXT NOT NULL,
+                MODIFIED_UTC TEXT NOT NULL,
+                ORIGIN TEXT NOT NULL DEFAULT 'user'
+            )
+            """;
+        await command.ExecuteNonQueryAsync();
+        foreach (var (id, title) in rows)
+        {
+            command.CommandText = $$"""
+                INSERT INTO {{tableName}}
+                    (ID, REPORT_NAME, TITLE, OWNER, IS_GLOBAL, STATE_JSON, MODIFIED_UTC, ORIGIN)
+                VALUES ('{{id}}', 'orders', '{{title}}', 'alice', 0, '{}', '2026-08-14T00:00:00.0000000Z', 'user')
+                """;
+            await command.ExecuteNonQueryAsync();
+        }
+    }
+
     public void Dispose() => _keepAlive.Dispose();
 
     private static SavedReport Report(string title) => new()

@@ -157,7 +157,14 @@ internal static class SavedReportEndpoints
             IsPrimary = candidate.Primary,
             StateJson = JsonSerializer.Serialize(candidate.State, IrJson.Options),
         };
-        await SavedStore(ctx).Create(report, ct);
+        try
+        {
+            await SavedStore(ctx).Create(report, ct);
+        }
+        catch (SavedReportTitleConflictException conflict)
+        {
+            return await TitleConflictFromStore(ctx, conflict, exceptId: null, ct);
+        }
 
         return Results.Json(Summary(report, identity), IrJson.Options, statusCode: StatusCodes.Status201Created);
     }
@@ -287,9 +294,16 @@ internal static class SavedReportEndpoints
         report.IsPrimary = candidate.Primary;
         report.Owner = candidate.Owner?.Trim();
 
-        return await savedStore.Update(report, ct)
-            ? Results.Json(Summary(report, identity), IrJson.Options)
-            : Results.NotFound();
+        try
+        {
+            return await savedStore.Update(report, ct)
+                ? Results.Json(Summary(report, identity), IrJson.Options)
+                : Results.NotFound();
+        }
+        catch (SavedReportTitleConflictException conflict)
+        {
+            return await TitleConflictFromStore(ctx, conflict, report.Id, ct);
+        }
     }
 
     internal static async Task<IResult> Delete(string id, HttpContext ctx, CancellationToken ct)
@@ -480,6 +494,10 @@ internal static class SavedReportEndpoints
         {
             throw;
         }
+        catch (SavedReportTitleConflictException conflict)
+        {
+            return await TitleConflictFromStore(ctx, conflict, exceptId: null, ct);
+        }
         catch (Exception ex)
         {
             return EndpointExtensions.ServerError(ctx, definition.Name, "report document upload", ex);
@@ -655,6 +673,27 @@ internal static class SavedReportEndpoints
             !string.Equals(report.Id, exceptId, StringComparison.OrdinalIgnoreCase)
             && string.Equals(report.ReportName, reportName, StringComparison.OrdinalIgnoreCase)
             && string.Equals(report.Title, title.Trim(), StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// The store's unique index caught a save the advisory pre-check missed (a
+    /// concurrent writer). Re-reading the collision row recovers the precise 409
+    /// wording (configured versus user); when the winner vanished again in between,
+    /// the generic user-collision wording stands.
+    /// </summary>
+    private static async Task<IResult> TitleConflictFromStore(
+        HttpContext ctx,
+        SavedReportTitleConflictException conflict,
+        string? exceptId,
+        CancellationToken ct)
+    {
+        var collision = await FindTitleCollision(ctx, conflict.ReportName, conflict.Title, exceptId, ct);
+        return collision is not null
+            ? TitleConflict(collision, conflict.Title)
+            : Results.Problem(
+                title: "Saved report title",
+                detail: $"A saved report named '{conflict.Title.Trim()}' already exists. Replace it if it is available to you, or choose another title.",
+                statusCode: StatusCodes.Status409Conflict);
+    }
 
     private static IResult TitleConflict(SavedReport collision, string title)
         => collision.Origin == SavedReportOrigin.Configured

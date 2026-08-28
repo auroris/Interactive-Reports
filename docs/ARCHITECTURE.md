@@ -199,7 +199,9 @@ Notes:
   Note the JSON config binder reads `[]` as absent; to lock a report down, list the
   one or two features it should keep.
 - Base SQL must not end with `ORDER BY` (breaks subquery wrapping on SQL Server; APEX has
-  the same rule). Validated at definition load with a clear error.
+  the same rule). Validated at definition load with a clear error by a comment-, string-,
+  and quoted-identifier-aware scan for the clause at parenthesis depth 0 — `'order by'`
+  as data or documentation never trips it, and comments cannot hide a real clause.
 - `documentFiles` paths are relative to the host content root unless absolute. Each
   file is a `{ title, primary, state }` envelope around the ordinary versioned state
   document. Every file joins the saved-report selector as a global read-only document.
@@ -427,8 +429,9 @@ provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
   active-content and embedded-content schemes fall back to text. Grid CSV exports
   serialize Display As cells to the same encoded `<a class="ir-cell-link">` /
   `<img class="ir-cell-image">` fragments the browser constructs; action cells export
-  their raw label text (a command button has no CSV shape); ordinary cells stay raw,
-  and hidden renderer sources never become exported columns. Highlight styles win over column styles where
+  their raw label text (a command button has no CSV shape); ordinary cells stay raw
+  apart from the CSV formula guard (§6), and hidden renderer sources never become
+  exported columns. Highlight styles win over column styles where
   both apply. Text is the base renderer and owns masks; link text composes the base
   renderer, including the selected text source column's own mask. `displayAs` and its
   renderer source columns are a **source-layer** affordance only — an aggregate is
@@ -567,7 +570,7 @@ Mounted by the host: `app.MapInteractiveReports("/api/reports").RequireAuthoriza
 | `GET/POST /api/reports/__saved-reports/{schema,query}` | Administrator listing through the ordinary report pipeline; action cells carry saved-report ids. |
 | `GET  /api/reports/admin/saved/{id}/document` | Administrator: download a canonical `{ title, primary, state }` source-file envelope. |
 | `POST /api/reports/admin/{name}/documents` | Administrator: validate a source-file envelope against the named report and import a private saved copy for testing. |
-| `POST /api/reports/{name}/export` | Same state, same gate, no paging → CSV (UTF-8 BOM; headers are the posted document's display labels, §5), capped at `maxRows` with `X-IR-Truncated` header. 403 when `download` is not whitelisted (§4). XLSX/HTML later. |
+| `POST /api/reports/{name}/export` | Same state, same gate, no paging → CSV (UTF-8 BOM; headers are the posted document's display labels, §5), capped at `maxRows` with `X-IR-Truncated` header. Text-sourced cells (labels included) that would trigger spreadsheet formula evaluation — leading `=` `+` `-` `@` tab CR — get the OWASP apostrophe guard by default, since RFC 4180 quoting does not stop Excel from evaluating them; non-text values (negative numbers, dates) are never altered, and `CsvWriter`'s `CsvCellPolicy.Verbatim` opts hosts with non-spreadsheet consumers out. 403 when `download` is not whitelisted (§4). XLSX/HTML later. |
 | `GET  /api/reports/ui/{file}` | Packaged UI assets (§14). Anonymous by design; content-hash ETags. |
 
 POST is the primary verb deliberately: state documents outgrow querystrings, and GET puts
@@ -611,7 +614,13 @@ exceptions are caught, logged server-side with a correlation id, and returned as
 generic problem document carrying that id. **No SQL text, no parameter values, no
 provider error internals ever reach the client.** Validation failures are the exception:
 they are precise and verbose (which filter, which column, why), because they reference
-only what the client already sent.
+only what the client already sent. Two strictness rules keep foreign input from becoming
+500s or silent reinterpretation: structural nulls (a null pipeline stage, list element, or
+required identifier/expression property — shapes the protocol serializer never writes) are
+rejected by a pre-validation pass with per-path 400s, and numeric enum tokens
+(`"dir": 99`) are malformed JSON outright, because the serializer only ever emits
+camelCase strings and an integer would deserialize into an undefined member that
+downstream code silently reinterprets.
 
 ## 7. Composition pipeline
 
@@ -893,6 +902,15 @@ as a parameter.)
 - `IReportConnectionFactory` (host-registered): named connection → open `DbConnection`.
   Hosts should point report connections at a **read-only database principal** — the
   engine only ever SELECTs, but the principal should make that a guarantee, not a habit.
+- One request's count, aggregate, break-total, and page reads execute inside a
+  dialect-appropriate consistent-read transaction (SQLite/Oracle serializable snapshot
+  reads, Postgres `REPEATABLE READ`, SQL Server `SNAPSHOT`), so a response never mixes
+  two database states — `totalRows` agrees with the rows and break totals even under
+  concurrent commits. Best-effort where the engine cannot promise it without cost:
+  SQL Server without `ALLOW_SNAPSHOT_ISOLATION` is probed once per connection name
+  (logged at Information with the enabling `ALTER DATABASE`) and degrades to the prior
+  per-statement reads rather than taking shared or range locks the host never asked
+  for; single-statement paths (chart, export) never open a transaction.
 - Positive `page.size` values are clamped to `maxPageSize` (default 1000). The
   allow-listed value `0` means **All** and deliberately composes no page limit or
   offset for grid and Group By queries. CSV export ignores pagination altogether and
@@ -971,6 +989,22 @@ Canonical envelope downloads reflect the stored flag. A configured title shadows
 database title in the end-user list and blocks creation/rename to that title; the admin
 list shows both.
 
+**Store integrity.** `REPORT_NAME` always records the configured definition key —
+lookups accept any casing at the boundary, but one spelling reaches persistence, so
+case-sensitive databases filter exactly. Title uniqueness is enforced twice: the
+endpoints' advisory pre-check produces the friendly 409 wording, and a unique index
+over **user-origin rows only** (`REPORT_NAME`, `TITLE_KEY` — a key computed in code
+as trim + invariant casefold, so every collation compares identically) closes the
+concurrent-save race, with the store translating its violation into the same 409.
+Configured rows live outside the index deliberately: a checked-in document may shadow
+a user title (above) and synchronization must never fail on that collision.
+Auto-created tables upgrade in place — add the column, backfill keys in code, create
+the index (partial on SQLite/SQL Server/Postgres; a CASE function-based index on
+Oracle, which has no partial indexes) — and pre-existing duplicate user titles fail
+the upgrade with instructions instead of silently keeping the race open. Owner
+visibility filters in memory with the same `OrdinalIgnoreCase` the authorization
+matrix uses, so database collation never decides who sees a row.
+
 **Primary and Default.** `IS_PRIMARY` is independent of global/private scope and is
 administrator-controlled. It makes a saved report visible to every caller authorized
 for the underlying definition. The schema resolver looks for a primary row titled
@@ -1043,8 +1077,11 @@ administrator list, the report-level gate requires membership (401 unauthenticat
 affirmatively authorized, also using non-disclosure. An optional policy stacks with
 either form, and `administratorsOnly` is rejected in combination with `allowAnonymous`. The built-in
 `__saved-reports` listing uses it; hosts get admin-only reports for free. Names
-beginning with `__` are reserved for built-in reports: configuration declaring one
-fails fast, and the built-in listing itself is synthesized in the definition store
+beginning with `__` are reserved for built-in reports, and `ui`, `saved`, `whoami`,
+and `admin` are reserved because literal route segments shadow `{name}` routes — a
+report with one of those names would be unreachable, or worse, partially reachable:
+configuration declaring any of them fails fast, and the built-in listing itself is
+synthesized in the definition store
 from the live SavedReports options — a plain per-dialect SELECT over the store table
 whose SCOPE and action-label columns are CASE expressions over ORIGIN, resolved only
 after the configured-document sync has run (which also guarantees the lazily created
@@ -1121,7 +1158,8 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   HTML-encoded; `Cache-Control: no-store`; disabled via
   `InteractiveReport:ViewerPagesEnabled`. Literal-first routing means the existing
   `ui`/`saved` segments shadow reports with those names, as the data routes always
-  have; `admin` and `whoami` join that reserved-in-practice set. Embedding in host
+  have; `admin` and `whoami` join that set, and definition validation rejects all
+  four names outright (§13). Embedding in host
   pages remains the primary consumption path.
 - **Feature surface**: scoped toolbar search (all text columns or one typed column → expression filter);
   Actions menu (Columns shuttle, Column Settings, Filter, Sort, Control Break, Highlight, Aggregate,
@@ -1443,3 +1481,10 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 | Group-stage filters reserved but not populated at T0 | ship HAVING filters now; forbid forever | Filtering means "which rows exist" (stage 1) in the user's model today; the layer slot makes group filters a dialog-UX task later, not a pipeline change. |
 | v1/v2 documents rejected outright | migrate v2 into v3 | Owner-confirmed: nothing external consumes documents or the wire protocol; a migrator would be dead code the day it lands. |
 | Server documents are authoritative; saved reports adopt liberally (snapshot gate retired) | keep the client-side schema-snapshot match-or-reset (the snapshot row above) | A full reversal of the snapshot row (owner, 2026-08-28): the server already judges every document on query — hard problems return a validation response the client now rolls back transactionally, soft drift degrades through `ignored[]` — so the client-side predictive gate second-guessed the authoritative judge and refused documents over recorded diffs the document might never reference. Saves stamp nothing; adoption strips the legacy `schema` key; the server-side machinery (state-model member, resolver copy, default-state stamping) was removed with it, legacy rows hydrating past the unknown member. |
+| One consistent-read transaction per multi-statement query | fold count/aggregates/breaks/rows into one statement; accept per-statement drift | Snapshot-style isolation (SQLite/Oracle serializable, Postgres repeatable read, SQL Server SNAPSHOT) gives cross-statement consistency without read locks on three of four engines. A single mega-statement would rewrite composition for a correctness property transactions give for free. SQL Server is probed and degrades (logged) when snapshot is off — shared/range locks on a host's OLTP tables are a worse default than the old drift. |
+| CSV text cells get the apostrophe formula guard by default | rely on RFC 4180 quoting; sanitize only on request | Quoting does not stop Excel from evaluating `=`/`+`/`-`/`@`-leading cells, exported database text can be attacker-authored, and the writer explicitly targets Excel (BOM). Only text-sourced cells are touched — numbers and dates keep full fidelity — and `CsvCellPolicy.Verbatim` remains for non-spreadsheet consumers. |
+| Title uniqueness backed by a user-rows-only unique index | trust the endpoint pre-check; span both origins | The check-then-insert race made the documented guarantee advisory. A code-computed `TITLE_KEY` (trim + invariant casefold) compares identically on every collation; the index covers user rows only because configured documents deliberately shadow user titles and sync must never fail on that. The store translates violations into the pre-check's own 409, and `Put` now treats only provider-classified unique violations as a lost insert race — anything else propagates rather than being reported as applied. |
+| Route-literal report names (`ui`, `saved`, `whoami`, `admin`) fail fast | document the shadowing; namespace system endpoints | Literal-first routing makes such reports silently unreachable or — worse — partially reachable (`saved` answers queries but not schema). Failing configuration names the conflict; moving system endpoints would break every existing consumer for four names nobody should use. |
+| Foreign-input strictness: numeric enums and structural nulls are 400s | accept and reinterpret; let nulls surface as 500s | The protocol serializer only ever writes camelCase enum strings and never writes nulls, so both shapes are provably foreign — rejecting them cannot break a legitimately saved document (liberal acceptance intact). `dir: 99` previously validated as an undefined member and executed as *something*; a null pipeline stage crashed the resolver into a sanitized 500. |
+| GraphQL rows adopt the REST exact-number contract | exact-number scalars; leave GraphQL.NET's serializer alone | The same report must not have two wire semantics: dynamic row values (`ComplexScalar`) silently rounded Int64/Decimal through doubles in JS clients. Normalizing rows to invariant strings mirrors `IrJson`; `totalRows`/`elapsedMs` stay `Long` scalars because their schema type declares number semantics and their magnitudes fit a double exactly. |
+| Saved rows record the configured definition key as `REPORT_NAME` | persist the route token as requested | Case-insensitive lookup with route-cased persistence scattered one report's rows across spellings on case-sensitive databases (`/orders` vs `/Orders`). The configured key is the identity; alternate casing stays accepted at the boundary and dies there. |

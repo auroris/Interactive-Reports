@@ -1436,4 +1436,76 @@ public class StateValidatorTests
         Assert.Equal("Total", result.Labels["AMOUNT"]);
         Assert.Equal("Order #", result.Labels["ORDER_ID"]);
     }
+
+    // ---- structural nulls: precise 400s, never NullReferenceException 500s ----
+
+    [Fact]
+    public void Null_pipeline_stages_and_list_elements_are_precise_errors()
+    {
+        var state = new ReportState
+        {
+            Pipeline =
+            [
+                new PipelineStage
+                {
+                    Shape = new StageShape { Kind = "source" },
+                    Layer = new StageLayer { Sorts = [null!] },
+                },
+                null!,
+            ],
+        };
+
+        var ex = Assert.Throws<ReportValidationException>(() => Validate(state));
+
+        Assert.Contains(ex.Errors, e => e.Path == "pipeline[1]" && e.Message.Contains("null"));
+        Assert.Contains(ex.Errors, e => e.Path == "pipeline[0].layer.sorts[0]");
+    }
+
+    [Fact]
+    public void Null_identifier_and_expression_properties_are_precise_errors()
+    {
+        var state = Doc(
+            source: new StageLayer
+            {
+                Columns = [null!],
+                Filters = [new FilterRule { Expr = null! }],
+                Sorts = [new SortRule { Col = null! }],
+                Aggregates = [new AggregateRule { Col = null! }],
+            },
+            tail: [Group(["CUSTOMER"], [new MetricRule { Id = null!, Col = null!, Fn = AggregateFn.Sum }])]);
+
+        var ex = Assert.Throws<ReportValidationException>(() => Validate(state));
+
+        Assert.Contains(ex.Errors, e => e.Path == "pipeline[0].layer.columns[0]");
+        Assert.Contains(ex.Errors, e => e.Path == "pipeline[0].layer.filters[0].expr");
+        Assert.Contains(ex.Errors, e => e.Path == "pipeline[0].layer.sorts[0].col");
+        Assert.Contains(ex.Errors, e => e.Path == "pipeline[0].layer.aggregates[0].col");
+        Assert.Contains(ex.Errors, e => e.Path == "pipeline[1].shape.values[0].id");
+        Assert.Contains(ex.Errors, e => e.Path == "pipeline[1].shape.values[0].col");
+    }
+
+    [Fact]
+    public void Null_stage_in_the_shelf_is_a_precise_error()
+    {
+        // Shelf tails are inert configuration, but the resolver still deep-copies
+        // them — a null stage crashed that copy before this gate existed.
+        var ex = Assert.Throws<ReportValidationException>(() =>
+            Validate(Doc(shelf: new() { ["chart"] = [null!] })));
+
+        Assert.Contains(ex.Errors, e => e.Path == "shelf.chart[0]");
+    }
+
+    [Fact]
+    public void Structurally_broken_default_state_fails_as_a_configuration_error()
+    {
+        // Server-side data, not the caller's document: blaming the request with a
+        // 400 would be wrong, so this surfaces as the sanitized config failure.
+        var def = OrdersDefinition(ReportDialect.Sqlite);
+        def.DefaultState = new ReportState { Pipeline = [null!] };
+
+        var ex = Assert.Throws<InvalidOperationException>(() => Validate(new ReportState(), def));
+
+        Assert.Contains("default state document is structurally invalid", ex.Message);
+        Assert.Contains("pipeline[0]", ex.Message);
+    }
 }

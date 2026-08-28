@@ -1,3 +1,4 @@
+using System.Globalization;
 using GraphQL;
 using GraphQL.Types;
 using InteractiveReport.Core.Model;
@@ -49,8 +50,11 @@ internal sealed class InteractiveReportResultGraphType : ObjectGraphType<ReportR
         Field<NonNullGraphType<ListGraphType<NonNullGraphType<InteractiveReportColumnGraphType>>>>("columns")
             .Resolve(context => context.Source.Columns);
         Field<NonNullGraphType<ComplexScalarGraphType>>("rows")
-            .Description("Dynamic row objects keyed by the names in columns.")
-            .Resolve(context => context.Source.Rows);
+            .Description(
+                "Dynamic row objects keyed by the names in columns. Like the REST protocol, "
+                + "64-bit integers and decimals are invariant strings so JavaScript clients "
+                + "never lose digits to IEEE-754 doubles; column metadata still says 'number'.")
+            .Resolve(context => WireRows(context.Source.Rows));
         Field<NonNullGraphType<InteractiveReportPageGraphType>>("page")
             .Resolve(context => context.Source.Page);
         Field<NonNullGraphType<LongGraphType>>("totalRows")
@@ -58,6 +62,30 @@ internal sealed class InteractiveReportResultGraphType : ObjectGraphType<ReportR
         Field<NonNullGraphType<LongGraphType>>("elapsedMs")
             .Resolve(context => context.Source.ElapsedMs);
     }
+
+    /// <summary>
+    /// The GraphQL twin of the REST wire protocol's exact-number converters
+    /// (IrJson): dynamic row values pass through GraphQL's own serializer, which
+    /// would emit Int64/UInt64/Decimal as JSON numbers and silently round them in
+    /// JavaScript clients. totalRows/elapsedMs stay Long scalars — their schema type
+    /// declares number semantics and their magnitudes fit a double exactly.
+    /// </summary>
+    private static IReadOnlyList<IReadOnlyDictionary<string, object?>> WireRows(
+        IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)
+        => rows
+            .Select(row => (IReadOnlyDictionary<string, object?>)row.ToDictionary(
+                pair => pair.Key,
+                pair => WireValue(pair.Value),
+                StringComparer.OrdinalIgnoreCase))
+            .ToList();
+
+    private static object? WireValue(object? value) => value switch
+    {
+        long number => number.ToString(CultureInfo.InvariantCulture),
+        ulong number => number.ToString(CultureInfo.InvariantCulture),
+        decimal number => number.ToString(CultureInfo.InvariantCulture),
+        _ => value,
+    };
 }
 
 internal sealed class InteractiveReportColumnGraphType : ObjectGraphType<ColumnInfo>
