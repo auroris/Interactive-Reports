@@ -17,13 +17,19 @@ Object.assign(globalThis, {
 // Per-test whoami behavior; the embedded __saved-reports listing 404s throughout
 // (the non-administrator experience).
 let whoami = null;
-const json = value => new Response(JSON.stringify(value), {
-    status: 200,
+let whoamiStatus = 404;
+let whoamiCalls = 0;
+const json = (value, status = 200) => new Response(JSON.stringify(value), {
+    status,
     headers: { "Content-Type": "application/json" },
 });
 globalThis.fetch = async url => {
-    if (String(url).endsWith("/whoami"))
-        return whoami === null ? new Response(null, { status: 404 }) : json(whoami);
+    if (String(url).endsWith("/whoami")) {
+        whoamiCalls++;
+        return whoami === null
+            ? new Response(null, { status: whoamiStatus })
+            : json(whoami, whoamiStatus);
+    }
     return new Response(null, { status: 404 });
 };
 
@@ -35,6 +41,7 @@ const settle = async condition => {
 };
 
 async function mount() {
+    whoamiCalls = 0;
     const admin = document.createElement("interactive-report-admin");
     admin.setAttribute("api-base", "/admin-api");
     document.body.append(admin);
@@ -44,12 +51,15 @@ async function mount() {
 
 test("a disabled whoami endpoint yields packaged guidance instead of a bare listing error", async () => {
     whoami = null;
+    whoamiStatus = 404;
     const admin = await mount();
 
     const banner = admin.shadowRoot.querySelector(".ir-banner-warn");
     assert.ok(banner, "the whoami-off guidance banner renders");
     assert.match(banner.textContent, /signed-in administrator/);
     assert.match(banner.textContent, /WhoamiEnabled/);
+    assert.equal(whoamiCalls, 1,
+        "the admin shell and its embedded report coalesce their identity request");
 
     admin.remove();
 });
@@ -62,6 +72,7 @@ test("a configured administrator list still produces the precise denial", async 
         administratorListConfigured: true,
         applicationAuthorizationConfigured: false,
     };
+    whoamiStatus = 200;
     const admin = await mount();
 
     const banner = admin.shadowRoot.querySelector(".ir-banner-error");
@@ -71,4 +82,25 @@ test("a configured administrator list still produces the precise denial", async 
     assert.match(admin.shadowRoot.querySelector(".ir-admin-count").textContent, /ordinary-user/);
 
     admin.remove();
+});
+
+test("a real whoami failure presents the server problem and trace reference", async () => {
+    whoami = {
+        title: "Identity service failed",
+        detail: "Try again later.",
+        traceId: "trace-admin-1",
+    };
+    whoamiStatus = 500;
+    const admin = await mount();
+
+    const banner = admin.shadowRoot.querySelector(".ir-banner-error");
+    assert.ok(banner);
+    assert.match(banner.textContent, /Identity service failed/);
+    assert.match(banner.textContent, /Try again later/);
+    assert.match(banner.textContent, /trace-admin-1/);
+    assert.doesNotMatch(banner.textContent, /WhoamiEnabled/);
+
+    admin.remove();
+    whoami = null;
+    whoamiStatus = 404;
 });

@@ -273,8 +273,6 @@ reserves the slot (a group-stage filter is HAVING semantics, a planned fast foll
 ```json
 {
   "v": 3,
-  "schema": { "ORDER_ID": "number", "CUSTOMER": "text", "STATUS": "text",
-              "AMOUNT": "number", "ORDER_DATE": "date", "CUSTOMER_URL": "text" },
   "search": "acme",
   "page": { "index": 1, "size": 50 },
   "pipeline": [
@@ -1090,9 +1088,11 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   three bundle entries (`ir.js`, `ir-admin.js`, `ir-chart.js` — thin registration/
   re-export files whose basenames fix the `Ui/dist` output names) and the shared
   `ir.css`. `core/` is widget-agnostic plumbing: `api.js` (fetch + problem+json +
-  served-prefix inference), `dom.js` (element builder, icons, banners, form
-  helpers), `menu.js` (popup menus), `dialog.js` (modal dialogs), `widget.js`
-  (shadow-root mount/teardown, compiles in `ir.css`). `report/` is the report
+  served-prefix inference + canonical error text), `identity.js` (the shared
+  optional-whoami policy and concurrent-request coalescing), `dom.js` (element
+  builder, icons, banners, form helpers), `menu.js` (popup menus), `dialog.js`
+  (modal dialogs), `widget.js` (shadow-root mount/teardown, shared notices,
+  compiles in `ir.css`). `report/` is the report
   widget: `element.js` (the custom element — state-document lifecycle: build,
   POST, route the response; exposes `doc`/`els`/`apply`/`runQuery`/notices as the
   surface its feature modules call), `state.js` (pure normalization,

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ApiError, apiUrl, download, downloadFile, errorLines } from "../../src/client/core/api.js";
+import { ApiError, apiUrl, download, downloadFile, errorLines, errorText } from "../../src/client/core/api.js";
+import { loadWhoami } from "../../src/client/core/identity.js";
 
 test("API URLs normalize the base and encode every path segment", () => {
     assert.equal(
@@ -25,6 +26,49 @@ test("errorLines carries the server's title, detail, and every validation messag
     assert.deepEqual(errorLines(new ApiError({}, 502)), ["HTTP 502"]);
     assert.deepEqual(errorLines(new Error("plain failure")), ["plain failure"]);
     assert.deepEqual(errorLines("just text"), ["just text"]);
+    assert.equal(errorText(err),
+        "Report state failed validation — The posted document is inconsistent. — Unknown column X — Bad expression (ref 00-abc-01)");
+});
+
+test("whoami shares the optional-endpoint policy and coalesces concurrent requests", async () => {
+    const originalFetch = globalThis.fetch;
+    let status = 200;
+    let body = { identity: "test-user" };
+    let calls = 0;
+    globalThis.fetch = async () => {
+        calls++;
+        await new Promise(resolve => setTimeout(resolve, 0));
+        return new Response(body === null ? null : JSON.stringify(body), {
+            status,
+            headers: { "Content-Type": "application/json" },
+        });
+    };
+
+    try {
+        const [first, second] = await Promise.all([
+            loadWhoami("/api/reports"),
+            loadWhoami("/api/reports"),
+        ]);
+        assert.equal(calls, 1, "the admin shell and embedded report share one in-flight request");
+        assert.deepEqual(first, second);
+        assert.equal(first.whoami.identity, "test-user");
+        assert.equal(first.error, null);
+
+        status = 404;
+        body = null;
+        const absent = await loadWhoami("/api/reports");
+        assert.equal(absent.whoami, null);
+        assert.equal(absent.error, null);
+
+        status = 500;
+        body = { title: "Identity failed", traceId: "trace-1" };
+        const failed = await loadWhoami("/api/reports");
+        assert.equal(failed.whoami, null);
+        assert.equal(failed.error.status, 500);
+        assert.equal(failed.error.traceId, "trace-1");
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
 });
 
 test("file downloads preserve GET for admin JSON and POST for report exports", async () => {

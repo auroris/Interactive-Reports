@@ -8,8 +8,9 @@
 // report simply has no data (404) for non-administrators.
 
 import { api, apiUrl, downloadFile, saveBlob } from "../core/api.js";
-import { el, banner, labeled, transientBanner } from "../core/dom.js";
+import { el, banner, labeled } from "../core/dom.js";
 import { openDialog, confirmDialog } from "../core/dialog.js";
+import { loadWhoami } from "../core/identity.js";
 import { WidgetElement } from "../core/widget.js";
 
 const LISTING_REPORT = "__saved-reports";
@@ -50,15 +51,18 @@ export class InteractiveReportAdminElement extends WidgetElement {
             el("div", { class: "ir-notices", part: "notices" }, this.els.errorSlot, this.els.transientSlot),
             report);
 
-        this.whoami = await api(`${this.base}/whoami`).catch(() => null);
+        const identity = await loadWhoami(this.base);
         if (seq !== this._seq || !this.isConnected) return;
+        this.whoami = identity.whoami;
         if (this.whoami?.identity)
             this.els.identity.textContent = `Signed in as ${this.whoami.identity}`;
         // The embedded report answers 404 for non-administrators; when whoami is
         // available, replace that generic denial with precise guidance. When it is
         // not (WhoamiEnabled is off — the default), say what this page needs instead
         // of leaving a bare listing error.
-        if (this.whoami === null) {
+        if (identity.error) {
+            this.showError(identity.error);
+        } else if (this.whoami === null) {
             this.els.errorSlot.replaceChildren(banner("warn",
                 "This page requires a signed-in administrator (InteractiveReport:Administrators). "
                 + "Enable InteractiveReport:WhoamiEnabled for precise identity guidance here."));
@@ -78,15 +82,6 @@ export class InteractiveReportAdminElement extends WidgetElement {
         this.els.report.runQuery?.().catch(() => {});
     }
 
-    notify(text) {
-        transientBanner(this.els.transientSlot, "ok", text);
-    }
-
-    fail(err) {
-        this.els.errorSlot.replaceChildren(
-            banner("error", err.message, () => this.els.errorSlot.replaceChildren()));
-    }
-
     /// The listing's action cells dispatch { command, row }: the row carries the
     /// hidden ID key plus the displayed columns (TITLE, OWNER, SCOPE, …) the
     /// dialogs and confirmations need.
@@ -103,7 +98,7 @@ export class InteractiveReportAdminElement extends WidgetElement {
                 case "delete": await this.deleteSavedReport(id, row); break;
             }
         } catch (err) {
-            this.fail(err);
+            this.showError(err);
         }
     }
 

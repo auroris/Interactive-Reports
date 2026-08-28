@@ -13,37 +13,42 @@ export function apiUrl(base, ...segments) {
     return `${prefix}/${segments.map(segment => encodeURIComponent(String(segment))).join("/")}`;
 }
 
+function problemLines(problem) {
+    const lines = [];
+    if (problem.title) lines.push(problem.title);
+    if (problem.detail) lines.push(problem.detail);
+    for (const messages of Object.values(problem.errors ?? {}))
+        for (const message of messages) lines.push(message);
+    return lines;
+}
+
 export class ApiError extends Error {
     constructor(problem, status) {
-        const parts = [];
-        if (problem.title) parts.push(problem.title);
-        if (problem.detail) parts.push(problem.detail);
-        for (const messages of Object.values(problem.errors ?? {}))
-            for (const m of messages) parts.push(m);
-        super(parts.join(" — ") || `HTTP ${status}`);
+        super(problemLines(problem).join(" — ") || `HTTP ${status}`);
         this.name = "ApiError";
         this.status = status;
         this.problem = problem;
-        this.errors = problem.errors ?? null;   // validation problems: { path: [messages] }
         this.traceId = problem.traceId ?? null; // sanitized server errors carry a correlation id
     }
 }
 
-/// The one presentation of an error, shared by banners and dialog error boxes:
+/// The canonical content of an error, shared by banners and dialog error boxes:
 /// the server's sanitized title, detail, and each validation message, in order.
-/// Callers append the traceId reference in their own format. Duck-typed on
-/// problem so it also covers plain Errors and strings.
+/// Duck-typed on problem so it also covers plain Errors and strings.
 export function errorLines(err) {
     if (typeof err === "string") return [err];
     const problem = err?.problem;
     if (!problem || typeof problem !== "object") return [err?.message || "Something went wrong."];
-    const lines = [];
-    if (problem.title) lines.push(problem.title);
-    if (problem.detail) lines.push(problem.detail);
-    for (const messages of Object.values(err.errors ?? {}))
-        for (const message of messages) lines.push(message);
+    const lines = problemLines(problem);
     if (!lines.length) lines.push(err.message || `HTTP ${err.status}`);
     return lines;
+}
+
+/// Compact banner text. Dialogs retain errorLines so each message can occupy its
+/// own row; single-line presenters share this trace-reference convention.
+export function errorText(err, message = null) {
+    const text = message ?? errorLines(err).join(" — ");
+    return err?.traceId ? `${text} (ref ${err.traceId})` : text;
 }
 
 async function problemFrom(res) {

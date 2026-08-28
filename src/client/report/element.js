@@ -3,10 +3,12 @@
 // routes the response to the renderers. Everything else — skeleton, menus,
 // search, dialogs, saved reports — lives in feature modules that operate on the
 // element through this class's surface: doc, els, apply/applyOrBanner, runQuery,
-// restoreLastGood, normalize/serialize, reportUrl, and the notice slots.
+// state transitions, restoreLastGood, normalize/serialize, reportUrl, and the
+// notice slots.
 
-import { api, apiUrl, errorLines } from "../core/api.js";
-import { banner, transientBanner } from "../core/dom.js";
+import { api, apiUrl, errorText } from "../core/api.js";
+import { banner } from "../core/dom.js";
+import { loadWhoami } from "../core/identity.js";
 import { setCustomStyleSheet, WidgetElement } from "../core/widget.js";
 import { applyFeatureChrome, buildSkeleton } from "./skeleton.js";
 import { featureEnabled } from "./schema.js";
@@ -39,6 +41,7 @@ export class InteractiveReportElement extends WidgetElement {
         super();
         this._busyTokens = new Set();
         this._initialized = false;
+        this._stateRevision = 0;
     }
     get requestedReportName() { return this.getAttribute("report"); }
     get requestedSavedReportName() { return this.getAttribute("saved-report"); }
@@ -74,6 +77,7 @@ export class InteractiveReportElement extends WidgetElement {
     }
 
     resetReportContext() {
+        this._stateRevision++;
         setCustomStyleSheet(this, null);
         this.schema = null;
         this.doc = null;
@@ -116,18 +120,11 @@ export class InteractiveReportElement extends WidgetElement {
         }
 
         try {
-            // 404 = the whoami endpoint is disabled; 401 = not signed in (the
-            // schema request owns that presentation). Anything else is a real
-            // failure that must not silently pass for "anonymous".
-            let whoamiWarning = null;
-            const whoami = await api(`${this.base}/whoami`).catch(err => {
-                if (err.status !== 404 && err.status !== 401)
-                    whoamiWarning = `Sign-in state could not be determined (${err.message}).`;
-                return null;
-            });
+            const identity = await loadWhoami(this.base);
             if (seq !== this._seq) return;
-            this.whoami = whoami;
-            if (whoamiWarning) this.notify(whoamiWarning, "warn");
+            this.whoami = identity.whoami;
+            if (identity.error)
+                this.notify(`Sign-in state could not be determined: ${errorText(identity.error)}.`, "warn");
             await this.activateReport(requested, seq);
         } catch (err) {
             if (err.name !== "AbortError" && seq === this._seq) this.showError(err);
@@ -232,14 +229,18 @@ export class InteractiveReportElement extends WidgetElement {
     async runQuery(opts = {}) {
         this._abort?.abort();
         const ctrl = this._abort = new AbortController();
+        const submitted = this.serialize();
         const finishBusy = this.beginBusy();
         try {
             const result = await api(this.reportUrl("query"), {
-                method: "POST", body: this.serialize(), signal: ctrl.signal,
+                method: "POST", body: submitted, signal: ctrl.signal,
             });
             if (ctrl !== this._abort) return;
             this.lastResult = result;
-            this.commitLastGood();
+            // The response validates the exact submitted document. Never clone
+            // the live document here: another asynchronous operation may have
+            // changed it while this request was in flight.
+            this.commitLastGood(submitted);
             this.clearError();
             renderChips(this, this.els.chips);
             this.renderView();
@@ -248,7 +249,7 @@ export class InteractiveReportElement extends WidgetElement {
             this.refreshViewButtons();
             return result;
         } catch (err) {
-            if (err.name === "AbortError") return;
+            if (ctrl !== this._abort || err.name === "AbortError") return;
             renderChips(this, this.els.chips);
             if (!opts.quiet) this.showError(err);
             throw err;
@@ -306,11 +307,12 @@ export class InteractiveReportElement extends WidgetElement {
         const next = structuredClone(this.doc);
         mutate(next);
         if (resetPage && next.page) next.page.index = 1;
+        const transition = this.beginStateTransition();
         this.doc = next;
         try {
             await this.runQuery({ quiet: true });
         } catch (err) {
-            this.restoreLastGood(prev);
+            if (this.isCurrentStateTransition(transition)) this.restoreLastGood(prev);
             throw err;
         }
     }
@@ -319,16 +321,47 @@ export class InteractiveReportElement extends WidgetElement {
         return this.apply(mutate, opts).catch(err => this.showError(err));
     }
 
+    /// Begin an operation that may replace the working document. Starting one
+    /// invalidates older saved-document loads and aborts any query it supersedes.
+    beginStateTransition() {
+        const revision = ++this._stateRevision;
+        this._abort?.abort();
+        this._abort = null;
+        return revision;
+    }
+
+    isCurrentStateTransition(revision) {
+        return revision === this._stateRevision;
+    }
+
+    get stateRevision() { return this._stateRevision; }
+
     /// The last server-validated state — the rollback target for any failed
     /// operation. Committed only on query success, so an operation whose query
     /// was aborted by a newer one never becomes a rollback target: if that newer
     /// operation fails, the restore skips past the aborted, never-validated
     /// intermediate back to validated ground.
-    commitLastGood() {
+    commitLastGood(doc = this.doc) {
         this._lastGood = {
-            doc: structuredClone(this.doc),
+            doc: structuredClone(doc),
             currentSaved: this.currentSaved,
+            revision: this._stateRevision,
         };
+    }
+
+    /// Record a successful save without treating it as a successful query.
+    /// A stable working copy becomes associated with the returned saved report;
+    /// a newer state transition keeps its own selection. Existing associations
+    /// still receive updated title/scope/row-version metadata.
+    recordSaved(summary, revision) {
+        const sameWorkingCopy = this.isCurrentStateTransition(revision);
+        const updatesCurrent = this.currentSaved?.id === summary.id;
+        if (sameWorkingCopy || updatesCurrent) this.currentSaved = summary;
+
+        const updatesLastGood = this._lastGood?.currentSaved?.id === summary.id;
+        if (this._lastGood && (updatesLastGood
+            || (sameWorkingCopy && this._lastGood.revision === revision)))
+            this._lastGood.currentSaved = summary;
     }
 
     /// Put doc, saved-report selection, search box, and chips back on the last
@@ -339,7 +372,11 @@ export class InteractiveReportElement extends WidgetElement {
         const good = this._lastGood;
         if (!good && !fallbackDoc) return;
         this.doc = good ? structuredClone(good.doc) : fallbackDoc;
-        if (good) this.currentSaved = good.currentSaved;
+        if (good) {
+            this.currentSaved = good.currentSaved;
+            // The restored, validated document is now the current generation.
+            good.revision = this._stateRevision;
+        }
         this.els.search.value = this.doc?.search ?? "";
         renderChips(this, this.els.chips);
         refreshSavedSelect(this);
@@ -361,15 +398,7 @@ export class InteractiveReportElement extends WidgetElement {
             : err?.status === 404 && !problem.title && !problem.detail
                 ? "Report not found — or you don't have access."
                 : null;
-        const text = friendly ?? errorLines(err).join(" — ");
-        const suffix = err?.traceId ? ` (ref ${err.traceId})` : "";
-        this.els.errorSlot.replaceChildren(banner("error", text + suffix, () => this.clearError()));
-    }
-
-    clearError() { this.els.errorSlot.replaceChildren(); }
-
-    notify(text, kind = "ok") {
-        transientBanner(this.els.transientSlot, kind, text);
+        super.showError(err, friendly);
     }
 
     renderIgnored(ignored) {

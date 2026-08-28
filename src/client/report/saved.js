@@ -56,17 +56,32 @@ async function loadSavedList(w) {
     }
 }
 
+function upsertSavedSummary(w, summary) {
+    const index = w.savedList.findIndex(saved => saved.id === summary.id);
+    if (index < 0) {
+        w.savedList = [...w.savedList, summary];
+        return;
+    }
+    w.savedList = w.savedList.map((saved, i) => i === index ? summary : saved);
+}
+
+function removeSavedSummary(w, id) {
+    w.savedList = w.savedList.filter(saved => saved.id !== id);
+}
+
 export async function loadSavedById(w, id) {
+    const transition = w.beginStateTransition();
     try {
         const docResponse = await api(apiUrl(w.base, "saved", id));
+        if (!w.isCurrentStateTransition(transition)) return;
         w.currentSaved = docResponse.summary;
         // Liberal acceptance: the document is adopted as-is and the server
         // judges it on query — a rejection lands in the catch and rolls back.
         w.adoptState(docResponse.state);
         refreshSavedSelect(w);
-        await w.runQuery();
+        await w.runQuery({ quiet: true });
     } catch (err) {
-        if (err.name === "AbortError") return;
+        if (!w.isCurrentStateTransition(transition)) return;
         // Nothing validated: put doc, selection, and search back on the last
         // validated state so Save/Delete cannot target the wrong report while
         // the previous grid is still on screen.
@@ -74,7 +89,7 @@ export async function loadSavedById(w, id) {
         if (err.status === 404) {
             w.showError(new Error("That saved report is no longer available — it may have been deleted."));
             await loadSavedList(w);
-            refreshSavedSelect(w);
+            if (w.isCurrentStateTransition(transition)) refreshSavedSelect(w);
         } else {
             w.showError(err);
         }
@@ -82,13 +97,14 @@ export async function loadSavedById(w, id) {
 }
 
 export async function resetToPrimary(w) {
+    const transition = w.beginStateTransition();
     w.currentSaved = (w.savedList ?? []).find(s => s.isPrimary && sameTitle(s.title, "Default")) ?? null;
     w.adoptState(w.schema?.defaultState);
     refreshSavedSelect(w);
     try {
         await w.runQuery();
-    } catch (err) {
-        if (err.name !== "AbortError") w.restoreLastGood();
+    } catch {
+        if (w.isCurrentStateTransition(transition)) w.restoreLastGood();
     }
 }
 
@@ -101,8 +117,10 @@ export async function resetWorkingCopy(w) {
 
 export async function saveReport(w, { title, isGlobal, isPrimary, asNew, target = null }) {
     const state = w.serialize();
+    const revision = w.stateRevision;
+    let savedSummary;
     if (asNew) {
-        w.currentSaved = await api(w.reportUrl("saved"), {
+        savedSummary = await api(w.reportUrl("saved"), {
             method: "POST", body: { title, state, isGlobal, isPrimary },
         });
     } else {
@@ -113,13 +131,15 @@ export async function saveReport(w, { title, isGlobal, isPrimary, asNew, target 
             body.isGlobal = isGlobal;
             body.isPrimary = isPrimary;
         }
-        w.currentSaved = await api(apiUrl(w.base, "saved", saved.id), {
+        savedSummary = await api(apiUrl(w.base, "saved", saved.id), {
             method: "PUT", body,
         });
     }
-    // The server validated the state on save; a later rollback should land here,
-    // on the newly saved report, not on whatever preceded it.
-    w.commitLastGood();
+    // Keep the known successful mutation in the local cache even if the
+    // following list refresh fails. Saving does not validate a rendered query,
+    // so it may update the saved association but never the rollback document.
+    upsertSavedSummary(w, savedSummary);
+    w.recordSaved(savedSummary, revision);
     await loadSavedList(w);
     refreshSavedSelect(w);
     w.notify("Report saved.");
@@ -129,12 +149,19 @@ export async function deleteCurrentSaved(w) {
     const s = w.currentSaved;
     if (!s) return;
     if (!await confirmDialog(w, "Delete Saved Report", `Delete "${s.title}"? This cannot be undone.`)) return;
+    const revision = w.stateRevision;
     try {
         await api(apiUrl(w.base, "saved", s.id), { method: "DELETE" });
-        w.currentSaved = null;
+        const deletedCurrent = w.currentSaved?.id === s.id;
+        if (deletedCurrent) w.currentSaved = null;
         w.forgetSaved(s.id);
+        removeSavedSummary(w, s.id);
         await loadSavedList(w);
-        await resetToPrimary(w);
+        // Do not replace a document changed after the delete began. The deleted
+        // association is cleared either way; only a still-current deletion
+        // resets the working document to Default.
+        if (deletedCurrent && w.isCurrentStateTransition(revision)) await resetToPrimary(w);
+        else refreshSavedSelect(w);
         w.notify("Saved report deleted.");
     } catch (err) {
         w.showError(err);

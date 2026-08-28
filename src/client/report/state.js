@@ -2,7 +2,7 @@
 // outside the custom element makes shape guarantees, tail switching, and
 // dependency cleanup independently testable.
 //
-// A document is: { v, schema?, search?, page, pipeline: [stage...], shelf }.
+// A document is: { v, search?, page, pipeline: [stage...], shelf }.
 // pipeline[0] is always the source stage; the tail (later stages) IS the view —
 // [] grid, [group] groupBy, [group, spread] pivot, [chart] chart. The shelf holds
 // the parked tails of inactive modes so the toolbar can switch back losslessly.

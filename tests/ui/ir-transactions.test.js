@@ -1,8 +1,7 @@
 // Transactional state-document lifecycle: apply is atomic against throwing
-// mutators, overlapping applies roll back to the last VALIDATED state (never to
-// an aborted intermediate), and failed saved-report loads restore doc,
-// selection, and search together. Also the honest-error policies: whoami and
-// saved-list failures other than 404 surface instead of passing for "disabled".
+// mutators, overlapping operations roll back to the last VALIDATED state (never
+// to an aborted or concurrently saved intermediate), and saved-report loads are
+// last-request-wins. Also the honest-error and degraded-list-refresh policies.
 
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -38,6 +37,11 @@ let savedDocuments = new Map();
 let failNextQuery = null;   // { problem, status } consumed by the next /query
 let holdQueries = false;
 const heldQueries = [];
+let holdSavedDocuments = false;
+const heldSavedDocuments = [];
+let holdSaves = false;
+const heldSaves = [];
+let savedMutationResult = null;
 
 const json = (value, status = 200) => new Response(JSON.stringify(value), {
     status,
@@ -54,7 +58,8 @@ const queryResult = () => json({
 });
 
 globalThis.fetch = (url, options = {}) => {
-    requests.push({ url: String(url), method: options.method ?? "GET", body: options.body });
+    const method = options.method ?? "GET";
+    requests.push({ url: String(url), method, body: options.body });
     const path = String(url);
     if (path.endsWith("/schema")) {
         return Promise.resolve(json({
@@ -74,17 +79,34 @@ globalThis.fetch = (url, options = {}) => {
             ? json({ identity: "test-user" })
             : new Response(null, { status: whoamiStatus }));
     }
-    if (path.endsWith("/saved")) {
+    if (path.endsWith("/saved") && method === "GET") {
         return Promise.resolve(savedListStatus === 200
             ? json(savedReports)
             : new Response(null, { status: savedListStatus }));
     }
+    if (path.endsWith("/saved") && method === "POST") {
+        if (holdSaves) {
+            return new Promise(resolve => heldSaves.push({
+                body: options.body,
+                succeed: summary => resolve(json(summary, 201)),
+            }));
+        }
+        return Promise.resolve(json(savedMutationResult, 201));
+    }
     const savedId = /\/saved\/([^/]+)$/.exec(path)?.[1];
-    if (savedId) {
+    if (savedId && method === "GET") {
+        if (holdSavedDocuments) {
+            return new Promise(resolve => heldSavedDocuments.push({
+                id: savedId,
+                succeed: document => resolve(json(document)),
+            }));
+        }
         return Promise.resolve(savedDocuments.has(savedId)
             ? json(savedDocuments.get(savedId))
             : new Response(null, { status: 404 }));
     }
+    if (savedId && method === "DELETE")
+        return Promise.resolve(new Response(null, { status: 204 }));
     if (path.endsWith("/query")) {
         if (holdQueries) {
             return new Promise((resolve, reject) => {
@@ -109,6 +131,8 @@ globalThis.fetch = (url, options = {}) => {
 };
 
 await import("../../src/InteractiveReport.AspNetCore/Ui/dist/ir.js");
+const { deleteCurrentSaved, loadSavedById, saveReport } =
+    await import("../../src/client/report/saved.js");
 
 const settle = async condition => {
     for (let attempt = 0; attempt < 60 && !condition(); attempt++)
@@ -176,6 +200,138 @@ test("overlapping applies roll back to the last validated state, not an aborted 
     await report.apply(d => { d.search = "ok"; });
     assert.equal(report.doc.search, "ok");
 
+    report.remove();
+});
+
+test("saved-report loads are last-request-wins even when GET responses arrive out of order", async () => {
+    requests.length = 0;
+    const savedA = { id: "saved-a", title: "A", mine: true };
+    const savedB = { id: "saved-b", title: "B", mine: true };
+    savedReports = [savedA, savedB];
+    const report = await mount();
+
+    holdSavedDocuments = true;
+    heldSavedDocuments.length = 0;
+    const loadA = loadSavedById(report, savedA.id);
+    const loadB = loadSavedById(report, savedB.id);
+    await settle(() => heldSavedDocuments.length === 2);
+
+    const state = search => ({
+        v: 3,
+        search,
+        page: { index: 1, size: 25 },
+        pipeline: [{ shape: { kind: "source" }, layer: {} }],
+    });
+    heldSavedDocuments.find(request => request.id === savedB.id)
+        .succeed({ summary: savedB, state: state("B") });
+    await loadB;
+    heldSavedDocuments.find(request => request.id === savedA.id)
+        .succeed({ summary: savedA, state: state("A") });
+    await loadA;
+
+    assert.equal(report.currentSaved?.id, savedB.id);
+    assert.equal(report.doc.search, "B");
+    assert.equal(report.els.savedSel.value, savedB.id);
+
+    holdSavedDocuments = false;
+    heldSavedDocuments.length = 0;
+    savedReports = [];
+    report.remove();
+});
+
+test("a concurrent save cannot promote an unvalidated live document to last-good", async () => {
+    requests.length = 0;
+    savedReports = [];
+    const report = await mount();
+
+    holdSaves = true;
+    holdQueries = true;
+    heldSaves.length = 0;
+    heldQueries.length = 0;
+
+    const save = saveReport(report, {
+        title: "Saved A", isGlobal: false, isPrimary: false, asNew: true,
+    });
+    await settle(() => heldSaves.length === 1);
+    const apply = report.apply(doc => { doc.search = "BAD"; });
+    await settle(() => heldQueries.length === 1);
+
+    const summary = { id: "saved-a", title: "Saved A", mine: true };
+    savedReports = [summary];
+    heldSaves[0].succeed(summary);
+    await save;
+
+    const rejection = assert.rejects(apply, /validation/i);
+    heldQueries[0].fail({ title: "Report state failed validation" }, 400);
+    await rejection;
+
+    assert.equal(report.doc.search ?? "", "",
+        "the failed query restores the previously rendered document");
+    assert.equal(report._lastGood.doc.search ?? "", "",
+        "save completion never blesses the unrelated live mutation");
+
+    holdSaves = false;
+    holdQueries = false;
+    heldSaves.length = 0;
+    heldQueries.length = 0;
+    savedReports = [];
+    report.remove();
+});
+
+test("a successful save remains in the local list when its refresh fails", async () => {
+    requests.length = 0;
+    savedReports = [];
+    savedListStatus = 200;
+    const report = await mount();
+
+    savedMutationResult = { id: "saved-new", title: "New report", mine: true };
+    savedListStatus = 500;
+    await saveReport(report, {
+        title: "New report", isGlobal: false, isPrimary: false, asNew: true,
+    });
+
+    assert.equal(report.savedList.some(saved => saved.id === "saved-new"), true);
+    assert.equal(report.currentSaved?.id, "saved-new");
+    assert.equal(report.els.savedSel.value, "saved-new");
+    assert.equal(report.els.savedWrap.hidden, false);
+    assert.match(warnText(report), /could not be refreshed/i);
+
+    savedMutationResult = null;
+    savedListStatus = 200;
+    report.remove();
+});
+
+test("a successful delete stays removed from the local list when its refresh fails", async () => {
+    requests.length = 0;
+    const summary = { id: "saved-delete", title: "Delete me", mine: true };
+    savedReports = [summary];
+    savedDocuments = new Map([[summary.id, {
+        summary,
+        state: {
+            v: 3,
+            search: "delete",
+            page: { index: 1, size: 25 },
+            pipeline: [{ shape: { kind: "source" }, layer: {} }],
+        },
+    }]]);
+    savedListStatus = 200;
+    const report = await mount();
+    await loadSavedById(report, summary.id);
+
+    savedListStatus = 500;
+    const deletion = deleteCurrentSaved(report);
+    await settle(() => report.shadowRoot.querySelector("dialog.ir-dialog-modal"));
+    report.shadowRoot.querySelector("dialog.ir-dialog-modal .ir-btn-primary").click();
+    await deletion;
+
+    assert.equal(report.savedList.some(saved => saved.id === summary.id), false);
+    assert.equal(report.currentSaved, null);
+    assert.notEqual(report.els.savedSel.value, summary.id);
+    assert.match(warnText(report), /could not be refreshed/i);
+
+    savedDocuments = new Map();
+    savedReports = [];
+    savedListStatus = 200;
     report.remove();
 });
 

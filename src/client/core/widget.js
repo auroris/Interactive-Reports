@@ -3,8 +3,8 @@
 // dialogs) the widget still owns when a host framework removes it.
 
 import cssText from "../ir.css";
-import { defaultApiBase } from "./api.js";
-import { el } from "./dom.js";
+import { defaultApiBase, errorText } from "./api.js";
+import { banner, el, transientBanner } from "./dom.js";
 import { closeMenuOwnedBy } from "./menu.js";
 import { closeDialogsOwnedBy } from "./dialog.js";
 
@@ -106,6 +106,22 @@ export class WidgetElement extends HTMLElement {
         else this.setAttribute("api-base", String(value));
     }
     get base() { return this.apiBase.replace(/\/+$/, ""); }
+
+    showError(err, message = null) {
+        const slot = this.els?.errorSlot;
+        if (!slot) return;
+        slot.replaceChildren(
+            banner("error", errorText(err, message), () => this.clearError()));
+    }
+
+    clearError() {
+        this.els?.errorSlot?.replaceChildren();
+    }
+
+    notify(text, kind = "ok") {
+        if (this.els?.transientSlot)
+            transientBanner(this.els.transientSlot, kind, text);
+    }
 
     disconnectedCallback() {
         ++this._seq;
