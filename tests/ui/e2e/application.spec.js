@@ -385,7 +385,9 @@ test("a saved report retains its grid, pivot, and chart configurations with pivo
         const savedState = saveResponse.request().postDataJSON().state;
         expect(modeOf(savedState)).toBe("pivot");
         expect(Object.keys(savedState.shelf)).toEqual(["chart"]);
-        expect(savedState.schema.AMOUNT).toBe("number");
+        // The schema-snapshot key is retired: the server judges documents on
+        // query, so saves no longer stamp one.
+        expect(savedState.schema).toBeUndefined();
 
         await runAndWaitForQuery(page, () =>
             page.getByRole("button", { name: "Grid", exact: true }).click());

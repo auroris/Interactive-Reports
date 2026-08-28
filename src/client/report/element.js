@@ -3,9 +3,9 @@
 // routes the response to the renderers. Everything else — skeleton, menus,
 // search, dialogs, saved reports — lives in feature modules that operate on the
 // element through this class's surface: doc, els, apply/applyOrBanner, runQuery,
-// normalize/serialize, reportUrl, and the notice slots.
+// restoreLastGood, normalize/serialize, reportUrl, and the notice slots.
 
-import { api, apiUrl } from "../core/api.js";
+import { api, apiUrl, errorLines } from "../core/api.js";
 import { banner, transientBanner } from "../core/dom.js";
 import { setCustomStyleSheet, WidgetElement } from "../core/widget.js";
 import { applyFeatureChrome, buildSkeleton } from "./skeleton.js";
@@ -15,7 +15,6 @@ import {
     configuredTail,
     modeOf,
     normalizeReportState,
-    schemaMismatch,
     serializeReportState,
 } from "./state.js";
 import { refreshSavedSelect, sameTitle } from "./saved.js";
@@ -82,6 +81,7 @@ export class InteractiveReportElement extends WidgetElement {
         this.savedList = [];
         this.currentSaved = null;
         this.searchScopeCol = null;
+        this._lastGood = null;
     }
 
     clearReportView() {
@@ -116,9 +116,18 @@ export class InteractiveReportElement extends WidgetElement {
         }
 
         try {
-            const whoami = await api(`${this.base}/whoami`).catch(() => null);
+            // 404 = the whoami endpoint is disabled; 401 = not signed in (the
+            // schema request owns that presentation). Anything else is a real
+            // failure that must not silently pass for "anonymous".
+            let whoamiWarning = null;
+            const whoami = await api(`${this.base}/whoami`).catch(err => {
+                if (err.status !== 404 && err.status !== 401)
+                    whoamiWarning = `Sign-in state could not be determined (${err.message}).`;
+                return null;
+            });
             if (seq !== this._seq) return;
             this.whoami = whoami;
+            if (whoamiWarning) this.notify(whoamiWarning, "warn");
             await this.activateReport(requested, seq);
         } catch (err) {
             if (err.name !== "AbortError" && seq === this._seq) this.showError(err);
@@ -145,8 +154,14 @@ export class InteractiveReportElement extends WidgetElement {
             this.schema = schema;
             setCustomStyleSheet(this, schema.styleSheet);
             applyFeatureChrome(this);
+            // A missing saved endpoint means the feature is off; any other
+            // failure must not masquerade as "no saved reports exist".
+            let savedError = null;
             const saved = featureEnabled(this, "savedReports")
-                ? await api(apiUrl(this.base, name, "saved")).catch(() => [])
+                ? await api(apiUrl(this.base, name, "saved")).catch(err => {
+                    if (err.status !== 404) savedError = err;
+                    return [];
+                })
                 : [];
             if (seq !== this._seq) return;
             this.savedList = saved;
@@ -155,17 +170,19 @@ export class InteractiveReportElement extends WidgetElement {
             const savedMatches = requestedSaved
                 ? saved.filter(candidate => sameTitle(candidate.title, requestedSaved))
                 : [];
-            let savedWarning;
+            let savedWarning = savedError
+                ? `Saved reports could not be loaded (${savedError.message}).`
+                : undefined;
             if (savedMatches.length === 1) {
                 const docResponse = await api(apiUrl(this.base, "saved", savedMatches[0].id));
                 if (seq !== this._seq) return false;
                 this.currentSaved = docResponse.summary;
-                this.adoptState(docResponse.state, `Saved report "${docResponse.summary?.title}"`);
+                this.adoptState(docResponse.state);
             } else {
-                this.adoptState(schema.defaultState, "The default report");
+                this.adoptState(schema.defaultState);
                 this.currentSaved = saved.find(candidate =>
                     candidate.isPrimary && sameTitle(candidate.title, "Default")) ?? null;
-                if (requestedSaved) {
+                if (requestedSaved && !savedError) {
                     savedWarning = savedMatches.length === 0
                         ? `Saved report "${requestedSaved}" is not available; loaded Default.`
                         : `Saved report name "${requestedSaved}" is ambiguous; loaded Default.`;
@@ -192,37 +209,14 @@ export class InteractiveReportElement extends WidgetElement {
             this.schema?.defaultState);
     }
 
-    /// The T0 consistency gate: a document whose recorded schema snapshot no
-    /// longer matches the live schema is refused — not run — and the working
-    /// copy resets down the drift-proof chain: default report, then the
-    /// synthetic empty state (which depends on nothing). Stored rows are never
-    /// touched; only the working copy resets. Absent snapshots skip the check.
-    adoptState(rawState, description) {
-        const live = this.schema?.columns ?? [];
-        const mismatch = schemaMismatch(rawState?.schema, live);
-        const adopt = state => {
-            this.doc = state;
-            this.els.search.value = state.search ?? "";
-        };
-        if (!mismatch) {
-            adopt(this.normalize(rawState));
-            return true;
-        }
-
-        const detail = mismatch.join("; ");
-        let fallback = "the default report";
-        const defaultState = this.schema?.defaultState;
-        if (schemaMismatch(defaultState?.schema, live)) {
-            // A configured default can itself predate the schema change; the
-            // synthetic empty terminus cannot.
-            adopt(normalizeReportState(null, this.schema?.limits?.defaultPageSize ?? 50));
-            fallback = "an empty report";
-        } else {
-            adopt(this.normalize(defaultState));
-        }
-        this.showError(new Error(
-            `${description ?? "This report"} was built against a schema that has changed (${detail}). Loaded ${fallback} instead.`));
-        return false;
+    /// Adopt a state document as the working copy. Server-delivered documents
+    /// are authoritative, and saved reports are accepted liberally: normalization
+    /// guarantees shape, the server judges the content on query — hard problems
+    /// come back as a validation response (and the failed operation rolls back),
+    /// soft drift as ignored[] notices.
+    adoptState(rawState) {
+        this.doc = this.normalize(rawState);
+        this.els.search.value = this.doc.search ?? "";
     }
 
     /// Canonical state: explicit empty values survive so they can clear report defaults;
@@ -245,6 +239,7 @@ export class InteractiveReportElement extends WidgetElement {
             });
             if (ctrl !== this._abort) return;
             this.lastResult = result;
+            this.commitLastGood();
             this.clearError();
             renderChips(this, this.els.chips);
             this.renderView();
@@ -301,17 +296,21 @@ export class InteractiveReportElement extends WidgetElement {
         this._chart = null;
     }
 
-    /// Optimistic apply: mutate the doc, re-query, roll back on failure. Throws so
-    /// dialogs can show the (precise) validation problem and stay open.
+    /// Optimistic apply: mutate a CLONE, install it, re-query, restore the last
+    /// validated state on failure. Mutating a clone keeps a mutator that throws
+    /// mid-way (staged multi-column edits) from leaving half its work in the live
+    /// doc. Throws so dialogs can show the (precise) validation problem and stay
+    /// open.
     async apply(mutate, { resetPage = true } = {}) {
-        const prev = structuredClone(this.doc);
-        mutate(this.doc);
-        if (resetPage && this.doc.page) this.doc.page.index = 1;
+        const prev = this.doc;
+        const next = structuredClone(this.doc);
+        mutate(next);
+        if (resetPage && next.page) next.page.index = 1;
+        this.doc = next;
         try {
             await this.runQuery({ quiet: true });
         } catch (err) {
-            this.doc = prev;
-            renderChips(this, this.els.chips);
+            this.restoreLastGood(prev);
             throw err;
         }
     }
@@ -320,12 +319,49 @@ export class InteractiveReportElement extends WidgetElement {
         return this.apply(mutate, opts).catch(err => this.showError(err));
     }
 
+    /// The last server-validated state — the rollback target for any failed
+    /// operation. Committed only on query success, so an operation whose query
+    /// was aborted by a newer one never becomes a rollback target: if that newer
+    /// operation fails, the restore skips past the aborted, never-validated
+    /// intermediate back to validated ground.
+    commitLastGood() {
+        this._lastGood = {
+            doc: structuredClone(this.doc),
+            currentSaved: this.currentSaved,
+        };
+    }
+
+    /// Put doc, saved-report selection, search box, and chips back on the last
+    /// validated state (or the caller's fallback when nothing was validated yet).
+    /// The rendered grid still shows that state's result, so the widget is
+    /// consistent again as a whole.
+    restoreLastGood(fallbackDoc = null) {
+        const good = this._lastGood;
+        if (!good && !fallbackDoc) return;
+        this.doc = good ? structuredClone(good.doc) : fallbackDoc;
+        if (good) this.currentSaved = good.currentSaved;
+        this.els.search.value = this.doc?.search ?? "";
+        renderChips(this, this.els.chips);
+        refreshSavedSelect(this);
+    }
+
+    /// A deleted saved report must not resurrect through a later rollback.
+    forgetSaved(id) {
+        if (this._lastGood?.currentSaved?.id === id) this._lastGood.currentSaved = null;
+    }
+
     // --- notices -------------------------------------------------------------
 
     showError(err) {
-        const text = err?.status === 401 ? "Sign in to use this report."
-            : err?.status === 404 ? "Report not found — or you don't have access."
-            : (err?.message || String(err));
+        // Friendly text covers the statuses the server deliberately leaves
+        // bodiless (auth challenges, hide-as-404); a server that did send a
+        // sanitized problem is more precise than either stock phrase.
+        const problem = err?.problem ?? {};
+        const friendly = err?.status === 401 ? "Sign in to use this report."
+            : err?.status === 404 && !problem.title && !problem.detail
+                ? "Report not found — or you don't have access."
+                : null;
+        const text = friendly ?? errorLines(err).join(" — ");
         const suffix = err?.traceId ? ` (ref ${err.traceId})` : "";
         this.els.errorSlot.replaceChildren(banner("error", text + suffix, () => this.clearError()));
     }

@@ -29,6 +29,23 @@ export class ApiError extends Error {
     }
 }
 
+/// The one presentation of an error, shared by banners and dialog error boxes:
+/// the server's sanitized title, detail, and each validation message, in order.
+/// Callers append the traceId reference in their own format. Duck-typed on
+/// problem so it also covers plain Errors and strings.
+export function errorLines(err) {
+    if (typeof err === "string") return [err];
+    const problem = err?.problem;
+    if (!problem || typeof problem !== "object") return [err?.message || "Something went wrong."];
+    const lines = [];
+    if (problem.title) lines.push(problem.title);
+    if (problem.detail) lines.push(problem.detail);
+    for (const messages of Object.values(err.errors ?? {}))
+        for (const message of messages) lines.push(message);
+    if (!lines.length) lines.push(err.message || `HTTP ${err.status}`);
+    return lines;
+}
+
 async function problemFrom(res) {
     const problem = await res.json().catch(() => ({}));
     return new ApiError(problem, res.status);

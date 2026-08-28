@@ -10,10 +10,12 @@
     "build": "npm run build:client",
     "build:client": "node scripts/build-client.mjs",
     "dev": "node scripts/build-client.mjs --watch",
-    "test": "npm run build:client && npm run test:unit",
-    "test:unit": "node --test tests/ui/*.test.js",
-    "test:ui": "npm run build:client && playwright test",
-    "verify": "npm test && npm run test:ui",
+    "test": "npm run test:unit",
+    "test:unit": "npm run build:client && npm run unit",
+    "unit": "node --test tests/ui/*.test.js",
+    "test:ui": "npm run build:client && npm run e2e",
+    "e2e": "playwright test",
+    "verify": "npm run build:client && npm run unit && npm run e2e",
     "pack": "pwsh scripts/pack.ps1"
   },
   "devDependencies": {

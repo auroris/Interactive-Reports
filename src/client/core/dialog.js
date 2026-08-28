@@ -2,6 +2,7 @@
 // widget's shadow root, enter the browser top layer, and leave the report below
 // them interactive. Destructive confirmations use a native modal <dialog>.
 
+import { errorLines } from "./api.js";
 import { el, icon } from "./dom.js";
 import { closePopups } from "./menu.js";
 import { hidePopover, popoverIsOpen, showPopover } from "./popover.js";
@@ -185,13 +186,8 @@ export function openDialog({
         setError(err) {
             errorBox.replaceChildren();
             if (err == null) { errorBox.hidden = true; return; }
-            const messages = [];
-            if (err.errors && typeof err.errors === "object") {
-                if (err.problem?.title) messages.push(err.problem.title);
-                for (const list of Object.values(err.errors)) messages.push(...list);
-            } else {
-                messages.push(typeof err === "string" ? err : err.message || "Something went wrong.");
-            }
+            const messages = errorLines(err);
+            if (err?.traceId) messages.push(`Reference: ${err.traceId}`);
             errorBox.append(...messages.map(message => el("div", {}, message)));
             errorBox.hidden = false;
         },

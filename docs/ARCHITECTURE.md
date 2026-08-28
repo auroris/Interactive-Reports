@@ -350,19 +350,15 @@ keyed by their derived mode name. The toolbar swaps tails between `pipeline` and
 `shelf`; the server never validates shelf entries — they are inert retained
 configuration, exactly as the old `views` registry was.
 
-**Schema snapshot.** `schema` records the discovered column name → logical kind
-(`text`/`number`/`date`/`bool`/`other`) map the document was authored against. The
-server ignores it entirely; it is a client-side contract. The client stamps it on
-every save, and on load compares it against the live schema (case- and
-order-insensitive): a recorded column that is missing or retyped is a mismatch —
-pure additions pass. On mismatch the client does **not** run the configured query:
-it shows an error naming the difference and resets its working copy to the default
-report (whose own snapshot is checked too; the synthetic empty state is the
-drift-proof terminus). The stored row is untouched until the user saves. An absent
-snapshot skips the check (hand-authored documents stay writable without ceremony).
-Post-T0, the recorded-vs-live diff plus the pipeline's explicit references enable
-dependency-aware pruning instead of the coarse reset; no protocol change will be
-needed for that upgrade.
+**Schema snapshot (retired 2026-08-28).** Documents no longer carry a
+client-checked schema snapshot. Server-delivered documents are authoritative, and
+saved reports are accepted liberally: the client adopts a document as-is and the
+server judges it on query — hard problems return a validation response (the client
+rolls the failed operation back to its last validated state), soft drift lands in
+`ignored[]`. The client stamps nothing on save and strips a legacy document's
+`schema` key on adoption; the server-side machinery (the state model's snapshot
+member, resolver copy, and default-state stamping) was removed with it — a legacy
+row's `schema` JSON property now falls through as an unknown member on hydration.
 
 **Stable synthetic names.** Group metrics are named by their spec-assigned ids
 (`m1`, `m2`, … — a namespace like computed columns' `c1`, unique within the stage,
@@ -457,9 +453,8 @@ provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
   default report's source-layer `labels` unless the effective Default state carries
   its own. When no default is configured the server synthesizes an empty pipeline
   (`[source]`, empty layer) — which, by the null-columns rule, means every schema
-  column in database order, flavored by the mapping — and stamps it with the current
-  schema snapshot, making it the drift-proof reset terminus. A client never invents
-  its own notion of "the default report".
+  column in database order, flavored by the mapping. A client never invents its own
+  notion of "the default report".
 
 **Aggregate functions (closed set):** `count sum avg median min max countDistinct`.
 - `sum/avg/median` require number columns; `min/max` allow number/date/text; `count/countDistinct`
@@ -554,10 +549,9 @@ surface as precise 400s.
 dropped into `ignored[]`. Expressions are typed programs, so an unknown referenced column
 is a precise validation error. Disabled filters/highlights are not parsed or planned,
 which lets an off instruction remain in saved state while its schema is being revised.
-Layered over that, T0 consistency is **coarse and client-owned**: the schema snapshot
-check (above) refuses to run a drifted document at all, and a user edit that breaks a
-downstream dependency (deleting a computed column a group stage consumes) deletes the
-dependent stages and shelf entries outright rather than limping. Presentation maps are
+Layered over that, a user edit that breaks a downstream dependency (deleting a
+computed column a group stage consumes) deletes the dependent stages and shelf
+entries outright rather than limping (T0 coarse invalidation). Presentation maps are
 exempt — unknown `labels`/`formats` keys stay dormant by design.
 
 ## 6. HTTP protocol
@@ -1151,14 +1145,18 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   group/spread rendering; saved-report select
   (Default + Primary/Global/Private groups); `ignored[]` and problem+json surfaced as
   notices — validation problems render *inside* the originating dialog, which stays
-  open (apply is optimistic: mutate, re-query, roll back on failure). Menus are
+  open (apply is transactional: mutate a clone, install, re-query, and on failure
+  restore the last server-validated state — so a throwing mutator, an overlapping
+  edit, or a failed saved-report load can never strand a half-mutated or
+  never-validated document). Menus are
   **stage-aware**: Columns, Column Settings, Compute, Highlight, and Sort operate on
   the *current* terminal table — the source layer in grid, the group stage's derived
   schema (dims + `__count` + metrics + computed) under a group tail, the spread
   layer's presentation maps under a spread tail — while Filter always edits the
-  source layer. On load the client compares the document's schema snapshot against
-  the live schema and, on mismatch, refuses the stale document with a banner naming
-  the difference and falls back to the default report (§5). The whole
+  source layer. On load the client adopts the delivered document as-is — server
+  documents are authoritative, saved reports are accepted liberally — and the
+  server judges it on query: a validation failure rolls the load back to the last
+  validated state, soft drift arrives as `ignored[]` (§5). The whole
   surface is gated by the definition's feature whitelist (§4), which arrives resolved
   on the schema payload: menu entries vanish with their headings and separators, the
   search bar / view buttons / Actions button / saved-report select hide when their
@@ -1444,3 +1442,4 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 | MIT + full nuget.org metadata at 0.9.0, shared via `Directory.Build.props` | per-project metadata; private-feed-first | One file owns identity/license/Source Link/symbols for all three packages; 0.9.0 signals pre-1.0 while the package soaks in a real host. Dependencies pin 8.0.x so the packages do not drag 10.x `Microsoft.Extensions.*` into Umbraco 13's 8.x graph. |
 | Group-stage filters reserved but not populated at T0 | ship HAVING filters now; forbid forever | Filtering means "which rows exist" (stage 1) in the user's model today; the layer slot makes group filters a dialog-UX task later, not a pipeline change. |
 | v1/v2 documents rejected outright | migrate v2 into v3 | Owner-confirmed: nothing external consumes documents or the wire protocol; a migrator would be dead code the day it lands. |
+| Server documents are authoritative; saved reports adopt liberally (snapshot gate retired) | keep the client-side schema-snapshot match-or-reset (the snapshot row above) | A full reversal of the snapshot row (owner, 2026-08-28): the server already judges every document on query — hard problems return a validation response the client now rolls back transactionally, soft drift degrades through `ignored[]` — so the client-side predictive gate second-guessed the authoritative judge and refused documents over recorded diffs the document might never reference. Saves stamp nothing; adoption strips the legacy `schema` key; the server-side machinery (state-model member, resolver copy, default-state stamping) was removed with it, legacy rows hydrating past the unknown member. |

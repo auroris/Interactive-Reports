@@ -95,7 +95,7 @@ public static class EndpointExtensions
                 columns = columns.Select(c => new ColumnInfo(c.Name, c.Label, c.KindName, c.IsComputed)),
                 editLink = ResolveEditLink(def, columns, ctx),
                 columnOverrides = ResolveColumnOverrides(def, columns),
-                defaultState = SchemaDefaultState(def, columns),
+                defaultState = SchemaDefaultState(def),
                 stateVersion = ReportState.CurrentVersion,
                 capabilities = new
                 {
@@ -202,7 +202,7 @@ public static class EndpointExtensions
     /// ingestion pipeline mirrors this same layering so exports render what an
     /// equivalent client displays.
     /// </summary>
-    internal static ReportState SchemaDefaultState(ReportDefinition def, Core.Schema.ReportSchema schema)
+    internal static ReportState SchemaDefaultState(ReportDefinition def)
     {
         // Resolve against an empty request to get a detached copy — the store's
         // definition (and its DefaultState) must not be mutated by response shaping.
@@ -213,14 +213,6 @@ public static class EndpointExtensions
         source.Layer ??= new StageLayer();
         if (source.Layer.Labels is null && def.GetEffectiveColumnLabels() is { } definitionLabels)
             source.Layer.Labels = new(definitionLabels);
-
-        // The delivered default is the client's drift-proof reset terminus: a document
-        // that never recorded a snapshot gets stamped with the live schema, so the
-        // client's recorded-vs-live comparison passes by construction.
-        state.Schema ??= schema.Columns.ToDictionary(
-            c => c.Name,
-            c => c.KindName,
-            StringComparer.OrdinalIgnoreCase);
         return state;
     }
 

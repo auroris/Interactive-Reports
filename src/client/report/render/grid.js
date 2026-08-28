@@ -7,7 +7,7 @@ import { columnSortable, headerLabelHidden, labelOf } from "../schema.js";
 import { stageContext } from "../stage.js";
 import { modeOf, sameColumn, sourceLayer } from "../state.js";
 import { formatAgg, formatInteger, hasFraction, parseReportNumber, FN_LABELS, FN_ORDER } from "./format.js";
-import { formatForColumn, renderColumnValue } from "./column-renderers.js";
+import { formatForColumn, renderColumnValue, renderTextValue } from "./column-renderers.js";
 import { activeEditLink, renderEditCell } from "./edit-link.js";
 import { headerMenuAvailable, openHeaderMenu } from "../menus.js";
 import { columnClasses } from "../classes.js";
@@ -96,10 +96,23 @@ export function renderGrid(w, table) {
     const totalsByKey = new Map((result.breakTotals ?? []).map(bt => [keyOf(bt.key), bt]));
 
     // Columns whose page values include fractions format uniformly as decimals.
-    const decimalCols = new Set(columns
+    // Derived over the full response so break columns share the page-wide rule.
+    const decimalCols = new Set(result.columns
         .filter(c => c.type === "number"
             && result.rows.some(r => hasFraction(r[c.name])))
         .map(c => c.name));
+
+    // Break headings carry the group's value, so it formats exactly like a cell
+    // of that column would — same mask, same decimal rule.
+    const breakColumns = new Map(result.columns.map(c => [c.name, c]));
+    const breakText = (row, name) => {
+        const value = row[name];
+        if (value === null || value === undefined) return "(blank)";
+        const col = breakColumns.get(name);
+        return col
+            ? renderTextValue(w, row, col, decimalCols.has(name), formatFor(col))
+            : String(value);
+    };
 
     // Highlight styles belong to whichever layer decorated this table: the
     // source layer in grid, the group layer when the group stage is terminal.
@@ -154,7 +167,7 @@ export function renderGrid(w, table) {
             if (key !== currentKey) {
                 closeGroup();
                 const bt = totalsByKey.get(key);
-                const label = breaks.map(b => `${labelOf(w, b)}: ${row[b] ?? "(blank)"}`).join("  ·  ");
+                const label = breaks.map(b => `${labelOf(w, b)}: ${breakText(row, b)}`).join("  ·  ");
                 bodyRows.push(el("tr", { class: "ir-break-header" },
                     el("td", { colSpan: Math.max(columns.length, 1) + cellOffset },
                         el("span", {}, label),
@@ -178,8 +191,12 @@ export function renderGrid(w, table) {
         for (const hit of [...rowHits, ...cellHits]) {
             const style = styleById.get(hit.id) ?? {};
             if (!hit.col) {
-                if (style.bg) tr.style.background = style.bg;
-                if (style.fg) tr.style.color = style.fg;
+                // On the cells, not the tr: a column format's inline background
+                // would beat a tr-level style, and highlights deliberately win.
+                for (const cell of tr.children) {
+                    if (style.bg) cell.style.background = style.bg;
+                    if (style.fg) cell.style.color = style.fg;
+                }
             } else {
                 const idx = columns.findIndex(c => sameColumn(c.name, hit.col));
                 if (idx >= 0) {

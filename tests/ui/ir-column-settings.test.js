@@ -279,13 +279,22 @@ test("a hidden computed column offers display settings and can source another co
     report.remove();
 });
 
-test("column settings reject component-reserved CSS classes", async () => {
+test("column settings reject component-reserved CSS classes without leaking staged edits", async () => {
     requests.length = 0;
     const report = await mount("orders");
 
     report.shadowRoot.querySelector("th.ir-th-menu .ir-th-button").click();
     clickMenuItem(report, "Column Settings");
     const dialog = report.shadowRoot.querySelector(".ir-dialog");
+
+    // Stage a VALID edit on ID first, then an invalid class on NAME: the failed
+    // apply must discard the whole visit, not leave ID's edit in the live doc.
+    const maskSel = fieldControl(dialog, "Format Mask");
+    maskSel.value = "integer";
+    maskSel.dispatchEvent(new window.Event("input", { bubbles: true }));
+    const column = fieldControl(dialog, "Column");
+    column.value = "NAME";
+    column.dispatchEvent(new window.Event("change", { bubbles: true }));
     const classesInp = dialog.querySelector('input[type="text"]');
     classesInp.value = "ir-empty";
     dialog.querySelector(".ir-btn-primary").click();
@@ -294,6 +303,8 @@ test("column settings reject component-reserved CSS classes", async () => {
     assert.match(dialog.querySelector(".ir-dialog-error").textContent, /invalid or reserved/i);
     assert.equal(!!report.shadowRoot.querySelector(".ir-dialog"), true,
         "invalid class input keeps the dialog open");
+    assert.equal(report.doc.pipeline[0].layer.formats?.ID, undefined,
+        "an earlier staged column's edit must not survive a later column's failure");
 
     report.remove();
 });

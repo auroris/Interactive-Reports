@@ -1,6 +1,6 @@
 // Pure report-state transformations over the v3 pipeline document. Keeping these
-// outside the custom element makes shape guarantees, tail switching, snapshot
-// comparison, and dependency cleanup independently testable.
+// outside the custom element makes shape guarantees, tail switching, and
+// dependency cleanup independently testable.
 //
 // A document is: { v, schema?, search?, page, pipeline: [stage...], shelf }.
 // pipeline[0] is always the source stage; the tail (later stages) IS the view —
@@ -12,6 +12,9 @@ export function normalizeReportState(raw, defaultPageSize = 50, defaults = null)
     for (const [key, value] of Object.entries(raw ? structuredClone(raw) : {}))
         if (value !== null && value !== undefined) state[key] = value;
 
+    // The retired schema-snapshot key: server documents are authoritative and
+    // the server validates on query, so the client neither checks nor carries it.
+    delete state.schema;
     if (!Array.isArray(state.pipeline) || state.pipeline.length === 0)
         state.pipeline = [{}];
     const head = state.pipeline[0];
@@ -107,32 +110,6 @@ export function pivotRowDims(doc) {
     const by = stageOf(doc, "group")?.shape?.by ?? [];
     const cols = (stageOf(doc, "spread")?.shape?.cols ?? []).map(c => String(c).toLowerCase());
     return by.filter(name => !cols.includes(String(name).toLowerCase()));
-}
-
-// --- schema snapshot ---------------------------------------------------------
-
-/// The recorded discovered-schema map a document is stamped with on save.
-export function schemaSnapshot(columns) {
-    const map = {};
-    for (const column of columns ?? []) map[column.name] = column.type;
-    return map;
-}
-
-/// Compare a document's recorded snapshot against the live schema columns.
-/// Mismatch = a recorded column is missing or retyped; pure additions pass.
-/// Returns a list of human-readable differences, or null when the check passes
-/// (including when the document never recorded a snapshot).
-export function schemaMismatch(recorded, liveColumns) {
-    if (!recorded || typeof recorded !== "object" || Array.isArray(recorded)) return null;
-    const live = new Map((liveColumns ?? []).map(c => [String(c.name).toLowerCase(), String(c.type)]));
-    const problems = [];
-    for (const [name, type] of Object.entries(recorded)) {
-        const liveType = live.get(String(name).toLowerCase());
-        if (liveType === undefined) problems.push(`${name} was removed`);
-        else if (liveType.toLowerCase() !== String(type).toLowerCase())
-            problems.push(`${name} changed from ${type} to ${liveType}`);
-    }
-    return problems.length ? problems : null;
 }
 
 // --- shared helpers ----------------------------------------------------------

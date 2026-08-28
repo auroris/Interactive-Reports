@@ -627,18 +627,7 @@ public class StateValidatorTests
         Assert.Equal(ViewMode.Grid, Validate(new ReportState { Pipeline = [] }).View.Mode);
     }
 
-    // ---- schema snapshot and shelf are server-inert ----
-
-    [Fact]
-    public void Schema_snapshot_is_ignored_by_the_server_entirely()
-    {
-        var result = Validate(Doc(
-            source: new StageLayer { Columns = ["CUSTOMER", "AMOUNT"] },
-            schema: new() { ["GHOST_COLUMN"] = "number", ["AMOUNT"] = "banana", [""] = "" }));
-
-        Assert.Equal(["CUSTOMER", "AMOUNT"], result.SelectColumns.Select(c => c.Name));
-        Assert.Empty(result.Ignored);
-    }
+    // ---- the shelf is server-inert ----
 
     [Fact]
     public void Shelf_entries_are_never_validated()

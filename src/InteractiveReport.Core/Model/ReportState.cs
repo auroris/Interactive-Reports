@@ -12,14 +12,6 @@ public sealed class ReportState
 
     public int V { get; set; } = CurrentVersion;
 
-    /// <summary>
-    /// The discovered schema snapshot (column name → logical kind) this document was
-    /// authored against. A client-side contract: the client stamps it on save and
-    /// compares it against the live schema on load (removed/retyped columns are a
-    /// mismatch; additions pass). The server never reads it.
-    /// </summary>
-    public Dictionary<string, string>? Schema { get; set; }
-
     /// <summary>Toolbar search: OR of case-insensitive contains across the source layer's visible text columns.</summary>
     public string? Search { get; set; }
 

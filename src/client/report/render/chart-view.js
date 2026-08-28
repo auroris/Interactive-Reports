@@ -51,6 +51,13 @@ export function renderChartView(w, container, chartModule) {
         return Number.isFinite(coordinate) ? coordinate : null;
     });
     const decimal = result.rows.some(r => hasFraction(r[valueCol.name]));
+    // One canonical display string per point, shared by the data table and the
+    // chart's tooltips — exact values, masks and all, never the lossy coordinate.
+    const displayValues = result.rows.map(r => {
+        const value = r[valueCol.name];
+        if (value === null || value === undefined) return null;
+        return renderTextValue(w, r, valueCol, decimal, valueFormat);
+    });
 
     // The metric column is synthetic (v0/__count) when aggregated, so its server
     // label embeds the raw column label — rebuild it from the chart spec instead.
@@ -67,7 +74,7 @@ export function renderChartView(w, container, chartModule) {
             el("th", { scope: "col", class: "ir-num" }, metricLabel))),
         el("tbody", {}, ...result.rows.map((r, i) => el("tr", {},
             el("td", {}, labels[i]),
-            el("td", { class: "ir-num" }, renderTextValue(w, r, valueCol, decimal, valueFormat))))));
+            el("td", { class: "ir-num" }, displayValues[i] ?? "")))));
 
     container.replaceChildren(
         el("div", { class: "ir-chart-region" }, canvas),
@@ -84,6 +91,7 @@ export function renderChartView(w, container, chartModule) {
         horizontal: view.orientation === "horizontal",
         labels,
         values,
+        displayValues,
         metricLabel,
         labelAxisTitle: view.labelAxisTitle ?? null,
         valueAxisTitle: view.valueAxisTitle ?? null,

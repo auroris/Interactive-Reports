@@ -6,8 +6,8 @@ namespace InteractiveReport.Core.Tests;
 
 /// <summary>
 /// The resolver's v3 semantics: search and page resolve property-wise (null inherits,
-/// explicit empty clears); pipeline, shelf, and schema replace the default wholesale
-/// when present; everything is deep-copied so validation never mutates a cached default.
+/// explicit empty clears); pipeline and shelf replace the default wholesale when
+/// present; everything is deep-copied so validation never mutates a cached default.
 /// </summary>
 public sealed class ReportStateResolverTests
 {
@@ -22,14 +22,12 @@ public sealed class ReportStateResolverTests
             },
             search: "open",
             page: new PageRequest { Index = 3, Size = 75 },
-            schema: new() { ["AMOUNT"] = "number" },
             shelf: new() { ["groupBy"] = [Group(by: ["STATUS"])] });
 
         var resolved = ReportStateResolver.Resolve(defaults, new ReportState());
 
         Assert.Equal("open", resolved.Search);
         Assert.Equal(3, resolved.Page!.Index);
-        Assert.Equal("number", resolved.Schema!["AMOUNT"]);
 
         var layer = resolved.Pipeline![0].Layer!;
         Assert.Equal("AMOUNT", Assert.Single(layer.Sorts!).Col);
@@ -41,7 +39,6 @@ public sealed class ReportStateResolverTests
         Assert.NotSame(defaults.Pipeline[0].Layer, resolved.Pipeline[0].Layer);
         Assert.NotSame(defaults.Pipeline[0].Layer!.Sorts, layer.Sorts);
         Assert.NotSame(defaults.Pipeline[0].Layer!.Labels, layer.Labels);
-        Assert.NotSame(defaults.Schema, resolved.Schema);
         Assert.NotSame(defaults.Shelf, resolved.Shelf);
         Assert.NotSame(defaults.Shelf!["groupBy"][0], resolved.Shelf["groupBy"][0]);
     }
@@ -89,10 +86,9 @@ public sealed class ReportStateResolverTests
     }
 
     [Fact]
-    public void Present_shelf_and_schema_replace_wholesale()
+    public void Present_shelf_replaces_wholesale()
     {
         var defaults = Doc(
-            schema: new() { ["AMOUNT"] = "number", ["STATUS"] = "text" },
             shelf: new()
             {
                 ["groupBy"] = [Group(by: ["STATUS"])],
@@ -100,15 +96,13 @@ public sealed class ReportStateResolverTests
             });
 
         var resolved = ReportStateResolver.Resolve(defaults, Doc(
-            schema: new() { ["ONLY"] = "text" },
             shelf: new() { ["pivot"] = [Group(by: ["REGION"]), Spread(cols: ["REGION"])] }));
 
-        Assert.Equal(["ONLY"], resolved.Schema!.Keys);
         Assert.Equal(["pivot"], resolved.Shelf!.Keys);
 
+        // An explicitly empty shelf is a wholesale replacement, not an inherit.
         var clearedShelf = ReportStateResolver.Resolve(defaults, Doc(shelf: new()));
         Assert.Empty(clearedShelf.Shelf!);
-        Assert.Equal(2, clearedShelf.Schema!.Count);   // schema still inherits independently
     }
 
     [Fact]

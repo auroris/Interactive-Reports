@@ -4,9 +4,9 @@ namespace InteractiveReport.Core.Validation;
 
 /// <summary>
 /// Resolves a partial request over a report's default state. Search and page resolve
-/// property-wise (null inherits; explicit empty clears); the pipeline, shelf, and
-/// schema snapshot replace the default wholesale when present — stage arrays do not
-/// merge. Everything is deep-copied so validation never mutates a cached default.
+/// property-wise (null inherits; explicit empty clears); the pipeline and shelf
+/// replace the default wholesale when present — stage arrays do not merge.
+/// Everything is deep-copied so validation never mutates a cached default.
 /// </summary>
 public static class ReportStateResolver
 {
@@ -17,7 +17,6 @@ public static class ReportStateResolver
         return new ReportState
         {
             V = requested.V,
-            Schema = Copy(requested.Schema ?? defaults?.Schema),
             Search = requested.Search ?? defaults?.Search,
             Page = requested.Page ?? defaults?.Page,
             Pipeline = CopyPipeline(requested.Pipeline ?? defaults?.Pipeline),

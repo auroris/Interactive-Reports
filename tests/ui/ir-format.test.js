@@ -247,7 +247,10 @@ test("control breaks own their columns and defer subtotal and grand total to log
 });
 
 test("higher highlight sequences win within a scope and cell scope wins over row scope", () => {
-    const columns = [{ name: "AMOUNT", label: "Amount", type: "number" }];
+    const columns = [
+        { name: "AMOUNT", label: "Amount", type: "number" },
+        { name: "STATUS", label: "Status", type: "text" },
+    ];
     const w = {
         doc: {
             pipeline: [src({
@@ -266,7 +269,7 @@ test("higher highlight sequences win within a scope and cell scope wins over row
         lastResult: {
             availableColumns: columns,
             columns,
-            rows: [{ AMOUNT: 10 }],
+            rows: [{ AMOUNT: 10, STATUS: "open" }],
             page: { index: 1, size: 10 },
             totalRows: 1,
             aggregates: {},
@@ -283,7 +286,10 @@ test("higher highlight sequences win within a scope and cell scope wins over row
 
     renderGrid(w, table);
 
+    // Row highlights paint the CELLS (a column format's inline background would
+    // beat a tr-level style): the sequence winner shows on cells without a cell
+    // hit, and the cell-scope winner overrides on its own cell.
     const row = table.querySelector("tr.ir-row");
-    assert.equal(row.style.background, "#222222");
     assert.equal(row.children[0].style.background, "#444444");
+    assert.equal(row.children[1].style.background, "#222222");
 });

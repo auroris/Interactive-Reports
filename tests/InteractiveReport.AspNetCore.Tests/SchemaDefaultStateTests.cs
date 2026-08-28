@@ -1,13 +1,12 @@
 using InteractiveReport.Core.Model;
-using InteractiveReport.Core.Schema;
 
 namespace InteractiveReport.AspNetCore.Tests;
 
 /// <summary>
 /// The default report the schema endpoint sends down is the single place friendly
 /// names leave the server: columnLabels seed the source layer's labels, a configured
-/// default's own labels win, a pipeline always exists, the live schema snapshot is
-/// stamped when absent, and response shaping never mutates the stored definition.
+/// default's own labels win, a pipeline always exists, and response shaping never
+/// mutates the stored definition.
 /// </summary>
 public sealed class SchemaDefaultStateTests
 {
@@ -20,16 +19,10 @@ public sealed class SchemaDefaultStateTests
         ColumnLabels = new() { ["ORDER_ID"] = "Order #" },
     };
 
-    private static ReportSchema LiveSchema() => ReportSchema.Create("orders",
-    [
-        new ColumnModel { Name = "ORDER_ID", Label = "Order Id", ClrType = typeof(long) },
-        new ColumnModel { Name = "LABEL", Label = "Label", ClrType = typeof(string) },
-    ]);
-
     [Fact]
     public void Unconfigured_default_synthesizes_a_source_pipeline_carrying_the_mapping()
     {
-        var state = EndpointExtensions.SchemaDefaultState(Definition(), LiveSchema());
+        var state = EndpointExtensions.SchemaDefaultState(Definition());
 
         Assert.Equal(ReportState.CurrentVersion, state.V);
         var stage = Assert.Single(state.Pipeline!);
@@ -38,28 +31,6 @@ public sealed class SchemaDefaultStateTests
         Assert.Null(stage.Layer!.Columns);   // null = every schema column in database order
         Assert.Null(stage.Layer.Filters);
         Assert.Equal("Order #", stage.Layer.Labels!["ORDER_ID"]);
-    }
-
-    [Fact]
-    public void Delivered_default_is_stamped_with_the_live_schema_snapshot()
-    {
-        var state = EndpointExtensions.SchemaDefaultState(Definition(), LiveSchema());
-
-        Assert.Equal("number", state.Schema!["ORDER_ID"]);
-        Assert.Equal("text", state.Schema["LABEL"]);
-        Assert.Equal(2, state.Schema.Count);
-        Assert.True(state.Schema.ContainsKey("order_id"));   // case-insensitive lookup
-    }
-
-    [Fact]
-    public void A_configured_snapshot_is_preserved_not_overwritten()
-    {
-        var def = Definition();
-        def.DefaultState = new ReportState { Schema = new() { ["ORDER_ID"] = "text" } };
-
-        var state = EndpointExtensions.SchemaDefaultState(def, LiveSchema());
-
-        Assert.Equal("text", Assert.Single(state.Schema!).Value);
     }
 
     [Fact]
@@ -78,7 +49,7 @@ public sealed class SchemaDefaultStateTests
             ],
         };
 
-        var state = EndpointExtensions.SchemaDefaultState(def, LiveSchema());
+        var state = EndpointExtensions.SchemaDefaultState(def);
 
         var layer = state.Pipeline![0].Layer!;
         Assert.Single(layer.Sorts!);
@@ -101,7 +72,7 @@ public sealed class SchemaDefaultStateTests
             ],
         };
 
-        var state = EndpointExtensions.SchemaDefaultState(def, LiveSchema());
+        var state = EndpointExtensions.SchemaDefaultState(def);
 
         var labels = state.Pipeline![0].Layer!.Labels!;
         Assert.Equal("Ticket", labels["ORDER_ID"]);
@@ -138,7 +109,7 @@ public sealed class SchemaDefaultStateTests
             ],
         };
 
-        var state = EndpointExtensions.SchemaDefaultState(def, LiveSchema());
+        var state = EndpointExtensions.SchemaDefaultState(def);
 
         var formats = state.Pipeline![0].Layer!.Formats!;
         Assert.Equal("center", formats["ORDER_ID"].Align);
@@ -157,7 +128,7 @@ public sealed class SchemaDefaultStateTests
         var def = Definition();                                       // columnLabels: ORDER_ID → "Order #"
         def.Columns = new() { ["LABEL"] = new ReportColumnOverride { Label = "Caption" } };
 
-        var state = EndpointExtensions.SchemaDefaultState(def, LiveSchema());
+        var state = EndpointExtensions.SchemaDefaultState(def);
 
         var labels = state.Pipeline![0].Layer!.Labels!;
         Assert.Equal("Order #", labels["ORDER_ID"]);
@@ -171,7 +142,7 @@ public sealed class SchemaDefaultStateTests
         def.ColumnLabels = null;
         def.Columns = new() { ["ORDER_ID"] = new ReportColumnOverride { Label = "Ticket" } };
 
-        var state = EndpointExtensions.SchemaDefaultState(def, LiveSchema());
+        var state = EndpointExtensions.SchemaDefaultState(def);
 
         Assert.Equal("Ticket", state.Pipeline![0].Layer!.Labels!["ORDER_ID"]);
     }
@@ -192,7 +163,7 @@ public sealed class SchemaDefaultStateTests
             ],
         };
 
-        var state = EndpointExtensions.SchemaDefaultState(def, LiveSchema());
+        var state = EndpointExtensions.SchemaDefaultState(def);
 
         Assert.NotSame(def.DefaultState, state);
         Assert.NotSame(def.DefaultState.Pipeline, state.Pipeline);
@@ -203,6 +174,5 @@ public sealed class SchemaDefaultStateTests
         Assert.Equal("Order #", def.ColumnLabels!["ORDER_ID"]);
         Assert.Single(def.DefaultState.Pipeline![0].Layer!.Sorts!);
         Assert.Null(def.DefaultState.Pipeline[0].Layer!.Labels);
-        Assert.Null(def.DefaultState.Schema);
     }
 }

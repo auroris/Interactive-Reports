@@ -38,7 +38,10 @@ const formatNumber = value =>
 /**
  * Render one chart. spec:
  *   { type: "bar"|"line"|"area"|"pie", horizontal, labels[], values[],
- *     metricLabel, labelAxisTitle, valueAxisTitle }
+ *     displayValues[], metricLabel, labelAxisTitle, valueAxisTitle }
+ * displayValues carries the canonical formatted string per point — tooltips show
+ * it verbatim so they match the data table (exact precision, masks) instead of
+ * re-formatting the lossy numeric coordinate.
  * Returns the Chart.js instance; the caller owns destroy().
  */
 export function renderChart(canvas, spec) {
@@ -117,10 +120,11 @@ export function renderChart(canvas, spec) {
                     callbacks: {
                         label: ctx => {
                             const value = tooltipValue(ctx);
-                            if (!pie) return `${spec.metricLabel}: ${formatNumber(value)}`;
+                            const display = spec.displayValues?.[ctx.dataIndex] ?? formatNumber(value);
+                            if (!pie) return `${spec.metricLabel}: ${display}`;
                             const total = spec.values.reduce((sum, v) => sum + (v ?? 0), 0);
                             const pct = total ? ` (${(value / total * 100).toLocaleString(undefined, { maximumFractionDigits: 1 })}%)` : "";
-                            return `${spec.metricLabel}: ${formatNumber(value)}${pct}`;
+                            return `${spec.metricLabel}: ${display}${pct}`;
                         },
                     },
                 },

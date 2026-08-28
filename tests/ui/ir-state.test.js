@@ -11,8 +11,6 @@ import {
     pivotRowDims,
     removeSourceComputedColumn,
     removeStageComputedColumn,
-    schemaMismatch,
-    schemaSnapshot,
     scopedSearchExpression,
     serializeReportState,
     setMapEntry,
@@ -242,25 +240,14 @@ test("stage computed deletion strips the group layer and the cell family's prese
     assert.deepEqual(spreadLayer.formats, {});
 });
 
-test("the schema snapshot matches on additions and mismatches on removals and retypes", () => {
-    const live = [
-        { name: "ORDER_ID", type: "number" },
-        { name: "CUSTOMER", type: "text" },
-        { name: "BRAND_NEW", type: "text" },
-    ];
+test("the retired schema-snapshot key never enters the working copy", () => {
+    // Legacy saved documents and server-stamped defaults may still carry it;
+    // the client is liberal about the rest but has no use for this key.
+    const fromDocument = normalizeReportState({ schema: { GONE: "number" }, pipeline: [src({})] }, 25);
+    assert.equal("schema" in fromDocument, false);
 
-    assert.equal(schemaMismatch(undefined, live), null, "no snapshot skips the check");
-    assert.equal(schemaMismatch({ order_id: "number" }, live), null, "case-insensitive match");
-    assert.equal(schemaMismatch({ ORDER_ID: "number", CUSTOMER: "text" }, live), null, "additions pass");
-
-    const removed = schemaMismatch({ GONE: "text" }, live);
-    assert.match(removed[0], /GONE was removed/);
-    const retyped = schemaMismatch({ ORDER_ID: "text" }, live);
-    assert.match(retyped[0], /ORDER_ID changed from text to number/);
-
-    assert.deepEqual(
-        schemaSnapshot([{ name: "A", type: "number" }, { name: "B", type: "date" }]),
-        { A: "number", B: "date" });
+    const fromDefaults = normalizeReportState(null, 25, { schema: { OLD: "text" }, pipeline: [src({})] });
+    assert.equal("schema" in fromDefaults, false);
 });
 
 test("expression column references skip quoted contents and longer identifiers", () => {

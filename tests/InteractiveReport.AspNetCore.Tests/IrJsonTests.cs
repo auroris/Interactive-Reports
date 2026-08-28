@@ -145,5 +145,21 @@ public sealed class IrJsonTests
             (shelfChart.Shape!.Kind, shelfChart.Shape.Type, shelfChart.Shape.Label, shelfChart.Shape.Fn));
     }
 
+    [Fact]
+    public void Legacy_documents_with_a_recorded_schema_snapshot_still_hydrate()
+    {
+        // The schema-snapshot contract was retired 2026-08-28; rows saved before
+        // then still carry the key, which now falls through as an unknown member.
+        var state = JsonSerializer.Deserialize<ReportState>(
+            """{"v":3,"schema":{"AMOUNT":"number"},"search":"open","pipeline":[{"shape":{"kind":"source"}}]}""",
+            IrJson.Options)!;
+
+        Assert.Equal("open", state.Search);
+        Assert.Equal("source", Assert.Single(state.Pipeline!).Shape!.Kind);
+
+        // Hydration is where the key dies: a re-serialized document is clean.
+        Assert.DoesNotContain("schema", JsonSerializer.Serialize(state, IrJson.Options));
+    }
+
     private sealed record WireNumbers(long Signed, ulong Unsigned, decimal Precise);
 }

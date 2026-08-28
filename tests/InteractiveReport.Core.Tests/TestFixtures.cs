@@ -40,7 +40,6 @@ public static class TestFixtures
         IEnumerable<PipelineStage>? tail = null,
         string? search = null,
         PageRequest? page = null,
-        Dictionary<string, string>? schema = null,
         Dictionary<string, List<PipelineStage>>? shelf = null)
     {
         var pipeline = new List<PipelineStage>
@@ -52,7 +51,6 @@ public static class TestFixtures
         {
             Search = search,
             Page = page,
-            Schema = schema,
             Pipeline = pipeline,
             Shelf = shelf,
         };
