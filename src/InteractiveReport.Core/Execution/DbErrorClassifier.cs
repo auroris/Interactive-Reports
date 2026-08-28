@@ -30,14 +30,6 @@ internal static class DbErrorClassifier
         _ => false,
     };
 
-    /// <summary>
-    /// SQL Server error 3952: a statement ran under SNAPSHOT isolation in a database
-    /// where ALLOW_SNAPSHOT_ISOLATION is off — the signal to stop offering snapshot
-    /// reads for that connection until re-probed.
-    /// </summary>
-    public static bool IsSnapshotIsolationUnavailable(ReportDialect dialect, DbException exception)
-        => dialect == ReportDialect.SqlServer && IntProperty(exception, "Number") == 3952;
-
     private static int? IntProperty(DbException exception, string name)
     {
         var getter = IntGetters.GetOrAdd((exception.GetType(), name), static key =>

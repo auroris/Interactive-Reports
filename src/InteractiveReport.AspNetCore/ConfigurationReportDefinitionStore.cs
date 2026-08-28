@@ -190,6 +190,9 @@ public sealed partial class ConfigurationReportDefinitionStore : IReportDefiniti
         if (def.CommandTimeoutSeconds < 1)
             throw new InvalidOperationException(
                 $"Report '{def.Name}': commandTimeoutSeconds must be at least 1.");
+        if (!Enum.IsDefined(def.Consistency))
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': unknown consistency strategy '{def.Consistency}' (known: none, snapshot).");
         // The base SELECT becomes a derived table; a trailing ORDER BY breaks that on
         // SQL Server (APEX imposes the same rule). The scanner is comment-, string-,
         // and quoted-identifier-aware, so 'order by' as data or documentation never

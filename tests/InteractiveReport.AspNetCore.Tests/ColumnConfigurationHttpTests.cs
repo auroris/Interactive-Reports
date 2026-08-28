@@ -57,6 +57,7 @@ public sealed class ColumnConfigurationHttpTests : IAsyncLifetime
             ["InteractiveReport:Reports:managed:Dialect"] = "Sqlite",
             ["InteractiveReport:Reports:managed:Sql"] = "SELECT ID, LABEL, NOTES FROM IR_COLUMN_TEST",
             ["InteractiveReport:Reports:managed:Authorization:AllowAnonymous"] = "true",
+            ["InteractiveReport:Reports:managed:Consistency"] = "snapshot",
             // Lowercase placeholder on purpose: the schema payload canonicalizes it.
             ["InteractiveReport:Reports:managed:EditLink:UrlTemplate"] = "/rows/{id}/edit",
             ["InteractiveReport:Reports:managed:EditLink:Label"] = "Edit row",
@@ -110,6 +111,7 @@ public sealed class ColumnConfigurationHttpTests : IAsyncLifetime
     public async Task Schema_delivers_the_canonical_edit_link_and_behavior_flags()
     {
         var schema = await GetJson("/api/reports/managed/schema");
+        Assert.False(schema.TryGetProperty("consistency", out _));
 
         var editLink = schema.GetProperty("editLink");
         Assert.Equal("/rows/{ID}/edit", editLink.GetProperty("urlTemplate").GetString());
@@ -170,6 +172,7 @@ public sealed class ColumnConfigurationHttpTests : IAsyncLifetime
         // Definition presentation never enters query payloads.
         Assert.False(result.TryGetProperty("editLink", out _));
         Assert.False(result.TryGetProperty("columnOverrides", out _));
+        Assert.False(result.TryGetProperty("consistency", out _));
     }
 
     [Fact]

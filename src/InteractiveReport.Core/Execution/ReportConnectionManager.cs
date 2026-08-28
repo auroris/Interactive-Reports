@@ -1,7 +1,5 @@
-using System.Collections.Concurrent;
+using System.Data;
 using System.Data.Common;
-using System.Globalization;
-using InteractiveReport.Core.Composition;
 using InteractiveReport.Core.Model;
 using Microsoft.Extensions.Logging;
 
@@ -16,16 +14,13 @@ internal sealed class ReportConnectionManager(
     IReportConnectionFactory connections,
     ILogger? logger = null)
 {
-    /// <summary>Per connection name: whether SQL Server SNAPSHOT isolation is enabled.</summary>
-    private readonly ConcurrentDictionary<string, bool> _snapshotCapable = new(StringComparer.Ordinal);
-
     public async Task<DbConnection> Open(ReportDefinition definition, CancellationToken ct)
     {
         var connection = connections.CreateConnection(definition.Connection);
         try
         {
             await connection.OpenAsync(ct);
-            await ApplySessionTimeZone(connection, definition, logger, ct);
+            await ApplySessionTimeZone(connection, definition, ct);
             return connection;
         }
         catch
@@ -36,78 +31,95 @@ internal sealed class ReportConnectionManager(
     }
 
     /// <summary>
-    /// Begins a read-only transaction so a request's count, aggregate, break-total,
-    /// and page reads see one database snapshot instead of racing concurrent commits.
-    /// Best-effort by design: SQL Server databases without ALLOW_SNAPSHOT_ISOLATION
-    /// (probed once per connection name) and providers that refuse the isolation
-    /// level fall back to null — the prior behavior of separate autocommit reads —
-    /// rather than trading consistency for read locks the host never asked for.
+    /// Opens the exact consistency scope requested by the definition. A configured
+    /// guarantee is either established or the request fails; there is no implicit
+    /// downgrade. Oracle's READ ONLY transaction is issued directly because ADO.NET
+    /// has no read-only isolation level and mapping it to Serializable loses the
+    /// provider's more precise, writer-friendly semantics.
     /// </summary>
-    public async Task<DbTransaction?> TryBeginConsistentRead(
+    public async Task<ReportReadScope> BeginReadScope(
         DbConnection connection,
         ReportDefinition definition,
         CancellationToken ct)
     {
+        if (definition.Consistency == ReportConsistency.None)
+            return ReportReadScope.None;
+
+        if (definition.Consistency != ReportConsistency.Snapshot)
+            throw new InvalidOperationException(
+                $"Report '{definition.Name}': unsupported consistency strategy '{definition.Consistency}'.");
+
         var dialect = definition.GetEffectiveDialect();
+        if (dialect == ReportDialect.Oracle)
+        {
+            // ODP.NET auto-commits commands executed outside an explicit local
+            // transaction. Start one first so SET TRANSACTION remains in force for
+            // every cursor opened by this report scope. READ COMMITTED is only the
+            // provider API's bootstrap mode; the first SQL statement changes the
+            // Oracle transaction itself to READ ONLY.
+            var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
+            var scope = ReportReadScope.FromTransaction(transaction, logger);
+            try
+            {
+                await ExecuteControlStatement(
+                    connection,
+                    definition,
+                    "SET TRANSACTION READ ONLY",
+                    ct,
+                    transaction);
+                return scope;
+            }
+            catch
+            {
+                await scope.DisposeAsync();
+                throw;
+            }
+        }
+
         if (dialect == ReportDialect.SqlServer
-            && !await SnapshotIsolationEnabled(connection, definition.Connection, ct))
-            return null;
+            && !await SqlServerSnapshotEnabled(connection, definition, ct))
+            throw new InvalidOperationException(
+                $"Report '{definition.Name}' requests snapshot consistency, but SQL Server "
+                + "ALLOW_SNAPSHOT_ISOLATION is disabled for this database. Enable it or configure consistency 'none'.");
 
-        try
+        var isolation = dialect switch
         {
-            return await connection.BeginTransactionAsync(DialectSupport.ConsistentReadIsolation(dialect), ct);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            logger?.LogDebug(
-                ex,
-                "Report connection {Connection}: consistent-read transaction unavailable; statements run individually.",
-                definition.Connection);
-            return null;
-        }
+            ReportDialect.SqlServer => IsolationLevel.Snapshot,
+            ReportDialect.Postgres => IsolationLevel.RepeatableRead,
+            ReportDialect.Sqlite => IsolationLevel.Serializable,
+            _ => throw new ArgumentOutOfRangeException(nameof(dialect), dialect, null),
+        };
+
+        var readTransaction = await connection.BeginTransactionAsync(isolation, ct);
+        return ReportReadScope.FromTransaction(readTransaction, logger);
     }
 
-    /// <summary>
-    /// Re-probe after a mid-flight capability change: SQL Server raises 3952 when
-    /// SNAPSHOT was disabled after the capability was cached. The failed request
-    /// still surfaces; subsequent requests degrade instead of failing repeatedly.
-    /// </summary>
-    public void NoteReadFailure(ReportDefinition definition, Exception exception)
-    {
-        if (exception is DbException dbException
-            && DbErrorClassifier.IsSnapshotIsolationUnavailable(definition.GetEffectiveDialect(), dbException))
-            _snapshotCapable.TryRemove(definition.Connection, out _);
-    }
-
-    private async Task<bool> SnapshotIsolationEnabled(
+    private async Task<bool> SqlServerSnapshotEnabled(
         DbConnection connection,
-        string connectionName,
+        ReportDefinition definition,
         CancellationToken ct)
     {
-        if (_snapshotCapable.TryGetValue(connectionName, out var capable)) return capable;
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "SELECT snapshot_isolation_state FROM sys.databases WHERE database_id = DB_ID()";
+        command.CommandTimeout = definition.CommandTimeoutSeconds;
+        logger?.LogDebug("Executing report SQL:\n{Sql}", command.CommandText);
+        return Convert.ToInt32(await command.ExecuteScalarAsync(ct) ?? 0) == 1;
+    }
 
-        try
-        {
-            // Rows of sys.databases are always visible for the caller's own database.
-            await using var command = connection.CreateCommand();
-            command.CommandText = "SELECT snapshot_isolation_state FROM sys.databases WHERE database_id = DB_ID()";
-            capable = Convert.ToInt32(
-                await command.ExecuteScalarAsync(ct) ?? 0,
-                CultureInfo.InvariantCulture) == 1;
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            logger?.LogDebug(ex, "Report connection {Connection}: snapshot capability probe failed.", connectionName);
-            capable = false;
-        }
-
-        _snapshotCapable[connectionName] = capable;
-        if (!capable)
-            logger?.LogInformation(
-                "Report connection {Connection}: SNAPSHOT isolation is not enabled, so multi-statement reads "
-                + "run without a shared snapshot. ALTER DATABASE ... SET ALLOW_SNAPSHOT_ISOLATION ON enables it.",
-                connectionName);
-        return capable;
+    private async Task ExecuteControlStatement(
+        DbConnection connection,
+        ReportDefinition definition,
+        string sql,
+        CancellationToken ct,
+        DbTransaction? transaction = null)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.CommandTimeout = definition.CommandTimeoutSeconds;
+        command.Transaction = transaction;
+        logger?.LogDebug("Executing report SQL:\n{Sql}", command.CommandText);
+        await command.ExecuteNonQueryAsync(ct);
     }
 
     /// <summary>
@@ -115,10 +127,9 @@ internal sealed class ReportConnectionManager(
     /// same trust level as the report SQL. These statements do not accept parameters, so
     /// the value is escaped before it is placed in the statement.
     /// </summary>
-    private static async Task ApplySessionTimeZone(
+    private async Task ApplySessionTimeZone(
         DbConnection connection,
         ReportDefinition definition,
-        ILogger? logger,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(definition.TimeZone)) return;
@@ -131,10 +142,6 @@ internal sealed class ReportConnectionManager(
             _ => null,
         };
         if (sql is null) return;
-
-        await using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        logger?.LogDebug("Executing report SQL:\n{Sql}", command.CommandText);
-        await command.ExecuteNonQueryAsync(ct);
+        await ExecuteControlStatement(connection, definition, sql, ct);
     }
 }

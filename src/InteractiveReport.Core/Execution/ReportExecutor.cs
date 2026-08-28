@@ -86,23 +86,13 @@ public sealed class ReportExecutor
         var stopwatch = Stopwatch.StartNew();
         var validated = await IngestDocument(definition, state, contextParams, ct);
 
-        try
+        return validated.View.Mode switch
         {
-            return validated.View.Mode switch
-            {
-                ViewMode.GroupBy => await QueryGroupStage(definition, validated, contextParams, stopwatch, ct),
-                ViewMode.Pivot => await QuerySpread(definition, validated, contextParams, stopwatch, ct),
-                ViewMode.Chart => await QueryChart(definition, validated, contextParams, stopwatch, ct),
-                _ => await QueryGrid(definition, validated, contextParams, stopwatch, ct),
-            };
-        }
-        catch (DbException ex)
-        {
-            // Self-heals a snapshot capability withdrawn mid-run (SQL Server 3952):
-            // this request still fails loudly; the next one re-probes and degrades.
-            _connections.NoteReadFailure(definition, ex);
-            throw;
-        }
+            ViewMode.GroupBy => await QueryGroupStage(definition, validated, contextParams, stopwatch, ct),
+            ViewMode.Pivot => await QuerySpread(definition, validated, contextParams, stopwatch, ct),
+            ViewMode.Chart => await QueryChart(definition, validated, contextParams, stopwatch, ct),
+            _ => await QueryGrid(definition, validated, contextParams, stopwatch, ct),
+        };
     }
 
     /// <summary>
@@ -184,21 +174,14 @@ public sealed class ReportExecutor
         var composed = QueryComposer.Compose(definition, state);
         var compiler = DialectSupport.GetCompiler(definition.GetEffectiveDialect());
 
-        // Count, aggregates, break totals, and page rows are separate statements; the
-        // consistent-read transaction (where available) makes them one snapshot, so
-        // totalRows can never disagree with the rows a concurrent commit changed.
+        // The configured scope is exact: none leaves these statements independent;
+        // snapshot makes them one provider-specific versioned view or fails loudly.
         await using var connection = await _connections.Open(definition, ct);
-        await using var transaction = await _connections.TryBeginConsistentRead(connection, definition, ct);
-        var reader = CreateReader(connection, compiler, definition, contextParams, transaction);
+        await using var scope = await _connections.BeginReadScope(connection, definition, ct);
+        var reader = CreateReader(connection, compiler, definition, contextParams, scope.Transaction);
 
-        var totalRows = await reader.ReadCount(composed.Count, ct);
-        var aggregates = composed.Aggregates is null
-            ? new Dictionary<string, IReadOnlyDictionary<string, object?>>()
-            : await reader.ReadAggregates(composed.Aggregates, state.Aggregates, ct);
-        var breakTotals = composed.BreakTotals is null
-            ? []
-            : await reader.ReadBreakTotals(composed.BreakTotals, state.Breaks, state.Aggregates, ct);
-        var executionRows = (await reader.ReadRows(composed.Page, maxRows: null, ct)).Rows;
+        var queryRows = await reader.ReadGridQueries(composed, state, ct);
+        var executionRows = queryRows.Rows;
         var breakContinues = false;
         if (state.Breaks.Count > 0
             && !state.PageAll
@@ -209,7 +192,7 @@ public sealed class ReportExecutor
             breakContinues = executionRows.Count > 0
                 && SameBreakKey(executionRows[^1], boundary, state.Breaks);
         }
-        if (transaction is not null) await transaction.CommitAsync(ct);
+        await scope.CompleteAsync(ct);
         var highlights = state.Rules.Decorations.Count > 0
             ? HighlightEvaluator.Evaluate(state.Rules.Decorations, executionRows)
             : [];
@@ -222,9 +205,9 @@ public sealed class ReportExecutor
             Columns = ReportResultColumns.From(state.SelectColumns),
             Rows = rows,
             Page = Page(state),
-            TotalRows = totalRows,
-            Aggregates = aggregates,
-            BreakTotals = breakTotals,
+            TotalRows = queryRows.TotalRows,
+            Aggregates = queryRows.Aggregates,
+            BreakTotals = queryRows.BreakTotals,
             BreakContinues = breakContinues,
             Highlights = highlights,
             Ignored = state.Ignored,
@@ -248,13 +231,12 @@ public sealed class ReportExecutor
         var compiler = DialectSupport.GetCompiler(definition.GetEffectiveDialect());
         var layer = state.View.GroupLayer!;
 
-        // Group count and page rows share one snapshot, exactly like the grid path.
         await using var connection = await _connections.Open(definition, ct);
-        await using var transaction = await _connections.TryBeginConsistentRead(connection, definition, ct);
-        var reader = CreateReader(connection, compiler, definition, contextParams, transaction);
-        var totalGroups = await reader.ReadCount(count, ct);
-        var executionRows = (await reader.ReadRows(page, maxRows: null, ct)).Rows;
-        if (transaction is not null) await transaction.CommitAsync(ct);
+        await using var scope = await _connections.BeginReadScope(connection, definition, ct);
+        var reader = CreateReader(connection, compiler, definition, contextParams, scope.Transaction);
+        var queryRows = await reader.ReadCountAndRows(count, page, ct);
+        var executionRows = queryRows.Rows;
+        await scope.CompleteAsync(ct);
         var highlights = layer.Decorations.Count > 0
             ? HighlightEvaluator.Evaluate(layer.Decorations, executionRows)
             : [];
@@ -267,7 +249,7 @@ public sealed class ReportExecutor
             Columns = ReportResultColumns.ForGroupStage(state),
             Rows = rows,
             Page = Page(state),
-            TotalRows = totalGroups,
+            TotalRows = queryRows.TotalRows,
             Highlights = highlights,
             Ignored = state.Ignored,
             ElapsedMs = stopwatch.ElapsedMilliseconds,
@@ -365,27 +347,18 @@ public sealed class ReportExecutor
         IReadOnlyList<CompiledRule<DefineColumnEffect>> totalsComputed = [];
         await using (var connection = await _connections.Open(definition, ct))
         {
-            // Source groups and the totals re-aggregation read the same snapshot, so
-            // totals rows always sum exactly what the matrix shows.
-            await using var transaction = await _connections.TryBeginConsistentRead(connection, definition, ct);
-            var reader = CreateReader(connection, compiler, definition, contextParams, transaction);
-            groups = await reader.ReadPivotGroups(
-                source,
-                view.PivotRows.Count,
-                view.PivotCols.Count,
-                valueCount,
-                ct);
-
-            if (groups.Count > MaxPivotGroups)
+            if (!view.Totals)
             {
-                throw new ReportValidationException(
-                    [new ValidationError(
-                        "pipeline[2].shape",
-                        $"spread source exceeds {MaxPivotGroups} groups — filter further or choose lower-cardinality dimensions")]);
+                var reader = CreateReader(connection, compiler, definition, contextParams);
+                groups = await ReadSpreadSource(reader);
+                EnsureSpreadGroupLimit(groups);
             }
-
-            if (view.Totals)
+            else
             {
+                await using var scope = await _connections.BeginReadScope(connection, definition, ct);
+                var reader = CreateReader(connection, compiler, definition, contextParams, scope.Transaction);
+                groups = await ReadSpreadSource(reader);
+                EnsureSpreadGroupLimit(groups);
                 totalsComputed = QueryComposer.SpreadTotalsComputed(view);
                 totalGroups = await reader.ReadPivotGroups(
                     QueryComposer.ComposeSpreadTotals(definition, state, totalsComputed),
@@ -393,9 +366,8 @@ public sealed class ReportExecutor
                     view.PivotCols.Count,
                     view.Values.Count + totalsComputed.Count,
                     ct);
+                await scope.CompleteAsync(ct);
             }
-
-            if (transaction is not null) await transaction.CommitAsync(ct);
         }
 
         var pivot = PivotTableBuilder.Build(
@@ -416,6 +388,23 @@ public sealed class ReportExecutor
             Ignored = state.Ignored,
             ElapsedMs = stopwatch.ElapsedMilliseconds,
         };
+
+        Task<List<PivotGroup>> ReadSpreadSource(ReportQueryReader reader)
+            => reader.ReadPivotGroups(
+                source,
+                view.PivotRows.Count,
+                view.PivotCols.Count,
+                valueCount,
+                ct);
+    }
+
+    private static void EnsureSpreadGroupLimit(IReadOnlyCollection<PivotGroup> groups)
+    {
+        if (groups.Count <= MaxPivotGroups) return;
+        throw new ReportValidationException(
+            [new ValidationError(
+                "pipeline[2].shape",
+                $"spread source exceeds {MaxPivotGroups} groups — filter further or choose lower-cardinality dimensions")]);
     }
 
     /// <summary>Export-only: stage-layer label overrides win over generated metadata labels.</summary>

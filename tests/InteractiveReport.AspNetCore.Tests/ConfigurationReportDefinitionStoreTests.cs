@@ -630,6 +630,33 @@ public sealed class ConfigurationReportDefinitionStoreTests
         Assert.Equal("Order #", snapshot.GetEffectiveColumnLabels()!["ORDER_ID"]);
     }
 
+    [Fact]
+    public async Task Consistency_is_opt_in_and_round_trips_the_definition_snapshot()
+    {
+        var defaultDefinition = OrdersDefinition();
+        using var defaultStore = StoreFor(defaultDefinition);
+        Assert.Equal(ReportConsistency.None, (await defaultStore.Find("orders"))!.Consistency);
+
+        var snapshotDefinition = OrdersDefinition();
+        snapshotDefinition.Consistency = ReportConsistency.Snapshot;
+        using var snapshotStore = StoreFor(snapshotDefinition);
+        Assert.Equal(ReportConsistency.Snapshot, (await snapshotStore.Find("orders"))!.Consistency);
+    }
+
+    [Fact]
+    public void Unknown_consistency_strategy_fails_definition_validation()
+    {
+        var definition = OrdersDefinition();
+        definition.Name = "orders";
+        definition.Consistency = (ReportConsistency)99;
+
+        var error = Assert.Throws<InvalidOperationException>(
+            () => ConfigurationReportDefinitionStore.Validate(definition));
+
+        Assert.Contains("unknown consistency strategy", error.Message);
+        Assert.Contains("none, snapshot", error.Message);
+    }
+
     // ---- dataSource + derived dialect ----
 
     private static ConfigurationReportDefinitionStore StoreWith(

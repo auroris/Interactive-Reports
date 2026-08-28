@@ -901,16 +901,24 @@ as a parameter.)
 
 - `IReportConnectionFactory` (host-registered): named connection → open `DbConnection`.
   Hosts should point report connections at a **read-only database principal** — the
-  engine only ever SELECTs, but the principal should make that a guarantee, not a habit.
-- One request's count, aggregate, break-total, and page reads execute inside a
-  dialect-appropriate consistent-read transaction (SQLite/Oracle serializable snapshot
-  reads, Postgres `REPEATABLE READ`, SQL Server `SNAPSHOT`), so a response never mixes
-  two database states — `totalRows` agrees with the rows and break totals even under
-  concurrent commits. Best-effort where the engine cannot promise it without cost:
-  SQL Server without `ALLOW_SNAPSHOT_ISOLATION` is probed once per connection name
-  (logged at Information with the enabling `ALTER DATABASE`) and degrades to the prior
-  per-statement reads rather than taking shared or range locks the host never asked
-  for; single-statement paths (chart, export) never open a transaction.
+  engine only reads report data, but the principal should make that a guarantee, not a
+  habit.
+- Multi-query consistency is an explicit per-definition policy. `none` is the default:
+  count, aggregate, break-total, and page statements remain independent and no
+  transaction is opened. `snapshot` requests one versioned view and is exact rather
+  than best-effort: Postgres uses `REPEATABLE READ`, SQLite a read transaction, and SQL
+  Server `SNAPSHOT` (which fails with guidance if `ALLOW_SNAPSHOT_ISOLATION` is off).
+  The engine never substitutes locking serializable behavior or silently downgrades.
+  The setting belongs only to server configuration; report state and every HTTP or
+  GraphQL response omit it. SQLite's read transaction can delay writer commits in
+  rollback-journal mode; operators selecting `snapshot` for a concurrently written
+  SQLite database should use WAL mode.
+- Oracle `snapshot` starts `SET TRANSACTION READ ONLY`, which provides transaction-level
+  read consistency without additional data locks. Grid and Group By datasets return as
+  ordered `SYS_REFCURSOR` outputs from one anonymous PL/SQL block and are consumed via
+  `DbDataReader.NextResult`; no permanent package, temporary object, or elevated DDL
+  permission is required. The scope ends with `ROLLBACK`. Single-statement paths
+  (chart and ordinary export) do not open a consistency scope.
 - Positive `page.size` values are clamped to `maxPageSize` (default 1000). The
   allow-listed value `0` means **All** and deliberately composes no page limit or
   offset for grid and Group By queries. CSV export ignores pagination altogether and
@@ -1481,7 +1489,7 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 | Group-stage filters reserved but not populated at T0 | ship HAVING filters now; forbid forever | Filtering means "which rows exist" (stage 1) in the user's model today; the layer slot makes group filters a dialog-UX task later, not a pipeline change. |
 | v1/v2 documents rejected outright | migrate v2 into v3 | Owner-confirmed: nothing external consumes documents or the wire protocol; a migrator would be dead code the day it lands. |
 | Server documents are authoritative; saved reports adopt liberally (snapshot gate retired) | keep the client-side schema-snapshot match-or-reset (the snapshot row above) | A full reversal of the snapshot row (owner, 2026-08-28): the server already judges every document on query — hard problems return a validation response the client now rolls back transactionally, soft drift degrades through `ignored[]` — so the client-side predictive gate second-guessed the authoritative judge and refused documents over recorded diffs the document might never reference. Saves stamp nothing; adoption strips the legacy `schema` key; the server-side machinery (state-model member, resolver copy, default-state stamping) was removed with it, legacy rows hydrating past the unknown member. |
-| One consistent-read transaction per multi-statement query | fold count/aggregates/breaks/rows into one statement; accept per-statement drift | Snapshot-style isolation (SQLite/Oracle serializable, Postgres repeatable read, SQL Server SNAPSHOT) gives cross-statement consistency without read locks on three of four engines. A single mega-statement would rewrite composition for a correctness property transactions give for free. SQL Server is probed and degrades (logged) when snapshot is off — shared/range locks on a host's OLTP tables are a worse default than the old drift. |
+| Explicit `none` / `snapshot` consistency policy; provider owns the mechanism | automatic best-effort transactions; one portable mega-statement | `none` is a valid no-side-effect choice. `snapshot` is either honored or rejected, never silently degraded. Oracle uses `SET TRANSACTION READ ONLY` plus an anonymous PL/SQL multi-`REF CURSOR` batch, Postgres repeatable read, SQLite a read transaction, and SQL Server SNAPSHOT only when the administrator enables it. This keeps one application contract without pretending database mechanisms or operational requirements are identical. |
 | CSV text cells get the apostrophe formula guard by default | rely on RFC 4180 quoting; sanitize only on request | Quoting does not stop Excel from evaluating `=`/`+`/`-`/`@`-leading cells, exported database text can be attacker-authored, and the writer explicitly targets Excel (BOM). Only text-sourced cells are touched — numbers and dates keep full fidelity — and `CsvCellPolicy.Verbatim` remains for non-spreadsheet consumers. |
 | Title uniqueness backed by a user-rows-only unique index | trust the endpoint pre-check; span both origins | The check-then-insert race made the documented guarantee advisory. A code-computed `TITLE_KEY` (trim + invariant casefold) compares identically on every collation; the index covers user rows only because configured documents deliberately shadow user titles and sync must never fail on that. The store translates violations into the pre-check's own 409, and `Put` now treats only provider-classified unique violations as a lost insert race — anything else propagates rather than being reported as applied. |
 | Route-literal report names (`ui`, `saved`, `whoami`, `admin`) fail fast | document the shadowing; namespace system endpoints | Literal-first routing makes such reports silently unreachable or — worse — partially reachable (`saved` answers queries but not schema). Failing configuration names the conflict; moving system endpoints would break every existing consumer for four names nobody should use. |

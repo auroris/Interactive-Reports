@@ -32,6 +32,16 @@ public class LiveDialectTests
 
     private static readonly IReadOnlyDictionary<string, object?> NoParams = new Dictionary<string, object?>();
 
+    private static async Task<bool> SqlServerSnapshotEnabled(LiveDb live)
+    {
+        await using var connection = live.CreateConnection("live");
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "SELECT snapshot_isolation_state FROM sys.databases WHERE database_id = DB_ID()";
+        return Convert.ToInt32(await command.ExecuteScalarAsync()) == 1;
+    }
+
     [SkippableTheory]
     [MemberData(nameof(Dialects))]
     public async Task Schema_discovery_reports_number_and_text_kinds(ReportDialect dialect)
@@ -421,6 +431,145 @@ public class LiveDialectTests
             Assert.Equal(10, result.TotalRows);
         else
             Assert.Equal("Pacific/Auckland", (string)result.Rows.Single()["TZ"]!);
+    }
+
+    [SkippableFact]
+    public async Task Oracle_snapshot_reads_return_all_grid_datasets_from_one_read_only_scope()
+    {
+        var live = LiveDb.For(ReportDialect.Oracle);
+        var def = live.Definition();
+        def.Consistency = ReportConsistency.Snapshot;
+
+        var result = await live.Executor.Query(def, Doc(source: new StageLayer
+        {
+            Columns = ["ORDER_ID", "CUSTOMER", "AMOUNT"],
+            Sorts = [new SortRule { Col = "ORDER_ID" }],
+            Breaks = ["CUSTOMER"],
+            Aggregates = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum }],
+        }), NoParams);
+
+        Assert.Equal(10, result.TotalRows);
+        Assert.Equal(47_200m, Convert.ToDecimal(result.Aggregates!["AMOUNT"]["sum"]));
+        Assert.NotEmpty(result.BreakTotals!);
+        Assert.Equal(10, result.Rows.Count);
+    }
+
+    [SkippableFact]
+    public async Task Sql_server_disabled_snapshot_fails_with_admin_guidance()
+    {
+        var live = LiveDb.For(ReportDialect.SqlServer);
+        Skip.If(await SqlServerSnapshotEnabled(live),
+            "SQL Server snapshot isolation is enabled; the concurrency test covers this configuration");
+
+        var definition = live.Definition();
+        definition.Consistency = ReportConsistency.Snapshot;
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => live.Executor.Query(definition, Doc(), NoParams));
+
+        Assert.Contains("ALLOW_SNAPSHOT_ISOLATION", error.Message);
+        Assert.Contains("consistency 'none'", error.Message);
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Dialects))]
+    public async Task Snapshot_scope_keeps_one_view_while_a_writer_commits(ReportDialect dialect)
+    {
+        var live = LiveDb.For(dialect);
+        var def = live.Definition();
+        def.Name = $"live-snapshot-{dialect}";
+        def.Consistency = ReportConsistency.Snapshot;
+        def.CommandTimeoutSeconds = 5;
+
+        if (dialect == ReportDialect.SqlServer)
+        {
+            Skip.IfNot(await SqlServerSnapshotEnabled(live),
+                "enable SQL Server snapshot reads with ALTER DATABASE [database] SET ALLOW_SNAPSHOT_ISOLATION ON");
+        }
+
+        try
+        {
+            var manager = new ReportConnectionManager(live);
+            var snapshot = await OpenSnapshot(manager, live, def, dialect);
+            await using var reportConnection = snapshot.Connection;
+            await using var scope = snapshot.Scope;
+            var before = snapshot.Amount;
+
+            // A read-consistency strategy must not make this writer wait for the
+            // report to finish. The short command timeout turns accidental read locks
+            // into a deterministic failure rather than a slow test.
+            await using (var writer = await Open(live))
+            await using (var update = writer.CreateCommand())
+            {
+                update.CommandText = "UPDATE IR_TEST_ORDERS SET AMOUNT = AMOUNT + 1 WHERE ORDER_ID = 1";
+                update.CommandTimeout = 5;
+                Assert.Equal(1, await update.ExecuteNonQueryAsync());
+            }
+
+            var during = await Amount(reportConnection, scope.Transaction);
+            Assert.Equal(before, during);
+            await scope.CompleteAsync(CancellationToken.None);
+
+            await using var observer = await Open(live);
+            Assert.Equal(before + 1, await Amount(observer, transaction: null));
+        }
+        finally
+        {
+            await using var cleanup = await Open(live);
+            await using var restore = cleanup.CreateCommand();
+            restore.CommandText = "UPDATE IR_TEST_ORDERS SET AMOUNT = 9000 WHERE ORDER_ID = 1";
+            restore.CommandTimeout = 5;
+            await restore.ExecuteNonQueryAsync();
+        }
+
+        static async Task<DbConnection> Open(LiveDb database)
+        {
+            var connection = database.CreateConnection("live");
+            await connection.OpenAsync();
+            return connection;
+        }
+
+        static async Task<(DbConnection Connection, ReportReadScope Scope, decimal Amount)> OpenSnapshot(
+            ReportConnectionManager manager,
+            LiveDb database,
+            ReportDefinition definition,
+            ReportDialect dialect)
+        {
+            for (var attempt = 0; ; attempt++)
+            {
+                var connection = await Open(database);
+                ReportReadScope? scope = null;
+                try
+                {
+                    scope = await manager.BeginReadScope(connection, definition, CancellationToken.None);
+                    return (connection, scope, await Amount(connection, scope.Transaction));
+                }
+                catch (OracleException ex) when (
+                    dialect == ReportDialect.Oracle && ex.Number == 1466 && attempt < 11)
+                {
+                    // The fixture has just dropped and recreated this table. Oracle's
+                    // documented recovery for an old snapshot crossing that DDL is to
+                    // roll back and re-execute; production report schemas are stable.
+                    if (scope is not null) await scope.DisposeAsync();
+                    await connection.DisposeAsync();
+                    await Task.Delay(250);
+                }
+                catch
+                {
+                    if (scope is not null) await scope.DisposeAsync();
+                    await connection.DisposeAsync();
+                    throw;
+                }
+            }
+        }
+
+        static async Task<decimal> Amount(DbConnection connection, DbTransaction? transaction)
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT AMOUNT FROM IR_TEST_ORDERS WHERE ORDER_ID = 1";
+            command.CommandTimeout = 5;
+            command.Transaction = transaction;
+            return Convert.ToDecimal(await command.ExecuteScalarAsync());
+        }
     }
 
     [SkippableTheory]

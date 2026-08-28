@@ -121,6 +121,14 @@ public sealed class ReportDefinition
     public int CommandTimeoutSeconds { get; set; } = 30;
 
     /// <summary>
+    /// Consistency policy for report paths that require more than one query. None is
+    /// the default and performs no transaction setup. Snapshot asks the provider for
+    /// a stable view and fails explicitly when that guarantee is not available; it
+    /// never silently falls back to independent statements or a different strategy.
+    /// </summary>
+    public ReportConsistency Consistency { get; set; } = ReportConsistency.None;
+
+    /// <summary>
     /// The developer's generated Default view. An administrator-controlled primary
     /// saved report titled "Default" replaces it until that report is unflagged.
     /// </summary>

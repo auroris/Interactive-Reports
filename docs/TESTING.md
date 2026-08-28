@@ -104,6 +104,20 @@ CREATE LOGIN irtest WITH PASSWORD = 'YourStrongPassword1!';
 USE irtest;
 CREATE USER irtest FOR LOGIN irtest;
 ALTER ROLE db_owner ADD MEMBER irtest;   -- test user seeds tables; prod guidance differs
+USE master;
+ALTER DATABASE irtest SET ALLOW_SNAPSHOT_ISOLATION ON;
+```
+
+The last statement enables the live snapshot-concurrency case. The test skips that one
+case, with the same command in its reason, when the database retains SQL Server's default
+`OFF` setting. `READ_COMMITTED_SNAPSHOT` is not required because the report engine
+explicitly opens a `SNAPSHOT` transaction. Enabling the option can wait for existing
+update transactions to finish; verify completion with:
+
+```sql
+SELECT snapshot_isolation_state_desc
+FROM sys.databases
+WHERE name = N'irtest';  -- must be ON, not IN_TRANSITION_TO_ON
 ```
 
 3. `TrustServerCertificate=True` in the connection string avoids TLS trust errors with

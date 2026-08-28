@@ -1,4 +1,5 @@
 using System.Data.Common;
+using InteractiveReport.Core.Composition;
 using InteractiveReport.Core.Model;
 using InteractiveReport.Core.Validation;
 using Microsoft.Extensions.Logging;
@@ -10,8 +11,9 @@ namespace InteractiveReport.Core.Execution;
 /// <summary>
 /// Compiles and materializes report queries over one prepared connection. This keeps
 /// provider command handling and ordinal-based result layouts out of the request
-/// orchestrator. When the orchestrator opened a consistent-read transaction, every
-/// command joins it (providers require the enlistment to be explicit).
+/// orchestrator. When the provider represents a configured read scope as an ADO.NET
+/// transaction, every command joins it explicitly. Oracle also uses its multi-cursor
+/// batch to transport the logical result sets in one round trip.
 /// </summary>
 internal sealed class ReportQueryReader(
     DbConnection connection,
@@ -21,7 +23,78 @@ internal sealed class ReportQueryReader(
     ILogger? logger,
     DbTransaction? transaction = null)
 {
-    public async Task<long> ReadCount(Query query, CancellationToken ct)
+    /// <summary>
+    /// Reads the grid's logical datasets. Oracle snapshot mode sends one anonymous
+    /// PL/SQL block and receives ordered REF CURSORs; every other mode uses the same
+    /// logical contract over ordinary commands.
+    /// </summary>
+    public async Task<GridQueryRows> ReadGridQueries(
+        ComposedQueries queries,
+        ValidatedState state,
+        CancellationToken ct)
+    {
+        if (!UseOracleCursorBatch)
+        {
+            var totalRows = await ReadCount(queries.Count, ct);
+            var aggregates = queries.Aggregates is null
+                ? new Dictionary<string, IReadOnlyDictionary<string, object?>>()
+                : await ReadAggregates(queries.Aggregates, state.Aggregates, ct);
+            var breakTotals = queries.BreakTotals is null
+                ? []
+                : await ReadBreakTotals(queries.BreakTotals, state.Breaks, state.Aggregates, ct);
+            var rows = (await ReadRows(queries.Page, maxRows: null, ct)).Rows;
+            return new GridQueryRows(totalRows, aggregates, breakTotals, rows);
+        }
+
+        var resultSets = new List<Query> { queries.Count };
+        if (queries.Aggregates is not null) resultSets.Add(queries.Aggregates);
+        if (queries.BreakTotals is not null) resultSets.Add(queries.BreakTotals);
+        resultSets.Add(queries.Page);
+
+        await using var command = BuildOracleBatch(resultSets);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var total = await MaterializeCount(reader, ct);
+
+        Dictionary<string, IReadOnlyDictionary<string, object?>> aggregateValues = [];
+        if (queries.Aggregates is not null)
+        {
+            await RequireNextResult(reader, ct);
+            aggregateValues = await MaterializeAggregates(reader, state.Aggregates, ct);
+        }
+
+        List<BreakTotal> breakValues = [];
+        if (queries.BreakTotals is not null)
+        {
+            await RequireNextResult(reader, ct);
+            breakValues = await MaterializeBreakTotals(reader, state.Breaks, state.Aggregates, ct);
+        }
+
+        await RequireNextResult(reader, ct);
+        var pageRows = (await MaterializeRows(reader, maxRows: null, ct)).Rows;
+        await RequireEnd(reader, ct);
+        return new GridQueryRows(total, aggregateValues, breakValues, pageRows);
+    }
+
+    public async Task<CountAndRowsQueryRows> ReadCountAndRows(
+        Query count,
+        Query rows,
+        CancellationToken ct)
+    {
+        if (!UseOracleCursorBatch)
+            return new CountAndRowsQueryRows(
+                await ReadCount(count, ct),
+                (await ReadRows(rows, maxRows: null, ct)).Rows);
+
+        await using var command = BuildOracleBatch([count, rows]);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var total = await MaterializeCount(reader, ct);
+        await RequireNextResult(reader, ct);
+        var materializedRows = (await MaterializeRows(reader, maxRows: null, ct)).Rows;
+        await RequireEnd(reader, ct);
+        return new CountAndRowsQueryRows(total, materializedRows);
+    }
+
+    private async Task<long> ReadCount(Query query, CancellationToken ct)
     {
         await using var command = Build(query);
         return Convert.ToInt64(await command.ExecuteScalarAsync(ct));
@@ -29,18 +102,9 @@ internal sealed class ReportQueryReader(
 
     public async Task<QueryRows> ReadRows(Query query, int? maxRows, CancellationToken ct)
     {
-        var rows = new List<IReadOnlyDictionary<string, object?>>();
         await using var command = Build(query);
         await using var reader = await command.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
-        {
-            var row = new Dictionary<string, object?>(reader.FieldCount, StringComparer.OrdinalIgnoreCase);
-            for (var i = 0; i < reader.FieldCount; i++)
-                row[reader.GetName(i)] = ValueAt(reader, i);
-            rows.Add(row);
-        }
-
-        return ApplyLimit(rows, maxRows);
+        return await MaterializeRows(reader, maxRows, ct);
     }
 
     /// <summary>
@@ -63,7 +127,7 @@ internal sealed class ReportQueryReader(
     }
 
     /// <summary>Reads a single-row aggregate query whose aliases are a0..aN.</summary>
-    public async Task<Dictionary<string, IReadOnlyDictionary<string, object?>>> ReadAggregates(
+    private async Task<Dictionary<string, IReadOnlyDictionary<string, object?>>> ReadAggregates(
         Query query,
         IReadOnlyList<ValidAggregate> aggregates,
         CancellationToken ct)
@@ -71,17 +135,11 @@ internal sealed class ReportQueryReader(
         await using var command = Build(query);
         await using var reader = await command.ExecuteReaderAsync(ct);
 
-        var values = new object?[aggregates.Count];
-        if (await reader.ReadAsync(ct))
-        {
-            for (var i = 0; i < values.Length; i++)
-                values[i] = ValueAt(reader, i);
-        }
-        return NestAggregates(aggregates, i => values[i]);
+        return await MaterializeAggregates(reader, aggregates, ct);
     }
 
     /// <summary>Reads break columns, __count, then a0..aN.</summary>
-    public async Task<List<BreakTotal>> ReadBreakTotals(
+    private async Task<List<BreakTotal>> ReadBreakTotals(
         Query query,
         IReadOnlyList<ColumnModel> breaks,
         IReadOnlyList<ValidAggregate> aggregates,
@@ -90,19 +148,7 @@ internal sealed class ReportQueryReader(
         await using var command = Build(query);
         await using var reader = await command.ExecuteReaderAsync(ct);
 
-        var result = new List<BreakTotal>();
-        while (await reader.ReadAsync(ct))
-        {
-            var key = new Dictionary<string, object?>(breaks.Count, StringComparer.OrdinalIgnoreCase);
-            for (var i = 0; i < breaks.Count; i++)
-                key[breaks[i].Name] = ValueAt(reader, i);
-
-            var rowCount = Convert.ToInt64(reader.GetValue(breaks.Count));
-            var offset = breaks.Count + 1;
-            var aggregateValues = NestAggregates(aggregates, i => ValueAt(reader, offset + i));
-            result.Add(new BreakTotal(key, rowCount, aggregateValues));
-        }
-        return result;
+        return await MaterializeBreakTotals(reader, breaks, aggregates, ct);
     }
 
     public async Task<List<PivotGroup>> ReadPivotGroups(
@@ -134,6 +180,92 @@ internal sealed class ReportQueryReader(
         var command = CommandBuilder.Build(connection, compiler.Compile(query), contextParams, definition, logger);
         command.Transaction = transaction;
         return command;
+    }
+
+    private DbCommand BuildOracleBatch(IReadOnlyList<Query> queries)
+    {
+        var command = CommandBuilder.BuildOracleCursorBatch(
+            connection,
+            queries.Select(compiler.Compile).ToList(),
+            contextParams,
+            definition,
+            logger);
+        command.Transaction = transaction;
+        return command;
+    }
+
+    private bool UseOracleCursorBatch
+        => definition.GetEffectiveDialect() == ReportDialect.Oracle
+            && definition.Consistency == ReportConsistency.Snapshot;
+
+    private static async Task<long> MaterializeCount(DbDataReader reader, CancellationToken ct)
+    {
+        if (!await reader.ReadAsync(ct))
+            throw new InvalidOperationException("The report count result set returned no row.");
+        return Convert.ToInt64(reader.GetValue(0));
+    }
+
+    private static async Task<QueryRows> MaterializeRows(
+        DbDataReader reader,
+        int? maxRows,
+        CancellationToken ct)
+    {
+        var rows = new List<IReadOnlyDictionary<string, object?>>();
+        while (await reader.ReadAsync(ct))
+        {
+            var row = new Dictionary<string, object?>(reader.FieldCount, StringComparer.OrdinalIgnoreCase);
+            for (var i = 0; i < reader.FieldCount; i++)
+                row[reader.GetName(i)] = ValueAt(reader, i);
+            rows.Add(row);
+        }
+        return ApplyLimit(rows, maxRows);
+    }
+
+    private static async Task<Dictionary<string, IReadOnlyDictionary<string, object?>>> MaterializeAggregates(
+        DbDataReader reader,
+        IReadOnlyList<ValidAggregate> aggregates,
+        CancellationToken ct)
+    {
+        var values = new object?[aggregates.Count];
+        if (await reader.ReadAsync(ct))
+        {
+            for (var i = 0; i < values.Length; i++)
+                values[i] = ValueAt(reader, i);
+        }
+        return NestAggregates(aggregates, i => values[i]);
+    }
+
+    private static async Task<List<BreakTotal>> MaterializeBreakTotals(
+        DbDataReader reader,
+        IReadOnlyList<ColumnModel> breaks,
+        IReadOnlyList<ValidAggregate> aggregates,
+        CancellationToken ct)
+    {
+        var result = new List<BreakTotal>();
+        while (await reader.ReadAsync(ct))
+        {
+            var key = new Dictionary<string, object?>(breaks.Count, StringComparer.OrdinalIgnoreCase);
+            for (var i = 0; i < breaks.Count; i++)
+                key[breaks[i].Name] = ValueAt(reader, i);
+
+            var rowCount = Convert.ToInt64(reader.GetValue(breaks.Count));
+            var offset = breaks.Count + 1;
+            var aggregateValues = NestAggregates(aggregates, i => ValueAt(reader, offset + i));
+            result.Add(new BreakTotal(key, rowCount, aggregateValues));
+        }
+        return result;
+    }
+
+    private static async Task RequireNextResult(DbDataReader reader, CancellationToken ct)
+    {
+        if (!await reader.NextResultAsync(ct))
+            throw new InvalidOperationException("The Oracle report batch returned fewer result sets than requested.");
+    }
+
+    private static async Task RequireEnd(DbDataReader reader, CancellationToken ct)
+    {
+        if (await reader.NextResultAsync(ct))
+            throw new InvalidOperationException("The Oracle report batch returned an unexpected result set.");
     }
 
     private static object?[] ReadKey(DbDataReader reader, int offset, int count)
@@ -181,6 +313,16 @@ internal sealed class ReportQueryReader(
 internal sealed record QueryRows(
     List<IReadOnlyDictionary<string, object?>> Rows,
     bool Truncated);
+
+internal sealed record GridQueryRows(
+    long TotalRows,
+    Dictionary<string, IReadOnlyDictionary<string, object?>> Aggregates,
+    List<BreakTotal> BreakTotals,
+    List<IReadOnlyDictionary<string, object?>> Rows);
+
+internal sealed record CountAndRowsQueryRows(
+    long TotalRows,
+    List<IReadOnlyDictionary<string, object?>> Rows);
 
 internal sealed record ChartPoint(object? Label, object? Value);
 

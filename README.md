@@ -42,6 +42,18 @@ consumers need no Node.js and no frontend build.
    `Microsoft.Data.SqlClient`). Reports are authenticated-only by default —
    `allowAnonymous` is the deliberate opt-out.
 
+   Multi-query reports default to `"consistency": "none"`: count, aggregate,
+   break-total, and page statements run independently and the engine imposes no
+   transaction policy. Set `"consistency": "snapshot"` when one database snapshot
+   is required. The provider owns the mechanism: Oracle uses a nonblocking read-only
+   transaction and returns grid datasets through one anonymous PL/SQL `REF CURSOR`
+   batch; Postgres uses `REPEATABLE READ`; SQLite uses a read transaction (WAL mode is
+   recommended where concurrent writers matter); SQL Server uses `SNAPSHOT` and fails
+   with configuration guidance when the database has not enabled
+   `ALLOW_SNAPSHOT_ISOLATION`. A requested guarantee is never silently downgraded.
+   This is server-only definition configuration: it is never report state and never
+   appears in schema or result payloads.
+
 3. Wire it up in `Program.cs` — two lines:
 
    ```csharp
