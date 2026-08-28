@@ -57,9 +57,12 @@ public sealed partial class ConfigurationReportDefinitionStore : IReportDefiniti
             // not synthesizing it unsynced, keeps a null synchronizer (internal test
             // constructor) honest.
             if (_synchronizer is null) return null;
+            // The built-in report is an administration feature. Resolving its target
+            // here produces the normal sanitized configuration error without making
+            // persistence a prerequisite for ordinary report definitions.
+            var savedConfig = _registry.ResolveStoreConfig(_options.CurrentValue.SavedReports);
             await _synchronizer.EnsureSynced(ct);
-            return SavedReportsListingDefinition.Create(
-                _registry.ResolveStoreConfig(_options.CurrentValue.SavedReports));
+            return SavedReportsListingDefinition.Create(savedConfig);
         }
 
         var reports = _options.CurrentValue.Reports;
@@ -74,7 +77,13 @@ public sealed partial class ConfigurationReportDefinitionStore : IReportDefiniti
         var snapshot = Snapshot(configuredName, def);
         Validate(snapshot);
         ResolveConnection(snapshot, _registry);
-        if (_synchronizer is not null && _savedReports is not null)
+        // No persistence target means no persistence work. In particular, installing
+        // the package and resolving a report must never create a directory or SQLite
+        // file as an incidental side effect. Saved-report endpoints still resolve the
+        // target explicitly and return an error until one is configured.
+        if (_synchronizer is not null
+            && _savedReports is not null
+            && ReportConnectionRegistry.IsStoreConfigured(_options.CurrentValue.SavedReports))
         {
             await _synchronizer.EnsureSynced(ct);
             var defaultPrimary = (await _savedReports.ListVisible(snapshot.Name, identity: null, ct: ct))
@@ -151,6 +160,31 @@ public sealed partial class ConfigurationReportDefinitionStore : IReportDefiniti
         if (def.Authorization is { AllowAnonymous: true, AdministratorsOnly: true })
             throw new InvalidOperationException(
                 $"Report '{def.Name}': authorization cannot be both allowAnonymous and administratorsOnly.");
+        if (def.Authorization is { AllowAnonymous: true, Restricted: true })
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': authorization cannot be both allowAnonymous and restricted.");
+        if (def.Authorization is { AdministratorsOnly: true, Restricted: true })
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': authorization cannot be both administratorsOnly and restricted.");
+        if (def.Authorization is { Users: null })
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': authorization users must be an array, not null.");
+        if (def.Authorization is { Users.Count: > 0 } reportAuthorization)
+        {
+            if (reportAuthorization.AllowAnonymous)
+                throw new InvalidOperationException(
+                    $"Report '{def.Name}': authorization users cannot be combined with allowAnonymous.");
+            if (reportAuthorization.AdministratorsOnly)
+                throw new InvalidOperationException(
+                    $"Report '{def.Name}': authorization users cannot be combined with administratorsOnly.");
+            if (reportAuthorization.Users.Any(string.IsNullOrWhiteSpace))
+                throw new InvalidOperationException(
+                    $"Report '{def.Name}': authorization users must be non-empty identity values.");
+            if (reportAuthorization.Users.Select(user => user.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase).Count() != reportAuthorization.Users.Count)
+                throw new InvalidOperationException(
+                    $"Report '{def.Name}': authorization users contain duplicate identity values.");
+        }
         if (string.IsNullOrWhiteSpace(def.Sql))
             throw new InvalidOperationException($"Report '{def.Name}': sql is required.");
 

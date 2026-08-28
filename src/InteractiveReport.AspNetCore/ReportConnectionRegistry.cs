@@ -113,15 +113,42 @@ internal sealed class ReportConnectionRegistry : IReportConnectionFactory
         if (hasDataSource)
         {
             var (name, dialect) = ResolveDataSource("SavedReports", saved.DataSource!, saved.Provider);
-            return new SavedReportStoreConfig(name, dialect, saved.AutoCreate, saved.TableName);
+            return new SavedReportStoreConfig(
+                name,
+                dialect,
+                saved.AutoCreate,
+                ResolveTableName(saved, saved.TableName));
         }
         if (hasConnection)
-            return new SavedReportStoreConfig(saved.Connection!, ResolveDialect(saved.Connection!), saved.AutoCreate, saved.TableName);
-        return new SavedReportStoreConfig(
-            ServiceCollectionExtensions.DefaultSavedReportsConnection,
-            ReportDialect.Sqlite,
-            saved.AutoCreate,
-            saved.TableName);
+        {
+            if (!string.IsNullOrWhiteSpace(saved.Provider))
+                throw new InvalidOperationException(
+                    "SavedReports: provider applies to dataSource; remove it when using connection.");
+            return new SavedReportStoreConfig(
+                saved.Connection!,
+                ResolveDialect(saved.Connection!),
+                saved.AutoCreate,
+                ResolveTableName(saved, saved.TableName));
+        }
+        if (!string.IsNullOrWhiteSpace(saved.Provider))
+            throw new InvalidOperationException(
+                "SavedReports: provider applies to dataSource; configure dataSource or remove provider.");
+        throw new InvalidOperationException(
+            "Saved-report storage is not configured. Set InteractiveReport:SavedReports:DataSource "
+            + "to a ConnectionStrings name or literal connection string, or set "
+            + "InteractiveReport:SavedReports:Connection to a database registered with AddConnection.");
+    }
+
+    internal static bool IsStoreConfigured(SavedReportsOptions saved)
+        => !string.IsNullOrWhiteSpace(saved.DataSource)
+            || !string.IsNullOrWhiteSpace(saved.Connection);
+
+    internal static string ResolveTableName(SavedReportsOptions saved, string baseName)
+    {
+        if (string.IsNullOrWhiteSpace(baseName))
+            throw new InvalidOperationException("Saved-report table base names must not be empty.");
+        var prefix = saved.TablePrefix ?? "";
+        return SavedReportStoreConfig.EnsureValidTableName(prefix + baseName);
     }
 
     private string ResolveProviderToken(string owner, string? provider, string? connectionStringName)

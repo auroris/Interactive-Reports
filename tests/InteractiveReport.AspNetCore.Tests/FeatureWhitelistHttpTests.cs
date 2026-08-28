@@ -65,6 +65,7 @@ public sealed class FeatureWhitelistHttpTests : IAsyncLifetime
             // Mixed casing on purpose: tokens are case-insensitive in config.
             ["InteractiveReport:Reports:locked:Features:0"] = "SEARCH",
             ["InteractiveReport:Reports:locked:Features:1"] = "sort",
+            ["InteractiveReport:SavedReports:Connection"] = "FeatureData",
         });
 
         builder.Services

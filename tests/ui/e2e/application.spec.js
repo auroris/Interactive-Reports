@@ -627,6 +627,41 @@ test("admin uploads a validated report document and downloads its canonical file
     }
 });
 
+test("admin adds and removes a database administrator grant", async ({ page, request }) => {
+    const identity = `authorization-${randomUUID()}`;
+    let granted = false;
+    try {
+        await page.goto("/admin.html");
+        await page.getByRole("button", { name: "Authorization…", exact: true }).click();
+        const dialog = page.getByRole("dialog", { name: "Authorization", exact: true });
+        await expect(dialog).toContainText("Administration access");
+
+        await dialog.getByLabel("Administrator", { exact: true }).fill(identity);
+        const grantResponse = page.waitForResponse(response =>
+            response.request().method() === "POST"
+            && new URL(response.url()).pathname === "/api/reports/admin/authorization/administrators");
+        await dialog.locator(".ir-auth-add").first()
+            .getByRole("button", { name: "Add", exact: true }).click();
+        expect((await grantResponse).status()).toBe(204);
+        granted = true;
+        await expect(dialog.getByText(identity, { exact: true })).toBeVisible();
+
+        const revokeResponse = page.waitForResponse(response =>
+            response.request().method() === "DELETE"
+            && new URL(response.url()).pathname === "/api/reports/admin/authorization/administrators");
+        await dialog.getByRole("button", { name: `Remove ${identity}`, exact: true }).click();
+        expect((await revokeResponse).status()).toBe(204);
+        granted = false;
+        await expect(dialog.getByText(identity, { exact: true })).toBeHidden();
+    } finally {
+        if (granted) {
+            await request.delete("/api/reports/admin/authorization/administrators", {
+                data: { identity },
+            });
+        }
+    }
+});
+
 test("a feature-whitelisted report pares the UI down and the server enforces the rest", async ({ page, request }) => {
     await openWorkbench(page);
     await runAndWaitForQuery(page, () =>

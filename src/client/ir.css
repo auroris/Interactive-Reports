@@ -469,6 +469,17 @@ dialog.ir-dialog::backdrop {
 }
 .ir-dialog-note { color: var(--ir-text-muted); font-size: 12px; margin: 10px 0 0; }
 .ir-confirm-text { margin: 0; }
+.ir-auth-section + .ir-auth-section { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--ir-border-light); }
+.ir-auth-section h3, .ir-auth-section h4 { margin: 0 0 8px; }
+.ir-auth-section h4 { margin-top: 14px; font-size: 13px; }
+.ir-auth-list { margin: 10px 0; border: 1px solid var(--ir-border-light); border-radius: var(--ir-radius); }
+.ir-auth-row { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 4px 8px; border-bottom: 1px solid var(--ir-border-light); font-size: 12.5px; }
+.ir-auth-row:last-child { border-bottom: 0; }
+.ir-auth-row > :first-child { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.ir-auth-source { color: var(--ir-text-muted); font-size: 11px; }
+.ir-auth-add { display: flex; align-items: flex-end; gap: 8px; margin-top: 10px; }
+.ir-auth-add .ir-field { margin-bottom: 0; }
+.ir-auth-report { margin-top: 8px; }
 
 @media (max-width: 640px) {
     .ir-dialog {

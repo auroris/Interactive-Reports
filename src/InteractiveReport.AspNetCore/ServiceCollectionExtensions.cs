@@ -1,24 +1,20 @@
 using System.Data.Common;
+using InteractiveReport.Core.Authorization;
 using InteractiveReport.Core.Definitions;
 using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Model;
 using InteractiveReport.Core.SavedReports;
 using InteractiveReport.Core.Schema;
-using Microsoft.Data.Sqlite;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 
 namespace InteractiveReport.AspNetCore;
 
 public static class ServiceCollectionExtensions
 {
-    /// <summary>Sentinel connection name for the zero-config local SQLite saved-report store.</summary>
-    internal const string DefaultSavedReportsConnection = "__ir:saved-reports-default";
-
     public static InteractiveReportBuilder AddInteractiveReports(
         this IServiceCollection services,
         IConfiguration configuration,
@@ -28,18 +24,6 @@ public static class ServiceCollectionExtensions
 
         var builder = new InteractiveReportBuilder(services);
 
-        // Zero-config default for saved reports: a local SQLite file under App_Data.
-        // The dialect is declared, never sniffed — the factory has a directory-creating
-        // side effect that dialect detection must not trigger.
-        builder.Connections[DefaultSavedReportsConnection] = sp =>
-        {
-            var env = sp.GetRequiredService<IHostEnvironment>();
-            var dir = Path.Combine(env.ContentRootPath, "App_Data");
-            Directory.CreateDirectory(dir);
-            return new SqliteConnection($"Data Source={Path.Combine(dir, "interactivereport.saved.db")}");
-        };
-        builder.ConnectionDialects[DefaultSavedReportsConnection] = ReportDialect.Sqlite;
-
         services.AddSingleton<SchemaCache>();
         services.AddSingleton<ConfiguredReportDocumentStore>();
         services.AddSingleton(sp => new ReportConnectionRegistry(
@@ -48,6 +32,21 @@ public static class ServiceCollectionExtensions
             sp,
             sp.GetRequiredService<IConfiguration>()));
         services.AddSingleton<IReportConnectionFactory>(sp => sp.GetRequiredService<ReportConnectionRegistry>());
+        services.AddSingleton<IReportAuthorizationStore>(sp => new SqlReportAuthorizationStore(
+            () =>
+            {
+                var options = sp.GetRequiredService<IOptionsMonitor<InteractiveReportOptions>>().CurrentValue;
+                var saved = sp.GetRequiredService<ReportConnectionRegistry>()
+                    .ResolveStoreConfig(options.SavedReports);
+                return new ReportAuthorizationStoreConfig(
+                    saved.ConnectionName,
+                    saved.Dialect,
+                    saved.AutoCreate,
+                    ReportConnectionRegistry.ResolveTableName(
+                        options.SavedReports,
+                        options.Authorization.TableName));
+            },
+            sp.GetRequiredService<IReportConnectionFactory>()));
         services.AddSingleton<IReportDefinitionStore>(sp => new ConfigurationReportDefinitionStore(
             sp.GetRequiredService<IOptionsMonitor<InteractiveReportOptions>>(),
             sp.GetRequiredService<SchemaCache>(),
@@ -118,6 +117,18 @@ public sealed class InteractiveReportBuilder
         where TResolver : class, IContextParameterResolver
     {
         _services.Replace(ServiceDescriptor.Singleton<IContextParameterResolver, TResolver>());
+        return this;
+    }
+
+    /// <summary>
+    /// Registers the application user directory used by administration account
+    /// selectors. The provider may be scoped and may return no entries to retain
+    /// free-form identity entry. It supplies choices only and does not authorize them.
+    /// </summary>
+    public InteractiveReportBuilder UseUserProvider<TProvider>()
+        where TProvider : class, IInteractiveReportUserProvider
+    {
+        _services.Replace(ServiceDescriptor.Scoped<IInteractiveReportUserProvider, TProvider>());
         return this;
     }
 

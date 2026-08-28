@@ -252,11 +252,24 @@ public sealed class ReportAuthorization
     public bool AllowAnonymous { get; set; }
 
     /// <summary>
-    /// Restricts the report to identities in InteractiveReport:Administrators —
+    /// Restricts this report to explicitly granted identities. Configuration grants
+    /// in <see cref="Users"/> and database grants made in the administration center
+    /// are additive. A database restriction marker can also enable this gate.
+    /// </summary>
+    public bool Restricted { get; set; }
+
+    /// <summary>
+    /// Canonical identity values granted access when the report is restricted. These
+    /// source-controlled grants are additive with administration-center grants.
+    /// </summary>
+    public List<string> Users { get; set; } = [];
+
+    /// <summary>
+    /// Restricts the report to configured or database administrators;
     /// non-administrators receive 404, matching the saved-report admin surface. If
-    /// that list is empty, the application operation authorizer must affirmatively
-    /// grant each request. A policy may stack on top. Contradicts AllowAnonymous
-    /// (rejected at load).
+    /// both administrator stores are empty, the application operation authorizer must
+    /// affirmatively grant each request. A policy may stack on top. Contradicts
+    /// AllowAnonymous and named-user restriction (rejected at load).
     /// </summary>
     public bool AdministratorsOnly { get; set; }
 }

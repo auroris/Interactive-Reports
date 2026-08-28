@@ -27,8 +27,8 @@ internal static class PersistenceHttpScenario
     private const string DataConnectionName = "PersistenceData";
     private const string Owner = "persistence-test-user";
 
-    public static string DefaultStorePath(string contentRoot)
-        => Path.Combine(contentRoot, "App_Data", "interactivereport.saved.db");
+    public static string ExplicitFileStorePath(string contentRoot)
+        => Path.Combine(contentRoot, "explicit-saved-reports.db");
 
     public static async Task Run(
         ReportDialect dialect,
@@ -42,7 +42,7 @@ internal static class PersistenceHttpScenario
         Assert.False(await TableExists(createDataConnection, dialect, defaultStoreTable));
         Assert.False(await TableExists(createDataConnection, dialect, explicitStoreTable));
 
-        var defaultSave = await SaveRestartAndLoad(
+        var fileSave = await SaveRestartAndLoad(
             dialect,
             createDataConnection,
             reportSql,
@@ -52,7 +52,7 @@ internal static class PersistenceHttpScenario
             defaultStoreTable,
             idThatMustBeAbsent: null);
 
-        Assert.True(File.Exists(DefaultStorePath(contentRoot)));
+        Assert.True(File.Exists(ExplicitFileStorePath(contentRoot)));
         Assert.False(await TableExists(createDataConnection, dialect, defaultStoreTable));
         Assert.False(await TableExists(createDataConnection, dialect, explicitStoreTable));
 
@@ -64,7 +64,7 @@ internal static class PersistenceHttpScenario
             contentRoot,
             savedReportsConnection: DataConnectionName,
             explicitStoreTable,
-            idThatMustBeAbsent: defaultSave.Id);
+            idThatMustBeAbsent: fileSave.Id);
 
         Assert.True(await TableExists(createDataConnection, dialect, explicitStoreTable));
     }
@@ -216,13 +216,16 @@ internal static class PersistenceHttpScenario
             [$"InteractiveReport:Reports:{ReportName}:Sql"] = reportSql,
             [$"InteractiveReport:Reports:{ReportName}:Authorization:AllowAnonymous"] = "true",
         };
-        if (!string.Equals(savedReportsTable, "IR_SAVED_REPORTS", StringComparison.Ordinal))
-            settings["InteractiveReport:SavedReports:TableName"] = savedReportsTable;
-        if (savedReportsConnection is not null)
+        settings["InteractiveReport:SavedReports:TableName"] = savedReportsTable;
+        if (savedReportsConnection is null)
+        {
+            settings["InteractiveReport:SavedReports:DataSource"] =
+                $"Data Source={ExplicitFileStorePath(contentRoot)};Pooling=False";
+            settings["InteractiveReport:SavedReports:Provider"] = "sqlite";
+        }
+        else
         {
             settings["InteractiveReport:SavedReports:Connection"] = savedReportsConnection;
-            settings["InteractiveReport:SavedReports:Dialect"] = dialect.ToString();
-            settings["InteractiveReport:SavedReports:TableName"] = savedReportsTable;
         }
         builder.Configuration.AddInMemoryCollection(settings);
 

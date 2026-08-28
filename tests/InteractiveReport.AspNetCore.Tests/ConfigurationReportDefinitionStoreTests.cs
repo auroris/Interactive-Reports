@@ -340,13 +340,55 @@ public sealed class ConfigurationReportDefinitionStoreTests
     }
 
     [Fact]
+    public void Named_user_authorization_rejects_conflicting_or_ambiguous_configuration()
+    {
+        static ReportDefinition Definition(ReportAuthorization authorization) => new()
+        {
+            Name = "orders",
+            Connection = "db",
+            Dialect = ReportDialect.Sqlite,
+            Sql = "select 1",
+            Authorization = authorization,
+        };
+
+        ConfigurationReportDefinitionStore.Validate(Definition(new ReportAuthorization
+        {
+            Restricted = true,
+            Users = ["alice", "bob"],
+        }));
+
+        var anonymous = Assert.Throws<InvalidOperationException>(() =>
+            ConfigurationReportDefinitionStore.Validate(Definition(new ReportAuthorization
+            {
+                AllowAnonymous = true,
+                Restricted = true,
+            })));
+        Assert.Contains("allowAnonymous and restricted", anonymous.Message);
+
+        var administrators = Assert.Throws<InvalidOperationException>(() =>
+            ConfigurationReportDefinitionStore.Validate(Definition(new ReportAuthorization
+            {
+                AdministratorsOnly = true,
+                Users = ["alice"],
+            })));
+        Assert.Contains("users cannot be combined with administratorsOnly", administrators.Message);
+
+        var duplicates = Assert.Throws<InvalidOperationException>(() =>
+            ConfigurationReportDefinitionStore.Validate(Definition(new ReportAuthorization
+            {
+                Users = ["alice", " ALICE "],
+            })));
+        Assert.Contains("duplicate identity", duplicates.Message);
+    }
+
+    [Fact]
     public void Builtin_definition_synthesizes_from_the_resolved_store_config()
     {
         var definition = SavedReportsListingDefinition.Create(new SavedReportStoreConfig(
-            ServiceCollectionExtensions.DefaultSavedReportsConnection, ReportDialect.Sqlite));
+            "ReportsDb", ReportDialect.Sqlite));
 
         Assert.Equal("__saved-reports", definition.Name);
-        Assert.Equal(ServiceCollectionExtensions.DefaultSavedReportsConnection, definition.Connection);
+        Assert.Equal("ReportsDb", definition.Connection);
         Assert.Equal(ReportDialect.Sqlite, definition.Dialect);
         Assert.True(definition.Authorization!.AdministratorsOnly);
         Assert.False(definition.Authorization.AllowAnonymous);

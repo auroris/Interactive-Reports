@@ -14,9 +14,11 @@ elision), validator rules, SQL-safety corpus, saved-report store, CSV writer, an
 end-to-end engine passes. The ASP.NET suite also starts a real local server over a clean
 file-backed SQLite report database. It obtains the synthetic default report document
 from the schema endpoint, queries and saves that exact document under a random title,
-restarts the server, and loads it again. It first proves that zero-configuration saved
-reports use a separate `App_Data/interactivereport.saved.db`, then points saved-report
-persistence at the report database and repeats the restart/load check.
+restarts the server, and loads it again. It exercises an explicitly configured SQLite
+connection string first, then points saved-report persistence at a registered report
+database and repeats the restart/load check. A separate HTTP test proves that a
+report-only host creates no persistence directory, database, or table and that direct
+persistence and administration requests fail cleanly until storage is configured.
 
 `npm test` builds the packaged client and runs the fast DOM-level unit suite with
 Node.js and happy-dom.

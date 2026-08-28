@@ -10,6 +10,13 @@ Object.assign(globalThis, {
     ShadowRoot: window.ShadowRoot,
     customElements: window.customElements,
     Node: window.Node,
+    Event: window.Event,
+    Option: function Option(text = "", value = "") {
+        const option = window.document.createElement("option");
+        option.textContent = text;
+        option.value = value;
+        return option;
+    },
     CustomEvent: window.CustomEvent,
     requestAnimationFrame: callback => setTimeout(callback, 0),
 });
@@ -19,16 +26,41 @@ Object.assign(globalThis, {
 let whoami = null;
 let whoamiStatus = 404;
 let whoamiCalls = 0;
+let users = null;
+let usersStatus = 404;
+let usersCalls = 0;
+let authorization = null;
+let authorizationCalls = [];
 const json = (value, status = 200) => new Response(JSON.stringify(value), {
     status,
     headers: { "Content-Type": "application/json" },
 });
-globalThis.fetch = async url => {
+globalThis.fetch = async (url, options = {}) => {
+    const method = options.method ?? "GET";
     if (String(url).endsWith("/whoami")) {
         whoamiCalls++;
         return whoami === null
             ? new Response(null, { status: whoamiStatus })
             : json(whoami, whoamiStatus);
+    }
+    if (String(url).endsWith("/admin/users")) {
+        usersCalls++;
+        return users === null
+            ? new Response(null, { status: usersStatus })
+            : json(users, usersStatus);
+    }
+    if (String(url).endsWith("/admin/authorization") && method === "GET") {
+        authorizationCalls.push({ url: String(url), method });
+        return authorization === null
+            ? new Response(null, { status: 404 })
+            : json(authorization);
+    }
+    if (String(url).includes("/admin/authorization/") && method !== "GET") {
+        authorizationCalls.push({
+            url: String(url), method,
+            body: options.body === undefined ? null : JSON.parse(options.body),
+        });
+        return new Response(null, { status: 204 });
     }
     return new Response(null, { status: 404 });
 };
@@ -42,12 +74,137 @@ const settle = async condition => {
 
 async function mount() {
     whoamiCalls = 0;
+    usersCalls = 0;
+    authorizationCalls = [];
     const admin = document.createElement("interactive-report-admin");
     admin.setAttribute("api-base", "/admin-api");
     document.body.append(admin);
     await settle(() => admin.shadowRoot?.querySelector(".ir-banner"));
     return admin;
 }
+
+test("authorization editor distinguishes configured and database grants", async () => {
+    whoami = {
+        authenticated: true,
+        identity: "admin-user",
+        isAdministrator: true,
+        administratorListConfigured: true,
+        applicationAuthorizationConfigured: false,
+    };
+    whoamiStatus = 200;
+    users = [
+        { display: "Ada Lovelace", value: "ada-id" },
+        { display: "Grace Hopper", value: "grace-id" },
+    ];
+    usersStatus = 200;
+    authorization = {
+        configuredAdministrators: ["ada-id"],
+        databaseAdministrators: ["grace-id"],
+        reports: [
+            {
+                name: "configured", title: "Configured report", restricted: true,
+                configuredRestricted: true, databaseRestricted: false, canRestrict: true,
+                configuredUsers: ["ada-id"], databaseUsers: ["grace-id"],
+            },
+            {
+                name: "database", title: "Database report", restricted: false,
+                configuredRestricted: false, databaseRestricted: false, canRestrict: true,
+                configuredUsers: [], databaseUsers: [],
+            },
+        ],
+    };
+    const admin = await mount();
+
+    await admin.authorizationDialog();
+
+    const dialog = admin.shadowRoot.querySelector(".ir-dialog");
+    assert.ok(dialog);
+    assert.match(dialog.textContent, /Ada Lovelace \(ada-id\)/);
+    assert.match(dialog.textContent, /Grace Hopper \(grace-id\)/);
+    assert.match(dialog.textContent, /appsettings\.json/);
+    assert.match(dialog.textContent, /administration center/);
+    let restriction = dialog.querySelector('.ir-auth-report input[type="checkbox"]');
+    assert.equal(restriction.checked, true);
+    assert.equal(restriction.disabled, true);
+
+    const reportSelect = dialog.querySelector('select[aria-label="Report"]');
+    reportSelect.value = "database";
+    reportSelect.dispatchEvent(new Event("change"));
+    restriction = dialog.querySelector('.ir-auth-report input[type="checkbox"]');
+    assert.equal(restriction.checked, false);
+    assert.equal(restriction.disabled, false);
+
+    restriction.checked = true;
+    restriction.dispatchEvent(new Event("change"));
+    await settle(() => authorizationCalls.some(call => call.method === "PUT"));
+    const update = authorizationCalls.find(call => call.method === "PUT");
+    assert.match(update.url, /\/admin\/authorization\/reports\/database$/);
+    assert.deepEqual(update.body, { restricted: true });
+
+    admin.remove();
+    authorization = null;
+    users = null;
+    usersStatus = 404;
+});
+
+test("owner reassignment uses the application user list as display/value options", async () => {
+    whoami = {
+        authenticated: true,
+        identity: "admin-user",
+        isAdministrator: true,
+        administratorListConfigured: true,
+        applicationAuthorizationConfigured: false,
+    };
+    whoamiStatus = 200;
+    users = [
+        { display: "Ada Lovelace", value: "ada-id" },
+        { display: "Grace Hopper", value: "grace-id" },
+    ];
+    usersStatus = 200;
+    const admin = await mount();
+
+    await admin.reassign("saved-1", {
+        TITLE: "Regional", REPORT_NAME: "orders", OWNER: "grace-id",
+    });
+
+    const select = admin.shadowRoot.querySelector(".ir-dialog select");
+    assert.ok(select);
+    assert.deepEqual([...select.options].map(option => [option.textContent, option.value]), [
+        ["Ada Lovelace", "ada-id"],
+        ["Grace Hopper", "grace-id"],
+    ]);
+    assert.equal(select.value, "grace-id");
+    assert.equal(usersCalls, 1);
+
+    admin.remove();
+});
+
+test("an empty or absent user list retains free-form owner entry", async () => {
+    whoami = {
+        authenticated: true,
+        identity: "admin-user",
+        isAdministrator: true,
+        administratorListConfigured: true,
+        applicationAuthorizationConfigured: false,
+    };
+    whoamiStatus = 200;
+    users = [];
+    usersStatus = 200;
+    const admin = await mount();
+
+    await admin.reassign("saved-1", {
+        TITLE: "Regional", REPORT_NAME: "orders", OWNER: "existing-id",
+    });
+
+    const input = admin.shadowRoot.querySelector('.ir-dialog input[type="text"]');
+    assert.ok(input);
+    assert.equal(input.value, "existing-id");
+    assert.equal(admin.shadowRoot.querySelector(".ir-dialog select"), null);
+
+    admin.remove();
+    users = null;
+    usersStatus = 404;
+});
 
 test("a disabled whoami endpoint yields packaged guidance instead of a bare listing error", async () => {
     whoami = null;

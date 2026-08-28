@@ -34,7 +34,10 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
 
     private static InteractiveReportOptions OptionsWith(params string[] documentFiles)
     {
-        var options = new InteractiveReportOptions();
+        var options = new InteractiveReportOptions
+        {
+            SavedReports = new SavedReportsOptions { Connection = "recording" },
+        };
         options.Reports["orders"] = new ReportDefinition { DocumentFiles = [.. documentFiles] };
         return options;
     }
@@ -45,11 +48,12 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
         var monitor = new MonitorStub(OptionsWith(documentFiles));
         var documents = new ConfiguredReportDocumentStore(monitor, new EnvStub(_root));
         var store = new RecordingStore();
-        // Default SavedReports options resolve to the sentinel store target, so the
-        // registry never needs a real connection here.
         var registry = new ReportConnectionRegistry(
             new Dictionary<string, Func<IServiceProvider, System.Data.Common.DbConnection>>(StringComparer.OrdinalIgnoreCase),
-            new Dictionary<string, ReportDialect>(StringComparer.OrdinalIgnoreCase),
+            new Dictionary<string, ReportDialect>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["recording"] = ReportDialect.Sqlite,
+            },
             EmptyServices.Instance,
             new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build());
         return (new ConfiguredReportDocumentSynchronizer(documents, store, monitor, registry), store, monitor);

@@ -64,17 +64,38 @@ consumers need no Node.js and no frontend build.
 
 4. Done — browse **`/reports/orders/view`**. The packaged page hosts the report;
    embedding `<interactive-report>` in your own pages (below) remains the primary
-   path for real applications. The saved-report administration page is at
-   `/reports/admin`; to use it, list administrator identities in
-   `InteractiveReport:Administrators` and set `InteractiveReport:WhoamiEnabled` so
-   the page can show precise identity guidance. Configuration mistakes fail at
-   startup with an error naming the fix; avoid the report names `ui`, `saved`,
+   path for real applications. Saved reports and administration require the explicit
+   storage configuration below. The administration page is at `/reports/admin`;
+   bootstrap it by listing at least one administrator identity in
+   `InteractiveReport:Administrators`. Administrators can then add database-backed
+   administrators in the page's **Authorization…** editor. Set
+   `InteractiveReport:WhoamiEnabled` so the page can show precise identity guidance.
+   Report-definition configuration mistakes fail at startup with an error naming the
+   fix; saved-storage errors are deferred until that optional subsystem is used. Avoid
+   the report names `ui`, `saved`,
    `admin`, and `whoami`, which collide with the endpoint namespace. The packaged
    pages can be turned off with `InteractiveReport:ViewerPagesEnabled: false`.
 
-Saved reports are stored zero-config in a local SQLite database under
-`App_Data/interactivereport.saved.db`; point `InteractiveReport:SavedReports` at a
-`dataSource` (same two forms) to keep them in your own database instead.
+The package performs no persistence setup unless you request it. A report-only
+installation does not create `App_Data`, a SQLite file, or database tables. To enable
+saved reports and administration, configure their shared storage explicitly:
+
+```json
+"InteractiveReport": {
+  "SavedReports": {
+    "dataSource": "MainDb",
+    "tablePrefix": "MYAPP_"
+  }
+}
+```
+
+`dataSource` accepts the same ConnectionStrings name or literal connection string as a
+report and uses the same optional `provider` setting. Alternatively, set `connection`
+to a database registered with `AddConnection`. `tablePrefix` is optional; the example
+creates `MYAPP_IR_SAVED_REPORTS` and `MYAPP_IR_REPORT_AUTHORIZATION`. Without
+`dataSource` or `connection`, ordinary reports still run, while saved-report and
+administration operations return an error and perform no filesystem or database
+writes. A configured but unreachable target also returns a sanitized server error.
 
 ### Umbraco 13
 
@@ -103,7 +124,6 @@ the host's content root unless absolute:
 ```json
 "orders": {
   "connection": "MainDb",
-  "dialect": "SqlServer",
   "sql": "SELECT ORDER_ID, CUSTOMER, CUSTOMER_URL, THUMBNAIL_URL, AMOUNT FROM ORDERS",
   "styleSheet": "/css/orders-report.css",
   "documentFiles": [
@@ -140,7 +160,7 @@ normal versioned state document:
 }
 ```
 
-All files appear as global saved reports and are synced into the saved-report store
+With saved-report storage configured, all files appear as global saved reports and are synced into the saved-report store
 whenever they change, as rows marked with a configured origin. A file's `primary`
 value seeds the row when it is first synchronized; after that an administrator can
 flag or unflag it without editing the file. File content remains read-only, although
@@ -149,8 +169,11 @@ takes precedence over an existing database report with the same title, and new t
 collisions are rejected. Ensure the host project copies these files to its build and
 publish output; the Workbench project shows one way to do that.
 
-Auto-created stores add `IS_PRIMARY` to an existing current-shape table in place.
-Hosts with `savedReports.autoCreate: false` must add the non-null 0/1 column themselves.
+Auto-created stores add `IS_PRIMARY` to an existing current-shape table in place and
+create the adjacent `IR_REPORT_AUTHORIZATION` table. `savedReports.tablePrefix` is
+prepended to both base table names. Hosts with
+`savedReports.autoCreate: false` must manage both tables and add the non-null 0/1
+saved-report column themselves.
 
 Primary is an administrator-controlled publication flag. Every primary report is
 visible to anyone who can access the underlying dataset. The generated report named
@@ -166,10 +189,89 @@ Make primary/Unflag, Reassign, State, Download, Delete) are action-renderer cell
 configured rows permit the primary action while their file-backed content remains
 read-only. Report names beginning with `__` are reserved. A definition
 may also declare `"authorization": { "administratorsOnly": true }` to restrict any
-report to `InteractiveReport:Administrators` the same way. Because the admin element
+report to configured or database administrators the same way. Because the admin element
 nests the report inside its own shadow root, theme tokens set on
 `<interactive-report-admin>` do not reach the embedded listing; it renders with the
 packaged default theme.
+
+Applications may supply the administration screen with an Oracle-style user list of
+values. Each entry has display text and a canonical string value; the value is what
+Interactive Reports stores as the saved-report owner and should use the same identity
+form shown by `whoami`. Implement the optional directory and register it through the
+builder:
+
+```csharp
+public sealed class ReportUsers : IInteractiveReportUserProvider
+{
+    public ValueTask<IReadOnlyCollection<InteractiveReportUser>?> GetUsers(
+        ClaimsPrincipal administrator,
+        CancellationToken cancellationToken = default)
+        => ValueTask.FromResult<IReadOnlyCollection<InteractiveReportUser>?>(
+        [
+            new("Ada Lovelace", "ada-id"),
+            new("Grace Hopper", "grace-id"),
+        ]);
+}
+
+builder.Services
+    .AddInteractiveReports(builder.Configuration)
+    .UseUserProvider<ReportUsers>();
+```
+
+The provider can be scoped and receives the authenticated administrator. Its order is
+preserved. Returning `null` or an empty collection, or not registering a provider,
+keeps the Reassign Owner dialog as free-form text. The protected
+`GET {prefix}/admin/users` endpoint invokes the provider only after the caller passes
+the administration gate; it reuses the `ListAllSavedReports` application-authorization
+action. The directory supplies choices, not authority: it does not change `whoami`,
+administrator matching, or operation authorization. The Authorization editor reuses
+these stable values when it creates real grants.
+
+### Built-in administrator and report authorization
+
+Database authorization is stored in `IR_REPORT_AUTHORIZATION` beside the saved-report
+table. It uses the required saved-report target and optional shared prefix. Change its
+base table name only when an operator-managed schema requires another identifier:
+
+```json
+{
+  "InteractiveReport": {
+    "Administrators": [ "bootstrap-admin-id" ],
+    "SavedReports": {
+      "dataSource": "MainDb",
+      "tablePrefix": "MYAPP_"
+    },
+    "Authorization": {
+      "TableName": "IR_REPORT_AUTHORIZATION"
+    },
+    "Reports": {
+      "orders": {
+        "dataSource": "MainDb",
+        "sql": "SELECT * FROM ORDERS",
+        "authorization": {
+          "restricted": true,
+          "users": [ "orders-user-id", "finance-user-id" ]
+        }
+      }
+    }
+  }
+}
+```
+
+`restricted: true` limits the report to explicitly granted canonical identities.
+Configuration users and users added through **Authorization…** are a case-insensitive
+union. The editor may also restrict a report whose configuration leaves `restricted`
+false; configured users can therefore be staged before the database restriction is
+enabled. A configuration restriction cannot be removed in the editor. Anonymous and
+`administratorsOnly` reports cannot also use named-user restrictions.
+
+Top-level `Administrators` and administrators added in the editor are likewise
+additive. Once either source contains an administrator, that union is authoritative;
+application authorization can restrict it but cannot promote an identity outside it.
+Administration permission does not implicitly grant access to a restricted report.
+Grant the administrator that report separately when its data should also be visible.
+Configuration entries remain read-only in the editor; database entries can be added or
+removed there.
 
 The panel can download any listed report as the canonical `{ title, primary, state }`
 JSON envelope. This makes a database-backed saved report ready to add to
@@ -218,20 +320,22 @@ For updates, metadata is complete but `State` is populated only when replacement
 was submitted; otherwise the existing stored JSON remains untouched. Reads continue to
 return stored state as JSON without typed rehydration.
 
-Built-in report visibility and saved-report ownership remain in force. A nonempty
-`InteractiveReport:Administrators` list is authoritative: listed identities remain
-eligible for administrator operations and application authorization may restrict
-them further, while an application callback cannot promote an identity outside that
-explicit list. When the list is empty, operations requiring administrator authority need an
-affirmative application authorization decision. With neither mechanism configured,
-they fail closed. `false` or `InteractiveReportAuthorizationDeniedException` is an
+Built-in report visibility, named-user restrictions, and saved-report ownership remain
+in force. The union of configured and database administrators is authoritative when
+nonempty: listed identities remain eligible for administrator operations and
+application authorization may restrict them further, while an application callback
+cannot promote an identity outside that union. When both administrator sources are
+empty, operations requiring administrator authority need an affirmative application
+authorization decision. With neither mechanism configured, they fail closed. `false`
+or `InteractiveReportAuthorizationDeniedException` is an
 expected denial; cancellation remains cancellation, and other exceptions are logged
 and returned as a sanitized 500 response.
 
 Saved-report decisions are resource-based: public, owner, or administrator may read;
 owner or administrator may update title/state or delete; and the explicit global,
-primary, ownership, list-all, upload, and download actions require administrator
-authority. The API applies these rules regardless of which client issued the request.
+primary, ownership, list-all, authorization-management, upload, and download actions
+require administrator authority. The API applies these rules regardless of which
+client issued the request.
 
 See [Authorization](docs/AUTHORIZATION.md) for complete setup examples for all three
 styles, the action/resource reference, multi-action composition, administrator
@@ -327,7 +431,6 @@ configuration, not report state:
 ```json
 "orders": {
   "connection": "MainDb",
-  "dialect": "SqlServer",
   "sql": "SELECT ORDER_ID, CUSTOMER, AMOUNT, NOTES FROM ORDERS",
   "editLink": {
     "urlTemplate": "/orders/{ORDER_ID}/edit",

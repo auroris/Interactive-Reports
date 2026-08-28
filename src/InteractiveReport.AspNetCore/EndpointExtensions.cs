@@ -50,15 +50,55 @@ public static class EndpointExtensions
 
         // Identity + saved reports (literal segments win over {name} in ASP.NET routing).
         group.MapGet("/whoami", SavedReportEndpoints.Whoami);
-        group.MapGet("/{name}/saved", SavedReportEndpoints.ListForReport);
-        group.MapPost("/{name}/saved", SavedReportEndpoints.Save);
-        group.MapGet("/saved/{id}", SavedReportEndpoints.Load);
-        group.MapPut("/saved/{id}", SavedReportEndpoints.Update);
-        group.MapDelete("/saved/{id}", SavedReportEndpoints.Delete);
-        group.MapGet("/admin/saved/{id}/document", SavedReportEndpoints.AdminDownloadDocument);
-        group.MapPost("/admin/{name}/documents", SavedReportEndpoints.AdminUploadDocument);
+        WithStorageErrors(group.MapGet("/{name}/saved", SavedReportEndpoints.ListForReport));
+        WithStorageErrors(group.MapPost("/{name}/saved", SavedReportEndpoints.Save));
+        WithStorageErrors(group.MapGet("/saved/{id}", SavedReportEndpoints.Load));
+        WithStorageErrors(group.MapPut("/saved/{id}", SavedReportEndpoints.Update));
+        WithStorageErrors(group.MapDelete("/saved/{id}", SavedReportEndpoints.Delete));
+        group.MapGet("/admin/users", SavedReportEndpoints.AdminListUsers);
+        group.MapGet("/admin/authorization", AuthorizationEndpoints.List);
+        group.MapPost("/admin/authorization/administrators", AuthorizationEndpoints.GrantAdministrator);
+        group.MapDelete("/admin/authorization/administrators", AuthorizationEndpoints.RevokeAdministrator);
+        group.MapPut("/admin/authorization/reports/{name}", AuthorizationEndpoints.SetReportRestriction);
+        group.MapPost("/admin/authorization/reports/{name}/users", AuthorizationEndpoints.GrantReportUser);
+        group.MapDelete("/admin/authorization/reports/{name}/users", AuthorizationEndpoints.RevokeReportUser);
+        WithStorageErrors(group.MapGet(
+            "/admin/saved/{id}/document", SavedReportEndpoints.AdminDownloadDocument));
+        WithStorageErrors(group.MapPost(
+            "/admin/{name}/documents", SavedReportEndpoints.AdminUploadDocument));
 
         return group;
+    }
+
+    /// <summary>
+    /// Saved-report handlers predate the optional store and contain deliberate
+    /// domain-level exception translations. This outer boundary handles only errors
+    /// that escape those translations, including a missing or unreachable store.
+    /// </summary>
+    private static void WithStorageErrors(RouteHandlerBuilder endpoint)
+    {
+        endpoint.AddEndpointFilter(async (invocation, next) =>
+        {
+            try
+            {
+                return await next(invocation);
+            }
+            catch (OperationCanceledException)
+                when (invocation.HttpContext.RequestAborted.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                var reportName = invocation.HttpContext.Request.RouteValues["name"]?.ToString()
+                    ?? SavedReportsListingDefinition.Name;
+                return ServerError(
+                    invocation.HttpContext,
+                    reportName,
+                    "saved-report storage",
+                    ex);
+            }
+        });
     }
 
     private static async Task<IResult> GetSchema(string name, HttpContext ctx, CancellationToken ct)
@@ -117,7 +157,7 @@ public static class EndpointExtensions
                 {
                     // A presentation hint, not a grant. Every mutation is still
                     // evaluated against its concrete action and resource.
-                    mayRequestAdministration = ReportRequestAccess.MayRequestAdministration(ctx),
+                    mayRequestAdministration = await ReportRequestAccess.MayRequestAdministration(ctx, ct),
                 },
             }, IrJson.Options);
         }

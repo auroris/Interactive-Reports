@@ -8,7 +8,7 @@
 // report simply has no data (404) for non-administrators.
 
 import { api, apiUrl, downloadFile, saveBlob } from "../core/api.js";
-import { el, banner, labeled } from "../core/dom.js";
+import { el, banner, labeled, sel } from "../core/dom.js";
 import { openDialog, confirmDialog } from "../core/dialog.js";
 import { loadWhoami } from "../core/identity.js";
 import { WidgetElement } from "../core/widget.js";
@@ -46,6 +46,10 @@ export class InteractiveReportAdminElement extends WidgetElement {
             el("div", { class: "ir-toolbar ir-admin-bar", part: "toolbar" },
                 el("button", { type: "button", class: "ir-btn", onclick: () => this.refresh() }, "Refresh"),
                 el("button", { type: "button", class: "ir-btn", onclick: () => this.uploadDocument() }, "Upload JSON…"),
+                el("button", {
+                    type: "button", class: "ir-btn",
+                    onclick: () => { void this.authorizationDialog().catch(err => this.showError(err)); },
+                }, "Authorization…"),
                 el("span", { class: "ir-spacer" }),
                 this.els.identity),
             el("div", { class: "ir-notices", part: "notices" }, this.els.errorSlot, this.els.transientSlot),
@@ -92,7 +96,7 @@ export class InteractiveReportAdminElement extends WidgetElement {
             switch (command) {
                 case "toggleGlobal": await this.toggleGlobal(id, row); break;
                 case "togglePrimary": await this.togglePrimary(id, row); break;
-                case "reassign": this.reassign(id, row); break;
+                case "reassign": await this.reassign(id, row); break;
                 case "openState": await this.viewState(id, row); break;
                 case "download": await this.downloadDocument(id, row); break;
                 case "delete": await this.deleteSavedReport(id, row); break;
@@ -120,8 +124,26 @@ export class InteractiveReportAdminElement extends WidgetElement {
         this.refresh();
     }
 
-    reassign(id, row) {
-        const ownerInp = el("input", { class: "ir-input", type: "text", value: row.OWNER ?? "", required: true });
+    async reassign(id, row) {
+        const users = await this.loadUserDirectory();
+
+        let ownerInp;
+        let note;
+        if (users.length) {
+            const current = users.find(user =>
+                String(user.value).toLocaleLowerCase() === String(row.OWNER ?? "").toLocaleLowerCase());
+            const options = users.map(user => ({ label: user.display, value: user.value }));
+            if (!current) options.unshift({ label: "Select a user", value: "" });
+            ownerInp = sel(options, current?.value ?? "");
+            ownerInp.required = true;
+            note = "The application supplies these accounts. The selected value is stored as the canonical owner identity.";
+        } else {
+            ownerInp = el("input", {
+                class: "ir-input", type: "text", value: row.OWNER ?? "", required: true,
+            });
+            note = "The exact identity value — what GET …/whoami reports for that user.";
+        }
+
         openDialog({
             owner: this,
             title: "Reassign Owner",
@@ -130,13 +152,182 @@ export class InteractiveReportAdminElement extends WidgetElement {
             build: body => body.append(
                 el("p", { class: "ir-confirm-text" }, `"${row.TITLE}" (${row.REPORT_NAME})`),
                 labeled("New owner (identity value)", ownerInp),
-                el("p", { class: "ir-dialog-note" }, "The exact identity value — what GET …/whoami reports for that user.")),
+                el("p", { class: "ir-dialog-note" }, note)),
             onApply: async () => {
                 const owner = ownerInp.value.trim();
                 if (!owner) throw new Error("Enter an identity value");
                 await api(apiUrl(this.base, "saved", id), { method: "PUT", body: { owner } });
                 this.notify(`"${row.TITLE}" reassigned to ${owner}.`);
                 this.refresh();
+            },
+        });
+    }
+
+    async loadUserDirectory() {
+        try {
+            const supplied = await api(apiUrl(this.base, "admin", "users"));
+            return Array.isArray(supplied) ? supplied : [];
+        } catch (err) {
+            // A separately hosted older API has no lookup route. Its behavior is the
+            // same as an application that did not register a provider.
+            if (err?.status === 404) return [];
+            throw err;
+        }
+    }
+
+    async authorizationDialog() {
+        let [authorization, users] = await Promise.all([
+            api(apiUrl(this.base, "admin", "authorization")),
+            this.loadUserDirectory(),
+        ]);
+        let selectedReport = authorization.reports?.[0]?.name ?? null;
+        const directory = new Map(users.map(user => [
+            String(user.value).toLocaleLowerCase(), user.display,
+        ]));
+        const displayIdentity = value => {
+            const display = directory.get(String(value).toLocaleLowerCase());
+            return display && display !== value ? `${display} (${value})` : value;
+        };
+
+        openDialog({
+            owner: this,
+            title: "Authorization",
+            width: "48rem",
+            build: (body, dlg) => {
+                const reload = async () => {
+                    authorization = await api(apiUrl(this.base, "admin", "authorization"));
+                    if (!authorization.reports?.some(report => report.name === selectedReport))
+                        selectedReport = authorization.reports?.[0]?.name ?? null;
+                    render();
+                };
+                const mutate = async operation => {
+                    dlg.setError(null);
+                    try {
+                        await operation();
+                        await reload();
+                    } catch (err) {
+                        dlg.setError(err);
+                    }
+                };
+                const identityControl = () => {
+                    if (users.length) {
+                        const control = sel([
+                            { label: "Select a user", value: "" },
+                            ...users.map(user => ({ label: user.display, value: user.value })),
+                        ], "");
+                        control.required = true;
+                        return control;
+                    }
+                    return el("input", {
+                        class: "ir-input", type: "text", required: true,
+                        placeholder: "Identity value", autocomplete: "off",
+                    });
+                };
+                const identityRows = (configured, database, remove) => {
+                    const rows = [];
+                    for (const identity of configured ?? []) {
+                        rows.push(el("div", { class: "ir-auth-row" },
+                            el("span", {}, displayIdentity(identity)),
+                            el("span", { class: "ir-auth-source" }, "appsettings.json")));
+                    }
+                    for (const identity of database ?? []) {
+                        rows.push(el("div", { class: "ir-auth-row" },
+                            el("span", {}, displayIdentity(identity)),
+                            el("span", { class: "ir-auth-source" }, "administration center"),
+                            el("button", {
+                                type: "button", class: "ir-btn ir-row-x",
+                                "aria-label": `Remove ${identity}`,
+                                onclick: () => { void mutate(() => remove(identity)); },
+                            }, "Remove")));
+                    }
+                    return rows.length
+                        ? el("div", { class: "ir-auth-list" }, rows)
+                        : el("p", { class: "ir-dialog-note" }, "No identities are explicitly granted.");
+                };
+                const addIdentity = (label, operation) => {
+                    const control = identityControl();
+                    const button = el("button", {
+                        type: "button", class: "ir-btn",
+                        onclick: () => {
+                            const identity = control.value.trim();
+                            if (!identity) { dlg.setError("Select or enter an identity value."); return; }
+                            void mutate(() => operation(identity));
+                        },
+                    }, "Add");
+                    return el("div", { class: "ir-auth-add" }, labeled(label, control), button);
+                };
+                const render = () => {
+                    const administratorSection = el("section", { class: "ir-auth-section" },
+                        el("h3", {}, "Administration access"),
+                        el("p", { class: "ir-dialog-note" },
+                            "These identities may use the administration center. Configuration and database grants are additive."),
+                        identityRows(
+                            authorization.configuredAdministrators,
+                            authorization.databaseAdministrators,
+                            identity => api(apiUrl(this.base, "admin", "authorization", "administrators"), {
+                                method: "DELETE", body: { identity },
+                            })),
+                        addIdentity("Administrator", identity => api(
+                            apiUrl(this.base, "admin", "authorization", "administrators"),
+                            { method: "POST", body: { identity } })));
+
+                    const reports = authorization.reports ?? [];
+                    const reportSelect = sel(reports.map(report => ({
+                        label: report.title, value: report.name,
+                    })), selectedReport);
+                    reportSelect.setAttribute("aria-label", "Report");
+                    reportSelect.onchange = () => {
+                        selectedReport = reportSelect.value;
+                        render();
+                    };
+                    const report = reports.find(item => item.name === selectedReport);
+                    let reportBody;
+                    if (!report) {
+                        reportBody = el("p", { class: "ir-dialog-note" }, "No configured reports are available.");
+                    } else if (!report.canRestrict) {
+                        reportBody = el("p", { class: "ir-dialog-note" },
+                            "This report is anonymous or administrators-only and cannot use named-user restrictions.");
+                    } else {
+                        const restricted = el("input", {
+                            type: "checkbox",
+                            checked: report.restricted,
+                            disabled: report.configuredRestricted,
+                            onchange: () => { void mutate(() => api(
+                                apiUrl(this.base, "admin", "authorization", "reports", report.name),
+                                { method: "PUT", body: { restricted: restricted.checked } })); },
+                        });
+                        reportBody = el("div", { class: "ir-auth-report" },
+                            el("label", { class: "ir-checkline" }, restricted,
+                                el("span", {}, "Restrict this report to explicitly granted users")),
+                            report.configuredRestricted
+                                ? el("p", { class: "ir-dialog-note" },
+                                    "This restriction is set in appsettings.json and cannot be removed here.")
+                                : null,
+                            el("h4", {}, "Granted users"),
+                            identityRows(
+                                report.configuredUsers,
+                                report.databaseUsers,
+                                identity => api(apiUrl(
+                                    this.base, "admin", "authorization", "reports", report.name, "users"), {
+                                    method: "DELETE", body: { identity },
+                                })),
+                            addIdentity("Report user", identity => api(apiUrl(
+                                this.base, "admin", "authorization", "reports", report.name, "users"), {
+                                method: "POST", body: { identity },
+                            })),
+                            !report.restricted
+                                ? el("p", { class: "ir-dialog-note" },
+                                    "User grants are stored now and take effect when this report is restricted.")
+                                : null);
+                    }
+
+                    const reportSection = el("section", { class: "ir-auth-section" },
+                        el("h3", {}, "Report access"),
+                        reports.length ? labeled("Report", reportSelect) : null,
+                        reportBody);
+                    body.replaceChildren(administratorSection, reportSection);
+                };
+                render();
             },
         });
     }

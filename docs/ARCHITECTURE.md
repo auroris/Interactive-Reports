@@ -971,9 +971,12 @@ authorization are configured; this is a UI hint, never an authorization decision
 (ID text GUID · REPORT_NAME · TITLE · OWNER · IS_GLOBAL 0/1 · IS_PRIMARY 0/1 · STATE_JSON · MODIFIED_UTC
 ISO-8601 text). Cross-dialect-uniform storage types on purpose; auto-created unless
 `autoCreate` is disabled. Location via `savedReports.connection` (a named connection —
-point it at the data database to co-locate saved reports with report data), defaulting
-zero-config to a local SQLite file `App_Data/interactivereport.saved.db`. Each operation
-uses one validated configuration snapshot, and auto-creation is tracked per
+point it at the data database to co-locate saved reports with report data) or
+`savedReports.dataSource` (a ConnectionStrings name or literal connection string).
+There is no implicit target: a report-only host performs no persistence I/O, and
+persistence/administration operations fail until one is configured. An optional
+`savedReports.tablePrefix` is prepended to both store table names. Each operation uses
+one validated configuration snapshot, and auto-creation is tracked per
 connection/dialect/table target so live configuration changes cannot mix query and storage
 targets or inherit stale initialization state.
 Database-backed titles are case-insensitively unique within a report at the endpoint
@@ -1054,7 +1057,8 @@ can therefore narrow a public proposal to a private save, while any privilege ad
 a later handler still emits its required administrator action. The action vocabulary is
 ViewReport, Query, Export, List/Read/Create/Update/DeleteSavedReport,
 PublishGlobalReport, PublishPrimaryReport, ChangeSavedReportOwner,
-ListAllSavedReports, DownloadReportDocument, and UploadReportDocument. `false` and the
+ListAllSavedReports, ManageAuthorization, DownloadReportDocument, and
+UploadReportDocument. `false` and the
 dedicated denial exception are ordinary denials. Unexpected exceptions are logged and
 sanitized as 500; request cancellation propagates.
 
@@ -1067,23 +1071,26 @@ the opposite rule:
 stored state is framed as JSON and returned without `ReportState` rehydration, so a read
 does not become an implicit migration or validation event.
 
-For operations requiring administrator authority, a nonempty configured administrator list is
-authoritative. A listed identity must still pass any configured operation authorizer;
-an unlisted identity cannot be promoted by it. If the list is empty, at least one
-operation authorizer must be registered and every one must grant the concrete action.
-No list plus no authorizer is a denial, never a fail-open default. Ordinary owner and
-dataset operations retain their existing behavior when no application authorizer is
-registered.
+For operations requiring administrator authority, the union of configured and
+database administrators is authoritative when nonempty. A listed identity must still
+pass any configured operation authorizer; an unlisted identity cannot be promoted by
+it. If both stores are empty, at least one operation authorizer must be registered and
+every one must grant the concrete action. No administrator plus no authorizer is a
+denial, never a fail-open default. Ordinary owner and dataset operations retain their
+existing behavior when no application authorizer is registered.
 
 The complete integrator guide, including direct callbacks, native resource handlers,
 policy delegation, action/resource contracts, composition, and HTTP results, is
 [Authorization](AUTHORIZATION.md).
 
 A definition may also declare `authorization.administratorsOnly`: with a nonempty
-administrator list, the report-level gate requires membership (401 unauthenticated,
-404 non-admin). With an empty list, the concrete application operation must be
-affirmatively authorized, also using non-disclosure. An optional policy stacks with
-either form, and `administratorsOnly` is rejected in combination with `allowAnonymous`. The built-in
+effective administrator list, the report-level gate requires membership (401
+unauthenticated, 404 non-admin). With both stores empty, the concrete application
+operation must be affirmatively authorized, also using non-disclosure. A definition
+can instead set `authorization.restricted` and source-controlled `users`; a database
+restriction marker and database report-user grants compose additively. An optional
+policy stacks with named-user access. `administratorsOnly`, `allowAnonymous`, and
+named-user restriction are mutually exclusive. The built-in
 `__saved-reports` listing uses it; hosts get admin-only reports for free. Names
 beginning with `__` are reserved for built-in reports, and `ui`, `saved`, `whoami`,
 and `admin` are reserved because literal route segments shadow `{name}` routes — a
@@ -1094,6 +1101,14 @@ from the live SavedReports options — a plain per-dialect SELECT over the store
 whose SCOPE and action-label columns are CASE expressions over ORIGIN, resolved only
 after the configured-document sync has run (which also guarantees the lazily created
 table exists before schema discovery).
+
+The authorization store is a second portable table on the resolved saved-report
+connection. `IR_REPORT_AUTHORIZATION` contains deterministic rows for administrator
+grants, report restriction markers, and report-user grants. It follows the saved
+store's dialect and AutoCreate setting, while
+`InteractiveReport:Authorization:TableName` can change its identifier. Configuration
+grants are never copied into this table; the authorization center presents them as a
+read-only layer over database-authored additions.
 
 ## 14. Packaged UI
 
@@ -1428,7 +1443,7 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 | Global/primary flags admin-only; content remains owner-managed | all published mutations admin-only | Publication is a curation act, while title/state and deletion remain owner actions. |
 | Primary is a separate admin-controlled flag; primary `Default` overrides generated Default | configured-file primary is the default | Several curated reports may be primary and public, while one stable title controls default-state replacement and unflagging restores the generated fallback. |
 | Configured report files use the saved-report protocol with `isReadOnly` | separate configured-report API or expose file origin | One selector and load path keeps the document model coherent. Generic mutability is what clients need; the storage source remains a server concern. |
-| Microsoft.Data.Sqlite dependency in the AspNetCore package | host-supplied providers only | The zero-config default saved-report store must work with no host setup; report-data connections remain host-supplied. |
+| Microsoft.Data.Sqlite dependency in the AspNetCore package | host-supplied providers only | SQLite remains a supported out-of-box `dataSource`; persistence still requires an explicit target and never creates a database merely because the package was installed. |
 | Decimal parameters bind as double on SQLite | decimal-as-TEXT (provider default) | The provider's TEXT binding breaks comparisons against affinity-less expressions (computed columns) via SQLite's cross-type ordering; double is SQLite's native numeric storage, so the conversion is faithful to the engine. |
 | Pivot caps: 60 column groups (configurable) + hard 10k source groups | unbounded pivot | An unbounded pivot is a memory/usability grenade; the caps surface as precise 400s telling the user what to change. |
 | Chart overflow is a precise 400, never truncation | truncate at the point cap like grid export | A truncated bar chart is misleading; a truncated pie is a lie — its proportions claim to describe the whole. Export truncation keeps its header signal; charts get an error naming the cap. |

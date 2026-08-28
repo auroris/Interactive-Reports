@@ -99,6 +99,7 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
             [$"InteractiveReport:Reports:{ReportName}:DefaultState:Search"] = "inline default",
             [$"InteractiveReport:Reports:{ReportName}:DocumentFiles:0"] = "ReportDocuments/orders.primary.json",
             [$"InteractiveReport:Reports:{ReportName}:DocumentFiles:1"] = "ReportDocuments/orders.regional.json",
+            ["InteractiveReport:SavedReports:Connection"] = "Data",
         });
         builder.Services
             .AddInteractiveReports(builder.Configuration)

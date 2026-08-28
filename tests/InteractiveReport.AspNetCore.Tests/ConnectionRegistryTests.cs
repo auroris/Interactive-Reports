@@ -131,7 +131,7 @@ public sealed class ConnectionRegistryTests
     }
 
     [Fact]
-    public void Store_config_resolves_the_sentinel_a_named_connection_or_a_data_source()
+    public void Store_config_requires_a_named_connection_or_data_source_and_applies_the_prefix()
     {
         var factories = new Dictionary<string, Func<IServiceProvider, DbConnection>>(StringComparer.OrdinalIgnoreCase)
         {
@@ -143,13 +143,19 @@ public sealed class ConnectionRegistryTests
             NullServices.Instance,
             new ConfigurationBuilder().Build());
 
-        var sentinel = registry.ResolveStoreConfig(new SavedReportsOptions());
-        Assert.Equal(ServiceCollectionExtensions.DefaultSavedReportsConnection, sentinel.ConnectionName);
-        Assert.Equal(ReportDialect.Sqlite, sentinel.Dialect);
+        var missing = Assert.Throws<InvalidOperationException>(() =>
+            registry.ResolveStoreConfig(new SavedReportsOptions()));
+        Assert.Contains("Saved-report storage is not configured", missing.Message);
+        Assert.Contains("SavedReports:DataSource", missing.Message);
 
-        var named = registry.ResolveStoreConfig(new SavedReportsOptions { Connection = "reports" });
+        var named = registry.ResolveStoreConfig(new SavedReportsOptions
+        {
+            Connection = "reports",
+            TablePrefix = "APP_",
+        });
         Assert.Equal("reports", named.ConnectionName);
         Assert.Equal(ReportDialect.Sqlite, named.Dialect);   // sniffed
+        Assert.Equal("APP_IR_SAVED_REPORTS", named.TableName);
 
         var viaDataSource = registry.ResolveStoreConfig(new SavedReportsOptions
         {
@@ -160,6 +166,14 @@ public sealed class ConnectionRegistryTests
         Assert.StartsWith("__ir:ds:", viaDataSource.ConnectionName);
         Assert.Equal(ReportDialect.Sqlite, viaDataSource.Dialect);
         Assert.Equal("SAVED", viaDataSource.TableName);
+
+        var invalidPrefix = Assert.Throws<InvalidOperationException>(() =>
+            registry.ResolveStoreConfig(new SavedReportsOptions
+            {
+                Connection = "reports",
+                TablePrefix = "bad prefix ",
+            }));
+        Assert.Contains("plain identifier", invalidPrefix.Message);
 
         var both = Assert.Throws<InvalidOperationException>(() => registry.ResolveStoreConfig(
             new SavedReportsOptions { DataSource = "Data Source=x.db", Connection = "reports" }));

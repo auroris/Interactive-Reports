@@ -88,6 +88,9 @@ public sealed class InteractiveReportAuthorizationHttpTests
         using var all = await host.Client.SendAsync(Request(
             HttpMethod.Get, "/api/reports/__saved-reports/schema", "action-admin"));
         Assert.Equal(HttpStatusCode.OK, all.StatusCode);
+        using var authorization = await host.Client.SendAsync(Request(
+            HttpMethod.Get, "/api/reports/admin/authorization", "action-admin"));
+        Assert.Equal(HttpStatusCode.OK, authorization.StatusCode);
 
         Assert.Equal(
             Enum.GetValues<InteractiveReportAction>().Order(),
@@ -504,6 +507,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
             ["InteractiveReport:Reports:orders:Dialect"] = "Sqlite",
             ["InteractiveReport:Reports:orders:Sql"] = "SELECT ID, LABEL FROM ORDERS",
             ["InteractiveReport:Reports:orders:Authorization:AllowAnonymous"] = "true",
+            ["InteractiveReport:SavedReports:Connection"] = "Data",
         };
         if (administrators is not null)
         {

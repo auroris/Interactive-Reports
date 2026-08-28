@@ -71,6 +71,7 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
             ["InteractiveReport:Reports:orders:Dialect"] = "Sqlite",
             ["InteractiveReport:Reports:orders:Sql"] = "SELECT ID, LABEL FROM ORDERS",
             ["InteractiveReport:Reports:orders:DocumentFiles:0"] = "ReportDocuments/orders.regional.json",
+            ["InteractiveReport:SavedReports:Connection"] = "Data",
         });
         builder.Services
             .AddInteractiveReports(builder.Configuration)

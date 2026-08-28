@@ -76,6 +76,7 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
             [$"InteractiveReport:Reports:{ReportName}:Sql"] = "SELECT ID, LABEL FROM ORDERS",
             [$"InteractiveReport:Reports:{ReportName}:Authorization:AllowAnonymous"] = "true",
             [$"InteractiveReport:Reports:{ReportName}:DocumentFiles:0"] = "ReportDocuments/orders.file.json",
+            ["InteractiveReport:SavedReports:Connection"] = "Data",
         });
 
         var reports = builder.Services

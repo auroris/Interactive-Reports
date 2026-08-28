@@ -53,6 +53,7 @@ public sealed class SavedReportTitleRaceHttpTests : IAsyncLifetime
             [$"InteractiveReport:Reports:{ReportName}:Connection"] = "Data",
             [$"InteractiveReport:Reports:{ReportName}:Sql"] = "SELECT ID, LABEL FROM ORDERS",
             [$"InteractiveReport:Reports:{ReportName}:Authorization:AllowAnonymous"] = "true",
+            ["InteractiveReport:SavedReports:Connection"] = "Data",
         });
 
         builder.Services

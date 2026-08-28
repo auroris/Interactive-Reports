@@ -7,7 +7,7 @@ namespace InteractiveReport.AspNetCore.Tests;
 public sealed class PersistenceHttpTests
 {
     [Fact]
-    public async Task Default_document_persists_separately_then_in_the_report_database_when_configured()
+    public async Task Default_document_persists_through_literal_and_registered_storage_targets()
     {
         var tempRoot = Directory.CreateTempSubdirectory("interactive-report-persistence-").FullName;
         var contentRoot = Path.Combine(tempRoot, "host");
@@ -35,7 +35,7 @@ public sealed class PersistenceHttpTests
         {
             Assert.NotEqual(
                 Path.GetFullPath(dataPath),
-                Path.GetFullPath(PersistenceHttpScenario.DefaultStorePath(contentRoot)));
+                Path.GetFullPath(PersistenceHttpScenario.ExplicitFileStorePath(contentRoot)));
 
             await PersistenceHttpScenario.Run(
                 ReportDialect.Sqlite,

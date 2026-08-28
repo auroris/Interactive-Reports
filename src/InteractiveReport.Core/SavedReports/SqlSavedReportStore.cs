@@ -10,8 +10,8 @@ namespace InteractiveReport.Core.SavedReports;
 
 /// <summary>
 /// SqlKata-backed saved-report store. Works against any supported dialect, so the table
-/// can live in a local SQLite file (the zero-config default) or in the same database as
-/// the report data. Values are stored cross-dialect-uniform: timestamps as ISO-8601 UTC
+/// can live in an explicitly configured SQLite file or in the same database as the
+/// report data. Values are stored cross-dialect-uniform: timestamps as ISO-8601 UTC
 /// text (sortable), the global flag as 0/1.
 /// </summary>
 public sealed class SqlSavedReportStore : ISavedReportStore

@@ -21,6 +21,7 @@ public enum InteractiveReportAction
     PublishPrimaryReport,
     ChangeSavedReportOwner,
     ListAllSavedReports,
+    ManageAuthorization,
     DownloadReportDocument,
     UploadReportDocument,
 }

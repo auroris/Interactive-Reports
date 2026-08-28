@@ -23,9 +23,9 @@ builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
 var interactiveReports = builder.Services.AddInteractiveReports(builder.Configuration)
     .AddConnection("SampleDb", _ => new SqliteConnection(connectionString));
 
-// Browser automation can isolate saved-report writes from the developer's Workbench
-// database by supplying this path and selecting the named connection in configuration.
-// Normal sample runs leave it unset and retain the zero-configuration App_Data store.
+// Browser automation can isolate saved-report writes from the explicitly configured
+// Workbench database by supplying this path and selecting the named connection in
+// configuration.
 var testSavedReportsPath = builder.Configuration["InteractiveReportTest:SavedReportsPath"];
 if (!string.IsNullOrWhiteSpace(testSavedReportsPath))
 {

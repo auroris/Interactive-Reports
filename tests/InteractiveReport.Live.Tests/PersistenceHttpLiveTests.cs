@@ -6,8 +6,8 @@ namespace InteractiveReport.Core.Tests;
 
 /// <summary>
 /// Runs the complete schema-default → query → save → process restart → load path.
-/// The first pass uses the zero-configuration local SQLite store; the second moves
-/// persistence into the report database without changing the document being saved.
+/// The first pass uses an explicitly configured SQLite connection string; the second
+/// uses the registered report database without changing the document being saved.
 /// </summary>
 public sealed class PersistenceHttpLiveTests
 {
@@ -20,7 +20,7 @@ public sealed class PersistenceHttpLiveTests
 
     [SkippableTheory]
     [MemberData(nameof(Dialects))]
-    public async Task Synthetic_default_document_roundtrips_through_both_persistence_targets(
+    public async Task Synthetic_default_document_roundtrips_through_both_explicit_persistence_targets(
         ReportDialect dialect)
     {
         var live = LiveDb.For(dialect);

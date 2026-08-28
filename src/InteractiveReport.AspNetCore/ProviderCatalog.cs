@@ -6,8 +6,8 @@ namespace InteractiveReport.AspNetCore;
 
 /// <summary>
 /// The one home for provider-token, connection-type, and dialect knowledge. SQLite is
-/// a hard dependency (the zero-config saved-report store needs it); every other
-/// provider loads by reflection from the host's own dependency graph, so the package
+/// a bundled provider; every other provider loads by reflection from the host's own
+/// dependency graph, so the package
 /// carries no provider references and a missing driver fails fast naming the exact
 /// NuGet package to add. Dialect is derived, never chosen: a provider token fixes it
 /// statically, and code-registered factories are sniffed by connection type.

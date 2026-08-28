@@ -184,9 +184,10 @@ endpoint. For saved reports, the relevant facts are available on the resource:
 - Changing global/primary publication or ownership emits a separate action, so those
   decisions do not have to be inferred from `UpdateSavedReport`.
 
-The engine applies the same built-in facts. The application authorizer receives them
-so it can make a coherent decision when it is adding restrictions or supplying
-administrator authority for an empty configured administrator list.
+The engine applies the same built-in facts, including configured/database report-user
+grants and the union of configured/database administrators. The application authorizer
+receives the operation facts so it can add restrictions or supply administrator
+authority only when both built-in administrator sources are empty.
 
 ## Action reference
 
@@ -203,7 +204,8 @@ administrator authority for an empty configured administrator list.
 | `PublishGlobalReport` | Effective definition changes public status | Emitted for both publishing and unpublishing after base-action mutation. Administrator action. |
 | `PublishPrimaryReport` | Effective definition changes primary status | Emitted for both flagging and unflagging after base-action mutation. Administrator action. |
 | `ChangeSavedReportOwner` | Effective definition changes owner | Administrator action. |
-| `ListAllSavedReports` | Schema/query/export of the built-in `__saved-reports` definition | Administrator action. Its export also emits `Export`. |
+| `ListAllSavedReports` | Schema/query/export of the built-in `__saved-reports` definition, and its protected user-directory lookup | Administrator action. Its export also emits `Export`. |
+| `ManageAuthorization` | List or change database administrators, report restrictions, and report-user grants | Administrator action. Configuration grants remain read-only. |
 | `DownloadReportDocument` | Download the canonical admin JSON envelope | Administrator action. |
 | `UploadReportDocument` | Validate and import an admin JSON envelope | Administrator action. A primary upload also emits `PublishPrimaryReport`. |
 
@@ -263,6 +265,7 @@ reports.UseAuthorization((request, cancellationToken) =>
             or InteractiveReportAction.PublishPrimaryReport
             or InteractiveReportAction.ChangeSavedReportOwner
             or InteractiveReportAction.ListAllSavedReports
+            or InteractiveReportAction.ManageAuthorization
             or InteractiveReportAction.DownloadReportDocument
             or InteractiveReportAction.UploadReportDocument =>
             isAdministrator,
@@ -442,6 +445,7 @@ reports.UseAuthorization(async (request, cancellationToken) =>
             or InteractiveReportAction.PublishPrimaryReport
             or InteractiveReportAction.ChangeSavedReportOwner
             or InteractiveReportAction.ListAllSavedReports
+            or InteractiveReportAction.ManageAuthorization
             or InteractiveReportAction.DownloadReportDocument
             or InteractiveReportAction.UploadReportDocument =>
             "Reports.Administer",
@@ -478,15 +482,16 @@ native adapter as well only when both the named policy result and a separate nat
 
 ## Administrator resolution and fail-closed behavior
 
-`InteractiveReport:Administrators` remains supported for compatibility. The canonical
+`InteractiveReport:Administrators` supplies source-controlled administrators. Database
+administrators created through the administration center are additive. The canonical
 identity is resolved through the configured `identityClaim`, then NameIdentifier,
-`sub`, and finally `Identity.Name`. List matching is case-insensitive and exact.
+`sub`, and finally `Identity.Name`. Matching is case-insensitive and exact.
 
 Operations that require administrator authority use this decision table:
 
-| Administrator list | Caller | Application authorizer | Result |
+| Effective configured/database administrator list | Caller | Application authorizer | Result |
 |---|---|---|---|
-| Nonempty | Listed | None | Allowed by the legacy administrator boundary. |
+| Nonempty | Listed | None | Allowed by the built-in administrator boundary. |
 | Nonempty | Listed | All grant | Allowed. |
 | Nonempty | Listed | Any denies | Denied. |
 | Nonempty | Not listed | Any | Denied before application operation authorization; an explicit list cannot be bypassed. |
@@ -499,13 +504,19 @@ This fallback is action-specific. An application can grant
 the principal to a permanent administrator identity.
 
 A definition with `authorization.administratorsOnly: true` uses the same model. With
-a nonempty administrator list, only listed callers reach operation authorization. With
-an empty list, the concrete operation must be affirmatively granted by an application
-authorizer. The built-in `__saved-reports` definition emits the explicit
+a nonempty effective administrator list, only listed callers reach operation
+authorization. With both sources empty, the concrete operation must be affirmatively
+granted by an application authorizer. The built-in `__saved-reports` definition emits the explicit
 `ListAllSavedReports` action. For an application-defined administrators-only report,
 the authorizer should map its `Resource.ReportName` to the application's administrator
 rule. The request carries action and resource facts, not the engine's intermediate
 reason for asking.
+
+The optional administration user-directory endpoint is part of that built-in surface.
+It performs the same administrator check and emits `ListAllSavedReports` before it
+resolves or invokes `IInteractiveReportUserProvider`. Directory entries are account
+choices only; returning an account does not authorize it. The separate Authorization
+editor emits `ManageAuthorization` when it turns a choice into a database grant.
 
 Ordinary operations retain the built-in behavior when no application authorizer is
 registered. Registering either `UseAuthorization` or
@@ -515,7 +526,7 @@ only administrator operations. Therefore:
 - A callback replacing the administrator list should evaluate the action against the
   resource facts: public/owner/administrator for reads, owner/administrator for update
   and delete, and administrator for publication, ownership, list-all, and document
-  administration actions.
+  administration and authorization-management actions.
 - A native handler must also succeed ordinary requirements that the application wants
   to permit.
 - Registering the native adapter with no successful handler denies ordinary and
@@ -564,6 +575,32 @@ The message from `InteractiveReportAuthorizationDeniedException` is not sent to 
 client. Authorization internals and resource existence remain protected. Use
 application logs or an audit store for detailed reasons.
 
+## Built-in named-user report restrictions
+
+A report can opt into exact identity grants in configuration:
+
+```json
+"authorization": {
+  "restricted": true,
+  "users": [ "orders-user-id", "finance-user-id" ]
+}
+```
+
+The administration center can independently store a restriction marker and report-user
+grants in `IR_REPORT_AUTHORIZATION`. Effective restriction is configuration OR database;
+effective users are the union. This permits source-controlled baseline grants plus
+operator-managed additions. Administrators are not implicit report users. A denied
+authenticated identity receives 404, and an unauthenticated identity receives 401.
+
+The database layer exists only when `InteractiveReport:SavedReports:DataSource` or
+`:Connection` is explicitly configured. It shares that target and the optional
+`SavedReports:TablePrefix`; installing the package alone creates no file or table.
+
+`allowAnonymous`, `administratorsOnly`, and named-user restriction are mutually
+exclusive access modes. A policy can stack on a named-user restriction and remains an
+additional requirement. Application authorizers also remain restrictive; a built-in
+grant never bypasses them.
+
 ## Report-definition policies remain available
 
 Operation authorization does not replace the existing per-report policy:
@@ -574,7 +611,6 @@ Operation authorization does not replace the existing per-report policy:
     "Reports": {
       "orders": {
         "connection": "MainDb",
-        "dialect": "SqlServer",
         "sql": "SELECT * FROM ORDERS",
         "authorization": {
           "policy": "MayAccessOrders"
@@ -603,7 +639,8 @@ depends on that client and the UI never treats a hint as permission.
 - Schema responses include `authorization.mayRequestAdministration`.
 - When the optional `whoami` endpoint is enabled, it includes
   `isAdministrator`, `administratorListConfigured`, and
-  `applicationAuthorizationConfigured`.
+  `applicationAuthorizationConfigured`, plus source-specific
+  `configuredAdministrator` and `databaseAdministrator` flags.
 
 These fields only control presentation. The UI may display a button that a
 resource-specific callback later denies. Every endpoint evaluates the concrete action

@@ -1,3 +1,4 @@
+using InteractiveReport.Core.Authorization;
 using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Identity;
 using InteractiveReport.Core.Model;
@@ -28,18 +29,13 @@ internal static class ReportRequestAccess
         var options = context.RequestServices
             .GetRequiredService<IOptionsMonitor<InteractiveReportOptions>>().CurrentValue;
 
-        // A nonempty legacy administrator list is authoritative. With no configured
-        // administrators, defer the decision to operation authorization; that path is
-        // fail-closed when no application authorizer is registered.
         if (authorization?.AdministratorsOnly == true)
         {
             if (context.User.Identity?.IsAuthenticated != true)
                 return Results.Unauthorized();
-            if (options.Administrators.Count > 0
-                && !ReportIdentity.IsAdministrator(
-                    context.User,
-                    options.IdentityClaim,
-                    options.Administrators))
+            var administrator = await AdministratorAccess(context, options, context.RequestAborted);
+            if (administrator.Error is not null) return administrator.Error;
+            if (administrator.Configured && !administrator.Granted)
                 return Results.NotFound();
         }
 
@@ -57,14 +53,42 @@ internal static class ReportRequestAccess
             if (!decision.Succeeded) return Results.NotFound();
         }
 
+        var identity = ReportIdentity.Resolve(context.User, options.IdentityClaim);
+        var storageConfigured = ReportConnectionRegistry.IsStoreConfigured(options.SavedReports);
+        var databaseAccess = new DatabaseReportAccess(false, false);
+        if (storageConfigured)
+        {
+            try
+            {
+                databaseAccess = await context.RequestServices
+                    .GetRequiredService<IReportAuthorizationStore>()
+                    .GetReportAccess(definition.Name, identity, context.RequestAborted);
+            }
+            catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                return AuthorizationFailure(context, definition.Name, "report access lookup", ex);
+            }
+        }
+
+        var restricted = authorization?.Restricted == true || databaseAccess.Restricted;
+        var configuredGrant = identity is not null
+            && authorization?.Users?.Any(user => string.Equals(
+                user.Trim(), identity, StringComparison.OrdinalIgnoreCase)) == true;
+        if (restricted && !configuredGrant && !databaseAccess.UserGranted)
+            return Results.NotFound();
+
         return null;
     }
 
     /// <summary>
     /// Applies one or more application actions after definition authorization. Every
     /// registered authorizer must grant every action. Administrator-required actions
-    /// use the configured administrator list when nonempty; otherwise at least one
-    /// application authorizer must affirmatively grant the operation.
+    /// use the configured/database administrator union when nonempty; otherwise at
+    /// least one application authorizer must affirmatively grant the operation.
     /// </summary>
     public static async Task<IResult?> AuthorizeOperations(
         ReportDefinition definition,
@@ -92,18 +116,12 @@ internal static class ReportRequestAccess
             if (context.User.Identity?.IsAuthenticated != true)
                 return Results.Unauthorized();
 
-            if (options.Administrators.Count > 0)
-            {
-                if (!ReportIdentity.IsAdministrator(
-                        context.User,
-                        options.IdentityClaim,
-                        options.Administrators))
-                    return Denied(context, hideDenied, denialDetail);
-            }
-            else if (authorizers.Length == 0)
-            {
+            var administrator = await AdministratorAccess(context, options, ct);
+            if (administrator.Error is not null) return administrator.Error;
+            if (administrator.Configured && !administrator.Granted)
                 return Denied(context, hideDenied, denialDetail);
-            }
+            if (!administrator.Configured && authorizers.Length == 0)
+                return Denied(context, hideDenied, denialDetail);
         }
 
         if (authorizers.Length == 0) return null;
@@ -196,22 +214,84 @@ internal static class ReportRequestAccess
                 statusCode: StatusCodes.Status403Forbidden);
 
     /// <summary>
-    /// UI hint only. It never grants an operation: configured administrators may ask,
-    /// and an application authorizer may make action-specific decisions when no
-    /// administrator list is configured.
+    /// UI hint only. It never grants an operation: configured or database
+    /// administrators may ask, and an application authorizer may make action-specific
+    /// decisions when neither administrator source is populated.
     /// </summary>
-    public static bool MayRequestAdministration(HttpContext context)
+    public static async Task<bool> MayRequestAdministration(
+        HttpContext context,
+        CancellationToken ct = default)
     {
+        if (context.User.Identity?.IsAuthenticated != true) return false;
         var options = context.RequestServices
             .GetRequiredService<IOptionsMonitor<InteractiveReportOptions>>().CurrentValue;
-        if (options.Administrators.Count > 0)
-            return ReportIdentity.IsAdministrator(
-                context.User,
-                options.IdentityClaim,
-                options.Administrators);
-        return context.User.Identity?.IsAuthenticated == true
-               && context.RequestServices.GetServices<IInteractiveReportAuthorizer>().Any();
+        if (!ReportConnectionRegistry.IsStoreConfigured(options.SavedReports)) return false;
+        var administrator = await AdministratorAccess(context, options, ct);
+        if (administrator.Error is not null)
+            throw new InvalidOperationException("Administration access lookup failed.");
+        if (administrator.Configured) return administrator.Granted;
+        return context.RequestServices.GetServices<IInteractiveReportAuthorizer>().Any();
     }
+
+    private static async Task<AdministratorDecision> AdministratorAccess(
+        HttpContext context,
+        InteractiveReportOptions options,
+        CancellationToken ct)
+    {
+        var identity = ReportIdentity.Resolve(context.User, options.IdentityClaim);
+        try
+        {
+            var database = await context.RequestServices
+                .GetRequiredService<IReportAuthorizationStore>()
+                .GetAdministratorAccess(identity, ct);
+            return new AdministratorDecision(
+                Configured: options.Administrators.Count > 0 || database.Configured,
+                Granted: ReportIdentity.IsAdministrator(
+                    context.User, options.IdentityClaim, options.Administrators)
+                    || database.UserGranted,
+                Error: null);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return new AdministratorDecision(
+                Configured: false,
+                Granted: false,
+                Error: AuthorizationFailure(
+                    context,
+                    SavedReportsListingDefinition.Name,
+                    "administrator access lookup",
+                    ex));
+        }
+    }
+
+    private static IResult AuthorizationFailure(
+        HttpContext context,
+        string reportName,
+        string operation,
+        Exception exception)
+    {
+        context.RequestServices.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("InteractiveReport.Authorization")
+            .LogError(
+                exception,
+                "Report {Report}: {Operation} failed (traceId {TraceId})",
+                reportName,
+                operation,
+                context.TraceIdentifier);
+        return Results.Problem(
+            title: "Report authorization failed",
+            statusCode: StatusCodes.Status500InternalServerError,
+            extensions: new Dictionary<string, object?>
+            {
+                ["traceId"] = context.TraceIdentifier,
+            });
+    }
+
+    private sealed record AdministratorDecision(bool Configured, bool Granted, IResult? Error);
 
     private static IResult Denied(HttpContext context, bool hide, string? detail)
     {

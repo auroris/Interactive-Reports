@@ -1,5 +1,6 @@
 using System.Text.Json;
 using InteractiveReport.AspNetCore.Definitions;
+using InteractiveReport.Core.Authorization;
 using InteractiveReport.Core.Definitions;
 using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Identity;
@@ -26,13 +27,34 @@ internal static class SavedReportEndpoints
 {
     // --- whoami --------------------------------------------------------------
 
-    internal static IResult Whoami(HttpContext ctx)
+    internal static async Task<IResult> Whoami(HttpContext ctx, CancellationToken ct)
     {
         var opts = Options(ctx);
         if (!opts.WhoamiEnabled) return Results.NotFound();
 
         var identity = ReportIdentity.Resolve(ctx.User, opts.IdentityClaim);
-        var administratorListConfigured = opts.Administrators.Count > 0;
+        var database = new DatabaseAdministratorAccess(false, false);
+        if (ReportConnectionRegistry.IsStoreConfigured(opts.SavedReports))
+        {
+            try
+            {
+                database = await ctx.RequestServices.GetRequiredService<IReportAuthorizationStore>()
+                    .GetAdministratorAccess(identity, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                return EndpointExtensions.ServerError(
+                    ctx, SavedReportsListingDefinition.Name, "identity authorization lookup", ex);
+            }
+        }
+
+        var configuredAdministrator = ReportIdentity.IsAdministrator(
+            ctx.User, opts.IdentityClaim, opts.Administrators);
+        var administratorListConfigured = opts.Administrators.Count > 0 || database.Configured;
         var applicationAuthorizationConfigured = ctx.RequestServices
             .GetServices<IInteractiveReportAuthorizer>()
             .Any();
@@ -41,13 +63,87 @@ internal static class SavedReportEndpoints
             authenticated = ctx.User.Identity?.IsAuthenticated == true,
             // The exact value to put in InteractiveReport:Administrators.
             identity,
-            isAdministrator = ReportIdentity.IsAdministrator(ctx.User, opts.IdentityClaim, opts.Administrators),
+            isAdministrator = configuredAdministrator || database.UserGranted,
+            configuredAdministrator,
+            databaseAdministrator = database.UserGranted,
             administratorListConfigured,
             applicationAuthorizationConfigured,
             name = ctx.User.Identity?.Name,
             authenticationType = ctx.User.Identity?.AuthenticationType,
             claims = ctx.User.Claims.Select(c => new { type = c.Type, value = c.Value }),
         }, IrJson.Options);
+    }
+
+    // --- administration user directory -------------------------------------
+
+    internal static async Task<IResult> AdminListUsers(
+        HttpContext ctx,
+        CancellationToken ct)
+    {
+        var definitions = ctx.RequestServices.GetRequiredService<IReportDefinitionStore>();
+        var (definition, findError) = await EndpointExtensions.FindDefinition(
+            definitions,
+            SavedReportsListingDefinition.Name,
+            ctx,
+            ct);
+        if (findError is not null) return findError;
+        if (definition is null) return Results.NotFound();
+
+        // Reuse the listing action so an application authorizer that already permits
+        // the administration screen also permits its account selector. The built-in
+        // definition supplies the administrator-only gate before the provider runs.
+        if (await ReportRequestAccess.Authorize(
+                definition,
+                ctx,
+                [InteractiveReportAction.ListAllSavedReports],
+                Resource(definition.Name),
+                administratorRequired: true,
+                hideDenied: true,
+                denialDetail: null,
+                ct) is { } denied)
+            return denied;
+
+        var provider = ctx.RequestServices.GetService<IInteractiveReportUserProvider>();
+        if (provider is null)
+            return Results.Json(Array.Empty<InteractiveReportUser>(), IrJson.Options);
+
+        try
+        {
+            var supplied = await provider.GetUsers(ctx.User, ct);
+            if (supplied is null || supplied.Count == 0)
+                return Results.Json(Array.Empty<InteractiveReportUser>(), IrJson.Options);
+
+            var users = new List<InteractiveReportUser>(supplied.Count);
+            var values = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var user in supplied)
+            {
+                if (user is null
+                    || string.IsNullOrWhiteSpace(user.Display)
+                    || string.IsNullOrWhiteSpace(user.Value))
+                    throw new InvalidOperationException(
+                        "The Interactive Reports user provider returned an entry with an empty display or value.");
+
+                var normalized = new InteractiveReportUser(user.Display.Trim(), user.Value.Trim());
+                if (!values.Add(normalized.Value))
+                    throw new InvalidOperationException(
+                        $"The Interactive Reports user provider returned duplicate value '{normalized.Value}'.");
+                users.Add(normalized);
+            }
+
+            return Results.Json(users, IrJson.Options);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return EndpointExtensions.ServerError(
+                ctx,
+                definition.Name,
+                "administration user lookup",
+                ex);
+        }
     }
 
     // --- user surface --------------------------------------------------------
