@@ -490,8 +490,8 @@ a pack, or a run of the packaged UI — `dotnet pack` and `dotnet build -c Relea
 fail with instructions when the bundles are missing, so a UI-less package cannot
 ship silently. `scripts/pack.ps1` (also `npm run pack`) chains the client build, the
 fast test layers, and `dotnet pack` for the three distributable projects into
-`artifacts/packages`; the tag-triggered `.github/workflows/release.yml` runs the
-same sequence and pushes to nuget.org when a `NUGET_API_KEY` secret is configured.
+`artifacts/packages`; publishing beyond that is currently a manual
+`dotnet nuget push` (release automation is deliberately still open).
 Package consumers never need Node.js. `ir-chart.js` (the Chart.js-based chart
 renderer) is fetched on demand the first time a report enters chart view; pages
 that never chart never load it.

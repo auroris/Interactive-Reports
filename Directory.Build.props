@@ -19,8 +19,10 @@
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
 
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <!-- Public members are documented where it matters; exhaustive coverage is not a goal. -->
-    <NoWarn>$(NoWarn);CS1591;CS1573</NoWarn>
+    <!-- Comment readability outranks XML-doc pedantry: no exhaustive coverage
+         (CS1591/CS1573), and prose like "comparison = <> < <=" stays literal
+         rather than entity-escaped (CS1570). -->
+    <NoWarn>$(NoWarn);CS1591;CS1573;CS1570</NoWarn>
   </PropertyGroup>
 
 </Project>

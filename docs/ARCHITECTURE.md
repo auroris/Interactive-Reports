@@ -79,10 +79,11 @@ still avoiding the worst dialect divergence (native PIVOT syntax) entirely.
 Target framework: `net8.0` (Umbraco 13 LTS floor; builds under SDK 8/10). Package
 dependencies pin 8.0.x for the same reason. Shared NuGet metadata (MIT, repo URL,
 Source Link, snupkg symbols, version) lives in the root `Directory.Build.props`;
-`scripts/pack.ps1` (`npm run pack`) and the tag-triggered
-`.github/workflows/release.yml` build the client bundles, run the fast test layers,
-and pack the three `src/` projects — an MSBuild guard fails Release builds and packs
-when `Ui/dist` is empty, so a UI-less package cannot ship.
+`scripts/pack.ps1` (`npm run pack`) builds the client bundles, runs the fast test
+layers, and packs the three `src/` projects — an MSBuild guard fails Release builds
+and packs when `Ui/dist` is empty, so a UI-less package cannot ship. Publish
+automation is deliberately undecided (owner discussion pending); packing is the
+scripted boundary today.
 
 ## 4. Report definitions
 
@@ -1113,9 +1114,9 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   imports the element class except its entry, so the graph stays acyclic.
   `npm run build` uses esbuild to compile the stylesheet and modules into three
   self-contained entry bundles in `Ui/dist`. The generated assets are ignored;
-  `scripts/pack.ps1` and the release workflow build them before packing, and an
-  MSBuild guard fails Release builds and packs when they are missing — package
-  consumers do not require Node.js, and a UI-less package cannot ship silently.
+  `scripts/pack.ps1` builds them before packing, and an MSBuild guard fails
+  Release builds and packs when they are missing — package consumers do not
+  require Node.js, and a UI-less package cannot ship silently.
 - **Packaged pages**: `GET {prefix}/{name}/view` hosts `<interactive-report>` and
   `GET {prefix}/admin` hosts `<interactive-report-admin>` — minimal shells emitting
   an absolute-prefix script URL so the client's script-relative api-base inference
@@ -1357,7 +1358,8 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   whoami-off guidance banner (which also surfaced and fixed the admin element's
   `remove()` method shadowing `Element.remove()`). MIT + full nuget.org metadata
   at 0.9.0 via `Directory.Build.props`, 8.0.x dependency pins, `Ui/dist` pack
-  guard, `scripts/pack.ps1`, tag-triggered release workflow, README rewritten
+  guard, `scripts/pack.ps1` (publish automation deliberately deferred to an owner
+  discussion), README rewritten
   package-first with an Umbraco 13 quickstart. Verified: 354 Core + 166
   AspNetCore + 2 offline live-project tests, 62 packaged-UI unit tests, 22
   Playwright e2e (three new packaged-page scenarios; Workbench reports run
