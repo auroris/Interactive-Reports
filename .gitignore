@@ -486,3 +486,4 @@ playwright-report/
 test-results/
 blob-report/
 /src/InteractiveReport.AspNetCore/Ui/dist
+/samples/Workbench/App_Data
