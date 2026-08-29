@@ -1,11 +1,11 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="fr-CA">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>InteractiveReport — Workbench</title>
+    <title>InteractiveReport — Atelier français</title>
     <style>
-        /* Host-page chrome only — everything inside <interactive-report> ships with the package. */
+        /* Habillage de la page hôte seulement; le rapport provient du paquet. */
         :root { color-scheme: light; }
         body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; background: #eef1f4; color: #1f2733; }
         header {
@@ -41,56 +41,53 @@
 </head>
 <body>
     <header>
-        <h1>InteractiveReport Workbench</h1>
+        <h1>Atelier InteractiveReport</h1>
         <div class="links">
             <span id="identity"></span>
-            <a href="#workbench-links">Tools &amp; endpoints</a>
+            <a href="/" lang="en" hreflang="en">English</a>
+            <a href="#workbench-links">Outils et points de terminaison</a>
         </div>
     </header>
 
     <main>
-        <nav id="workbench-links" class="workbench-links" aria-label="Workbench tools and endpoints">
-            <a href="/fr.html" lang="fr-CA" hreflang="fr-CA">
-                <strong>Atelier en français</strong>
-                <small>Rapport hébergé en français canadien</small>
-            </a>
+        <nav id="workbench-links" class="workbench-links" aria-label="Outils et points de terminaison de l’atelier">
             <a href="/api/reports/orders/view">
-                <strong>Packaged viewer</strong>
-                <small>Standalone report page shipped by the server package</small>
+                <strong>Visionneuse fournie</strong>
+                <small>Page de rapport autonome fournie par le paquet serveur</small>
             </a>
             <a href="/admin.html">
-                <strong>Host administration</strong>
-                <small>Workbench page hosting the saved-report administration element</small>
+                <strong>Administration hébergée</strong>
+                <small>Page de l’atelier qui héberge l’élément d’administration</small>
             </a>
             <a href="/api/reports/admin">
-                <strong>Packaged administration</strong>
-                <small>Standalone administration page shipped by the server package</small>
+                <strong>Administration fournie</strong>
+                <small>Page d’administration autonome fournie par le paquet serveur</small>
             </a>
             <a href="/swagger">
-                <strong>Swagger UI</strong>
-                <small>Browse and execute the documented REST API</small>
+                <strong>Interface Swagger</strong>
+                <small>Parcourir et exécuter l’API REST documentée</small>
             </a>
             <a href="/swagger/v1/swagger.json">
-                <strong>OpenAPI document</strong>
-                <small>Raw generated OpenAPI JSON</small>
+                <strong>Document OpenAPI</strong>
+                <small>Document JSON OpenAPI généré</small>
             </a>
             <a href="/graphiql">
                 <strong>GraphiQL</strong>
-                <small>Explore the schema and execute saved-report queries</small>
+                <small>Explorer le schéma et exécuter des requêtes de rapports enregistrés</small>
             </a>
             <a href="/api/reports/whoami">
-                <strong>Who am I?</strong>
-                <small>Identity and authorization bootstrap diagnostics</small>
+                <strong>Qui suis-je?</strong>
+                <small>Diagnostic de l’identité et des autorisations</small>
             </a>
             <a href="/api/reports/orders/schema">
-                <strong>Orders schema</strong>
-                <small>Raw schema, capabilities, features, and limits JSON</small>
+                <strong>Schéma des commandes</strong>
+                <small>Schéma, capacités, fonctionnalités et limites au format JSON</small>
             </a>
         </nav>
 
         <interactive-report report="orders" api-base="/api/reports">
             <p class="build-warning">
-                You're seeing this message because you forgot to run
+                Vous voyez ce message parce que vous avez oublié d’exécuter
                 <code>npm install &amp;&amp; npm run build</code>.
             </p>
         </interactive-report>
@@ -99,7 +96,7 @@
     <script type="module">
         const who = await fetch("/api/reports/whoami").then(r => r.ok ? r.json() : null).catch(() => null);
         if (who) document.getElementById("identity").textContent =
-            (who.identity ?? "anonymous") + (who.isAdministrator ? " · admin" : "");
+            (who.identity ?? "anonyme") + (who.isAdministrator ? " · admin" : "");
     </script>
 </body>
 </html>

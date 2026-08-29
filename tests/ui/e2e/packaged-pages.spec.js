@@ -16,6 +16,19 @@ test("the packaged viewer page serves a working report", async ({ page }) => {
     await expect(page.getByText("1 – 50 of 500 rows", { exact: true })).toBeVisible();
 });
 
+test("the Workbench exposes a Canadian French report page", async ({ page }) => {
+    await page.goto("/fr.html");
+
+    await expect(page).toHaveTitle("InteractiveReport — Atelier français");
+    await expect(page.locator("html")).toHaveAttribute("lang", "fr-CA");
+    await expect(page.locator("interactive-report")).not.toHaveAttribute("lang");
+    await expect(page.getByRole("searchbox", { name: "Rechercher" })).toBeVisible();
+    await expect(page.getByText("1 à 50 sur 500 lignes", { exact: true })).toBeVisible();
+
+    await page.getByRole("button", { name: "Actions", exact: true }).click();
+    await expect(page.getByRole("menuitem", { name: "Colonnes…", exact: true })).toBeVisible();
+});
+
 test("a dataSource-configured report with no dialect loads through the packaged page", async ({ page }) => {
     await page.goto("/api/reports/order-feed/view");
 
