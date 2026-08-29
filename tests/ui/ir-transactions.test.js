@@ -43,6 +43,8 @@ let holdSavedDocuments = false;
 const heldSavedDocuments = [];
 let holdSaves = false;
 const heldSaves = [];
+let holdSavedLists = false;
+const heldSavedLists = [];
 let savedMutationResult = null;
 
 const json = (value, status = 200) => new Response(JSON.stringify(value), {
@@ -80,6 +82,12 @@ globalThis.fetch = (url, options = {}) => {
             : new Response(null, { status: whoamiStatus }));
     }
     if (path.endsWith("/saved") && method === "GET") {
+        if (holdSavedLists) {
+            return new Promise(resolve => heldSavedLists.push({
+                url: path,
+                succeed: reports => resolve(json(reports)),
+            }));
+        }
         return Promise.resolve(savedListStatus === 200
             ? json(savedReports)
             : new Response(null, { status: savedListStatus }));
@@ -299,6 +307,44 @@ test("a successful save remains in the local list when its refresh fails", async
 
     savedMutationResult = null;
     savedListStatus = 200;
+    report.remove();
+});
+
+test("a saved-list refresh cannot cross a report switch", async () => {
+    requests.length = 0;
+    savedReports = [];
+    savedListStatus = 200;
+    const report = await mount();
+
+    savedMutationResult = { id: "saved-orders", title: "Orders copy", mine: true };
+    holdSavedLists = true;
+    heldSavedLists.length = 0;
+    const save = saveReport(report, {
+        title: "Orders copy", isGlobal: false, isPrimary: false, asNew: true,
+    });
+    await settle(() => heldSavedLists.length === 1);
+    assert.match(heldSavedLists[0].url, /\/orders\/saved$/);
+
+    holdSavedLists = false;
+    const invoiceSaved = { id: "saved-invoices", title: "Invoices copy", mine: true };
+    savedReports = [invoiceSaved];
+    report.setAttribute("report", "invoices");
+    await settle(() => report.reportName === "invoices"
+        && report.savedList.some(saved => saved.id === invoiceSaved.id));
+
+    heldSavedLists[0].succeed([
+        { id: "late-orders", title: "Late orders response", mine: true },
+    ]);
+    await save;
+
+    assert.deepEqual(report.savedList, [invoiceSaved],
+        "the completed Orders request must not replace the Invoices list");
+    assert.equal(report.els.savedSel.value, "",
+        "the current report's selector remains on its own default state");
+
+    savedMutationResult = null;
+    savedReports = [];
+    heldSavedLists.length = 0;
     report.remove();
 });
 

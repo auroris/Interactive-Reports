@@ -8,6 +8,12 @@ namespace InteractiveReport.Core.SavedReports;
 /// </summary>
 public interface ISavedReportStore
 {
+    /// <summary>
+    /// Returns one detached, coherent version of the complete row. Metadata and
+    /// StateJson must come from the same authoritative version, and later store
+    /// mutations must not mutate the returned instance. Authorization paths rely on
+    /// this snapshot boundary before they inspect metadata and consume the state.
+    /// </summary>
     Task<SavedReport?> Get(string id, CancellationToken ct = default);
 
     /// <summary>
@@ -65,17 +71,54 @@ public interface ISavedReportStore
 
     Task Create(SavedReport report, CancellationToken ct = default);
 
-    /// <summary>Full-row update by id (last write wins); refreshes ModifiedUtc.</summary>
-    Task<bool> Update(SavedReport report, CancellationToken ct = default);
+    /// <summary>
+    /// Atomically replaces <paramref name="expected"/> with <paramref name="report"/>
+    /// when its authorization fields and ModifiedUtc concurrency version still match
+    /// the authoritative snapshot. Returns false when the row was deleted or changed
+    /// after it was read. Successful updates refresh both the stored ModifiedUtc and
+    /// <paramref name="report"/>'s value so callers can return the committed revision.
+    /// Snapshot string fields use ordinal equality, never the storage collation.
+    /// </summary>
+    Task<bool> Update(
+        SavedReport report,
+        SavedReport expected,
+        CancellationToken ct = default);
 
     /// <summary>
-    /// Insert-or-update by id that persists the row — including ModifiedUtc — exactly
-    /// as given. The configured-document synchronizer's write path: synced rows carry
-    /// their file's timestamp, so this deliberately never stamps, unlike
-    /// <see cref="Create"/> and <see cref="Update"/>.
+    /// Insert-or-update convenience operation. Inserts preserve the supplied
+    /// ModifiedUtc. Every replacement advances ModifiedUtc beyond the stored version,
+    /// even when the supplied value is unchanged or older, so it remains a valid CAS
+    /// revision. Implementations must retry conditional conflicts without applying a
+    /// stale replacement to a newer row.
     /// </summary>
     Task Put(SavedReport report, CancellationToken ct = default);
 
+    /// <summary>
+    /// Atomically inserts <paramref name="report"/> when <paramref name="expected"/>
+    /// is null and the id is absent, or replaces the row when it still equals the
+    /// detached <paramref name="expected"/> snapshot. A replacement advances
+    /// ModifiedUtc in storage and on <paramref name="report"/>. Returns false on a
+    /// concurrent insert, update, or delete. Snapshot strings use ordinal equality.
+    /// </summary>
+    Task<bool> Put(
+        SavedReport report,
+        SavedReport? expected,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Atomically deletes a row only when its authorization fields and ModifiedUtc
+    /// concurrency version still match the authoritative snapshot. Returns false when
+    /// the row was deleted or changed. Endpoint authorization paths use this overload
+    /// so a decision can never be applied to a different version of the resource.
+    /// Snapshot string fields use ordinal equality, never the storage collation.
+    /// </summary>
+    Task<bool> Delete(SavedReport expected, CancellationToken ct = default);
+
+    /// <summary>
+    /// Unconditional delete by id for internal reconciliation, where the configured
+    /// manifest is authoritative and deliberately removes an orphan regardless of its
+    /// stored contents.
+    /// </summary>
     Task<bool> Delete(string id, CancellationToken ct = default);
 }
 
@@ -109,6 +152,11 @@ public sealed record SavedReport
     public bool IsPrimary { get; set; }
     /// <summary>The state document, stored verbatim as JSON text.</summary>
     public required string StateJson { get; set; }
+    /// <summary>
+    /// Persisted optimistic-concurrency revision. Create uses the current UTC time;
+    /// configured-row inserts may seed it from a file mtime, but every subsequent
+    /// replacement must advance it even when that source timestamp is unchanged.
+    /// </summary>
     public DateTime ModifiedUtc { get; set; }
     public SavedReportOrigin Origin { get; set; } = SavedReportOrigin.User;
 

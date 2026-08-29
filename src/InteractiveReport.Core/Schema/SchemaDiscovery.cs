@@ -32,7 +32,8 @@ public static class SchemaDiscovery
         CancellationToken ct = default)
     {
         var probe = new Query()
-            .FromRaw($"({def.Sql}) {QueryComposer.BaseAlias}") // no AS: Oracle table aliases
+            .FromRaw(SqlKataSyntax.PreserveRaw(
+                $"({def.Sql}) {QueryComposer.BaseAlias}")) // no AS: Oracle table aliases
             .WhereRaw("1 = 0");
 
         var compiled = DialectSupport.GetCompiler(def.GetEffectiveDialect()).Compile(probe);

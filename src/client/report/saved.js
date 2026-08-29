@@ -46,9 +46,16 @@ export function refreshSavedSelect(w) {
 }
 
 async function loadSavedList(w) {
+    const sequence = w._seq;
+    const reportName = w.reportName;
+    const stillCurrent = () => sequence === w._seq && reportName === w.reportName;
     try {
-        w.savedList = await api(w.reportUrl("saved"));
+        const saved = await api(w.reportUrl("saved"));
+        if (stillCurrent()) w.savedList = saved;
     } catch (err) {
+        // A save/delete refresh can finish after the element has switched reports.
+        // Its response and errors belong to the old report context.
+        if (!stillCurrent()) return;
         // 404 = the feature is off. A real failure keeps the list we have —
         // wiping it would present a server problem as "no saved reports".
         if (err.status === 404) { w.savedList = []; return; }

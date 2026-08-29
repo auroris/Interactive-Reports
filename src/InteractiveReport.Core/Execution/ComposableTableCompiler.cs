@@ -593,7 +593,8 @@ internal sealed class ComposableTableCompiler
             rows,
             columns,
             metrics,
-            keys);
+            keys,
+            _definition.GetEffectiveDialect());
         var retainedSources = rows.ToDictionary(
             row => row.Name,
             row => ResolveFormatSource(formatSources, row, formats),

@@ -261,8 +261,9 @@ internal static class SavedReportEndpoints
     internal static async Task<IResult> Load(string id, HttpContext ctx, CancellationToken ct)
     {
         await Synchronizer(ctx).EnsureSynced(ct);
-        var metadata = await SavedStore(ctx).GetMetadata(id, ct);
-        if (metadata is null) return EndpointExtensions.SavedReportNotFound();
+        var report = await SavedStore(ctx).Get(id, ct);
+        if (report is null) return EndpointExtensions.SavedReportNotFound();
+        var metadata = report.Metadata();
 
         // Loading a state document still requires access to the underlying report.
         var identity = Identity(ctx);
@@ -277,9 +278,6 @@ internal static class SavedReportEndpoints
         }, ctx, ct);
         if (access.Error is not null) return access.Error;
 
-        var report = await SavedStore(ctx).Get(id, ct);
-        if (report is null) return EndpointExtensions.SavedReportNotFound();
-
         using var state = JsonDocument.Parse(report.StateJson);
         return Results.Json(
             new SavedReportDocument(Summary(report, identity), state.RootElement.Clone()),
@@ -290,8 +288,9 @@ internal static class SavedReportEndpoints
     {
         await Synchronizer(ctx).EnsureSynced(ct);
         var savedStore = SavedStore(ctx);
-        var metadata = await savedStore.GetMetadata(id, ct);
-        if (metadata is null) return EndpointExtensions.SavedReportNotFound();
+        var current = await savedStore.Get(id, ct);
+        if (current is null) return EndpointExtensions.SavedReportNotFound();
+        var metadata = current.Metadata();
 
         var identity = Identity(ctx);
         UpdateSavedReportRequest request = null!;
@@ -344,8 +343,7 @@ internal static class SavedReportEndpoints
         if (access.Error is not null) return access.Error;
         var definition = access.Definition!;
 
-        var report = await savedStore.Get(id, ct);
-        if (report is null) return EndpointExtensions.SavedReportNotFound();
+        var report = current with { };
 
         if (metadata.Origin == SavedReportOrigin.Configured)
         {
@@ -357,7 +355,7 @@ internal static class SavedReportEndpoints
                 return ReadOnlyConfiguredResult();
 
             report.IsPrimary = candidate.Primary;
-            return await savedStore.Update(report, ct)
+            return await savedStore.Update(report, current, ct)
                 ? Results.Json(Summary(report, identity), IrJson.Options)
                 : EndpointExtensions.SavedReportNotFound();
         }
@@ -381,7 +379,7 @@ internal static class SavedReportEndpoints
 
         try
         {
-            return await savedStore.Update(report, ct)
+            return await savedStore.Update(report, current, ct)
                 ? Results.Json(Summary(report, identity), IrJson.Options)
                 : EndpointExtensions.SavedReportNotFound();
         }
@@ -395,7 +393,7 @@ internal static class SavedReportEndpoints
     {
         await Synchronizer(ctx).EnsureSynced(ct);
         var savedStore = SavedStore(ctx);
-        var report = await savedStore.GetMetadata(id, ct);
+        var report = await savedStore.Get(id, ct);
         if (report is null) return EndpointExtensions.SavedReportNotFound();
 
         var identity = Identity(ctx);
@@ -404,7 +402,7 @@ internal static class SavedReportEndpoints
         {
             ReportName = report.ReportName,
             Actions = [InteractiveReportAction.DeleteSavedReport],
-            Resource = Resource(report.ReportName, report),
+            Resource = Resource(report.ReportName, report.Metadata()),
             AdministratorRequired = report.Origin != SavedReportOrigin.Configured
                 && builtIn != SavedReportAccess.Allowed,
             HideDenied = builtIn == SavedReportAccess.Hidden,
@@ -415,7 +413,7 @@ internal static class SavedReportEndpoints
         if (report.Origin == SavedReportOrigin.Configured)
             return ReadOnlyConfiguredResult();
 
-        return await savedStore.Delete(id, ct)
+        return await savedStore.Delete(report, ct)
             ? Results.NoContent()
             : EndpointExtensions.SavedReportNotFound();
     }
@@ -436,8 +434,9 @@ internal static class SavedReportEndpoints
         if (Identity(ctx) is null) return EndpointExtensions.AuthenticationRequired();
 
         await Synchronizer(ctx).EnsureSynced(ct);
-        var metadata = await SavedStore(ctx).GetMetadata(id, ct);
-        if (metadata is null) return EndpointExtensions.SavedReportNotFound();
+        var report = await SavedStore(ctx).Get(id, ct);
+        if (report is null) return EndpointExtensions.SavedReportNotFound();
+        var metadata = report.Metadata();
         var reportName = metadata.ReportName;
         var access = await Access(ctx).Authorize(new ReportAccessRequest
         {
@@ -448,9 +447,6 @@ internal static class SavedReportEndpoints
             HideDenied = true,
         }, ctx, ct);
         if (access.Error is not null) return access.Error;
-
-        var report = await SavedStore(ctx).Get(id, ct);
-        if (report is null) return EndpointExtensions.SavedReportNotFound();
 
         ReportState? state;
         try

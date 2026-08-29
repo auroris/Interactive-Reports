@@ -76,8 +76,9 @@ public sealed class SqliteSavedReportStoreTests : SavedReportStoreCorpus, IDispo
         var loaded = Assert.Single(await store.ListAll());
 
         Assert.False(loaded.IsPrimary);
+        var expected = loaded with { };
         loaded.IsPrimary = true;
-        Assert.True(await store.Update(loaded));
+        Assert.True(await store.Update(loaded, expected));
         Assert.True((await store.Get(loaded.Id))!.IsPrimary);
     }
 

@@ -11,6 +11,8 @@ namespace InteractiveReport.AspNetCore;
 /// files remain the source of truth: rows are upserted under their stable cfg_ ids
 /// whenever a file signature changes, and configured rows whose file is gone are
 /// removed (which also self-handles moved or renamed files — their id changes).
+/// A new row starts at the file mtime; subsequent content replacements advance that
+/// value as an optimistic-concurrency revision, including when an mtime is preserved.
 /// A file's primary value seeds a new row. After that the database flag is preserved,
 /// making the administrator's flag/unflag action authoritative over file metadata.
 /// </summary>
@@ -72,25 +74,34 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
 
             foreach (var document in documents)
             {
-                var isPrimary = byId.TryGetValue(document.Id, out var current)
-                    ? current.IsPrimary
-                    : document.Primary;
-                var row = new SavedReport
+                byId.TryGetValue(document.Id, out var current);
+                while (true)
                 {
-                    Id = document.Id,
-                    ReportName = document.ReportName,
-                    Title = document.Title,
-                    Owner = null,
-                    IsGlobal = true,
-                    IsPrimary = isPrimary,
-                    StateJson = document.StateJson,
-                    ModifiedUtc = document.ModifiedUtc,
-                    Origin = SavedReportOrigin.Configured,
-                };
-                if (current is null || Differs(current, row))
-                {
-                    await _store.Put(row, ct);
-                    upserted++;
+                    var row = new SavedReport
+                    {
+                        Id = document.Id,
+                        ReportName = document.ReportName,
+                        Title = document.Title,
+                        Owner = null,
+                        IsGlobal = true,
+                        IsPrimary = current?.IsPrimary ?? document.Primary,
+                        StateJson = document.StateJson,
+                        ModifiedUtc = document.ModifiedUtc,
+                        Origin = SavedReportOrigin.Configured,
+                    };
+                    if (current is not null && !Differs(current, row)) break;
+
+                    if (await _store.Put(row, current, ct))
+                    {
+                        byId[document.Id] = row;
+                        upserted++;
+                        break;
+                    }
+
+                    // Re-evaluate the administrator-owned primary bit after a
+                    // concurrent mutation instead of applying the stale value that
+                    // ListAll observed at the start of synchronization.
+                    current = await _store.Get(document.Id, ct);
                 }
             }
 
@@ -132,7 +143,6 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
 
     private static bool Differs(SavedReport current, SavedReport desired)
         => current.Origin != desired.Origin
-            || current.ModifiedUtc != desired.ModifiedUtc
             || !current.IsGlobal
             || current.IsPrimary != desired.IsPrimary
             || current.Owner is not null

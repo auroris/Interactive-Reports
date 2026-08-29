@@ -198,21 +198,7 @@ public sealed class ReportExecutor
         if (document.Tables is not { Count: > 0 })
             return new SchemaRefresh(document, results);
 
-        if (string.IsNullOrWhiteSpace(document.ActiveTable))
-            throw new ReportValidationException(
-                [new ValidationError("activeTable", "activeTable is required when tables are present")]);
-        var activeTable = document.Tables.Keys.FirstOrDefault(tableId => string.Equals(
-            tableId,
-            document.ActiveTable.Trim(),
-            StringComparison.OrdinalIgnoreCase));
-        if (activeTable is null)
-            throw new ReportValidationException(
-                [new ValidationError(
-                    "activeTable",
-                    $"unknown table '{document.ActiveTable.Trim()}'")]);
-        // Accept harmless casing/outer whitespace at the boundary, but return and
-        // persist the exact document-owned table identifier.
-        document.ActiveTable = activeTable;
+        var activeTable = ResolveActiveTable(document);
 
         var refreshTargets = document.Tables
             .Where(pair => pair.Value.Schema is null)
@@ -527,6 +513,27 @@ public sealed class ReportExecutor
     private static bool RequiresComposablePipeline(ReportState state, string? activeTable)
         => state.Tables is { Count: > 0 } && !string.IsNullOrWhiteSpace(activeTable);
 
+    private static string ResolveActiveTable(ReportState document)
+    {
+        if (string.IsNullOrWhiteSpace(document.ActiveTable))
+            throw new ReportValidationException(
+                [new ValidationError("activeTable", "activeTable is required when tables are present")]);
+
+        var requested = document.ActiveTable.Trim();
+        var activeTable = document.Tables!.Keys.FirstOrDefault(tableId => string.Equals(
+            tableId,
+            requested,
+            StringComparison.OrdinalIgnoreCase));
+        if (activeTable is null)
+            throw new ReportValidationException(
+                [new ValidationError("activeTable", $"unknown table '{requested}'")]);
+
+        // Accept harmless casing/outer whitespace at the boundary, but return and
+        // persist the exact document-owned table identifier.
+        document.ActiveTable = activeTable;
+        return activeTable;
+    }
+
     private static List<ColumnInfo>? StaticTableSchema(ValidatedState state)
         => state.View.Mode switch
         {
@@ -583,6 +590,9 @@ public sealed class ReportExecutor
         var document = ReportStateResolver.Resolve(definition.DefaultState, state);
         if (document.Tables is { Count: > 0 })
         {
+            // "definition" is an internal ancestry token, not an exportable target.
+            // Resolve a document-owned table before opening a database connection.
+            ResolveActiveTable(document);
             return await ExportComposableTable(
                 definition,
                 document,

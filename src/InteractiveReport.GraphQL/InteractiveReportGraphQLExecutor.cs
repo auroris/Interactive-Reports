@@ -36,8 +36,9 @@ internal sealed class InteractiveReportGraphQLExecutor(
             ?? throw new InvalidOperationException("GraphQL report execution requires an active HTTP request.");
 
         await synchronizer.EnsureSynced(ct);
-        var metadata = await savedReports.GetMetadata(id, ct);
-        if (metadata is null) throw NotFound();
+        var saved = await savedReports.Get(id, ct);
+        if (saved is null) throw NotFound();
+        var metadata = saved.Metadata();
 
         var identity = ReportIdentity.Resolve(context.User, options.CurrentValue.IdentityClaim);
         var savedReportAccess = SavedReportAccessPolicy.Read(metadata, identity, administrator: false);
@@ -66,9 +67,6 @@ internal sealed class InteractiveReportGraphQLExecutor(
         if (authorization.Error is not null)
             throw AuthorizationError(authorization.Error, context);
         var definition = authorization.Definition ?? throw NotFound();
-
-        var saved = await savedReports.Get(id, ct);
-        if (saved is null) throw NotFound();
 
         try
         {

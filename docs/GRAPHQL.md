@@ -71,6 +71,14 @@ type Query {
 }
 ```
 
+Each operation may contain at most one executable `report` response key. Aliases and
+root fragments do not permit one HTTP request to fan out into multiple report/database
+executions; such an operation fails GraphQL validation before any resolver runs. An
+operation may expand at most 256 fragment-spread visits across its reachable fragment
+graph; documents above that ceiling fail before authorization or execution, including
+when parsed documents are cached. The adapter also caps its schema's execution
+concurrency at one without changing other GraphQL schemas registered by the host.
+
 `id` is the saved-report id returned by the existing saved-report listing and creation
 APIs. It is unique across report definitions and origins. Configured file-backed ids
 remain stable while their configured report name and resolved file path remain stable.

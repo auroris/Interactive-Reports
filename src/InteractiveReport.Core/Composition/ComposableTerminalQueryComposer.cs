@@ -223,13 +223,14 @@ internal static class ComposableTerminalQueryComposer
         var placement = sort.Nulls == NullPlacement.First ? "FIRST" : "LAST";
         if (dialect != ReportDialect.SqlServer)
         {
-            query.OrderByRaw($"[{physicalName}] {direction} NULLS {placement}");
+            query.OrderByRaw(
+                $"{SqlKataSyntax.Identifier(dialect, physicalName)} {direction} NULLS {placement}");
             return;
         }
 
         var nullRank = sort.Nulls == NullPlacement.First ? 0 : 1;
         query.OrderByRaw(
-            $"CASE WHEN [{physicalName}] IS NULL THEN {nullRank} ELSE {1 - nullRank} END");
+            $"CASE WHEN {SqlKataSyntax.Identifier(dialect, physicalName)} IS NULL THEN {nullRank} ELSE {1 - nullRank} END");
         if (sort.Dir == SortDir.Asc) query.OrderBy(physicalName);
         else query.OrderByDesc(physicalName);
     }

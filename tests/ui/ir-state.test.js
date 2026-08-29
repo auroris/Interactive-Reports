@@ -792,6 +792,44 @@ test("terminal cleanup is table-local and understands inherited Pivot cell famil
     assert.deepEqual(node(state, "compute").computed, []);
 });
 
+test("computed cleanup retires an action whose key column disappears", () => {
+    const state = normalizeReportState({
+        activeTable: "base",
+        tables: {
+            base: {
+                from: "definition",
+                composables: nodesFor({
+                    computed: [{ id: "c1", expr: "AMOUNT * 2" }],
+                    formats: {
+                        ACTION: {
+                            displayAs: "action",
+                            command: "open-order",
+                            keyColumn: "c1",
+                            bold: true,
+                        },
+                        SAFE_ACTION: {
+                            displayAs: "action",
+                            command: "open-customer",
+                            keyColumn: "CUSTOMER",
+                        },
+                    },
+                }),
+            },
+        },
+    }, 25);
+
+    removeTerminalComputedColumn(state, "c1");
+
+    assert.deepEqual(node(state, "formats").formats, {
+        ACTION: { bold: true },
+        SAFE_ACTION: {
+            displayAs: "action",
+            command: "open-customer",
+            keyColumn: "CUSTOMER",
+        },
+    });
+});
+
 test("metric cleanup traverses repeated terminal nodes, including read-only predecessors", () => {
     const cell = 'm1@["SHIPPED"]';
     const state = normalizeReportState({
@@ -929,6 +967,9 @@ test("expression references skip quoted contents and longer identifiers", () => 
     assert.equal(expressionReferencesColumn('`m1@["SHIPPED"]` > 0', 'm1@["SHIPPED"]'), true);
     assert.equal(expressionReferencesColumn('`m1@["SHIPPED"]` > 0', "m1"), false);
     assert.equal(expressionReferencesColumn('`m1@["SHIPPED"]` > 0', "m1", { pivotFamily: true }), true);
+    assert.equal(expressionReferencesColumn("COST$ > 0", "cost$"), true);
+    assert.equal(expressionReferencesColumn("ORDER# = 1", "order#"), true);
+    assert.equal(expressionReferencesColumn("COST$ADJUSTED > 0", "COST$"), false);
 });
 
 test("scoped search emits escaped and typed predicates", () => {

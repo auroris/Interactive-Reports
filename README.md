@@ -466,7 +466,8 @@ The adapter accepts every saved-report origin. File-backed reports are strongly
 recommended for durable GraphQL consumers because ordinary users cannot modify their
 state; administrators update the source file deliberately. The resolver enforces both
 `ReadSavedReport` and `Query`, including ownership, publication, report-definition,
-context-parameter, and application authorization rules. See
+context-parameter, and application authorization rules. One operation may execute only
+one `report` root response key, including through aliases and fragments. See
 [GraphQL adapter](docs/GRAPHQL.md) for the complete contract and operational notes.
 The Workbench also installs GraphiQL at `/graphiql` in Development so its schema can be
 explored and saved-report queries can be executed in the browser.

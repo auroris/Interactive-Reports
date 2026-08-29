@@ -1215,9 +1215,10 @@ host content root, assigned stable opaque `cfg_…` endpoint ids, and **synced i
 saved-report store** as rows with
 `ORIGIN = 'configured'` whenever a file signature (length + last-write) changes.
 The files remain the source of truth: sync upserts under the stable id, removes
-configured rows whose file left the configuration, and never stamps timestamps (rows
-carry the file's mtime). The store is therefore the single listing surface — the
-end-user list, the admin list, and the built-in `__saved-reports` report all read
+configured rows whose file left the configuration. New rows begin with the file's mtime;
+each later content replacement advances that value as an optimistic-concurrency revision,
+even when a deployment preserves the mtime. The store is therefore the single listing
+surface — the end-user list, the admin list, and the built-in `__saved-reports` report all read
 rows, and provenance is a column: summaries derive `isReadOnly` from origin. The
 endpoints allow an administrator to change only `isPrimary`; content mutations and
 deletion return 403 because the next sync would resurrect them. A file's primary bit
@@ -1241,6 +1242,13 @@ Oracle, which has no partial indexes) — and pre-existing duplicate user titles
 the upgrade with instructions instead of silently keeping the race open. Owner
 visibility filters in memory with the same ordinal equality the authorization
 matrix uses, so database collation never decides who sees a row.
+
+`ISavedReportStore.Get` is also a security boundary for custom stores: it returns one
+detached, coherent metadata-and-state version. Authorized mutations carry that expected
+snapshot back to the store. The SQL implementation compares it ordinally in managed code,
+then updates or deletes only the matching `MODIFIED_UTC` revision; every replacement,
+including configured-document `Put`, advances that revision. This avoids collation drift
+and Oracle CLOB equality while preventing an authorization decision from reaching a newer row.
 
 **Primary and Default.** `IS_PRIMARY` is independent of global/private scope and is
 administrator-controlled. It makes a saved report visible to every caller authorized

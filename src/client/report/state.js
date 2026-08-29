@@ -549,7 +549,7 @@ export function expressionReferencesColumn(expression, column, { pivotFamily = f
         }
         if (!quoted && /[A-Za-z_]/.test(source[index])) {
             let end = index + 1;
-            while (end < source.length && /[A-Za-z0-9_]/.test(source[end])) end++;
+            while (end < source.length && /[A-Za-z0-9_$#]/.test(source[end])) end++;
             if (matches(source.slice(index, end))) return true;
             index = end;
             continue;
@@ -618,6 +618,13 @@ const cleanupColumnReferences = (range, column, { pivotFamily = false } = {}) =>
                 if (matches(name)) {
                     delete formats.formats[name];
                     continue;
+                }
+                if (matches(format?.keyColumn)) {
+                    if (String(format?.displayAs ?? "").trim().toLowerCase() === "action") {
+                        delete format.displayAs;
+                        delete format.command;
+                    }
+                    delete format.keyColumn;
                 }
                 if (matches(format?.urlColumn) || matches(format?.textColumn)) {
                     delete format.displayAs;

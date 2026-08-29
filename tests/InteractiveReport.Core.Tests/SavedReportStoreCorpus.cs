@@ -43,6 +43,21 @@ public abstract class SavedReportStoreCorpus
     }
 
     [SkippableFact]
+    public async Task Get_returns_a_detached_snapshot()
+    {
+        var report = Make("Detached", "alice");
+        await Store.Create(report);
+
+        var first = (await Store.Get(report.Id))!;
+        first.Owner = "mallory";
+        first.StateJson = """{"search":"mutated locally"}""";
+
+        var second = (await Store.Get(report.Id))!;
+        Assert.Equal("alice", second.Owner);
+        Assert.Equal(report.StateJson, second.StateJson);
+    }
+
+    [SkippableFact]
     public async Task Configured_rows_roundtrip_origin_null_owner_and_cfg_length_ids()
     {
         // Configured-document ids are 68 chars ("cfg_" + SHA-256 hex); the DDL must
@@ -72,21 +87,38 @@ public abstract class SavedReportStoreCorpus
     }
 
     [SkippableFact]
-    public async Task Put_inserts_then_updates_and_never_stamps_the_given_timestamp()
+    public async Task Put_preserves_an_insert_revision_and_advances_a_replacement_revision()
     {
         var report = Make("Synced", "alice");
-        report.ModifiedUtc = new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+        var initialRevision = new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+        report.ModifiedUtc = initialRevision;
         await Store.Put(report);
-        Assert.Equal(report.ModifiedUtc, (await Store.Get(report.Id))!.ModifiedUtc);
+        Assert.Equal(initialRevision, (await Store.Get(report.Id))!.ModifiedUtc);
 
         report.Title = "Synced v2";
-        report.ModifiedUtc = new DateTime(2026, 2, 3, 4, 5, 6, DateTimeKind.Utc);
+        report.ModifiedUtc = initialRevision;
         await Store.Put(report);
 
         var updated = await Store.Get(report.Id);
         Assert.Equal("Synced v2", updated!.Title);
         Assert.Equal(report.ModifiedUtc, updated.ModifiedUtc);
+        Assert.True(updated.ModifiedUtc > initialRevision);
         Assert.Equal(SavedReportOrigin.User, updated.Origin);
+    }
+
+    [SkippableFact]
+    public async Task Conditional_Put_rejects_an_expected_absent_insert_race()
+    {
+        var winner = Make("Insert winner", "alice");
+        winner.ModifiedUtc = new DateTime(2026, 3, 4, 5, 6, 7, DateTimeKind.Utc);
+        Assert.True(await Store.Put(winner, expected: null));
+
+        var loser = winner with { Title = "Insert loser" };
+        Assert.False(await Store.Put(loser, expected: null));
+
+        var current = (await Store.Get(winner.Id))!;
+        Assert.Equal("Insert winner", current.Title);
+        Assert.Equal(winner.ModifiedUtc, current.ModifiedUtc);
     }
 
     [SkippableFact]
@@ -151,15 +183,87 @@ public abstract class SavedReportStoreCorpus
         var report = Make("Original", "alice");
         await Store.Create(report);
 
+        var expected = report with { };
         report.Title = "Renamed";
         report.Owner = "bob";
         report.IsGlobal = true;
-        Assert.True(await Store.Update(report));
+        Assert.True(await Store.Update(report, expected));
 
         var loaded = await Store.Get(report.Id);
         Assert.Equal("Renamed", loaded!.Title);
         Assert.Equal("bob", loaded.Owner);
         Assert.True(loaded.IsGlobal);
+    }
+
+    [SkippableFact]
+    public async Task Update_and_delete_reject_a_stale_authoritative_snapshot()
+    {
+        var report = Make("Concurrent", "alice");
+        await Store.Create(report);
+        var expected = (await Store.Get(report.Id))!;
+
+        // A state-only write proves ModifiedUtc is a real concurrency predicate, not
+        // merely a repeat of the authorization metadata comparisons.
+        var winner = expected with { StateJson = """{"search":"winner"}""" };
+        Assert.True(await Store.Update(winner, expected));
+        Assert.NotEqual(expected.ModifiedUtc, winner.ModifiedUtc);
+
+        var stale = expected with { Title = "Stale overwrite", Owner = "mallory" };
+        Assert.False(await Store.Update(stale, expected));
+        Assert.False(await Store.Delete(expected));
+
+        var current = (await Store.Get(report.Id))!;
+        Assert.Equal("Concurrent", current.Title);
+        Assert.Equal("alice", current.Owner);
+        Assert.Equal(winner.StateJson, current.StateJson);
+        Assert.True(await Store.Delete(current));
+        Assert.Null(await Store.Get(report.Id));
+    }
+
+    [SkippableFact]
+    public async Task Same_revision_Put_replacement_invalidates_the_prior_snapshot()
+    {
+        var report = Make("Put race", "alice");
+        await Store.Create(report);
+        var expected = (await Store.Get(report.Id))!;
+
+        var replacement = expected with
+        {
+            StateJson = """{"search":"replacement"}""",
+            ModifiedUtc = expected.ModifiedUtc,
+        };
+        Assert.True(await Store.Put(replacement, expected));
+        Assert.True(replacement.ModifiedUtc > expected.ModifiedUtc);
+
+        var staleWrite = expected with { Title = "stale" };
+        Assert.False(await Store.Update(staleWrite, expected));
+        Assert.False(await Store.Delete(expected));
+        Assert.Equal(
+            replacement.StateJson,
+            (await Store.Get(report.Id))!.StateJson);
+    }
+
+    [SkippableFact]
+    public async Task Snapshot_matching_uses_ordinal_authorization_strings()
+    {
+        var report = Make("Ordinal owner", "Alice@Example.test");
+        await Store.Create(report);
+        var current = (await Store.Get(report.Id))!;
+
+        // These snapshots are not authoritative even on a database whose default
+        // collation equates their strings. Application ownership is ordinal.
+        var wrongOwner = current with { Owner = "alice@example.test" };
+        var wrongReport = current with { ReportName = "ORDERS" };
+        var wrongTitle = current with { Title = "ordinal OWNER" };
+
+        Assert.False(await Store.Update(wrongOwner with { IsGlobal = true }, wrongOwner));
+        Assert.False(await Store.Delete(wrongOwner));
+        Assert.False(await Store.Update(wrongReport with { IsGlobal = true }, wrongReport));
+        Assert.False(await Store.Delete(wrongReport));
+        Assert.False(await Store.Update(wrongTitle with { IsGlobal = true }, wrongTitle));
+        Assert.False(await Store.Delete(wrongTitle));
+
+        Assert.Equal(current, await Store.Get(report.Id));
     }
 
     [SkippableFact]
@@ -194,9 +298,10 @@ public abstract class SavedReportStoreCorpus
         var other = Make("Rename me", "alice");
         await Store.Create(other);
 
+        var expected = other with { };
         other.Title = "keep";
 
-        await Assert.ThrowsAsync<SavedReportTitleConflictException>(() => Store.Update(other));
+        await Assert.ThrowsAsync<SavedReportTitleConflictException>(() => Store.Update(other, expected));
     }
 
     [SkippableFact]

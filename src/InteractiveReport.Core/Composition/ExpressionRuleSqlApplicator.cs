@@ -25,7 +25,7 @@ internal static class ExpressionRuleSqlApplicator
             evaluationUtcNow,
             physicalColumns);
         query.SelectRaw(
-            $"{sql} AS [{physicalAlias ?? rule.Effect.Column.Name}]",
+            $"{sql} AS {SqlKataSyntax.Identifier(dialect, physicalAlias ?? rule.Effect.Column.Name)}",
             bindings.ToArray());
     }
 
@@ -57,7 +57,7 @@ internal static class ExpressionRuleSqlApplicator
             evaluationUtcNow,
             physicalColumns);
         query.SelectRaw(
-            $"CASE WHEN {sql} THEN 1 ELSE 0 END AS [{rule.Effect.ProjectionName}]",
+            $"CASE WHEN {sql} THEN 1 ELSE 0 END AS {SqlKataSyntax.Identifier(dialect, rule.Effect.ProjectionName)}",
             bindings.ToArray());
     }
 }

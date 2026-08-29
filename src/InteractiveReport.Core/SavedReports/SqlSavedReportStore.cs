@@ -51,7 +51,16 @@ public sealed class SqlSavedReportStore : ISavedReportStore
 
     public async Task<SavedReport?> Get(string id, CancellationToken ct = default)
     {
-        var rows = await Select(q => q.Where("ID", id), ct);
+        var rows = await Select(Validated(_config()), q => q.Where("ID", id), ct);
+        return rows.SingleOrDefault();
+    }
+
+    private async Task<SavedReport?> Get(
+        SavedReportStoreConfig config,
+        string id,
+        CancellationToken ct)
+    {
+        var rows = await Select(config, q => q.Where("ID", id), ct);
         return rows.SingleOrDefault();
     }
 
@@ -130,29 +139,44 @@ public sealed class SqlSavedReportStore : ISavedReportStore
 
     public async Task Create(SavedReport report, CancellationToken ct = default)
     {
+        var config = Validated(_config());
         report.ModifiedUtc = DateTime.UtcNow;
         try
         {
-            await Execute(config => new Query(config.TableName).AsInsert(ToRow(report)), ct);
+            await Execute(config, cfg => new Query(cfg.TableName).AsInsert(ToRow(report)), ct);
         }
-        catch (DbException ex) when (IsTitleUniqueViolation(ex))
+        catch (DbException ex) when (IsTitleUniqueViolation(config, ex))
         {
             throw new SavedReportTitleConflictException(report.ReportName, report.Title, ex);
         }
     }
 
-    public async Task<bool> Update(SavedReport report, CancellationToken ct = default)
+    public async Task<bool> Update(
+        SavedReport report,
+        SavedReport expected,
+        CancellationToken ct = default)
     {
-        report.ModifiedUtc = DateTime.UtcNow;
-        var row = ToRow(report);
+        var config = Validated(_config());
+        if (!string.Equals(report.Id, expected.Id, StringComparison.Ordinal))
+            throw new ArgumentException(
+                "The replacement and expected saved-report snapshots must have the same id.",
+                nameof(expected));
+
+        if (!await IsCurrentSnapshot(config, expected, ct)) return false;
+
+        var modifiedUtc = NextModifiedUtc(expected.ModifiedUtc);
+        var row = ToRow(report with { ModifiedUtc = modifiedUtc });
         row.Remove("ID");
         try
         {
-            return await Execute(
-                config => new Query(config.TableName).Where("ID", report.Id).AsUpdate(row),
+            var updated = await Execute(
+                config,
+                cfg => MatchRevision(new Query(cfg.TableName), expected).AsUpdate(row),
                 ct) == 1;
+            if (updated) report.ModifiedUtc = modifiedUtc;
+            return updated;
         }
-        catch (DbException ex) when (IsTitleUniqueViolation(ex))
+        catch (DbException ex) when (IsTitleUniqueViolation(config, ex))
         {
             throw new SavedReportTitleConflictException(report.ReportName, report.Title, ex);
         }
@@ -160,33 +184,79 @@ public sealed class SqlSavedReportStore : ISavedReportStore
 
     public async Task Put(SavedReport report, CancellationToken ct = default)
     {
-        var row = ToRow(report);
-        var update = new Dictionary<string, object?>(row);
-        update.Remove("ID");
+        var config = Validated(_config());
+        while (true)
+        {
+            var expected = await Get(config, report.Id, ct);
+            if (await Put(config, report, expected, ct)) return;
+        }
+    }
+
+    public Task<bool> Put(
+        SavedReport report,
+        SavedReport? expected,
+        CancellationToken ct = default)
+        => Put(Validated(_config()), report, expected, ct);
+
+    private async Task<bool> Put(
+        SavedReportStoreConfig config,
+        SavedReport report,
+        SavedReport? expected,
+        CancellationToken ct)
+    {
+        if (expected is not null
+            && !string.Equals(report.Id, expected.Id, StringComparison.Ordinal))
+            throw new ArgumentException(
+                "The replacement and expected saved-report snapshots must have the same id.",
+                nameof(expected));
+
+        if (expected is not null && !await IsCurrentSnapshot(config, expected, ct)) return false;
+
+        var modifiedUtc = expected is null
+            ? report.ModifiedUtc
+            : NextReplacementModifiedUtc(expected.ModifiedUtc, report.ModifiedUtc);
+        var row = ToRow(report with { ModifiedUtc = modifiedUtc });
         try
         {
-            if (await Execute(config => new Query(config.TableName).Where("ID", report.Id).AsUpdate(update), ct) == 1)
-                return;
-            await Execute(config => new Query(config.TableName).AsInsert(row), ct);
+            bool applied;
+            if (expected is null)
+            {
+                await Execute(config, cfg => new Query(cfg.TableName).AsInsert(row), ct);
+                applied = true;
+            }
+            else
+            {
+                row.Remove("ID");
+                applied = await Execute(
+                    config,
+                    cfg => MatchRevision(new Query(cfg.TableName), expected).AsUpdate(row),
+                    ct) == 1;
+            }
+
+            if (applied) report.ModifiedUtc = modifiedUtc;
+            return applied;
         }
-        catch (DbException ex) when (IsTitleUniqueViolation(ex))
+        catch (DbException ex) when (DbErrorClassifier.IsUniqueViolation(config.Dialect, ex))
         {
-            throw new SavedReportTitleConflictException(report.ReportName, report.Title, ex);
+            // When the expected-absent insert lost its id race, re-reading is the
+            // portable way to distinguish it even if the provider reports another
+            // unique index first. The caller must reconsider the replacement from
+            // that new snapshot. Other title conflicts keep their stable exception.
+            if (expected is null && await Get(config, report.Id, ct) is not null) return false;
+            if (IsTitleUniqueViolation(config, ex))
+                throw new SavedReportTitleConflictException(report.ReportName, report.Title, ex);
+            throw;
         }
-        catch (DbException ex) when (DbErrorClassifier.IsUniqueViolation(_config().Dialect, ex))
-        {
-            // Lost a concurrent first-insert race on the primary key — the row exists
-            // now, so the idempotent path is to update it. Any other insert failure
-            // (missing table, constraint, permissions) propagates above: reporting
-            // success would let the synchronizer mark a missing row as applied.
-            var updated = await Execute(
-                config => new Query(config.TableName).Where("ID", report.Id).AsUpdate(update),
-                ct);
-            if (updated != 1)
-                throw new InvalidOperationException(
-                    $"Saved report '{report.Id}': the insert reported a conflict but the follow-up update matched {updated} rows.",
-                    ex);
-        }
+    }
+
+    public async Task<bool> Delete(SavedReport expected, CancellationToken ct = default)
+    {
+        var config = Validated(_config());
+        if (!await IsCurrentSnapshot(config, expected, ct)) return false;
+        return await Execute(
+            config,
+            cfg => MatchRevision(new Query(cfg.TableName), expected).AsDelete(),
+            ct) == 1;
     }
 
     public async Task<bool> Delete(string id, CancellationToken ct = default)
@@ -198,6 +268,25 @@ public sealed class SqlSavedReportStore : ISavedReportStore
 
     private static string OriginText(SavedReportOrigin origin)
         => origin == SavedReportOrigin.Configured ? "configured" : "user";
+
+    private static DateTime NextModifiedUtc(DateTime current)
+    {
+        var now = DateTime.UtcNow;
+        if (now > current) return now;
+        if (current == DateTime.MaxValue)
+            throw new InvalidOperationException(
+                "A saved report with DateTime.MaxValue cannot receive a later concurrency version.");
+        return current.AddTicks(1);
+    }
+
+    private static DateTime NextReplacementModifiedUtc(DateTime current, DateTime requested)
+    {
+        if (requested > current) return requested;
+        if (current == DateTime.MaxValue)
+            throw new InvalidOperationException(
+                "A saved report with DateTime.MaxValue cannot receive a later concurrency version.");
+        return current.AddTicks(1);
+    }
 
     private static SavedReportOrigin OriginFrom(string text)
         => string.Equals(text, "configured", StringComparison.OrdinalIgnoreCase)
@@ -219,6 +308,36 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     };
 
     /// <summary>
+    /// Compares the complete detached snapshot in .NET so database collation can never
+    /// equate authorization strings that the application compares ordinally. The
+    /// subsequent DML matches the revision, which every store replacement advances,
+    /// closing the interval between this coherent read and the write. This also avoids
+    /// non-portable CLOB equality for Oracle STATE_JSON.
+    /// </summary>
+    private async Task<bool> IsCurrentSnapshot(
+        SavedReportStoreConfig config,
+        SavedReport expected,
+        CancellationToken ct)
+        => await Get(config, expected.Id, ct) is { } current
+            && SameSnapshot(current, expected);
+
+    private static bool SameSnapshot(SavedReport current, SavedReport expected)
+        => string.Equals(current.Id, expected.Id, StringComparison.Ordinal)
+            && string.Equals(current.ReportName, expected.ReportName, StringComparison.Ordinal)
+            && string.Equals(current.Title, expected.Title, StringComparison.Ordinal)
+            && string.Equals(current.Owner, expected.Owner, StringComparison.Ordinal)
+            && current.IsGlobal == expected.IsGlobal
+            && current.IsPrimary == expected.IsPrimary
+            && string.Equals(current.StateJson, expected.StateJson, StringComparison.Ordinal)
+            && current.ModifiedUtc == expected.ModifiedUtc
+            && current.Origin == expected.Origin;
+
+    private static Query MatchRevision(Query query, SavedReport expected)
+        => query
+            .Where("ID", expected.Id)
+            .Where("MODIFIED_UTC", expected.ModifiedUtc.ToString("o", CultureInfo.InvariantCulture));
+
+    /// <summary>
     /// Normalized title-uniqueness key, computed in code so every dialect and
     /// collation compares identically — the same trim+casefold the endpoint layer's
     /// OrdinalIgnoreCase pre-check uses.
@@ -227,25 +346,32 @@ public sealed class SqlSavedReportStore : ISavedReportStore
 
     internal static string TitleIndexName(string tableName) => tableName + "_TITLE_UX";
 
-    private bool IsTitleUniqueViolation(DbException ex)
+    private static bool IsTitleUniqueViolation(SavedReportStoreConfig config, DbException ex)
     {
-        var cfg = _config();
-        return DbErrorClassifier.IsUniqueViolation(cfg.Dialect, ex)
-            && (ex.Message.Contains(TitleIndexName(cfg.TableName), StringComparison.OrdinalIgnoreCase)
+        return DbErrorClassifier.IsUniqueViolation(config.Dialect, ex)
+            && (ex.Message.Contains(TitleIndexName(config.TableName), StringComparison.OrdinalIgnoreCase)
                 // SQLite reports the violated COLUMNS, not the index name.
                 || ex.Message.Contains("TITLE_KEY", StringComparison.OrdinalIgnoreCase));
     }
 
     private async Task<IReadOnlyList<SavedReport>> Select(Func<Query, Query> shape, CancellationToken ct)
     {
-        var cfg = Validated(_config());
-        var query = shape(new Query(cfg.TableName)
+        var config = Validated(_config());
+        return await Select(config, shape, ct);
+    }
+
+    private async Task<IReadOnlyList<SavedReport>> Select(
+        SavedReportStoreConfig config,
+        Func<Query, Query> shape,
+        CancellationToken ct)
+    {
+        var query = shape(new Query(config.TableName)
             .Select("ID", "REPORT_NAME", "TITLE", "OWNER", "IS_GLOBAL", "IS_PRIMARY", "STATE_JSON", "MODIFIED_UTC", "ORIGIN"));
 
-        await using var conn = await OpenConnection(cfg, ct);
-        var compiled = DialectSupport.GetCompiler(cfg.Dialect).Compile(query);
+        await using var conn = await OpenConnection(config, ct);
+        var compiled = DialectSupport.GetCompiler(config.Dialect).Compile(query);
         await using var cmd = CommandBuilder.Build(
-            conn, compiled, NoParams, TimeoutSeconds, cfg.Dialect, _logger);
+            conn, compiled, NoParams, TimeoutSeconds, config.Dialect, _logger);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
 
         var result = new List<SavedReport>();
@@ -301,12 +427,20 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         Func<SavedReportStoreConfig, Query> buildQuery,
         CancellationToken ct)
     {
-        var cfg = Validated(_config());
-        var query = buildQuery(cfg);
-        await using var conn = await OpenConnection(cfg, ct);
-        var compiled = DialectSupport.GetCompiler(cfg.Dialect).Compile(query);
+        var config = Validated(_config());
+        return await Execute(config, buildQuery, ct);
+    }
+
+    private async Task<int> Execute(
+        SavedReportStoreConfig config,
+        Func<SavedReportStoreConfig, Query> buildQuery,
+        CancellationToken ct)
+    {
+        var query = buildQuery(config);
+        await using var conn = await OpenConnection(config, ct);
+        var compiled = DialectSupport.GetCompiler(config.Dialect).Compile(query);
         await using var cmd = CommandBuilder.Build(
-            conn, compiled, NoParams, TimeoutSeconds, cfg.Dialect, _logger);
+            conn, compiled, NoParams, TimeoutSeconds, config.Dialect, _logger);
         return await cmd.ExecuteNonQueryAsync(ct);
     }
 

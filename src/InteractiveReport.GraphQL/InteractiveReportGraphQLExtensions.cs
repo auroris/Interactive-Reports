@@ -27,6 +27,14 @@ public static class InteractiveReportGraphQLExtensions
         services.TryAddSingleton<ComplexScalarGraphType>();
         services.AddGraphQL(builder => builder
             .AddSchema<InteractiveReportGraphQLSchema>()
+            .AddValidationRule<SingleReportRootFieldValidationRule>(useForCachedDocuments: true)
+            .ConfigureExecutionOptions(options =>
+            {
+                if (options.Schema is InteractiveReportGraphQLSchema)
+                {
+                    options.MaxParallelExecutionCount = 1;
+                }
+            })
             .AddSystemTextJson());
 
         return services;

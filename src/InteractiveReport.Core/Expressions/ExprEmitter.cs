@@ -1,13 +1,15 @@
 using System.Text;
+using InteractiveReport.Core.Composition;
 using InteractiveReport.Core.Model;
 
 namespace InteractiveReport.Core.Expressions;
 
 /// <summary>
-/// Stage 3: emits a typed AST as a dialect-specific SQL fragment. Identifiers are
-/// emitted in SqlKata bracket form ("[COL]") so raw fragments still get dialect
-/// quoting; literals become positional '?' bindings, never inlined text (the one
-/// exception is the NULL keyword, which is ours, not client data). Every binary
+/// Stage 3: emits a typed AST as a dialect-specific SQL fragment. Identifiers use
+/// SqlKata's portable bracket markers when possible and dialect quoting when their
+/// names contain marker/delimiter characters. Literals become positional '?' bindings,
+/// never inlined text (the one exception is the NULL keyword, which is ours, not client
+/// data). Every binary
 /// operation is parenthesized — verbose SQL beats precedence surprises.
 ///
 /// Function SQL comes from the registry (ExprFunctions): the emitter knows shapes,
@@ -114,11 +116,11 @@ internal sealed class EmitContext(
                 break;
 
             case ColumnRef c:
-                _sb.Append('[').Append(
+                _sb.Append(SqlKataSyntax.Identifier(Dialect,
                     physicalColumns is not null
                     && physicalColumns.TryGetValue(c.Column.Name, out var physical)
                         ? physical
-                        : c.Column.Name).Append(']');
+                        : c.Column.Name));
                 break;
 
             case UnaryMinus u:

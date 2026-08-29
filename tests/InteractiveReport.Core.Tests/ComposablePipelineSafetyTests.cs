@@ -35,7 +35,86 @@ public sealed class ComposablePipelineSafetyTests : IClassFixture<SqliteE2EFixtu
 
         var relation = ComposableSqlRelation.Definition(definition, schema);
 
-        Assert.Equal("__irc1", relation.Names.Column());
+        Assert.Equal("__irc1", relation.PhysicalColumns["__irc0"]);
+        Assert.Equal("__irc2", relation.Names.Column());
+    }
+
+    [Theory]
+    [InlineData(ReportDialect.SqlServer)]
+    [InlineData(ReportDialect.Sqlite)]
+    [InlineData(ReportDialect.Postgres)]
+    [InlineData(ReportDialect.Oracle)]
+    public void Identifier_torture_corpus_compiles_as_literal_names(ReportDialect dialect)
+    {
+        var compiler = DialectSupport.GetCompiler(dialect);
+
+        foreach (var name in IdentifierTortureCorpus.NamesForCompiler(dialect))
+        {
+            var compiled = compiler.Compile(new Query("source")
+                .SelectRaw(SqlKataSyntax.Identifier(dialect, name)));
+            var expected = IdentifierTortureCorpus.QuoteSqlIdentifier(dialect, name);
+
+            Assert.True(
+                compiled.Sql.Contains(expected, StringComparison.Ordinal),
+                $"Expected {dialect} to preserve identifier '{name}' as {expected}, but compiled: {compiled.Sql}");
+            Assert.Empty(compiled.NamedBindings);
+        }
+    }
+
+    [Theory]
+    [InlineData(ReportDialect.SqlServer, "[A]]B\"Q]")]
+    [InlineData(ReportDialect.Sqlite, "\"A]B\"\"Q\"")]
+    [InlineData(ReportDialect.Postgres, "\"A]B\"\"Q\"")]
+    [InlineData(ReportDialect.Oracle, "\"A]B\"\"Q\"")]
+    public void Raw_identifiers_escape_the_dialect_closing_delimiter(
+        ReportDialect dialect,
+        string expected)
+    {
+        var query = new Query("source").SelectRaw(
+            $"{SqlKataSyntax.Identifier(dialect, "A]B\"Q")} AS {SqlKataSyntax.Identifier(dialect, "safe")}");
+
+        var sql = DialectSupport.GetCompiler(dialect).Compile(query).Sql;
+
+        Assert.Contains(expected, sql, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(ReportDialect.SqlServer, "[A?B]")]
+    [InlineData(ReportDialect.Sqlite, "\"A?B\"")]
+    [InlineData(ReportDialect.Postgres, "\"A?B\"")]
+    [InlineData(ReportDialect.Oracle, "\"A?B\"")]
+    public void Raw_question_marks_are_not_mistaken_for_bindings(
+        ReportDialect dialect,
+        string expectedIdentifier)
+    {
+        const string configuredSql = "SELECT '?' AS P, '\uE000?' AS S";
+        const string sentinelIdentifier = "A\uE000\uE001B";
+        const string sentinelBinding = "bound\uE000\uE001?";
+        var query = new Query()
+            .FromRaw($"({SqlKataSyntax.PreserveRaw(configuredSql)}) source")
+            .SelectRaw($"{SqlKataSyntax.Identifier(dialect, "A?B")}, {SqlKataSyntax.Identifier(dialect, sentinelIdentifier)}")
+            .Where("P", sentinelBinding);
+
+        var compiled = DialectSupport.GetCompiler(dialect).Compile(query);
+
+        Assert.Contains("'?'", compiled.Sql, StringComparison.Ordinal);
+        Assert.Contains("'\uE000?'", compiled.Sql, StringComparison.Ordinal);
+        Assert.Contains(expectedIdentifier, compiled.Sql, StringComparison.Ordinal);
+        Assert.Contains(sentinelIdentifier, compiled.Sql, StringComparison.Ordinal);
+        Assert.Single(compiled.NamedBindings);
+        Assert.Equal(sentinelBinding, compiled.NamedBindings.Values.Single());
+        Assert.Contains("'?'", compiled.ToString(), StringComparison.Ordinal);
+        Assert.Contains(sentinelBinding, compiled.ToString(), StringComparison.Ordinal);
+        Assert.Equal(2, compiled.Sql.Count(character => character == '\uE000'));
+        Assert.Equal(2, compiled.RawSql.Count(character => character == '\uE000'));
+        Assert.Equal(1, compiled.Sql.Count(character => character == '\uE001'));
+        Assert.Equal(1, compiled.RawSql.Count(character => character == '\uE001'));
+
+        var combined = DialectSupport.GetCompiler(dialect).Compile([query.Clone(), query.Clone()]);
+        Assert.Equal(2, combined.NamedBindings.Count);
+        Assert.Equal(2, combined.NamedBindings.Values.Count(value => Equals(value, sentinelBinding)));
+        Assert.Equal(2, combined.Sql.Split(sentinelIdentifier, StringSplitOptions.None).Length - 1);
+        Assert.Equal(2, combined.ToString().Split(sentinelBinding, StringSplitOptions.None).Length - 1);
     }
 
     [Fact]
@@ -293,6 +372,81 @@ public sealed class ComposablePipelineSafetyTests : IClassFixture<SqliteE2EFixtu
             _executor.RefreshSchemaCaches(definition, state, NoParams));
 
         Assert.Contains(exception.Errors, error => error.Path == "activeTable");
+    }
+
+    [Fact]
+    public async Task Export_rejects_definition_as_an_active_table_target()
+    {
+        var definition = new ReportDefinition
+        {
+            Name = "reserved-export-target",
+            Connection = "E2E",
+            Dialect = ReportDialect.Sqlite,
+            Sql = "SELECT ORDER_ID, STATUS FROM ORDERS",
+        };
+        var state = TestFixtures.Doc();
+        state.ActiveTable = "  DeFiNiTiOn  ";
+
+        var exception = await Assert.ThrowsAsync<ReportValidationException>(() =>
+            _executor.Export(definition, state, NoParams));
+
+        Assert.Contains(exception.Errors, error =>
+            error.Path == "activeTable"
+            && error.Message == "unknown table 'DeFiNiTiOn'");
+    }
+
+    [Fact]
+    public async Task Database_identifiers_containing_raw_markers_remain_addressable()
+    {
+        var definition = new ReportDefinition
+        {
+            Name = "raw-marker-identifier",
+            Connection = "E2E",
+            Dialect = ReportDialect.Sqlite,
+            Sql = """SELECT STATUS AS "A]B", AMOUNT FROM ORDERS""",
+        };
+        var state = TestFixtures.Doc(tail:
+        [
+            TestFixtures.Group(
+                by: ["A]B"],
+                values: [TestFixtures.Metric("m1", "AMOUNT", AggregateFn.Sum)]),
+        ]);
+
+        var query = await _executor.Query(definition, state, NoParams);
+        var export = await _executor.Export(definition, state, NoParams);
+
+        Assert.Equal(["A]B", "__count", "m1"], query.Columns.Select(column => column.Name));
+        Assert.Equal(4, query.TotalRows);
+        Assert.All(query.Rows, row => Assert.True(row.ContainsKey("A]B")));
+        Assert.Equal(query.Columns.Select(column => column.Name), export.Columns.Select(column => column.Name));
+        Assert.Equal(4, export.Rows.Count);
+    }
+
+    [Fact]
+    public async Task Definition_sql_and_identifiers_may_contain_literal_question_marks()
+    {
+        var definition = new ReportDefinition
+        {
+            Name = "question-mark-sql",
+            Connection = "E2E",
+            Dialect = ReportDialect.Sqlite,
+            Sql = """SELECT STATUS AS "A?B", '?' AS "literal?", AMOUNT FROM ORDERS""",
+        };
+        var state = TestFixtures.Doc(tail:
+        [
+            TestFixtures.Group(
+                by: ["A?B"],
+                values: [TestFixtures.Metric("m1", "AMOUNT", AggregateFn.Sum)]),
+        ]);
+
+        var query = await _executor.Query(definition, state, NoParams);
+        var export = await _executor.Export(definition, state, NoParams);
+
+        Assert.Equal(["A?B", "__count", "m1"], query.Columns.Select(column => column.Name));
+        Assert.Equal(4, query.TotalRows);
+        Assert.All(query.Rows, row => Assert.True(row.ContainsKey("A?B")));
+        Assert.Equal(query.Columns.Select(column => column.Name), export.Columns.Select(column => column.Name));
+        Assert.Equal(4, export.Rows.Count);
     }
 
     [Fact]

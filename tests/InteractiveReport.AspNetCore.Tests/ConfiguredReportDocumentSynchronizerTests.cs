@@ -124,7 +124,9 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
         await synchronizer.EnsureSynced();
 
         var put = Assert.Single(store.Calls, call => call.StartsWith("put:", StringComparison.Ordinal));
-        Assert.Equal("A substantially longer regional view title", store.Rows[put["put:".Length..]].Title);
+        var updated = store.Rows[put["put:".Length..]];
+        Assert.Equal("A substantially longer regional view title", updated.Title);
+        Assert.True(updated.ModifiedUtc > originalTimestamp);
     }
 
     [Fact]
@@ -176,10 +178,39 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
         Assert.False(updated.IsPrimary);
     }
 
+    [Fact]
+    public async Task Sync_rechecks_the_primary_override_after_a_conditional_Put_conflict()
+    {
+        var (synchronizer, store, _) = Build(_primaryPath);
+        await synchronizer.EnsureSynced();
+        store.ReplaceBeforeNextPut(current => current with
+        {
+            IsPrimary = false,
+            ModifiedUtc = current.ModifiedUtc.AddTicks(1),
+        });
+
+        File.WriteAllText(_primaryPath, """
+            { "title": "Committed Primary after race", "primary": true,
+              "state": { "activeTable": "base", "tables": { "base": { "from": "definition", "composables": [] } } } }
+            """);
+        File.SetLastWriteTimeUtc(_primaryPath, DateTime.UtcNow.AddMinutes(1));
+
+        await synchronizer.EnsureSynced();
+
+        var updated = Assert.Single(store.Rows.Values);
+        Assert.Equal("Committed Primary after race", updated.Title);
+        Assert.False(updated.IsPrimary);
+    }
+
     private sealed class RecordingStore : ISavedReportStore
     {
+        private Func<SavedReport, SavedReport>? _replaceBeforeNextPut;
+
         public Dictionary<string, SavedReport> Rows { get; } = new(StringComparer.Ordinal);
         public List<string> Calls { get; } = [];
+
+        public void ReplaceBeforeNextPut(Func<SavedReport, SavedReport> replacement)
+            => _replaceBeforeNextPut = replacement;
 
         public Task<SavedReport?> Get(string id, CancellationToken ct = default)
         {
@@ -206,14 +237,46 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
         public Task Create(SavedReport report, CancellationToken ct = default)
             => throw new NotSupportedException();
 
-        public Task<bool> Update(SavedReport report, CancellationToken ct = default)
+        public Task<bool> Update(
+            SavedReport report,
+            SavedReport expected,
+            CancellationToken ct = default)
             => throw new NotSupportedException();
 
-        public Task Put(SavedReport report, CancellationToken ct = default)
+        public async Task Put(SavedReport report, CancellationToken ct = default)
         {
+            Rows.TryGetValue(report.Id, out var expected);
+            if (!await Put(report, expected, ct))
+                throw new InvalidOperationException("The recording-store write raced unexpectedly.");
+        }
+
+        public Task<bool> Put(
+            SavedReport report,
+            SavedReport? expected,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
             Calls.Add($"put:{report.Id}");
+            if (_replaceBeforeNextPut is { } replace
+                && Rows.TryGetValue(report.Id, out var beforeRace))
+            {
+                Rows[report.Id] = replace(beforeRace);
+                _replaceBeforeNextPut = null;
+            }
+            var exists = Rows.TryGetValue(report.Id, out var current);
+            if (expected is null)
+            {
+                if (exists) return Task.FromResult(false);
+            }
+            else if (!exists || !SameSnapshot(current!, expected))
+            {
+                return Task.FromResult(false);
+            }
+
+            if (current is not null && report.ModifiedUtc <= current.ModifiedUtc)
+                report.ModifiedUtc = current.ModifiedUtc.AddTicks(1);
             Rows[report.Id] = report with { };
-            return Task.CompletedTask;
+            return Task.FromResult(true);
         }
 
         public Task<bool> Delete(string id, CancellationToken ct = default)
@@ -221,6 +284,12 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
             Calls.Add($"delete:{id}");
             return Task.FromResult(Rows.Remove(id));
         }
+
+        public Task<bool> Delete(SavedReport expected, CancellationToken ct = default)
+            => throw new NotSupportedException();
+
+        private static bool SameSnapshot(SavedReport current, SavedReport expected)
+            => current == expected;
     }
 
     private sealed class MonitorStub(InteractiveReportOptions initial) : IOptionsMonitor<InteractiveReportOptions>

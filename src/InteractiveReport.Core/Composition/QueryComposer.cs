@@ -83,7 +83,8 @@ public static class QueryComposer
     {
         // Alias without AS: Oracle rejects AS in table aliases (ORA-00933); the bare
         // form is valid on every supported dialect.
-        var relation = new Query().FromRaw($"({def.Sql}) {BaseAlias}");
+        var relation = new Query().FromRaw(SqlKataSyntax.PreserveRaw(
+            $"({def.Sql}) {BaseAlias}"));
         var core = ApplyOperations(
             relation,
             state.Operations,
@@ -412,7 +413,8 @@ public static class QueryComposer
         var q = core.Clone().Select(dimNames);
         q.SelectRaw("COUNT(*) AS [__count]");
         foreach (var v in values)
-            q.SelectRaw($"{DialectSupport.AggregateExpression(dialect, v.Fn, $"[{v.Column.Name}]")} AS [{v.Alias}]");
+            q.SelectRaw(
+                $"{DialectSupport.AggregateExpression(dialect, v.Fn, Identifier(dialect, v.Column.Name))} AS {Identifier(dialect, v.Alias)}");
         q.GroupBy(dimNames);
         return q;
     }
@@ -439,7 +441,7 @@ public static class QueryComposer
         var ranked = core.Clone().Select(selectedNames);
         var partition = dimNames.Length == 0
             ? ""
-            : $"PARTITION BY {string.Join(", ", dimNames.Select(name => $"[{name}]"))} ";
+            : $"PARTITION BY {string.Join(", ", dimNames.Select(name => Identifier(dialect, name)))} ";
         var medianAliases = new Dictionary<int, (string Rank, string Count)>();
 
         for (var i = 0; i < values.Count; i++)
@@ -448,9 +450,11 @@ public static class QueryComposer
             var column = values[i].Column.Name;
             var rank = UniquePrivateName($"__ir_median_rank_{i}", usedNames);
             var count = UniquePrivateName($"__ir_median_count_{i}", usedNames);
+            var quotedColumn = Identifier(dialect, column);
             ranked.SelectRaw(
-                $"ROW_NUMBER() OVER ({partition}ORDER BY CASE WHEN [{column}] IS NULL THEN 1 ELSE 0 END, [{column}]) AS [{rank}]");
-            ranked.SelectRaw($"COUNT([{column}]) OVER ({partition.TrimEnd()}) AS [{count}]");
+                $"ROW_NUMBER() OVER ({partition}ORDER BY CASE WHEN {quotedColumn} IS NULL THEN 1 ELSE 0 END, {quotedColumn}) AS {Identifier(dialect, rank)}");
+            ranked.SelectRaw(
+                $"COUNT({quotedColumn}) OVER ({partition.TrimEnd()}) AS {Identifier(dialect, count)}");
             medianAliases[i] = (rank, count);
         }
 
@@ -462,7 +466,7 @@ public static class QueryComposer
             if (value.Fn != AggregateFn.Median)
             {
                 query.SelectRaw(
-                    $"{DialectSupport.AggregateExpression(dialect, value.Fn, $"[{value.Column.Name}]")} AS [{value.Alias}]");
+                    $"{DialectSupport.AggregateExpression(dialect, value.Fn, Identifier(dialect, value.Column.Name))} AS {Identifier(dialect, value.Alias)}");
                 continue;
             }
 
@@ -470,11 +474,11 @@ public static class QueryComposer
             var lower = HalfPosition(aliases.Count, 1, dialect);
             var upper = HalfPosition(aliases.Count, 2, dialect);
             var candidate =
-                $"CASE WHEN [{aliases.Rank}] IN ({lower}, {upper}) THEN [{value.Column.Name}] END";
+                $"CASE WHEN {Identifier(dialect, aliases.Rank)} IN ({lower}, {upper}) THEN {Identifier(dialect, value.Column.Name)} END";
             var median = dialect == ReportDialect.SqlServer
                 ? $"AVG(CAST({candidate} AS FLOAT))"
                 : $"AVG({candidate})";
-            query.SelectRaw($"{median} AS [{value.Alias}]");
+            query.SelectRaw($"{median} AS {Identifier(dialect, value.Alias)}");
         }
 
         if (dimNames.Length > 0) query.GroupBy(dimNames);
@@ -483,14 +487,17 @@ public static class QueryComposer
 
     private static string HalfPosition(string countAlias, int add, ReportDialect dialect)
         => dialect == ReportDialect.Oracle
-            ? $"FLOOR(([{countAlias}] + {add}) / 2)"
-            : $"(([{countAlias}] + {add}) / 2)";
+            ? $"FLOOR(({Identifier(dialect, countAlias)} + {add}) / 2)"
+            : $"(({Identifier(dialect, countAlias)} + {add}) / 2)";
 
     private static string UniquePrivateName(string candidate, HashSet<string> used)
     {
         while (!used.Add(candidate)) candidate = $"_{candidate}";
         return candidate;
     }
+
+    private static string Identifier(ReportDialect dialect, string name)
+        => SqlKataSyntax.Identifier(dialect, name);
 
     /// <summary>
     /// Apply one schema-bound sort. Oracle, Postgres, and supported SQLite versions
@@ -513,13 +520,14 @@ public static class QueryComposer
         var placement = sort.Nulls == NullPlacement.First ? "FIRST" : "LAST";
         if (dialect != ReportDialect.SqlServer)
         {
-            query.OrderByRaw($"[{sort.Column.Name}] {direction} NULLS {placement}");
+            query.OrderByRaw(
+                $"{Identifier(dialect, sort.Column.Name)} {direction} NULLS {placement}");
             return;
         }
 
         var nullRank = sort.Nulls == NullPlacement.First ? 0 : 1;
         query.OrderByRaw(
-            $"CASE WHEN [{sort.Column.Name}] IS NULL THEN {nullRank} ELSE {1 - nullRank} END");
+            $"CASE WHEN {Identifier(dialect, sort.Column.Name)} IS NULL THEN {nullRank} ELSE {1 - nullRank} END");
         if (sort.Dir == SortDir.Asc) query.OrderBy(sort.Column.Name);
         else query.OrderByDesc(sort.Column.Name);
     }
@@ -553,7 +561,8 @@ public static class QueryComposer
 
         var q = core.Clone();
         foreach (var value in values)
-            q.SelectRaw($"{DialectSupport.AggregateExpression(dialect, value.Fn, $"[{value.Column.Name}]")} AS [{value.Alias}]");
+            q.SelectRaw(
+                $"{DialectSupport.AggregateExpression(dialect, value.Fn, Identifier(dialect, value.Column.Name))} AS {Identifier(dialect, value.Alias)}");
         return q;
     }
 

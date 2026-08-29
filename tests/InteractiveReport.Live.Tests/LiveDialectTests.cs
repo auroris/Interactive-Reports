@@ -55,6 +55,18 @@ public class LiveDialectTests
 
     [SkippableTheory]
     [MemberData(nameof(Dialects))]
+    public async Task Pathological_column_names_round_trip(ReportDialect dialect)
+    {
+        var live = LiveDb.For(dialect);
+        var definition = live.Definition();
+        definition.Name = $"live-identifier-torture-{dialect}";
+        definition.Sql = IdentifierTortureCorpus.DefinitionSql(dialect, "IR_TEST_ORDERS");
+
+        await IdentifierTortureCorpus.AssertRoundTrip(live.Executor, definition);
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Dialects))]
     public async Task Filter_sort_page(ReportDialect dialect)
     {
         var live = LiveDb.For(dialect);

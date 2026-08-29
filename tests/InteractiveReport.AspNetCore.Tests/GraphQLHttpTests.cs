@@ -252,6 +252,118 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Many_aliased_report_fields_are_rejected_before_any_report_executes()
+    {
+        var id = await CreatePrivateReport("alice", "Alias Limit");
+        _authorization.Clear();
+        var aliases = string.Join(
+            Environment.NewLine,
+            Enumerable.Range(0, 32).Select(index =>
+                $"result{index}: report(id: $id) {{ totalRows }}"));
+
+        using var response = await Send(
+            HttpMethod.Post,
+            "/graphql",
+            "alice",
+            new
+            {
+                query = $$"""
+                    query ExecuteMany($id: ID!) {
+                      ...ManyReports
+                      ... on Query {
+                        finalResult: report(id: $id) { totalRows }
+                      }
+                    }
+
+                    fragment ManyReports on Query {
+                      {{aliases}}
+                    }
+                    """,
+                variables = new { id },
+            });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await ReadJson(response);
+        Assert.Contains(
+            "Only one executable 'report' root field is allowed per operation.",
+            body.GetProperty("errors")[0].GetProperty("message").GetString());
+        Assert.False(body.TryGetProperty("data", out _));
+        Assert.Empty(_authorization);
+    }
+
+    [Fact]
+    public async Task Shared_fragment_DAG_over_the_expansion_budget_is_rejected_before_execution()
+    {
+        var id = await CreatePrivateReport("alice", "Fragment Limit");
+        _authorization.Clear();
+        const int levels = 12;
+        var fragments = string.Join(
+            Environment.NewLine,
+            Enumerable.Range(0, levels).Select(index =>
+                $"fragment Layer{index} on Query {{ ...Layer{index + 1} ...Layer{index + 1} }}"));
+
+        using var response = await Send(
+            HttpMethod.Post,
+            "/graphql",
+            "alice",
+            new
+            {
+                query = $$"""
+                    query ExecuteShared($id: ID!) {
+                      ...Layer0
+                    }
+
+                    {{fragments}}
+
+                    fragment Layer{{levels}} on Query {
+                      result: report(id: $id) { totalRows }
+                    }
+                    """,
+                variables = new { id },
+            });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await ReadJson(response);
+        Assert.Contains(
+            "The operation exceeds the fragment expansion limit of 256.",
+            body.GetProperty("errors")[0].GetProperty("message").GetString());
+        Assert.False(body.TryGetProperty("data", out _));
+        Assert.Empty(_authorization);
+    }
+
+    [Fact]
+    public async Task Only_one_executable_aliased_report_field_in_fragments_executes_normally()
+    {
+        var id = await CreatePrivateReport("alice", "Single Alias");
+
+        using var response = await Send(
+            HttpMethod.Post,
+            "/graphql",
+            "alice",
+            new
+            {
+                query = """
+                    query ExecuteOne($id: ID!, $skip: Boolean!) {
+                      ...SavedReport
+                      ... on Query {
+                        ignored: report(id: $id) @skip(if: $skip) { totalRows }
+                      }
+                    }
+
+                    fragment SavedReport on Query {
+                      result: report(id: $id) { totalRows }
+                    }
+                    """,
+                variables = new { id, skip = true },
+            });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await ReadJson(response);
+        Assert.Equal(3, body.GetProperty("data").GetProperty("result")
+            .GetProperty("totalRows").GetInt64());
+    }
+
+    [Fact]
     public async Task Unsupported_transport_method_returns_405_without_falling_off_the_pipeline()
     {
         using var response = await Send(HttpMethod.Delete, "/graphql", identity: null);
