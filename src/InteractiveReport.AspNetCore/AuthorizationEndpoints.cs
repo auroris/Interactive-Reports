@@ -101,7 +101,7 @@ internal static class AuthorizationEndpoints
         CancellationToken ct)
     {
         var configured = FindConfiguredReport(context, name);
-        if (configured is null) return Results.NotFound();
+        if (configured is null) return EndpointExtensions.ReportNotFound();
         var (canonicalName, report) = configured.Value;
         var denied = await AuthorizeAdministration(context, canonicalName, ct);
         if (denied is not null) return denied;
@@ -114,16 +114,18 @@ internal static class AuthorizationEndpoints
         }
         catch (JsonException ex)
         {
-            return BadRequest("Malformed authorization request", ex.Message);
+            return BadRequest(
+                InteractiveReportErrorCodes.MalformedAuthorizationRequest,
+                ex.Message);
         }
         if (request?.Restricted is null)
-            return BadRequest("Malformed authorization request", "restricted is required");
+            return BadRequest(
+                InteractiveReportErrorCodes.AuthorizationRestrictionRequired);
         if (request.Restricted == true
             && (report.Authorization?.AllowAnonymous == true
                 || report.Authorization?.AdministratorsOnly == true))
             return BadRequest(
-                "Report authorization conflict",
-                "An anonymous or administrators-only report cannot also use user restrictions.");
+                InteractiveReportErrorCodes.ReportRestrictionConflict);
 
         try
         {
@@ -199,15 +201,14 @@ internal static class AuthorizationEndpoints
         CancellationToken ct)
     {
         var configured = FindConfiguredReport(context, name);
-        if (configured is null) return Results.NotFound();
+        if (configured is null) return EndpointExtensions.ReportNotFound();
         var (canonicalName, report) = configured.Value;
         var denied = await AuthorizeAdministration(context, canonicalName, ct);
         if (denied is not null) return denied;
         if (report.Authorization?.AllowAnonymous == true
             || report.Authorization?.AdministratorsOnly == true)
             return BadRequest(
-                "Report authorization conflict",
-                "An anonymous or administrators-only report cannot have user grants.");
+                InteractiveReportErrorCodes.ReportUserGrantConflict);
         var (identity, malformed) = await ReadIdentity(context, ct);
         if (malformed is not null) return malformed;
 
@@ -239,14 +240,15 @@ internal static class AuthorizationEndpoints
         }
         catch (JsonException ex)
         {
-            return (null, BadRequest("Malformed authorization request", ex.Message));
+            return (null, BadRequest(
+                InteractiveReportErrorCodes.MalformedAuthorizationRequest,
+                ex.Message));
         }
 
         var identity = request?.Identity?.Trim();
         return string.IsNullOrEmpty(identity) || identity.Length > 400
             ? (null, BadRequest(
-                "Malformed authorization request",
-                "identity is required (1–400 characters)"))
+                InteractiveReportErrorCodes.AuthorizationIdentityInvalid))
             : (identity, null);
     }
 
@@ -284,10 +286,12 @@ internal static class AuthorizationEndpoints
         => context.RequestServices.GetRequiredService<IOptionsMonitor<InteractiveReportOptions>>()
             .CurrentValue;
 
-    private static IResult BadRequest(string title, string detail)
-        => Results.Problem(
-            title: title,
-            detail: detail,
-            statusCode: StatusCodes.Status400BadRequest);
+    private static IResult BadRequest(
+        string code,
+        string? details = null)
+        => EndpointExtensions.Error(
+            code,
+            StatusCodes.Status400BadRequest,
+            details);
 
 }

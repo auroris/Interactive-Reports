@@ -83,7 +83,7 @@ public static class EndpointExtensions
                 "Executes a versioned report-state document against the configured report definition.")
             .Accepts<ReportState>("application/json")
             .Produces<ReportResult>()
-            .ProducesValidationProblem();
+            .Produces<InteractiveReportError>(StatusCodes.Status400BadRequest);
         ProtectedApi(
                 group.MapPost("/{name}/export", PostExport),
                 ReportsTag,
@@ -91,7 +91,7 @@ public static class EndpointExtensions
                 "Executes the supplied report state without paging and returns CSV. A positive maxRows definition setting caps the output.")
             .Accepts<ReportState>("application/json")
             .Produces(StatusCodes.Status200OK, contentType: "text/csv")
-            .ProducesProblem(StatusCodes.Status400BadRequest);
+            .Produces<InteractiveReportError>(StatusCodes.Status400BadRequest);
 
         // Packaged UI assets. Anonymous even when the host locks the group — see UiEndpoints.
         group.MapGet("/ui/{file}", UiEndpoints.Serve)
@@ -117,8 +117,8 @@ public static class EndpointExtensions
                 "Inspect the current identity",
                 "Bootstrap diagnostic that shows the exact caller identity used by Interactive Reports. The host must explicitly enable it.")
             .Produces<InteractiveReportIdentity>()
-            .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status500InternalServerError);
+            .Produces<InteractiveReportError>(StatusCodes.Status404NotFound)
+            .Produces<InteractiveReportError>(StatusCodes.Status500InternalServerError);
         ProtectedApi(
                 WithStorageErrors(group.MapGet("/{name}/saved", SavedReportEndpoints.ListForReport)),
                 SavedReportsTag,
@@ -132,8 +132,8 @@ public static class EndpointExtensions
                 "Creates a private, global, or primary saved report after validating the submitted state.")
             .Accepts<SaveReportRequest>("application/json")
             .Produces<SavedReportSummary>(StatusCodes.Status201Created)
-            .ProducesValidationProblem()
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .Produces<InteractiveReportError>(StatusCodes.Status400BadRequest)
+            .Produces<InteractiveReportError>(StatusCodes.Status409Conflict);
         ProtectedApi(
                 WithStorageErrors(group.MapGet("/saved/{id}", SavedReportEndpoints.Load)),
                 SavedReportsTag,
@@ -147,8 +147,8 @@ public static class EndpointExtensions
                 "Changes selected saved-report properties. Publication and ownership changes require administrator authority.")
             .Accepts<UpdateSavedReportRequest>("application/json")
             .Produces<SavedReportSummary>()
-            .ProducesValidationProblem()
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .Produces<InteractiveReportError>(StatusCodes.Status400BadRequest)
+            .Produces<InteractiveReportError>(StatusCodes.Status409Conflict);
         ProtectedApi(
                 WithStorageErrors(group.MapDelete("/saved/{id}", SavedReportEndpoints.Delete)),
                 SavedReportsTag,
@@ -174,7 +174,7 @@ public static class EndpointExtensions
                 "Adds a database-authored administrator grant.")
             .Accepts<AuthorizationIdentityRequest>("application/json")
             .Produces(StatusCodes.Status204NoContent)
-            .ProducesProblem(StatusCodes.Status400BadRequest);
+            .Produces<InteractiveReportError>(StatusCodes.Status400BadRequest);
         ProtectedApi(
                 group.MapDelete("/admin/authorization/administrators", AuthorizationEndpoints.RevokeAdministrator),
                 AdministrationTag,
@@ -182,7 +182,7 @@ public static class EndpointExtensions
                 "Removes a database-authored administrator grant.")
             .Accepts<AuthorizationIdentityRequest>("application/json")
             .Produces(StatusCodes.Status204NoContent)
-            .ProducesProblem(StatusCodes.Status400BadRequest);
+            .Produces<InteractiveReportError>(StatusCodes.Status400BadRequest);
         ProtectedApi(
                 group.MapPut("/admin/authorization/reports/{name}", AuthorizationEndpoints.SetReportRestriction),
                 AdministrationTag,
@@ -190,7 +190,7 @@ public static class EndpointExtensions
                 "Controls whether the report requires an explicit per-user grant.")
             .Accepts<ReportRestrictionRequest>("application/json")
             .Produces(StatusCodes.Status204NoContent)
-            .ProducesProblem(StatusCodes.Status400BadRequest);
+            .Produces<InteractiveReportError>(StatusCodes.Status400BadRequest);
         ProtectedApi(
                 group.MapPost("/admin/authorization/reports/{name}/users", AuthorizationEndpoints.GrantReportUser),
                 AdministrationTag,
@@ -198,7 +198,7 @@ public static class EndpointExtensions
                 "Adds a database-authored user grant for one report.")
             .Accepts<AuthorizationIdentityRequest>("application/json")
             .Produces(StatusCodes.Status204NoContent)
-            .ProducesProblem(StatusCodes.Status400BadRequest);
+            .Produces<InteractiveReportError>(StatusCodes.Status400BadRequest);
         ProtectedApi(
                 group.MapDelete("/admin/authorization/reports/{name}/users", AuthorizationEndpoints.RevokeReportUser),
                 AdministrationTag,
@@ -206,7 +206,7 @@ public static class EndpointExtensions
                 "Removes a database-authored user grant for one report.")
             .Accepts<AuthorizationIdentityRequest>("application/json")
             .Produces(StatusCodes.Status204NoContent)
-            .ProducesProblem(StatusCodes.Status400BadRequest);
+            .Produces<InteractiveReportError>(StatusCodes.Status400BadRequest);
         ProtectedApi(
                 WithStorageErrors(group.MapGet(
                     "/admin/saved/{id}/document", SavedReportEndpoints.AdminDownloadDocument)),
@@ -222,8 +222,8 @@ public static class EndpointExtensions
                 "Validates and imports a report-document envelope as a saved report.")
             .Accepts<ReportDocumentFile>("application/json")
             .Produces<SavedReportSummary>(StatusCodes.Status201Created)
-            .ProducesValidationProblem()
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .Produces<InteractiveReportError>(StatusCodes.Status400BadRequest)
+            .Produces<InteractiveReportError>(StatusCodes.Status409Conflict);
 
         return group;
     }
@@ -276,10 +276,10 @@ public static class EndpointExtensions
         string summary,
         string description)
         => Api(endpoint, tag, summary, description)
-            .ProducesProblem(StatusCodes.Status401Unauthorized)
-            .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status500InternalServerError);
+            .Produces<InteractiveReportError>(StatusCodes.Status401Unauthorized)
+            .Produces<InteractiveReportError>(StatusCodes.Status403Forbidden)
+            .Produces<InteractiveReportError>(StatusCodes.Status404NotFound)
+            .Produces<InteractiveReportError>(StatusCodes.Status500InternalServerError);
 
     private static async Task<IResult> GetSchema(string name, HttpContext ctx, CancellationToken ct)
     {
@@ -457,10 +457,10 @@ public static class EndpointExtensions
                 var format = context.Request.Query["format"].FirstOrDefault() ?? "csv";
                 return string.Equals(format, "csv", StringComparison.OrdinalIgnoreCase)
                     ? null
-                    : Results.Problem(
-                        title: "Unsupported export format",
-                        detail: $"format '{format}' is not supported (csv only for now)",
-                        statusCode: StatusCodes.Status400BadRequest);
+                    : Error(
+                        InteractiveReportErrorCodes.UnsupportedExportFormat,
+                        StatusCodes.Status400BadRequest,
+                        $"format '{format}' is not supported (csv only for now)");
             },
             static async (context, definition, executor, state, contextParams, token) =>
             {
@@ -510,10 +510,10 @@ public static class EndpointExtensions
         catch (JsonException ex)
         {
             // Precise by design: the message only references the caller's input.
-            return Results.Problem(
-                title: "Malformed report state document",
-                detail: ex.Message,
-                statusCode: StatusCodes.Status400BadRequest);
+            return Error(
+                InteractiveReportErrorCodes.MalformedReportState,
+                StatusCodes.Status400BadRequest,
+                ex.Message);
         }
 
         try
@@ -539,20 +539,54 @@ public static class EndpointExtensions
     /// <summary>
     /// Everything that isn't a validation error is sanitized: full details (including
     /// provider messages that may embed SQL fragments) go to the server log under a
-    /// correlation id; the client gets a generic problem document carrying that id.
+    /// correlation id; the client gets a generic coded error carrying that id.
     /// </summary>
     internal static IResult ValidationProblem(ReportValidationException ex)
     {
-        var errors = ex.Errors
-            .GroupBy(error => error.Path)
-            .ToDictionary(group => group.Key, group => group.Select(error => error.Message).ToArray());
-        return Results.ValidationProblem(errors, title: "Report state failed validation");
+        var details = string.Join(
+            Environment.NewLine,
+            ex.Errors.Select(error => string.IsNullOrWhiteSpace(error.Path)
+                ? error.Message
+                : $"{error.Path}: {error.Message}"));
+        return Error(
+            InteractiveReportErrorCodes.ReportStateInvalid,
+            StatusCodes.Status400BadRequest,
+            details);
     }
+
+    /// <summary>Builds every Interactive Reports HTTP error with the same wire type.</summary>
+    internal static IResult Error(
+        string code,
+        int statusCode,
+        string? details = null,
+        string? traceId = null)
+    {
+        var (title, description) = InteractiveReportErrorCatalog.Find(code);
+        return Results.Json(
+            new InteractiveReportError(code, description, title, details, traceId),
+            IrJson.Options,
+            statusCode: statusCode);
+    }
+
+    internal static IResult AuthenticationRequired()
+        => Error(
+            InteractiveReportErrorCodes.AuthenticationRequired,
+            StatusCodes.Status401Unauthorized);
+
+    internal static IResult ReportNotFound()
+        => Error(
+            InteractiveReportErrorCodes.ReportNotFound,
+            StatusCodes.Status404NotFound);
+
+    internal static IResult SavedReportNotFound()
+        => Error(
+            InteractiveReportErrorCodes.SavedReportNotFound,
+            StatusCodes.Status404NotFound);
 
     /// <summary>
     /// Definition resolution behind error shaping. Find validates configuration and
     /// synchronizes configured documents, so a mistake introduced by a live config
-    /// reload must surface as the standard sanitized problem document rather than an
+    /// reload must surface as the standard sanitized coded error rather than an
     /// unhandled 500. (Startup-time mistakes fail the host before traffic — see
     /// InteractiveReportStartupValidator.)
     /// </summary>
@@ -561,10 +595,10 @@ public static class EndpointExtensions
         Log(ctx)?.LogError(ex, "Report {Report}: {Operation} failed (traceId {TraceId})",
             reportName, operation, ctx.TraceIdentifier);
 
-        return Results.Problem(
-            title: "Report execution failed",
-            statusCode: StatusCodes.Status500InternalServerError,
-            extensions: new Dictionary<string, object?> { ["traceId"] = ctx.TraceIdentifier });
+        return Error(
+            InteractiveReportErrorCodes.ReportExecutionFailed,
+            StatusCodes.Status500InternalServerError,
+            traceId: ctx.TraceIdentifier);
     }
 
     private static IReportAccessService Access(HttpContext context)

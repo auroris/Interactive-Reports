@@ -200,7 +200,9 @@ public sealed class DataSourceHttpTests : IAsyncLifetime
             "/api/reports/mutable/query", JsonContent.Create(new { v = 3 }));
         Assert.Equal(HttpStatusCode.InternalServerError, after.StatusCode);
         var problem = await ReadJson(after);
+        Assert.Equal("IR-1202", problem.GetProperty("code").GetString());
         Assert.Equal("Report execution failed", problem.GetProperty("title").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(problem.GetProperty("description").GetString()));
         Assert.False(string.IsNullOrEmpty(problem.GetProperty("traceId").GetString()));
 
         // Restore for the other tests (fixture instances are per-test-class).

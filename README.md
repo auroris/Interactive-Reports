@@ -77,7 +77,7 @@ consumers need no Node.js and no frontend build.
     pages can be turned off with `InteractiveReport:ViewerPagesEnabled: false`.
 
 `MapInteractiveReports` publishes standard ASP.NET Core endpoint summaries, tags,
-request-body types, response types, and problem response metadata. A host can add its
+request-body types, response types, and coded-error response metadata. A host can add its
 preferred OpenAPI generator without the Interactive Reports package depending on one.
 The Workbench demonstrates this with Swagger UI at `/swagger` in Development.
 
@@ -413,6 +413,27 @@ status/duration, report queries and exports, and configured-document synchroniza
 `Debug` adds authorization decisions, schema-cache activity, and exact submitted SQL.
 Errors retain the request trace id. Request bodies and SQL parameter values are never
 logged.
+
+Every JSON API failure uses the same `InteractiveReportError` wire shape. `code` and
+`description` are required; `title`, `details`, and `traceId` are omitted when they do
+not apply:
+
+```json
+{
+  "code": "IR-1201",
+  "description": "One or more report settings are invalid.",
+  "title": "Report state failed validation",
+  "details": "pipeline[0].layer.filters[0].expr: unknown column 'OLD_NAME'"
+}
+```
+
+The `IR-nnnn` catalog behaves like a product-specific ORA series: each code is a stable,
+language-independent core message identity. Context such as paths and rejected values
+lives in `details`, which is not translated. The packaged client currently translates
+known error titles and descriptions into English or Canadian French, selected from the
+nearest `lang` attribute and then browser preferences; unknown codes retain the server's
+English fallback. Unexpected server failures remain sanitized and add `traceId` for
+correlation with the server log.
 
 The supplied logger owns filtering and destinations. For the category created above,
 Debug can be enabled with:

@@ -1,5 +1,7 @@
-// Fetch layer for the report protocol: problem+json aware, JSON in/out, blob export.
+// Fetch layer for the report protocol: coded-error aware, JSON in/out, blob export.
 // Shared by the report widget (ir.js) and the admin widget (ir-admin.js).
+
+import { errorReference, localizedError } from "./localization.js";
 
 /// Default API prefix for a widget with no api-base attribute: the prefix this
 /// script was served from. …/api/reports/ui/ir.js → …/api/reports
@@ -13,47 +15,60 @@ export function apiUrl(base, ...segments) {
     return `${prefix}/${segments.map(segment => encodeURIComponent(String(segment))).join("/")}`;
 }
 
-function problemLines(problem) {
+function serverErrorLines(error, locale = null) {
     const lines = [];
-    if (problem.title) lines.push(problem.title);
-    if (problem.detail) lines.push(problem.detail);
-    for (const messages of Object.values(problem.errors ?? {}))
+    const localized = error.code ? localizedError(error.code, locale) : null;
+    const title = localized?.title ?? error.title;
+    if (title) lines.push(title);
+    const description = localized?.description
+        ?? error.description
+        ?? error.detail; // detail supports pre-code servers
+    if (description)
+        lines.push(...String(description).split(/\r?\n/).filter(Boolean));
+    if (error.details)
+        lines.push(...String(error.details).split(/\r?\n/).filter(Boolean));
+    // ValidationProblemDetails compatibility for clients and servers upgraded at
+    // different times. New servers flatten these entries into details.
+    for (const messages of Object.values(error.errors ?? {}))
         for (const message of messages) lines.push(message);
     return lines;
 }
 
 export class ApiError extends Error {
-    constructor(problem, status) {
-        super(problemLines(problem).join(" — ") || `HTTP ${status}`);
+    constructor(error, status) {
+        error = error && typeof error === "object" ? error : {};
+        super(serverErrorLines(error).join(" — ") || `HTTP ${status}`);
         this.name = "ApiError";
         this.status = status;
-        this.problem = problem;
-        this.traceId = problem.traceId ?? null; // sanitized server errors carry a correlation id
+        this.error = error;
+        this.problem = error; // compatibility for host code written against the former contract
+        this.code = error.code ?? null;
+        this.traceId = error.traceId ?? null; // sanitized server errors carry a correlation id
     }
 }
 
 /// The canonical content of an error, shared by banners and dialog error boxes:
-/// the server's sanitized title, detail, and each validation message, in order.
-/// Duck-typed on problem so it also covers plain Errors and strings.
-export function errorLines(err) {
+/// the server's sanitized title and description, in order. Duck-typed on error so
+/// it also covers plain Errors, strings, and the former problem-details contract.
+export function errorLines(err, locale = null) {
     if (typeof err === "string") return [err];
-    const problem = err?.problem;
-    if (!problem || typeof problem !== "object") return [err?.message || "Something went wrong."];
-    const lines = problemLines(problem);
+    const error = err?.error ?? err?.problem;
+    if (!error || typeof error !== "object") return [err?.message || "Something went wrong."];
+    const lines = serverErrorLines(error, locale);
     if (!lines.length) lines.push(err.message || `HTTP ${err.status}`);
     return lines;
 }
 
 /// Compact banner text. Dialogs retain errorLines so each message can occupy its
 /// own row; single-line presenters share this trace-reference convention.
-export function errorText(err, message = null) {
-    const text = message ?? errorLines(err).join(" — ");
-    return err?.traceId ? `${text} (ref ${err.traceId})` : text;
+export function errorText(err, message = null, locale = null) {
+    const text = message ?? errorLines(err, locale).join(" — ");
+    return err?.traceId ? `${text} ${errorReference(err.traceId, locale, true)}` : text;
 }
 
-async function problemFrom(res) {
-    const problem = await res.json().catch(() => ({}));
-    return new ApiError(problem, res.status);
+async function errorFrom(res) {
+    const error = await res.json().catch(() => ({}));
+    return new ApiError(error, res.status);
 }
 
 export async function api(url, { method = "GET", body, signal } = {}) {
@@ -63,7 +78,7 @@ export async function api(url, { method = "GET", body, signal } = {}) {
         headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
         body: body !== undefined ? JSON.stringify(body) : undefined,
     });
-    if (!res.ok) throw await problemFrom(res);
+    if (!res.ok) throw await errorFrom(res);
     if (res.status === 204) return null;
     return res.json();
 }
@@ -85,7 +100,7 @@ export async function downloadFile(url, { method = "GET", body } = {}) {
         headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
         body: body !== undefined ? JSON.stringify(body) : undefined,
     });
-    if (!res.ok) throw await problemFrom(res);
+    if (!res.ok) throw await errorFrom(res);
     const disposition = res.headers.get("Content-Disposition") ?? "";
     const filename = /filename="?([^";]+)"?/.exec(disposition)?.[1] ?? null;
     return {

@@ -103,8 +103,14 @@ public sealed class SavedReportTitleRaceHttpTests : IAsyncLifetime
 
         Assert.Equal(HttpStatusCode.Conflict, raced.StatusCode);
         using var problem = JsonDocument.Parse(await raced.Content.ReadAsStringAsync());
-        Assert.Equal("Saved report title", problem.RootElement.GetProperty("title").GetString());
-        Assert.Contains("Contested", problem.RootElement.GetProperty("detail").GetString());
+        Assert.Equal(
+            "IR-1309",
+            problem.RootElement.GetProperty("code").GetString());
+        Assert.Equal("Saved report title conflict", problem.RootElement.GetProperty("title").GetString());
+        Assert.Equal(
+            "A saved report with this title already exists.",
+            problem.RootElement.GetProperty("description").GetString());
+        Assert.Contains("Contested", problem.RootElement.GetProperty("details").GetString());
 
         // The rival's row survives; a save under a fresh title still works.
         using var retry = await _client.PostAsync(

@@ -118,6 +118,26 @@ public sealed class AuthorizationHttpTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Authentication_and_hidden_denials_use_the_coded_error_contract()
+    {
+        using var anonymous = await GetSchema("configured", null);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        Assert.Equal("application/json", anonymous.Content.Headers.ContentType?.MediaType);
+        var authentication = await ReadJson(anonymous);
+        Assert.Equal("IR-1000", authentication.GetProperty("code").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(
+            authentication.GetProperty("description").GetString()));
+
+        using var hidden = await GetSchema("configured", "ordinary-user");
+        Assert.Equal(HttpStatusCode.NotFound, hidden.StatusCode);
+        var notFound = await ReadJson(hidden);
+        Assert.Equal("IR-1001", notFound.GetProperty("code").GetString());
+        Assert.False(notFound.TryGetProperty("detail", out _));
+        Assert.False(notFound.TryGetProperty("status", out _));
+        Assert.False(notFound.TryGetProperty("type", out _));
+    }
+
+    [Fact]
     public async Task Saved_report_queries_and_title_checks_require_report_access()
     {
         using var created = await Send(
@@ -282,6 +302,36 @@ public sealed class AuthorizationHttpTests : IAsyncLifetime
             "configured-admin",
             new { restricted = true });
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var error = await ReadJson(response);
+        Assert.Equal("IR-1403", error.GetProperty("code").GetString());
+        Assert.Equal(
+            "Anonymous and administrators-only reports cannot use user restrictions.",
+            error.GetProperty("description").GetString());
+        Assert.False(error.TryGetProperty("details", out _));
+    }
+
+    [Fact]
+    public async Task Authorization_input_failures_have_distinct_message_codes()
+    {
+        using var missingRestriction = await Send(
+            HttpMethod.Put,
+            "/api/reports/admin/authorization/reports/database",
+            "configured-admin",
+            new { });
+        Assert.Equal(HttpStatusCode.BadRequest, missingRestriction.StatusCode);
+        Assert.Equal(
+            "IR-1401",
+            (await ReadJson(missingRestriction)).GetProperty("code").GetString());
+
+        using var invalidIdentity = await Send(
+            HttpMethod.Post,
+            "/api/reports/admin/authorization/administrators",
+            "configured-admin",
+            new { identity = " " });
+        Assert.Equal(HttpStatusCode.BadRequest, invalidIdentity.StatusCode);
+        Assert.Equal(
+            "IR-1402",
+            (await ReadJson(invalidIdentity)).GetProperty("code").GetString());
     }
 
     private Task<HttpResponseMessage> GetSchema(string report, string? identity)

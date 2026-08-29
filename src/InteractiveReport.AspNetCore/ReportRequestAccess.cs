@@ -108,7 +108,7 @@ internal sealed class ReportAccessService : IReportAccessService
         if (resolutionError is not null)
             return new ReportAccessResult(null, resolutionError);
         if (definition is null)
-            return new ReportAccessResult(null, Results.NotFound());
+            return new ReportAccessResult(null, EndpointExtensions.ReportNotFound());
 
         var suppliedResource = request.Resource;
         if (request.PrepareResource is not null)
@@ -304,17 +304,17 @@ internal sealed class ReportAccessService : IReportAccessService
         if (authorization?.AdministratorsOnly == true)
         {
             if (context.User.Identity?.IsAuthenticated != true)
-                return Results.Unauthorized();
+                return EndpointExtensions.AuthenticationRequired();
             var administrator = await AdministratorAccess(context, options, ct);
             if (administrator.Error is not null) return administrator.Error;
             if (administrator.Configured && !administrator.Granted)
-                return Results.NotFound();
+                return EndpointExtensions.ReportNotFound();
         }
 
         if (authorization?.AllowAnonymous == true) return null;
 
         if (context.User.Identity?.IsAuthenticated != true)
-            return Results.Unauthorized();
+            return EndpointExtensions.AuthenticationRequired();
 
         if (authorization?.Policy is { Length: > 0 } policy)
         {
@@ -322,7 +322,7 @@ internal sealed class ReportAccessService : IReportAccessService
                 ?? throw new InvalidOperationException(
                     $"Report '{definition.Name}' declares policy '{policy}' but the host has not registered authorization services (AddAuthorization).");
             var decision = await service.AuthorizeAsync(context.User, policy);
-            if (!decision.Succeeded) return Results.NotFound();
+            if (!decision.Succeeded) return EndpointExtensions.ReportNotFound();
         }
 
         // Administrators-only definitions cannot also carry named-user restrictions.
@@ -356,7 +356,7 @@ internal sealed class ReportAccessService : IReportAccessService
             && authorization?.Users?.Any(user => string.Equals(
                 user.Trim(), identity, StringComparison.Ordinal)) == true;
         if (restricted && !configuredGrant && !databaseAccess.UserGranted)
-            return Results.NotFound();
+            return EndpointExtensions.ReportNotFound();
 
         return null;
     }
@@ -398,7 +398,7 @@ internal sealed class ReportAccessService : IReportAccessService
         if (administratorRequired)
         {
             if (context.User.Identity?.IsAuthenticated != true)
-                return Results.Unauthorized();
+                return EndpointExtensions.AuthenticationRequired();
 
             var administrator = await AdministratorAccess(context, options, ct);
             if (administrator.Error is not null) return administrator.Error;
@@ -443,13 +443,10 @@ internal sealed class ReportAccessService : IReportAccessService
                         resource.ReportName,
                         action,
                         context.TraceIdentifier);
-                    return Results.Problem(
-                        title: "Report authorization failed",
-                        statusCode: StatusCodes.Status500InternalServerError,
-                        extensions: new Dictionary<string, object?>
-                        {
-                            ["traceId"] = context.TraceIdentifier,
-                        });
+                    return EndpointExtensions.Error(
+                        InteractiveReportErrorCodes.AuthorizationFailed,
+                        StatusCodes.Status500InternalServerError,
+                        traceId: context.TraceIdentifier);
                 }
 
                 if (!allowed)
@@ -467,10 +464,10 @@ internal sealed class ReportAccessService : IReportAccessService
     public IResult? RequireFeature(ReportDefinition definition, string feature)
         => ReportFeatures.IsEnabled(definition, feature)
             ? null
-            : Results.Problem(
-                title: "Feature disabled",
-                detail: $"'{feature}' is not enabled for this report",
-                statusCode: StatusCodes.Status403Forbidden);
+            : EndpointExtensions.Error(
+                InteractiveReportErrorCodes.FeatureDisabled,
+                StatusCodes.Status403Forbidden,
+                $"'{feature}' is not enabled for this report");
 
     /// <summary>
     /// UI hint only. It never grants an operation: configured or database
@@ -547,13 +544,10 @@ internal sealed class ReportAccessService : IReportAccessService
             reportName,
             operation,
             context.TraceIdentifier);
-        return Results.Problem(
-            title: "Report authorization failed",
-            statusCode: StatusCodes.Status500InternalServerError,
-            extensions: new Dictionary<string, object?>
-            {
-                ["traceId"] = context.TraceIdentifier,
-            });
+        return EndpointExtensions.Error(
+            InteractiveReportErrorCodes.AuthorizationFailed,
+            StatusCodes.Status500InternalServerError,
+            traceId: context.TraceIdentifier);
     }
 
     private sealed record AdministratorDecision(bool Configured, bool Granted, IResult? Error);
@@ -561,12 +555,12 @@ internal sealed class ReportAccessService : IReportAccessService
     private static IResult Denied(HttpContext context, bool hide, string? detail)
     {
         if (context.User.Identity?.IsAuthenticated != true)
-            return Results.Unauthorized();
-        if (hide) return Results.NotFound();
-        return Results.Problem(
-            title: "Authorization denied",
-            detail: detail ?? "The caller is not allowed to perform this operation.",
-            statusCode: StatusCodes.Status403Forbidden);
+            return EndpointExtensions.AuthenticationRequired();
+        if (hide) return EndpointExtensions.ReportNotFound();
+        return EndpointExtensions.Error(
+            InteractiveReportErrorCodes.AuthorizationDenied,
+            StatusCodes.Status403Forbidden,
+            detail);
     }
 
     public async Task<IReadOnlyDictionary<string, object?>> ResolveContextParameters(

@@ -90,6 +90,7 @@ public sealed class InteractiveReportUserProviderHttpTests
 
         Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
         var problem = await ReadJson(response);
+        Assert.Equal("IR-1202", problem.GetProperty("code").GetString());
         Assert.Equal("Report execution failed", problem.GetProperty("title").GetString());
         Assert.False(problem.ToString().Contains("same-id", StringComparison.OrdinalIgnoreCase));
     }

@@ -321,7 +321,13 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
             }));
         Assert.Equal(HttpStatusCode.BadRequest, invalidResponse.StatusCode);
         var invalid = await ReadJson(invalidResponse);
+        Assert.Equal("IR-1201", invalid.GetProperty("code").GetString());
         Assert.Equal("Report state failed validation", invalid.GetProperty("title").GetString());
+        Assert.Equal(
+            "One or more report settings are invalid.",
+            invalid.GetProperty("description").GetString());
+        Assert.Contains("pipeline", invalid.GetProperty("details").GetString());
+        Assert.False(invalid.TryGetProperty("errors", out _));
 
         var title = $"Uploaded {Guid.NewGuid():N}";
         using var uploadResponse = await _client.PostAsync(

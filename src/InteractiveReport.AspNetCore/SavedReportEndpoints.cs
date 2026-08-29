@@ -29,7 +29,10 @@ internal static class SavedReportEndpoints
     internal static async Task<IResult> Whoami(HttpContext ctx, CancellationToken ct)
     {
         var opts = Options(ctx);
-        if (!opts.WhoamiEnabled) return Results.NotFound();
+        if (!opts.WhoamiEnabled)
+            return EndpointExtensions.Error(
+                InteractiveReportErrorCodes.EndpointNotFound,
+                StatusCodes.Status404NotFound);
 
         var identity = ReportIdentity.Resolve(ctx.User, opts.IdentityClaim);
         var database = new DatabaseAdministratorAccess(false, false);
@@ -166,7 +169,7 @@ internal static class SavedReportEndpoints
     internal static async Task<IResult> Save(string name, HttpContext ctx, CancellationToken ct)
     {
         var identity = Identity(ctx);
-        if (identity is null) return Results.Unauthorized();
+        if (identity is null) return EndpointExtensions.AuthenticationRequired();
         InteractiveReportDefinition candidate = null!;
         var access = await Access(ctx).Authorize(new ReportAccessRequest
         {
@@ -189,13 +192,18 @@ internal static class SavedReportEndpoints
                 catch (JsonException ex)
                 {
                     return new ReportAccessResourcePreparation(
-                        null, BadRequest("Malformed save request", ex.Message));
+                        null, BadRequest(
+                            InteractiveReportErrorCodes.MalformedSaveRequest,
+                            ex.Message));
                 }
-                if (TitleError(request?.Title) is { } titleError)
+                if (TitleError(
+                        request?.Title,
+                        InteractiveReportErrorCodes.SavedReportTitleInvalid) is { } titleError)
                     return new ReportAccessResourcePreparation(null, titleError);
                 if (request!.State is null)
                     return new ReportAccessResourcePreparation(
-                        null, BadRequest("Malformed save request", "state is required"));
+                        null, BadRequest(
+                            InteractiveReportErrorCodes.SavedReportStateRequired));
 
                 candidate = new InteractiveReportDefinition
                 {
@@ -216,7 +224,10 @@ internal static class SavedReportEndpoints
         if (access.Error is not null) return access.Error;
         var def = access.Definition!;
 
-        if (DefinitionError(candidate, "Malformed save request") is { } candidateError)
+        if (DefinitionError(
+                candidate,
+                InteractiveReportErrorCodes.SavedReportTitleInvalid,
+                InteractiveReportErrorCodes.SavedReportStateRequired) is { } candidateError)
             return candidateError;
         if (await ValidateSubmittedState(def, candidate, ctx, "saved report creation", ct) is { } stateError)
             return stateError;
@@ -251,7 +262,7 @@ internal static class SavedReportEndpoints
     {
         await Synchronizer(ctx).EnsureSynced(ct);
         var metadata = await SavedStore(ctx).GetMetadata(id, ct);
-        if (metadata is null) return Results.NotFound();
+        if (metadata is null) return EndpointExtensions.SavedReportNotFound();
 
         // Loading a state document still requires access to the underlying report.
         var identity = Identity(ctx);
@@ -267,7 +278,7 @@ internal static class SavedReportEndpoints
         if (access.Error is not null) return access.Error;
 
         var report = await SavedStore(ctx).Get(id, ct);
-        if (report is null) return Results.NotFound();
+        if (report is null) return EndpointExtensions.SavedReportNotFound();
 
         using var state = JsonDocument.Parse(report.StateJson);
         return Results.Json(
@@ -280,7 +291,7 @@ internal static class SavedReportEndpoints
         await Synchronizer(ctx).EnsureSynced(ct);
         var savedStore = SavedStore(ctx);
         var metadata = await savedStore.GetMetadata(id, ct);
-        if (metadata is null) return Results.NotFound();
+        if (metadata is null) return EndpointExtensions.SavedReportNotFound();
 
         var identity = Identity(ctx);
         UpdateSavedReportRequest request = null!;
@@ -308,7 +319,9 @@ internal static class SavedReportEndpoints
                 catch (JsonException ex)
                 {
                     return new ReportAccessResourcePreparation(
-                        null, BadRequest("Malformed update request", ex.Message));
+                        null, BadRequest(
+                            InteractiveReportErrorCodes.MalformedUpdateRequest,
+                            ex.Message));
                 }
 
                 candidate = new InteractiveReportDefinition
@@ -332,7 +345,7 @@ internal static class SavedReportEndpoints
         var definition = access.Definition!;
 
         var report = await savedStore.Get(id, ct);
-        if (report is null) return Results.NotFound();
+        if (report is null) return EndpointExtensions.SavedReportNotFound();
 
         if (metadata.Origin == SavedReportOrigin.Configured)
         {
@@ -346,10 +359,13 @@ internal static class SavedReportEndpoints
             report.IsPrimary = candidate.Primary;
             return await savedStore.Update(report, ct)
                 ? Results.Json(Summary(report, identity), IrJson.Options)
-                : Results.NotFound();
+                : EndpointExtensions.SavedReportNotFound();
         }
 
-        if (DefinitionError(candidate, "Malformed update request") is { } candidateError)
+        if (DefinitionError(
+                candidate,
+                InteractiveReportErrorCodes.SavedReportTitleInvalid,
+                InteractiveReportErrorCodes.SavedReportStateRequired) is { } candidateError)
             return candidateError;
         if (await ValidateSubmittedState(definition, candidate, ctx, "saved report update", ct) is { } stateError)
             return stateError;
@@ -367,7 +383,7 @@ internal static class SavedReportEndpoints
         {
             return await savedStore.Update(report, ct)
                 ? Results.Json(Summary(report, identity), IrJson.Options)
-                : Results.NotFound();
+                : EndpointExtensions.SavedReportNotFound();
         }
         catch (SavedReportTitleConflictException conflict)
         {
@@ -380,7 +396,7 @@ internal static class SavedReportEndpoints
         await Synchronizer(ctx).EnsureSynced(ct);
         var savedStore = SavedStore(ctx);
         var report = await savedStore.GetMetadata(id, ct);
-        if (report is null) return Results.NotFound();
+        if (report is null) return EndpointExtensions.SavedReportNotFound();
 
         var identity = Identity(ctx);
         var builtIn = SavedReportAccessPolicy.Modify(report, identity, administrator: false);
@@ -399,7 +415,9 @@ internal static class SavedReportEndpoints
         if (report.Origin == SavedReportOrigin.Configured)
             return ReadOnlyConfiguredResult();
 
-        return await savedStore.Delete(id, ct) ? Results.NoContent() : Results.NotFound();
+        return await savedStore.Delete(id, ct)
+            ? Results.NoContent()
+            : EndpointExtensions.SavedReportNotFound();
     }
 
     // --- administrator surface -----------------------------------------------
@@ -415,11 +433,11 @@ internal static class SavedReportEndpoints
         HttpContext ctx,
         CancellationToken ct)
     {
-        if (Identity(ctx) is null) return Results.Unauthorized();
+        if (Identity(ctx) is null) return EndpointExtensions.AuthenticationRequired();
 
         await Synchronizer(ctx).EnsureSynced(ct);
         var metadata = await SavedStore(ctx).GetMetadata(id, ct);
-        if (metadata is null) return Results.NotFound();
+        if (metadata is null) return EndpointExtensions.SavedReportNotFound();
         var reportName = metadata.ReportName;
         var access = await Access(ctx).Authorize(new ReportAccessRequest
         {
@@ -432,7 +450,7 @@ internal static class SavedReportEndpoints
         if (access.Error is not null) return access.Error;
 
         var report = await SavedStore(ctx).Get(id, ct);
-        if (report is null) return Results.NotFound();
+        if (report is null) return EndpointExtensions.SavedReportNotFound();
 
         ReportState? state;
         try
@@ -479,7 +497,7 @@ internal static class SavedReportEndpoints
         CancellationToken ct)
     {
         var identity = Identity(ctx);
-        if (identity is null) return Results.Unauthorized();
+        if (identity is null) return EndpointExtensions.AuthenticationRequired();
         InteractiveReportDefinition candidate = null!;
         var access = await Access(ctx).Authorize(new ReportAccessRequest
         {
@@ -498,13 +516,18 @@ internal static class SavedReportEndpoints
                 catch (JsonException ex)
                 {
                     return new ReportAccessResourcePreparation(
-                        null, BadRequest("Malformed report document", ex.Message));
+                        null, BadRequest(
+                            InteractiveReportErrorCodes.MalformedReportDocument,
+                            ex.Message));
                 }
-                if (TitleError(document?.Title, "Malformed report document") is { } titleError)
+                if (TitleError(
+                        document?.Title,
+                        InteractiveReportErrorCodes.ReportDocumentTitleInvalid) is { } titleError)
                     return new ReportAccessResourcePreparation(null, titleError);
                 if (document!.State is null)
                     return new ReportAccessResourcePreparation(
-                        null, BadRequest("Malformed report document", "state is required"));
+                        null, BadRequest(
+                            InteractiveReportErrorCodes.ReportDocumentStateRequired));
 
                 candidate = new InteractiveReportDefinition
                 {
@@ -525,7 +548,10 @@ internal static class SavedReportEndpoints
         if (access.Error is not null) return access.Error;
         var definition = access.Definition!;
 
-        if (DefinitionError(candidate, "Malformed report document") is { } candidateError)
+        if (DefinitionError(
+                candidate,
+                InteractiveReportErrorCodes.ReportDocumentTitleInvalid,
+                InteractiveReportErrorCodes.ReportDocumentStateRequired) is { } candidateError)
             return candidateError;
         if (await ValidateSubmittedState(definition, candidate, ctx, "report document upload", ct) is { } stateError)
             return stateError;
@@ -623,7 +649,8 @@ internal static class SavedReportEndpoints
     {
         if (!candidate.StateChanged) return null;
         if (candidate.State is null)
-            return BadRequest("Malformed report definition", "state is required");
+            return BadRequest(
+                InteractiveReportErrorCodes.ReportDefinitionStateRequired);
 
         try
         {
@@ -695,49 +722,54 @@ internal static class SavedReportEndpoints
         var collision = await FindTitleCollision(ctx, conflict.ReportName, conflict.Title, exceptId, ct);
         return collision is not null
             ? TitleConflict(collision, conflict.Title)
-            : Results.Problem(
-                title: "Saved report title",
-                detail: $"A saved report named '{conflict.Title.Trim()}' already exists. Replace it if it is available to you, or choose another title.",
-                statusCode: StatusCodes.Status409Conflict);
+            : EndpointExtensions.Error(
+                InteractiveReportErrorCodes.SavedReportTitleConflict,
+                StatusCodes.Status409Conflict,
+                $"A saved report named '{conflict.Title.Trim()}' already exists. Replace it if it is available to you, or choose another title.");
     }
 
     private static IResult TitleConflict(SavedReport collision, string title)
         => collision.Origin == SavedReportOrigin.Configured
-            ? Results.Problem(
-                title: "Configured report title",
-                detail: $"'{title.Trim()}' is supplied by a read-only configured report document; choose another title.",
-                statusCode: StatusCodes.Status409Conflict)
-            : Results.Problem(
-                title: "Saved report title",
-                detail: $"A saved report named '{title.Trim()}' already exists. Replace it if it is available to you, or choose another title.",
-                statusCode: StatusCodes.Status409Conflict);
+            ? EndpointExtensions.Error(
+                InteractiveReportErrorCodes.ConfiguredReportTitleConflict,
+                StatusCodes.Status409Conflict,
+                $"'{title.Trim()}' is supplied by a read-only configured report document; choose another title.")
+            : EndpointExtensions.Error(
+                InteractiveReportErrorCodes.SavedReportTitleConflict,
+                StatusCodes.Status409Conflict,
+                $"A saved report named '{title.Trim()}' already exists. Replace it if it is available to you, or choose another title.");
 
     private static IResult ReadOnlyConfiguredResult()
-        => Results.Problem(
-            title: "Read-only report",
-            detail: "Configured report documents cannot be updated or deleted. Use Save As to create an editable copy.",
-            statusCode: StatusCodes.Status403Forbidden);
+        => EndpointExtensions.Error(
+            InteractiveReportErrorCodes.ConfiguredReportReadOnly,
+            StatusCodes.Status403Forbidden);
 
-    private static IResult? TitleError(string? title, string problemTitle = "Malformed save request")
+    private static IResult? TitleError(string? title, string code)
         => string.IsNullOrWhiteSpace(title) || title.Trim().Length > 200
-            ? BadRequest(problemTitle, "title is required (1–200 characters)")
+            ? BadRequest(code)
             : null;
 
     private static IResult? DefinitionError(
         InteractiveReportDefinition definition,
-        string problemTitle)
+        string titleCode,
+        string stateCode)
     {
-        if (TitleError(definition.Title, problemTitle) is { } titleError)
+        if (TitleError(definition.Title, titleCode) is { } titleError)
             return titleError;
         if (definition.Owner is not null && string.IsNullOrWhiteSpace(definition.Owner))
-            return BadRequest(problemTitle, "owner must be a non-empty identity value");
+            return BadRequest(InteractiveReportErrorCodes.SavedReportOwnerInvalid);
         if (definition.StateChanged && definition.State is null)
-            return BadRequest(problemTitle, "state is required");
+            return BadRequest(stateCode);
         return null;
     }
 
-    private static IResult BadRequest(string title, string detail)
-        => Results.Problem(title: title, detail: detail, statusCode: StatusCodes.Status400BadRequest);
+    private static IResult BadRequest(
+        string code,
+        string? details = null)
+        => EndpointExtensions.Error(
+            code,
+            StatusCodes.Status400BadRequest,
+            details);
 
     private static string DownloadFileName(string reportName, string title)
     {

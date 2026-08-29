@@ -69,7 +69,7 @@ still avoiding the worst dialect divergence (native PIVOT syntax) entirely.
 | Project | Responsibility |
 |---|---|
 | `src/InteractiveReport.Core` | State model, validation, expression parser, query composition (SqlKata), execution, schema discovery, highlight evaluation, in-memory pivot, export. No ASP.NET dependencies. |
-| `src/InteractiveReport.AspNetCore` | Endpoint mapping (`MapInteractiveReports`), standard OpenAPI metadata and public wire contracts, config-backed definition store, auth integration, JSON protocol shaping, problem+json errors. `Ui/dist` holds the generated client assets (§14), embedded and served by the same mapping. |
+| `src/InteractiveReport.AspNetCore` | Endpoint mapping (`MapInteractiveReports`), standard OpenAPI metadata and public wire contracts, config-backed definition store, auth integration, JSON protocol shaping, coded errors. `Ui/dist` holds the generated client assets (§14), embedded and served by the same mapping. |
 | `src/InteractiveReport.GraphQL` | Optional GraphQL.NET transport over saved reports. Looks up every origin through `ISavedReportStore` and reuses ASP.NET authorization, context resolution, validation, and execution. |
 | `src/client` | Product UI source modules and the three browser-bundle entry points. |
 | `samples/Workbench` | Dev harness: SQLite sample DB. `index.html` and `admin.html` host the packaged report and administration elements; Swagger UI and GraphiQL expose the REST and GraphQL developer surfaces. |
@@ -172,7 +172,7 @@ Notes:
   `dialect` key in old configuration binds but is superseded. Configuration is
   validated at startup by a hosted service (host fails to start naming the fix);
   mistakes introduced later by a live config reload surface per request as the
-  standard sanitized problem document.
+  standard sanitized coded-error document.
 - `contextParams` values resolve **server-side only** (claims by default; host may register
   an `IContextParameterResolver` for anything else). Client-supplied values can never bind
   to them — they are a separate parameter class from filter values. This is the
@@ -617,14 +617,75 @@ remain JSON numbers on the wire. `BigInt` is used only to hand an already-rounde
 integer to `Intl.NumberFormat` for locale grouping. Chart.js coordinates are converted to
 `Number` only at the chart pixel boundary; the accessible chart-data table stays exact.
 
-**Errors:** RFC 7807 `application/problem+json`, sanitized. Database and compiler
-exceptions are caught, logged server-side with a correlation id, and returned as a
-generic problem document carrying that id. **No SQL text, no parameter values, no
-provider error internals ever reach the client.** Validation failures are the exception:
-they are precise and verbose (which filter, which column, why), because they reference
-only what the client already sent. Two strictness rules keep foreign input from becoming
-500s or silent reinterpretation: structural nulls (a null pipeline stage, list element, or
-required identifier/expression property — shapes the protocol serializer never writes) are
+**Errors:** every JSON API failure is `application/json` containing the single public
+`InteractiveReportError` wire class:
+
+```json
+{
+  "code": "IR-1202",
+  "description": "An unexpected error occurred while processing the report.",
+  "title": "Report execution failed",
+  "traceId": "0HN..."
+}
+```
+
+`code` and `description` are required. The `IR-nnnn` catalog behaves like a
+product-specific ORA series: one stable code identifies one core message. The English
+`description` and optional `title` are fallback presentation text that a localized client
+may replace. Optional `details` carries contextual text such as a state path, rejected
+value, or JSON parser diagnostic; it is deliberately not part of the translated core
+message. `traceId` appears only when a server log entry holds additional diagnostic
+detail. Authentication challenges and hidden 404 denials use the same shape, so the
+client no longer needs status-specific bodiless fallbacks. Static viewer-page and asset
+misses remain ordinary bodyless 404s because those routes are not JSON APIs.
+
+The packaged client's `core/localization.js` owns English and Canadian French error
+catalogs. It selects the nearest `lang` attribute, then a browser language, with English
+as the final fallback. Known codes replace the server title and description; `details`
+is appended unchanged. An unknown code shows the server fallback so separately deployed
+client and server packages remain operable while their catalogs are briefly out of step.
+
+The current HTTP code catalog is:
+
+| Code | Core message identity |
+|---|---|
+| `IR-1000` | Authentication is required. |
+| `IR-1001` | The report is absent or access is deliberately hidden. |
+| `IR-1002` | The saved report is absent or access is deliberately hidden. |
+| `IR-1003` | An optional JSON endpoint is unavailable. |
+| `IR-1004` | The authenticated caller is denied. |
+| `IR-1005` | Authorization infrastructure failed unexpectedly. |
+| `IR-1100` | A report feature is disabled. |
+| `IR-1101` | The export format is unsupported. |
+| `IR-1200` | The report-state body is not valid JSON. |
+| `IR-1201` | The report state failed semantic validation. |
+| `IR-1202` | Report execution, storage, provider work, or live definition resolution failed unexpectedly. |
+| `IR-1300` | The saved-report create body is not valid JSON. |
+| `IR-1301` | A saved-report title is invalid. |
+| `IR-1302` | A saved-report create body has no state. |
+| `IR-1303` | The saved-report update body is not valid JSON. |
+| `IR-1304` | A saved-report owner is invalid. |
+| `IR-1305` | A report-document upload is not valid JSON. |
+| `IR-1306` | A report-document title is invalid. |
+| `IR-1307` | A report document has no state. |
+| `IR-1308` | A hydrated report definition unexpectedly has no state. |
+| `IR-1309` | A user-authored saved-report title conflicts. |
+| `IR-1310` | A title conflicts with a configured read-only report. |
+| `IR-1311` | A configured report cannot be mutated. |
+| `IR-1400` | An authorization-administration body is not valid JSON. |
+| `IR-1401` | The restriction value is missing. |
+| `IR-1402` | The authorization identity is invalid. |
+| `IR-1403` | A user restriction conflicts with an anonymous or administrators-only definition. |
+| `IR-1404` | A user grant conflicts with an anonymous or administrators-only definition. |
+| `IR-1500` | The GraphQL HTTP transport is unsupported. |
+
+Database and compiler exceptions are caught and logged server-side. **No SQL text, no
+parameter values, no provider error internals ever reach the client.** Validation
+failures are the exception: their `details` field contains newline-separated `path: message`
+entries because they reference only what the client already sent. Two
+strictness rules keep foreign input from becoming 500s or silent reinterpretation:
+structural nulls (a null pipeline stage, list element, or required
+identifier/expression property, shapes the protocol serializer never writes) are
 rejected by a pre-validation pass with per-path 400s, and numeric enum tokens
 (`"dir": 99`) are malformed JSON outright, because the serializer only ever emits
 camelCase strings and an integer would deserialize into an undefined member that
@@ -639,7 +700,7 @@ resolve definition (store)                         404 if absent
 → ingest document (one pipeline, query + export):
     discover/fetch cached schema
     resolve doc over effective Default state (source labels: … ?? columnLabels)
-    walk the stage pipeline:                       400 problem+json (precise)
+    walk the stage pipeline:                       400 coded error (precise)
         source: validate layer against base ∪ source computed (effective schema)
         group:  derive static output schema (dims + __count + metrics by id
                 + layer computed) and validate its layer against it
@@ -938,7 +999,7 @@ as a parameter.)
   from the HTTP request so abandoned browsers stop occupying the database.
 - Logging: the final `DbCommand.CommandText` for report queries, schema probes, and
   session setup is logged at Debug only; parameter *values* are never logged.
-  Correlation id at Information joins HTTP log ↔ engine log ↔ problem response.
+  Correlation id at Information joins HTTP log ↔ engine log ↔ coded error response.
 
 ## 12. Security model
 
@@ -1168,8 +1229,9 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 - Source modules live in `src/client`, organized by concern. The root holds only the
   three bundle entries (`ir.js`, `ir-admin.js`, `ir-chart.js` — thin registration/
   re-export files whose basenames fix the `Ui/dist` output names) and the shared
-  `ir.css`. `core/` is widget-agnostic plumbing: `api.js` (fetch + problem+json +
-  served-prefix inference + canonical error text), `identity.js` (the shared
+  `ir.css`. `core/` is widget-agnostic plumbing: `api.js` (fetch + coded errors +
+  served-prefix inference + canonical error text), `localization.js` (locale
+  selection plus English/Canadian French coded-error catalogs), `identity.js` (the shared
   optional-whoami policy and concurrent-request coalescing), `dom.js` (element
   builder, icons, banners, form helpers), `menu.js` (popup menus), `dialog.js`
   (modal dialogs), `widget.js` (shadow-root mount/teardown, shared notices,
@@ -1225,8 +1287,8 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   group/spread/chart stages and shelf entries outright (T0 coarse invalidation, §5);
   break groups with per-column subtotal rows and grand-total rows; row/cell highlights;
   group/spread rendering; saved-report select
-  (Default + Primary/Global/Private groups); `ignored[]` and problem+json surfaced as
-  notices — validation problems render *inside* the originating dialog, which stays
+  (Default + Primary/Global/Private groups); `ignored[]` and coded errors surfaced as
+  notices — validation errors render *inside* the originating dialog, which stays
   open (apply is transactional: mutate a clone, install, re-query, and on failure
   restore the last server-validated state — so a throwing mutator, an overlapping
   edit, or a failed saved-report load can never strand a half-mutated or
@@ -1437,7 +1499,7 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   `ReportDefinition.Dialect` is nullable and stamped by the store, superseding
   leftovers; `SavedReportsOptions.Dialect` removed; `SavedReports.DataSource`
   added. Startup validator (config mistakes fail boot); definition resolution
-  wrapped in problem-document shaping for post-reload breakage. Packaged
+  wrapped in coded-error shaping for post-reload breakage. Packaged
   anonymous viewer/admin pages (`/{name}/view`, `/admin`) with an admin
   whoami-off guidance banner (which also surfaced and fixed the admin element's
   `remove()` method shadowing `Element.remove()`). MIT + full nuget.org metadata

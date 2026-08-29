@@ -111,7 +111,7 @@ export class WidgetElement extends HTMLElement {
         const slot = this.els?.errorSlot;
         if (!slot) return;
         slot.replaceChildren(
-            banner("error", errorText(err, message), () => this.clearError()));
+            banner("error", errorText(err, message, this), () => this.clearError()));
     }
 
     clearError() {

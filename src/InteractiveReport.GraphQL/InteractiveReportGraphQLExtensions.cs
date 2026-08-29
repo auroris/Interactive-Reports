@@ -59,10 +59,9 @@ public static class InteractiveReportGraphQLExtensions
                 || isWebSocketUpgrade)
             {
                 context.Response.Headers.Allow = "GET, POST";
-                return Results.Problem(
-                    statusCode: StatusCodes.Status405MethodNotAllowed,
-                    title: "Unsupported GraphQL transport",
-                    detail: "Interactive Reports GraphQL supports HTTP GET and POST queries only.");
+                return EndpointExtensions.Error(
+                    InteractiveReportErrorCodes.GraphQlTransportUnsupported,
+                    StatusCodes.Status405MethodNotAllowed);
             }
 
             return await next(invocation);

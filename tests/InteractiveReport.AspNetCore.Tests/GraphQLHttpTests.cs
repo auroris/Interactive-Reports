@@ -260,9 +260,11 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
         Assert.Contains("GET", response.Content.Headers.Allow);
         Assert.Contains("POST", response.Content.Headers.Allow);
         var body = await ReadJson(response);
+        Assert.Equal("IR-1500", body.GetProperty("code").GetString());
         Assert.Equal(
             "Unsupported GraphQL transport",
             body.GetProperty("title").GetString());
+        Assert.Contains("GET and POST", body.GetProperty("description").GetString());
     }
 
     private async Task<string> CreatePrivateReport(string owner, string title)

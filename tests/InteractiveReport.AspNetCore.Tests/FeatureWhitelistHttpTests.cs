@@ -124,7 +124,8 @@ public sealed class FeatureWhitelistHttpTests : IAsyncLifetime
             "/api/reports/locked/export?format=csv", JsonContent.Create(new { }));
         Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
         var problem = await ReadJson(refused);
-        Assert.Contains("download", problem.GetProperty("detail").GetString());
+        Assert.Equal("IR-1100", problem.GetProperty("code").GetString());
+        Assert.Contains("download", problem.GetProperty("details").GetString());
 
         using var allowed = await _client.PostAsync(
             "/api/reports/open/export?format=csv", JsonContent.Create(new { }));
@@ -140,7 +141,8 @@ public sealed class FeatureWhitelistHttpTests : IAsyncLifetime
             "/api/reports/locked/saved", JsonContent.Create(body));
         Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
         var problem = await ReadJson(refused);
-        Assert.Contains("savedReports", problem.GetProperty("detail").GetString());
+        Assert.Equal("IR-1100", problem.GetProperty("code").GetString());
+        Assert.Contains("savedReports", problem.GetProperty("details").GetString());
 
         using var allowed = await _client.PostAsync(
             "/api/reports/open/saved", JsonContent.Create(new { title = "Allowed", state = new { } }));

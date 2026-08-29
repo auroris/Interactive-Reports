@@ -390,12 +390,12 @@ export class InteractiveReportElement extends WidgetElement {
     // --- notices -------------------------------------------------------------
 
     showError(err) {
-        // Friendly text covers the statuses the server deliberately leaves
-        // bodiless (auth challenges, hide-as-404); a server that did send a
-        // sanitized problem is more precise than either stock phrase.
-        const problem = err?.problem ?? {};
-        const friendly = err?.status === 401 ? "Sign in to use this report."
-            : err?.status === 404 && !problem.title && !problem.detail
+        // Friendly text remains as compatibility for older, bodiless servers. A
+        // coded server error is more precise than either stock phrase.
+        const error = err?.error ?? err?.problem ?? {};
+        const hasServerText = error.title || error.description || error.detail;
+        const friendly = err?.status === 401 && !hasServerText ? "Sign in to use this report."
+            : err?.status === 404 && !hasServerText
                 ? "Report not found — or you don't have access."
                 : null;
         super.showError(err, friendly);

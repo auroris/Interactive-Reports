@@ -580,7 +580,7 @@ Application-operation results are translated as follows:
 | Condition | Result |
 |---|---|
 | Required authentication is absent | `401 Unauthorized` |
-| Authenticated caller is denied a capability it already knows exists | `403 Forbidden` problem response |
+| Authenticated caller is denied a capability it already knows exists | `403 Forbidden` coded-error response |
 | Denial concerns a report or saved report whose existence should be concealed | `404 Not Found` |
 | Callback returns `false` | Expected denial using the applicable status above |
 | Callback throws `InteractiveReportAuthorizationDeniedException` | Expected denial using the applicable status above |

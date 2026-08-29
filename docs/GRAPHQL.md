@@ -186,6 +186,12 @@ Validation details contain only report-state paths and validation messages. Unex
 failures are logged server-side and return a correlation `traceId`; database exception
 text and generated SQL are not returned.
 
+Errors that occur before GraphQL execution use the HTTP API's single coded-error object
+instead of a GraphQL `errors` array. At present this is
+`IR-1500` for methods other than GET or POST and for WebSocket
+upgrades. Its `description` is English fallback text that localized clients may replace
+using the code.
+
 ## Operational boundaries
 
 The adapter deliberately exposes no report-state input beyond paging. A caller cannot

@@ -1,8 +1,9 @@
 namespace InteractiveReport.Core.Model;
 
 /// <summary>
-/// Validation failures are the one error class that is precise and verbose to the client:
-/// they reference only what the client already sent. Everything else is sanitized.
+/// Validation failures retain precise, verbose details for the client because they
+/// reference only what the client already sent. Everything else is sanitized at the
+/// transport boundary.
 /// </summary>
 public sealed class ReportValidationException : Exception
 {

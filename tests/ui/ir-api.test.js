@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ApiError, apiUrl, download, downloadFile, errorLines, errorText } from "../../src/client/core/api.js";
 import { loadWhoami } from "../../src/client/core/identity.js";
+import { localizedError, supportedErrorCodes, supportedLocales } from "../../src/client/core/localization.js";
 
 test("API URLs normalize the base and encode every path segment", () => {
     assert.equal(
@@ -9,25 +10,58 @@ test("API URLs normalize the base and encode every path segment", () => {
         "/api/reports/sales%20%2F%20west/schema");
 });
 
-test("errorLines carries the server's title, detail, and every validation message in order", () => {
+test("coded errors localize their core message and retain untranslated details", () => {
     const err = new ApiError({
-        title: "Report state failed validation",
-        detail: "The posted document is inconsistent.",
-        errors: { "pipeline[0]": ["Unknown column X", "Bad expression"] },
+        code: "IR-1201",
+        title: "Server title is only a fallback",
+        description: "Server description is only a fallback.",
+        details: "pipeline[0]: Unknown column X\npipeline[0]: Bad expression",
         traceId: "00-abc-01",
     }, 400);
     // The correlation reference is appended by each presenter in its own format.
-    assert.deepEqual(errorLines(err), [
+    assert.equal(err.code, "IR-1201");
+    assert.deepEqual(errorLines(err, "en"), [
         "Report state failed validation",
-        "The posted document is inconsistent.",
-        "Unknown column X",
-        "Bad expression",
+        "One or more report settings are invalid.",
+        "pipeline[0]: Unknown column X",
+        "pipeline[0]: Bad expression",
+    ]);
+    assert.deepEqual(errorLines(err, "fr-CA"), [
+        "Échec de la validation de l’état du rapport",
+        "Un ou plusieurs paramètres du rapport ne sont pas valides.",
+        "pipeline[0]: Unknown column X",
+        "pipeline[0]: Bad expression",
     ]);
     assert.deepEqual(errorLines(new ApiError({}, 502)), ["HTTP 502"]);
     assert.deepEqual(errorLines(new Error("plain failure")), ["plain failure"]);
     assert.deepEqual(errorLines("just text"), ["just text"]);
-    assert.equal(errorText(err),
-        "Report state failed validation — The posted document is inconsistent. — Unknown column X — Bad expression (ref 00-abc-01)");
+    assert.equal(errorText(err, null, "en"),
+        "Report state failed validation — One or more report settings are invalid. — pipeline[0]: Unknown column X — pipeline[0]: Bad expression (ref 00-abc-01)");
+    assert.equal(errorText(err, null, "fr-CA"),
+        "Échec de la validation de l’état du rapport — Un ou plusieurs paramètres du rapport ne sont pas valides. — pipeline[0]: Unknown column X — pipeline[0]: Bad expression (réf. 00-abc-01)");
+
+    const future = new ApiError({
+        code: "IR-9999",
+        title: "Future server title",
+        description: "Future server description.",
+    }, 400);
+    assert.deepEqual(
+        errorLines(future, "fr-CA"),
+        ["Future server title", "Future server description."],
+        "unknown codes fall back to the server while catalogs are out of step");
+});
+
+test("every client error code has English and Canadian French copy", () => {
+    assert.deepEqual(supportedLocales, ["en", "fr-CA"]);
+    assert.equal(new Set(supportedErrorCodes).size, supportedErrorCodes.length);
+    for (const code of supportedErrorCodes) {
+        assert.match(code, /^IR-\d{4}$/);
+        for (const locale of supportedLocales) {
+            const message = localizedError(code, locale);
+            assert.ok(message?.title, `${code} has a ${locale} title`);
+            assert.ok(message?.description, `${code} has a ${locale} description`);
+        }
+    }
 });
 
 test("whoami shares the optional-endpoint policy and coalesces concurrent requests", async () => {
@@ -61,7 +95,12 @@ test("whoami shares the optional-endpoint policy and coalesces concurrent reques
         assert.equal(absent.error, null);
 
         status = 500;
-        body = { title: "Identity failed", traceId: "trace-1" };
+        body = {
+            code: "IR-1202",
+            description: "Identity lookup failed.",
+            title: "Identity failed",
+            traceId: "trace-1",
+        };
         const failed = await loadWhoami("/api/reports");
         assert.equal(failed.whoami, null);
         assert.equal(failed.error.status, 500);

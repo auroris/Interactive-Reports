@@ -4,6 +4,7 @@
 
 import { errorLines } from "./api.js";
 import { el, icon } from "./dom.js";
+import { errorReference } from "./localization.js";
 import { closePopups } from "./menu.js";
 import { hidePopover, popoverIsOpen, showPopover } from "./popover.js";
 
@@ -186,8 +187,8 @@ export function openDialog({
         setError(err) {
             errorBox.replaceChildren();
             if (err == null) { errorBox.hidden = true; return; }
-            const messages = errorLines(err);
-            if (err?.traceId) messages.push(`Reference: ${err.traceId}`);
+            const messages = errorLines(err, owner);
+            if (err?.traceId) messages.push(errorReference(err.traceId, owner));
             errorBox.append(...messages.map(message => el("div", {}, message)));
             errorBox.hidden = false;
         },

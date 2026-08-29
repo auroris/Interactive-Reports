@@ -527,7 +527,10 @@ public sealed class InteractiveReportAuthorizationHttpTests
 
         Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
         var problem = await ReadJson(response);
+        Assert.Equal("IR-1005", problem.GetProperty("code").GetString());
         Assert.Equal("Report authorization failed", problem.GetProperty("title").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(problem.GetProperty("description").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(problem.GetProperty("traceId").GetString()));
         Assert.DoesNotContain("MissingPolicyInfrastructure", problem.ToString());
     }
 
