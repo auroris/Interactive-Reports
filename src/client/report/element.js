@@ -13,11 +13,11 @@ import { setCustomStyleSheet, WidgetElement } from "../core/widget.js";
 import { applyFeatureChrome, buildSkeleton } from "./skeleton.js";
 import { featureEnabled } from "./schema.js";
 import {
-    activateTail,
-    configuredTail,
     invalidateChangedSchemas,
     modeOf,
     normalizeReportState,
+    resolveView,
+    selectView,
     serializeReportState,
 } from "./state.js";
 import { refreshSavedSelect, sameTitle } from "./saved.js";
@@ -439,8 +439,23 @@ export class InteractiveReportElement extends WidgetElement {
         const current = modeOf(this.doc);
         if (mode === current) return;
         if (mode !== "grid" && !featureEnabled(this, mode)) return;
-        if (mode === "grid") { this.applyOrBanner(d => activateTail(d, "grid")); return; }
-        if (configuredTail(this.doc, mode)) this.applyOrBanner(d => activateTail(d, mode));
-        else openViewDialog(this, mode);
+        const resolution = resolveView(this.doc, mode);
+        if (resolution.candidate) {
+            this.applyOrBanner(d => selectView(d, mode, resolution.candidate.tableId));
+            return;
+        }
+        if (resolution.status === "ambiguous") {
+            const name = this.t(mode === "groupBy" ? "group.label" : `toolbar.${mode}`);
+            this.showError(new Error(this.t("view.ambiguous", {
+                mode: name,
+                tables: resolution.candidates.map(candidate => candidate.tableId).join(", "),
+            })));
+            return;
+        }
+        if (mode === "grid") {
+            this.showError(new Error(this.t("view.baseUnavailable")));
+            return;
+        }
+        openViewDialog(this, mode);
     }
 }

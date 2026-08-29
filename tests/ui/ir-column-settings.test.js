@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
-import { sourceLayer } from "../../src/client/report/state.js";
+import { inputComposableLocation, terminalComposableLocation } from "../../src/client/report/state.js";
 import { reportState } from "./report-state-fixture.js";
 
 const window = new Window({ url: "https://host.example/dashboard" });
@@ -47,16 +47,52 @@ const ROW = {
     IMAGE_URL: "https://images.example/42.png",
     c1: "/computed/42",
 };
+const GROUPED_COLUMNS = [
+    { name: "URL", label: "URL", type: "text" },
+    { name: "m1", label: "sum(Amount)", type: "number", formatSource: "AMOUNT" },
+];
+const groupedDocument = () => ({
+    activeTable: "grouped",
+    tables: {
+        base: {
+            from: "definition",
+            schema: structuredClone(ALL_COLUMNS),
+            composables: [{
+                kind: "formats",
+                formats: {
+                    AMOUNT: {
+                        mask: "currency:CAD",
+                        displayAs: "image",
+                        urlColumn: "URL",
+                    },
+                },
+            }],
+        },
+        grouped: {
+            from: "base",
+            schema: structuredClone(GROUPED_COLUMNS),
+            composables: [
+                { kind: "group", by: ["URL"], values: [{ id: "m1", col: "AMOUNT", fn: "sum" }] },
+                { kind: "labels", labels: { m1: "Sales" } },
+            ],
+        },
+    },
+    page: { index: 1, size: 25 },
+});
+const inputNode = (doc, kind) => inputComposableLocation(doc, kind)?.composable;
+const terminalNode = (doc, kind) => terminalComposableLocation(doc, kind)?.composable;
 
 globalThis.fetch = async (url, options = {}) => {
     requests.push({ url: String(url), method: options.method ?? "GET", body: options.body });
     const report = /\/([^/]+)\/(schema|query|saved)$/.exec(String(url))?.[1];
     if (String(url).endsWith("/schema")) {
         return json({
-            defaultState: {
-                ...reportState({ columns: ["ID", "NAME"] }),
-                page: { index: 1, size: 25 },
-            },
+            defaultState: report === "grouped-metadata"
+                ? groupedDocument()
+                : {
+                    ...reportState({ columns: ["ID", "NAME"] }),
+                    page: { index: 1, size: 25 },
+                },
             limits: { defaultPageSize: 25, maxPageSize: 100 },
             columns: ALL_COLUMNS,
             capabilities: { aggregateFunctions: {}, expressionFunctions: [] },
@@ -68,12 +104,25 @@ globalThis.fetch = async (url, options = {}) => {
     if (String(url).endsWith("/query")) {
         // Honor the posted visible-columns list so renders reflect visibility edits.
         const doc = options.body ? JSON.parse(options.body) : {};
-        const layer = sourceLayer(doc);
-        const visible = layer.columns?.length
-            ? ALL_COLUMNS.filter(c => layer.columns.includes(c.name))
+        if (doc.activeTable === "grouped") {
+            return json({
+                availableColumns: GROUPED_COLUMNS,
+                columns: GROUPED_COLUMNS,
+                rows: [{ URL: "https://images.example/sales.png", m1: 1234.5 }],
+                page: { index: 1, size: 25 },
+                totalRows: 1,
+                aggregates: {},
+                highlights: [],
+                ignored: [],
+            });
+        }
+        const select = inputNode(doc, "select");
+        const formats = inputNode(doc, "formats")?.formats ?? {};
+        const visible = select?.columns?.length
+            ? ALL_COLUMNS.filter(c => select.columns.includes(c.name))
             : ALL_COLUMNS.filter(c => ["ID", "NAME"].includes(c.name));
         const projected = [...visible];
-        for (const [name, format] of Object.entries(layer.formats ?? {})) {
+        for (const [name, format] of Object.entries(formats)) {
             if (!visible.some(c => c.name === name) || !["link", "image"].includes(format.displayAs)) continue;
             for (const source of [format.urlColumn, format.displayAs === "link" ? format.textColumn : null]) {
                 const column = ALL_COLUMNS.find(c => c.name === source);
@@ -123,7 +172,7 @@ const applyDialog = async report => {
     await settle(() => !report.shadowRoot.querySelector(".ir-dialog"));
     assert.equal(!report.shadowRoot.querySelector(".ir-dialog"), true, "the dialog should close on success");
     const doc = JSON.parse(requests.filter(r => r.url.endsWith("/query")).at(-1).body);
-    return sourceLayer(doc);
+    return doc;
 };
 
 test("column settings write doc.formats and the grid renders mask, alignment, and style", async () => {
@@ -157,7 +206,7 @@ test("column settings write doc.formats and the grid renders mask, alignment, an
         "custom classes participate in the live preview");
 
     const doc = await applyDialog(report);
-    assert.deepEqual(doc.formats, {
+    assert.deepEqual(inputNode(doc, "formats").formats, {
         ID: {
             mask: "integer", align: "center", bold: true,
             classes: ["amount-column", "emphasized"],
@@ -194,7 +243,7 @@ test("column settings configure a link renderer with hidden URL and visible text
     fieldControl(dialog, "Link Text Column").value = "NAME";
 
     const doc = await applyDialog(report);
-    assert.deepEqual(doc.formats, {
+    assert.deepEqual(inputNode(doc, "formats").formats, {
         NAME: { displayAs: "link", urlColumn: "URL", textColumn: "NAME" },
     });
 
@@ -223,7 +272,7 @@ test("column settings configure an image renderer", async () => {
     fieldControl(dialog, "URL Column").value = "IMAGE_URL";
 
     const doc = await applyDialog(report);
-    assert.deepEqual(doc.formats, {
+    assert.deepEqual(inputNode(doc, "formats").formats, {
         NAME: { displayAs: "image", urlColumn: "IMAGE_URL" },
     });
 
@@ -264,8 +313,8 @@ test("a hidden computed column offers display settings and can source another co
     fieldControl(dialog, "Link Text Column").value = "NAME";
 
     const doc = await applyDialog(report);
-    assert.deepEqual(doc.columns, ["ID", "NAME"], "the computed source remains hidden");
-    assert.deepEqual(doc.formats, {
+    assert.deepEqual(inputNode(doc, "select").columns, ["ID", "NAME"], "the computed source remains hidden");
+    assert.deepEqual(inputNode(doc, "formats").formats, {
         c1: { displayAs: "image", urlColumn: "c1" },
         NAME: { displayAs: "link", urlColumn: "c1", textColumn: "NAME" },
     });
@@ -274,6 +323,60 @@ test("a hidden computed column offers display settings and can source another co
     assert.equal(link.textContent, "Example");
     assert.equal(link.getAttribute("href"), "/computed/42");
     assert.equal(report.shadowRoot.querySelectorAll("th").length, 2);
+
+    report.remove();
+});
+
+test("restyling a grouped metric preserves its inherited mask and renderer", async () => {
+    requests.length = 0;
+    const report = await mount("grouped-metadata");
+
+    const metricHeader = [...report.shadowRoot.querySelectorAll("th.ir-th-menu")]
+        .find(header => header.textContent.includes("Sales"));
+    metricHeader.querySelector(".ir-th-button").click();
+    clickMenuItem(report, "Column Settings");
+    const dialog = report.shadowRoot.querySelector(".ir-dialog");
+    assert.equal(fieldControl(dialog, "Column").value, "m1");
+    assert.equal(fieldControl(dialog, "Format Mask").value, "currency:CAD");
+    assert.equal(fieldControl(dialog, "Display As").value, "image");
+    assert.equal(fieldControl(dialog, "URL Column").value, "URL");
+
+    const bold = dialog.querySelectorAll('input[type="checkbox"]')[1];
+    bold.checked = true;
+    const doc = await applyDialog(report);
+
+    assert.deepEqual(terminalNode(doc, "formats").formats.m1, {
+        mask: "currency:CAD",
+        bold: true,
+        displayAs: "image",
+        urlColumn: "URL",
+    });
+
+    report.remove();
+});
+
+test("reapplying a generated-column rename keeps the override", async () => {
+    requests.length = 0;
+    const report = await mount("grouped-metadata");
+
+    const openRename = () => {
+        const metricHeader = [...report.shadowRoot.querySelectorAll("th.ir-th-menu")]
+            .find(header => header.textContent.includes("Sales"));
+        metricHeader.querySelector(".ir-th-button").click();
+        clickMenuItem(report, "Rename");
+        return report.shadowRoot.querySelector(".ir-dialog input");
+    };
+
+    let input = openRename();
+    assert.equal(input.value, "Sales");
+    assert.equal(input.placeholder, "sum(Amount)", "the neutral generated heading is the stable default");
+    let doc = await applyDialog(report);
+    assert.equal(terminalNode(doc, "labels").labels.m1, "Sales");
+
+    input = openRename();
+    assert.equal(input.value, "Sales");
+    doc = await applyDialog(report);
+    assert.equal(terminalNode(doc, "labels").labels.m1, "Sales");
 
     report.remove();
 });
@@ -302,7 +405,7 @@ test("column settings reject component-reserved CSS classes without leaking stag
     assert.match(dialog.querySelector(".ir-dialog-error").textContent, /invalid or reserved/i);
     assert.equal(!!report.shadowRoot.querySelector(".ir-dialog"), true,
         "invalid class input keeps the dialog open");
-    assert.equal(sourceLayer(report.doc).formats?.ID, undefined,
+    assert.equal(inputNode(report.doc, "formats")?.formats?.ID, undefined,
         "an earlier staged column's edit must not survive a later column's failure");
 
     report.remove();
@@ -320,7 +423,7 @@ test("the visible checkbox edits doc.columns: hiding removes, re-showing appends
     visChk().checked = false;
 
     let doc = await applyDialog(report);
-    assert.deepEqual(doc.columns, ["NAME"], "unchecking hides the column (no second source of truth)");
+    assert.deepEqual(inputNode(doc, "select").columns, ["NAME"], "unchecking hides the column (no second source of truth)");
     await settle(() => report.shadowRoot.querySelectorAll("th").length === 1);
     assert.equal(report.shadowRoot.querySelectorAll("th").length, 1);
 
@@ -334,7 +437,7 @@ test("the visible checkbox edits doc.columns: hiding removes, re-showing appends
     visChk().checked = true;
 
     doc = await applyDialog(report);
-    assert.deepEqual(doc.columns, ["NAME", "ID"], "re-shown columns append to the end");
+    assert.deepEqual(inputNode(doc, "select").columns, ["NAME", "ID"], "re-shown columns append to the end");
 
     report.remove();
 });

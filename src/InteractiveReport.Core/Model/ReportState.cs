@@ -29,7 +29,7 @@ public sealed class ReportState
     public Dictionary<string, ReportTable>? Tables { get; set; }
 }
 
-/// <summary>One named table: an optional input table plus ordered composables.</summary>
+/// <summary>One named table: an explicit input relation plus ordered composables.</summary>
 public sealed class ReportTable
 {
     /// <summary>"definition" or another table identifier in this document.</summary>
@@ -46,10 +46,11 @@ public sealed class ReportTable
 }
 
 /// <summary>
-/// One operation composed onto a table. Kind selects the payload fields. Shape
-/// composables (group, pivot, chart) and ordinary table composables (compute, filter,
-/// sort, select, labels, formats, highlight, break, aggregate) deliberately share one
-/// ordered protocol. The engine interprets Kind; the owning table's name does not.
+/// One operation composed onto a table. Kind selects the payload fields.
+/// Relation-changing composables (group, pivot, chart) and other composables (compute,
+/// filter, sort, select, labels, formats, highlight, break, aggregate) deliberately
+/// share one ordered protocol. The engine interprets Kind; the owning table's name does
+/// not.
 /// </summary>
 public sealed class TableComposable
 {

@@ -103,7 +103,7 @@ public sealed class ReportDocumentSchemaCacheTests : IClassFixture<SqliteE2EFixt
     }
 
     [Fact]
-    public async Task Non_null_cache_is_preserved_but_does_not_override_live_schema_or_column_policy()
+    public async Task Compiled_non_null_cache_is_replaced_and_cannot_override_live_schema_or_column_policy()
     {
         var definition = Definition();
         definition.Columns = new()
@@ -125,8 +125,9 @@ public sealed class ReportDocumentSchemaCacheTests : IClassFixture<SqliteE2EFixt
         Assert.Contains(result.Ignored, item =>
             item.Kind == "filter" && item.Detail.Contains("AMOUNT", StringComparison.Ordinal));
         Assert.DoesNotContain(result.AvailableColumns, column => column.Name == "GHOST");
-        var preserved = Assert.Single(result.Document!.Tables!["source"].Schema!);
-        Assert.Equal(("GHOST", "Forged"), (preserved.Name, preserved.Label));
+        Assert.Equal(
+            ["ORDER_ID", "CUSTOMER", "STATUS", "AMOUNT", "NOTES"],
+            result.Document!.Tables!["source"].Schema!.Select(column => column.Name));
     }
 
     [Fact]
@@ -147,6 +148,49 @@ public sealed class ReportDocumentSchemaCacheTests : IClassFixture<SqliteE2EFixt
         Assert.Contains(error.Errors, item =>
             item.Path == "tables.source.composables[0].filters[0].expr"
             && item.Message.Contains("GHOST", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Active_table_reference_is_accepted_liberally_and_returned_canonically()
+    {
+        var document = Doc();
+        document.ActiveTable = "  SoUrCe  ";
+        document.Tables!["source"].From = "  DeFiNiTiOn  ";
+        document.Tables["source"].Composables =
+        [
+            new TableComposable
+            {
+                Kind = "  FiLtEr  ",
+                Filters = [Filter("AMOUNT >= 0")],
+            },
+        ];
+
+        var result = await _executor.Query(Definition(), document, NoParams);
+        var export = await _executor.Export(Definition(), document, NoParams);
+
+        Assert.Equal("source", result.Document!.ActiveTable);
+        Assert.Equal("definition", result.Document.Tables!["source"].From);
+        Assert.Equal("filter", Assert.Single(result.Document.Tables["source"].Composables!).Kind);
+        Assert.Equal(10, result.TotalRows);
+        Assert.Equal(10, export.Rows.Count);
+    }
+
+    [Fact]
+    public async Task Fully_drifted_selection_falls_back_to_the_live_schema()
+    {
+        var document = Doc(source: new StageLayer { Columns = ["GHOST"] });
+
+        var result = await _executor.Query(Definition(), document, NoParams);
+        var export = await _executor.Export(Definition(), document, NoParams);
+
+        Assert.Equal(
+            ["ORDER_ID", "CUSTOMER", "STATUS", "AMOUNT", "NOTES"],
+            result.Columns.Select(column => column.Name));
+        Assert.Equal(10, result.Rows.Count);
+        Assert.Contains(result.Ignored, item =>
+            item.Kind == "column" && item.Detail.Contains("GHOST", StringComparison.Ordinal));
+        Assert.Equal(result.Columns.Select(column => column.Name), export.Columns.Select(column => column.Name));
+        Assert.Equal(10, export.Rows.Count);
     }
 
     [Fact]

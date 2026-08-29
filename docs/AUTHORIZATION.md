@@ -9,6 +9,11 @@ The mapped server API is the security boundary. The caller may be the packaged w
 component, another application, a scheduled process, a hand-written HTTP client, or
 the optional GraphQL adapter.
 
+These controls make internet exposure possible; they do not make it the preferred
+deployment. Keep the application on a trusted network when practical. If it must be
+publicly reachable, use a dedicated reporting database or read replica and a
+least-privileged read-only principal, never the primary production database.
+
 Every published data and security-administration endpoint participates in application
 operation authorization. The only exceptions are the opt-in `whoami` bootstrap
 diagnostic and packaged HTML/CSS/JavaScript delivery. Those exceptions expose no report
@@ -100,10 +105,11 @@ the same resource separately.
 `Id`, `ReportName`, `Title`, `Public`, `Primary`, `Owner`, `State`, and
 `StateChanged`. `Public` corresponds to the HTTP field `isGlobal`; `Primary`
 corresponds to `isPrimary`. `State` is the typed `ReportState` object graph, including
-the unordered table map, explicit `from` dependencies, nullable per-table schema
-caches, ordered composables, filters, computed columns, formats, and other nested
-structures. Cached schemas are advisory response data; authorization code must not
-treat them as proof of the configured SQL's shape.
+the unordered table map, explicit recursive `from` dependencies, nullable per-table
+schema caches, direct composables, filters, computed columns, formats, and other nested
+structures. Each child consumes its completed parent's relation; cached schemas remain
+advisory response data, so authorization code must not treat them as proof of either
+the configured SQL or a composed relation's shape.
 
 For updates, title, publication flags, and owner are the effective values after the
 client patch has been applied to current metadata. `StateChanged` distinguishes a

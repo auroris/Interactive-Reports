@@ -5,13 +5,11 @@ using InteractiveReport.Core.Model;
 namespace InteractiveReport.Core.Expressions;
 
 /// <summary>
-/// Evaluates the same typed portable-expression AST used by SQL composition. Pivot
-/// materialization produces a data-dependent schema in memory, so its layer runs here
-/// after the long grouped query has been materialized as a wide table. Materialized
-/// text comparison and sorting are ordinal. SQL-backed expressions necessarily inherit
-/// the report database's collation because the supported dialects share neither a
-/// collation name nor collation syntax; exact cross-path text parity therefore requires
-/// a binary/ordinal database collation.
+/// Evaluates the typed portable-expression AST for the legacy no-table materialization
+/// path. Current named-table expressions stay SQL-backed, including Pivot. Materialized
+/// text comparison and sorting are ordinal; SQL-backed expressions inherit the report
+/// database's collation because the supported dialects share neither a collation name
+/// nor collation syntax.
 /// </summary>
 internal sealed class ExpressionEvaluator(DateTime evaluationUtcNow)
 {

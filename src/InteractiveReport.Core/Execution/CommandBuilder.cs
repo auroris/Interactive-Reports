@@ -4,6 +4,7 @@ using System.Data.Common;
 using System.Reflection;
 using System.Text;
 using InteractiveReport.Core.Model;
+using InteractiveReport.Core.Validation;
 using Microsoft.Extensions.Logging;
 using SqlKata;
 
@@ -11,6 +12,10 @@ namespace InteractiveReport.Core.Execution;
 
 internal static class CommandBuilder
 {
+    // Keep a provider-independent application ceiling below SQL Server's 2100 hard
+    // limit. It also bounds deep Pivot chains and large expression lists before any
+    // supported provider receives an unexpectedly large command.
+    internal const int MaxParameters = 2000;
     private static readonly ConcurrentDictionary<Type, Action<DbCommand>?> BindByNameSetters = new();
     private static readonly ConcurrentDictionary<Type, Action<DbParameter>?> RefCursorSetters = new();
     /// <summary>
@@ -35,6 +40,12 @@ internal static class CommandBuilder
         ReportDialect dialect,
         ILogger? logger = null)
     {
+        var parameterCount = (long)compiled.NamedBindings.Count + contextParams.Count;
+        if (parameterCount > MaxParameters)
+            throw new ReportValidationException(
+                [new ValidationError(
+                    "query",
+                    $"report commands may contain at most {MaxParameters} parameters")]);
         var cmd = connection.CreateCommand();
         cmd.CommandText = compiled.Sql;
         cmd.CommandTimeout = commandTimeoutSeconds;
@@ -95,6 +106,12 @@ internal static class CommandBuilder
                     $"Oracle report batch binding '{name}' conflicts with a context parameter.");
             inputs[name] = value;
         }
+
+        if ((long)inputs.Count + resultSets.Count > MaxParameters)
+            throw new ReportValidationException(
+                [new ValidationError(
+                    "query",
+                    $"report commands may contain at most {MaxParameters} parameters")]);
 
         var cursorPrefix = "irResult";
         while (Enumerable.Range(0, resultSets.Count).Any(i => inputs.ContainsKey($"{cursorPrefix}{i}")))

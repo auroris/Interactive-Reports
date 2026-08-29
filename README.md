@@ -8,6 +8,13 @@ pivot, charts, and CSV export) and can layer their own **saved reports** on top.
 The browser UI ships inside the package as a custom element plus ready-made pages —
 consumers need no Node.js and no frontend build.
 
+> [!WARNING]
+> Internet-facing deployment is technically supported, but it is not the recommended
+> topology. Prefer an internal or otherwise trusted network. If the application must be
+> exposed publicly, point reports at a dedicated reporting database or read replica
+> through a least-privileged, read-only principal. Do not run interactive reporting
+> workloads against the primary production database.
+
 ## Getting started
 
 1. Add the package:
@@ -129,7 +136,7 @@ the host's content root unless absolute:
 ```json
 "orders": {
   "connection": "MainDb",
-  "sql": "SELECT ORDER_ID, CUSTOMER, CUSTOMER_URL, THUMBNAIL_URL, AMOUNT FROM ORDERS",
+  "sql": "SELECT ORDER_ID, CUSTOMER, STATUS, CUSTOMER_URL, THUMBNAIL_URL, AMOUNT FROM ORDERS",
   "styleSheet": "/css/orders-report.css",
   "documentFiles": [
     "ReportDocuments/orders.primary.json",
@@ -146,12 +153,13 @@ normal state document:
   "title": "Default",
   "primary": true,
   "state": {
-    "activeTable": "orders",
+    "activeTable": "pivot",
     "tables": {
-      "orders": {
+      "base": {
         "from": "definition",
         "schema": null,
         "composables": [
+          { "kind": "filter", "filters": [ { "expr": "AMOUNT > 0" } ] },
           { "kind": "sort", "sorts": [ { "col": "AMOUNT", "dir": "desc" } ] },
           { "kind": "select", "columns": [ "ORDER_ID", "CUSTOMER", "THUMBNAIL_URL", "AMOUNT" ] },
           { "kind": "formats", "formats": {
@@ -167,6 +175,30 @@ normal state document:
             "AMOUNT": { "mask": "currency:CAD", "classes": [ "amount-column", "emphasized" ] }
           } }
         ]
+      },
+      "groupBy": {
+        "from": "base",
+        "schema": null,
+        "composables": [
+          { "kind": "group", "by": [ "CUSTOMER" ],
+            "values": [ { "id": "m1", "col": "AMOUNT", "fn": "sum" } ] }
+        ]
+      },
+      "pivot": {
+        "from": "base",
+        "schema": null,
+        "composables": [
+          { "kind": "pivot", "rows": [ "CUSTOMER" ], "cols": [ "STATUS" ],
+            "values": [ { "id": "m1", "col": "AMOUNT", "fn": "sum" } ] }
+        ]
+      },
+      "chart": {
+        "from": "base",
+        "schema": null,
+        "composables": [
+          { "kind": "chart", "type": "bar", "label": "CUSTOMER",
+            "value": "AMOUNT", "fn": "sum" }
+        ]
       }
     }
   }
@@ -175,24 +207,38 @@ normal state document:
 
 `tables` is an unordered map of opaque identifiers. A table reads either the
 configured SQL (`"from": "definition"`) or another named table, then applies its
-`composables` in order. Names such as `base`, `group`, or `pivot` have no special
-meaning; Group By, Pivot, and Chart behavior comes from composables of those kinds,
-and ordinary filtering, selection, presentation, break, and aggregate composables use
-the same table path around them. `definition` is the sole reserved input sentinel and
-cannot be a table key; every other nonblank, case-unique id is opaque. The packaged
-client authors a simple subset of these documents, but preserves valid compositions
-produced by other clients.
+`composables` directly. When `from` names a table, the server completes that parent,
+wraps its final SQL as the child's source relation, and carries its output schema and
+column metadata forward. The same rule repeats recursively, to a bounded depth, so
+Group, Pivot, and Chart results can themselves feed later tables. Names such as `base`,
+`groupBy`, or `pivot` have no engine meaning; they are only names the packaged UI tends
+to choose for the simple sibling tables it authors.
 
-Each table's optional `schema` is a non-authoritative output-schema cache. New
-documents may omit it or set it to null. The client nulls a changed table's cache and
-the caches of its descendants; on submission the server fills every null cache from
-live execution. Query results include the enriched state as `document` alongside the
-requested rows and metadata, and the client adopts that returned document. The cache
-is never used for expression binding, query planning, or authorization.
+Compute, filter, Group, Pivot, and Chart composables change the relation available to a
+child. Labels and formats change its column metadata. Select, sort, highlight, break,
+and aggregate describe the response when their owning table is active; they do not
+pretend to be ordered rows or footer datasets inside a derived SQL table. Consequently,
+the `base` table's filter above participates in `pivot`, while its visible-column and
+sort choices remain the base table's own terminal presentation. `definition` is the
+sole reserved input sentinel and cannot be a table key; every other nonblank,
+case-unique id is opaque. The packaged client preserves valid deeper compositions from
+other clients even when they do not map to one built-in toolbar mode.
 
-The server accepts at most 64 tables and 512 composables per document. Within the
-selected composition, the stacked limits are 20 computed-column rules, 50 filter
-rules, and 50 highlight rules, including rules on either side of a shape boundary.
+Each table's optional `schema` is a non-authoritative cache of its completed public
+relation before terminal `select` visibility is applied. New documents may omit it or
+set it to null. The client nulls a changed table's cache and every transitive descendant
+cache; search changes also invalidate dynamic descendants. On submission the server
+recursively fills every null cache from live compilation. Query results include the
+enriched state as `document` alongside the requested rows and metadata, and the client
+adopts that returned document. The server also replaces non-null caches for the active
+table and any ancestor it compiled on the way, so returned working data agrees with the
+live plan. Dormant caches remain advisory and are never used for expression binding,
+query planning, or authorization.
+
+The server accepts at most 64 tables, a maximum `from` depth of 64, and 512 composables
+per document. Within the selected composition, the stacked limits are 20
+computed-column rules, 50 filter rules, and 50 highlight rules. Pivot and Chart caps
+provide additional bounds for data-dependent relations.
 
 With saved-report storage configured, all files appear as global saved reports and are synced into the saved-report store
 whenever they change, as rows marked with a configured origin. A file's `primary`
@@ -590,24 +636,37 @@ Numeric aggregate pickers include median alongside sum, average, minimum, maximu
 count, and distinct count. Median uses the same grouped query path for report totals,
 control-break totals, Group By, pivot, and chart metrics on every supported database.
 
-The Pivot dialog's **Show total rows** option adds aggregate rows below the matrix.
-Those values are re-aggregated from the filtered source instead of adding displayed
+The Pivot dialog's **Show total rows** option adds terminal aggregate rows below the
+matrix. Those values are re-aggregated from the Pivot's completed input relation
+instead of adding displayed
 cells, so averages, medians, distinct counts, and null handling remain correct. It
 does not synthesize a right-side total column, which may require report-specific rules
 such as excluding cancelled orders.
 
-A saved report retains its complete table map. The packaged UI switches among the
-simple Grid, Group By, Pivot, and Chart compositions it authored by changing
-`activeTable`, without rebuilding their settings; only the selected table ancestry is
-executed. Other valid tables remain in the document even when their composition came
-from another client and does not map to one built-in toolbar mode.
+A saved report retains its complete table map. The packaged UI normally authors a
+`definition`-backed base table plus Group By, Pivot, and Chart tables whose `from`
+points at that base, then switches among them by changing `activeTable`. Only the
+selected table and its recursive inputs are executed for rows. Other valid tables
+remain in the document, including deeper or multi-compositor relations created by
+another client that do not map to one built-in toolbar mode.
 
-Group By is a complete table layer rather than a display-only summary. Its filters run
-after grouping, and its computed columns, sorts, highlights, control breaks, and footer
-aggregates bind to the Group output (`dimensions + __count + metrics + computed`). The
+Group By produces a complete relation rather than a display-only summary. Its filters
+run after grouping, and its computed columns, sorts, highlights, control breaks, and
+footer aggregates bind to the Group output
+(`dimensions + __count + metrics + computed`). The
 same aggregate list supplies the whole-table footer and each control-break subtotal, as
-it does on an unshaped table. A Group break counts Group rows; aggregating `__count` reports
-the corresponding number of filtered source rows.
+it does on a relation without Group. A Group break counts Group rows; aggregating `__count` reports
+the corresponding number of filtered source rows. In an externally authored chain
+where a Group dimension or metric already owns `__count`, the generated count column
+gains leading underscores until its name is unique; the returned schema is authoritative.
+
+Server resource ceilings allow deep external compositions without leaving expansion
+unbounded: 64 tables, depth 64, 512 composables, 256 shape metrics, 900 completed
+columns, and 1,800 generated predicates per Pivot. Relational stage depth is 256 in
+general and 22 on SQL Server, reserving space for terminal query wrappers. Every
+complete command, on every supported dialect, is capped at 2,000 cumulative bound
+parameters including context values. Definition-level row, Pivot-column, Pivot-group,
+and Chart-point limits still apply.
 
 Save updates the selected saved report. Save As creates a new report when its name is
 unused; when the name matches an editable report, it asks for confirmation and replaces

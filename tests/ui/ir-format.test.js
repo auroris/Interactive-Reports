@@ -8,8 +8,8 @@ import {
     hasFraction,
     parseReportNumber,
 } from "../../src/client/report/render/format.js";
-import { renderColumnValue } from "../../src/client/report/render/column-renderers.js";
-import { canRenderChart, renderChartView } from "../../src/client/report/render/chart-view.js";
+import { formatForColumn, renderColumnValue } from "../../src/client/report/render/column-renderers.js";
+import { canRenderChart, chartResultColumns, renderChartView } from "../../src/client/report/render/chart-view.js";
 import { renderGrid } from "../../src/client/report/render/grid.js";
 import { renderPager } from "../../src/client/report/render/pager.js";
 import { reportState, sourceComposableOf } from "./report-state-fixture.js";
@@ -90,7 +90,7 @@ test("computed, group, and pivot values all use the normal mask path", () => {
     const w = {
         doc: reportState(
             { formats: { AMOUNT: { mask: "plain" } } },
-            { kind: "group", by: ["STATUS"], values: [{ id: "m1", col: "AMOUNT", fn: "sum" }], layer: {} }),
+            { kind: "group", by: ["STATUS"], values: [{ id: "m1", col: "AMOUNT", fn: "sum" }] }),
         lastResult: {
             columns: [
                 { name: "STATUS", label: "Status", type: "text", computed: false },
@@ -112,7 +112,7 @@ test("computed, group, and pivot values all use the normal mask path", () => {
     // The metric column inherits the source column's mask through formatSource.
     assert.equal(table.querySelector("tbody tr").children[1].textContent, "9007199254740993.13");
 
-    // A group-layer format on the metric id overrides the inherited source mask.
+    // A Format node owned by the grouped table overrides the inherited source mask.
     w.doc.tables.groupBy.composables.push({ kind: "formats", formats: { m1: { mask: "integer" } } });
     renderGrid(w, table);
     assert.equal(table.querySelector("tbody tr").children[1].textContent, "9,007,199,254,740,993");
@@ -129,7 +129,6 @@ test("computed, group, and pivot values all use the normal mask path", () => {
         {
             kind: "pivot", rows: ["CUSTOMER"], cols: ["STATUS"],
                 values: [{ id: "m1", col: "AMOUNT", fn: "sum" }],
-            layer: {},
         });
     w.lastResult.columns = [
         { name: "CUSTOMER", label: "Customer", type: "text", computed: false },
@@ -165,6 +164,55 @@ test("the chart data table retains an exact masked metric", () => {
     assert.equal(container.querySelector(".ir-chart-table tbody td:last-child").textContent, "9007199254740993.13");
 });
 
+test("chart result columns use the server-disambiguated aggregate metric name", () => {
+    const w = {
+        doc: reportState({}, {
+            kind: "chart", type: "bar", label: "v0", value: "AMOUNT", fn: "sum",
+        }),
+        lastResult: {
+            columns: [
+                { name: "v0", label: "Bucket", type: "text" },
+                { name: "v0_metric", label: "sum(Amount)", type: "number", formatSource: "AMOUNT" },
+            ],
+            rows: [{ v0: "SHIPPED", v0_metric: 42 }],
+        },
+        schema: {
+            columns: [
+                { name: "v0", label: "Bucket", type: "text" },
+                { name: "AMOUNT", label: "Amount", type: "number" },
+            ],
+        },
+    };
+
+    assert.deepEqual(chartResultColumns(w).map(column => column.name), ["v0", "v0_metric"]);
+    assert.equal(canRenderChart(w), true);
+});
+
+test("a count chart renders when its label owns the __count name", () => {
+    const w = {
+        doc: reportState({}, {
+            kind: "chart", type: "pie", label: "__count", fn: "count",
+        }),
+        lastResult: {
+            columns: [
+                { name: "__count", label: "Bucket", type: "text" },
+                { name: "__count_metric", label: "Count", type: "number" },
+            ],
+            rows: [{ __count: "SHIPPED", __count_metric: 3 }],
+        },
+        schema: { columns: [{ name: "__count", label: "Bucket", type: "text" }] },
+    };
+    const container = document.createElement("div");
+
+    renderChartView(w, container, { renderChart: () => null });
+
+    assert.deepEqual(chartResultColumns(w).map(column => column.name), ["__count", "__count_metric"]);
+    assert.equal(canRenderChart(w), true);
+    assert.deepEqual(
+        [...container.querySelectorAll(".ir-chart-table tbody td")].map(cell => cell.textContent),
+        ["SHIPPED", "3"]);
+});
+
 test("presentation formats compose through intermediate table ancestry", () => {
     const columns = [{ name: "m1", label: "sum(Amount)", type: "number", formatSource: "AMOUNT" }];
     const w = {
@@ -198,6 +246,37 @@ test("presentation formats compose through intermediate table ancestry", () => {
     renderGrid(w, table);
 
     assert.equal(table.querySelector("tbody td").textContent, "9,007,199,254,740,993");
+});
+
+test("a later shape inherits a direct format from its intermediate metric", () => {
+    const column = { name: "m2", label: "sum(sum(Amount))", type: "number", formatSource: "m1" };
+    const w = {
+        doc: {
+            activeTable: "second",
+            tables: {
+                source: {
+                    from: "definition",
+                    composables: [{ kind: "formats", formats: { AMOUNT: { mask: "currency:CAD" } } }],
+                },
+                first: {
+                    from: "source",
+                    composables: [
+                        { kind: "group", by: ["STATUS"], values: [{ id: "m1", col: "AMOUNT", fn: "sum" }] },
+                        { kind: "formats", formats: { m1: { mask: "integer" } } },
+                    ],
+                },
+                second: {
+                    from: "first",
+                    schema: [column],
+                    composables: [
+                        { kind: "group", by: ["STATUS"], values: [{ id: "m2", col: "m1", fn: "sum" }] },
+                    ],
+                },
+            },
+        },
+    };
+
+    assert.equal(formatForColumn(w, column).mask, "integer");
 });
 
 test("a chart with a required output column hidden is a valid non-chartable table", () => {

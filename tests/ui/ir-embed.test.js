@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
-import { sourceLayer } from "../../src/client/report/state.js";
+import { inputComposableLocation } from "../../src/client/report/state.js";
 import { reportState } from "./report-state-fixture.js";
 
 const window = new Window({ url: "https://host.example/dashboard" });
@@ -286,15 +286,15 @@ test("labels resolve client-side: default report seeds them, rename overrides, c
         // serialize the whole happy-dom graph.
         assert.equal(!report.shadowRoot.querySelector(".ir-dialog"), true, "the dialog should close on success");
         const doc = JSON.parse(requests.filter(r => r.url.endsWith("/query")).at(-1).body);
-        return sourceLayer(doc);
+        return inputComposableLocation(doc, "labels")?.composable?.labels ?? {};
     };
 
-    assert.deepEqual((await rename("Ticket")).labels, { ID: "Ticket" });
+    assert.deepEqual(await rename("Ticket"), { ID: "Ticket" });
     assert.equal(headerText(), "Ticket", "the override should render without server involvement");
 
     // Clearing drops the entry — display falls back to the server's neutral label —
     // but the map itself stays: an explicit {} still overrides a report default.
-    assert.deepEqual((await rename("")).labels, {});
+    assert.deepEqual(await rename(""), {});
     assert.equal(headerText(), "ID");
 
     report.remove();

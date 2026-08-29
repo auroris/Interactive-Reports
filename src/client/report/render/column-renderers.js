@@ -3,7 +3,7 @@
 
 import { el } from "../../core/dom.js";
 import { columnOf } from "../schema.js";
-import { terminalTableColumns } from "../stage.js";
+import { terminalTableColumns } from "../table.js";
 import { composedFormats, lookupValue } from "../state.js";
 import { formatValue, hasFraction } from "./format.js";
 
@@ -39,7 +39,10 @@ export function formatForColumn(w, col) {
     const own = lookupValue(formats.output, col.name)
         ?? lookupValue(formats.input, col.name);
     if (own) return own;
-    return lookupValue(formats.input, col.formatSource ?? col.name) ?? null;
+    const source = col.formatSource ?? col.name;
+    return lookupValue(formats.output, source)
+        ?? lookupValue(formats.input, source)
+        ?? null;
 }
 
 function sourceColumn(w, name, fallback) {

@@ -8,16 +8,19 @@
 import { el, labeled, sel } from "../../core/dom.js";
 import { openDialog } from "../../core/dialog.js";
 import {
-    activateTail,
-    configuredTail,
+    createView,
     nextFreeId,
+    pruneRetiredChartOutputs,
     pruneRetiredMetrics,
-    removeStageComputedColumn,
+    pruneRetiredPivotOutputs,
+    removeTerminalComputedColumn,
+    replaceComposable,
+    resolveCreationBase,
+    resolveView,
     sameColumn,
-    stageOf,
 } from "../state.js";
 import { chartFnsFor } from "../schema.js";
-import { shapeInputColumns } from "../stage.js";
+import { shapeEditable, shapeInputColumns } from "../table.js";
 import {
     aggregateRowList,
     colOptions,
@@ -34,6 +37,48 @@ export function openViewDialog(w, mode) {
     if (mode === "groupBy") groupByDialog(w);
     else if (mode === "pivot") pivotDialog(w);
     else chartDialog(w);
+}
+
+const modeName = (w, mode) => w.t(mode === "groupBy" ? "group.label" : `toolbar.${mode}`);
+
+function shapeTarget(w, mode) {
+    const resolution = resolveView(w.doc, mode);
+    if (resolution.status === "ambiguous") {
+        w.showError(new Error(w.t("view.ambiguous", {
+            mode: modeName(w, mode),
+            tables: resolution.candidates.map(candidate => candidate.tableId).join(", "),
+        })));
+        return null;
+    }
+    if (resolution.candidate) {
+        if (!shapeEditable(resolution.candidate.shapeLocation)) {
+            w.showError(new Error(w.t("view.shapeReadOnly", {
+                mode: modeName(w, mode),
+                table: resolution.candidate.tableId,
+            })));
+            return null;
+        }
+        return {
+            location: resolution.candidate.shapeLocation,
+            baseTableId: null,
+        };
+    }
+
+    const base = resolveCreationBase(w.doc);
+    if (base.status === "ambiguous") {
+        w.showError(new Error(w.t("view.ambiguousBase", {
+            tables: base.candidates.map(candidate => candidate.tableId).join(", "),
+        })));
+        return null;
+    }
+    if (!base.candidate) {
+        w.showError(new Error(w.t("view.baseUnavailable")));
+        return null;
+    }
+    return {
+        location: null,
+        baseTableId: base.candidate.tableId,
+    };
 }
 
 // --- Group By / Pivot --------------------------------------------------------
@@ -75,23 +120,18 @@ function assignMetricIds(rows, previous) {
     return { values, retired: remaining.map(v => v.id) };
 }
 
-/// Retired dims and metrics take their dependent stage-layer state with them —
+/// Retired dims and metrics take dependent terminal-table state with them —
 /// the same coarse rule as deleting a computed column.
-function pruneRetiredStageState(d, kind, retiredMetricIds, retiredDims) {
-    const stage = stageOf(d, kind);
-    if (!stage) return;
-    pruneRetiredMetrics(d, stage, retiredMetricIds);
-    for (const dim of retiredDims) removeStageComputedColumn(d, stage, dim);
+function pruneRetiredTableState(d, tableId, retiredMetricIds, retiredDims) {
+    pruneRetiredMetrics(d, tableId, retiredMetricIds);
+    for (const dim of retiredDims) removeTerminalComputedColumn(d, dim, tableId);
 }
 
-const groupShape = tail => tail?.find(s => (s.shape?.kind ?? "") === "group") ?? null;
-const pivotShape = tail => tail?.find(s => (s.shape?.kind ?? "") === "pivot") ?? null;
-
 export function groupByDialog(w) {
-    const existingTail = configuredTail(w.doc, "groupBy");
-    const existingGroup = groupShape(existingTail);
-    const shape = existingGroup?.shape ?? {};
-    const inputColumns = shapeInputColumns(w, existingGroup);
+    const target = shapeTarget(w, "groupBy");
+    if (!target) return;
+    const shape = target.location?.composable ?? {};
+    const inputColumns = shapeInputColumns(w, target.location, target.baseTableId);
     const dims = dimList(w, shape.by, { addLabel: w.t("group.addColumn"), max: 3, columns: inputColumns });
     const values = valueList(w, shape.values, inputColumns);
 
@@ -109,20 +149,22 @@ export function groupByDialog(w) {
             const { values: withIds, retired } = assignMetricIds(values.list.read(), shape.values);
             const retiredDims = (shape.by ?? []).filter(old => !by.some(n => sameColumn(n, old)));
             return w.apply(d => {
-                const stage = structuredClone(existingGroup) ?? {};
-                stage.shape = { kind: "group", by, values: withIds };
-                activateTail(d, "groupBy", [stage]);
-                pruneRetiredStageState(d, "group", retired, retiredDims);
+                const replacement = { kind: "group", by, values: withIds };
+                const location = target.location
+                    ? replaceComposable(d, target.location, replacement)
+                    : createView(d, "groupBy", replacement, target.baseTableId);
+                d.activeTable = location.tableId;
+                pruneRetiredTableState(d, location.tableId, retired, retiredDims);
             });
         },
     });
 }
 
 export function pivotDialog(w) {
-    const existingTail = configuredTail(w.doc, "pivot");
-    const existingPivot = pivotShape(existingTail);
-    const shape = existingPivot?.shape ?? {};
-    const inputColumns = shapeInputColumns(w, existingPivot);
+    const target = shapeTarget(w, "pivot");
+    if (!target) return;
+    const shape = target.location?.composable ?? {};
+    const inputColumns = shapeInputColumns(w, target.location, target.baseTableId);
 
     const rows = dimList(w, shape.rows, { addLabel: w.t("pivot.rowColumn"), max: 2, columns: inputColumns });
     const cols = dimList(w, shape.cols, { addLabel: w.t("common.column"), max: 2, columns: inputColumns });
@@ -145,15 +187,14 @@ export function pivotDialog(w) {
             if (!rowNames.length || !colNames.length)
                 throw new Error(w.t("pivot.pickDimensions"));
             const { values: withIds, retired } = assignMetricIds(values.list.read(), shape.values);
-            const dimensions = [...rowNames, ...colNames];
-            const retiredDims = [...(shape.rows ?? []), ...(shape.cols ?? [])]
-                .filter(old => !dimensions.some(n => sameColumn(n, old)));
             return w.apply(d => {
-                const pivot = structuredClone(existingPivot) ?? {};
-                pivot.shape = { kind: "pivot", rows: rowNames, cols: colNames, values: withIds };
-                if (totalsInp.checked) pivot.shape.totals = true;
-                activateTail(d, "pivot", [pivot]);
-                pruneRetiredStageState(d, "pivot", retired, retiredDims);
+                const replacement = { kind: "pivot", rows: rowNames, cols: colNames, values: withIds };
+                if (totalsInp.checked) replacement.totals = true;
+                const location = target.location
+                    ? replaceComposable(d, target.location, replacement)
+                    : createView(d, "pivot", replacement, target.baseTableId);
+                d.activeTable = location.tableId;
+                pruneRetiredPivotOutputs(d, location.tableId, shape, replacement, retired);
             });
         },
     });
@@ -162,10 +203,10 @@ export function pivotDialog(w) {
 // --- Chart -------------------------------------------------------------------
 
 export function chartDialog(w) {
-    const existingTail = configuredTail(w.doc, "chart");
-    const existingChart = existingTail?.find(s => (s.shape?.kind ?? "") === "chart");
-    const active = existingChart?.shape;
-    const inputColumns = shapeInputColumns(w, existingChart);
+    const target = shapeTarget(w, "chart");
+    if (!target) return;
+    const active = target.location?.composable;
+    const inputColumns = shapeInputColumns(w, target.location, target.baseTableId);
     const chartable = inputColumns.filter(c => c.type !== "other");
     const inputType = name => inputColumns.find(column => sameColumn(column.name, name))?.type ?? "other";
 
@@ -258,7 +299,14 @@ export function chartDialog(w) {
                 if (labelTitleInp.value.trim()) shape.labelAxisTitle = labelTitleInp.value.trim();
                 if (valueTitleInp.value.trim()) shape.valueAxisTitle = valueTitleInp.value.trim();
             }
-            return w.apply(d => activateTail(d, "chart", [{ shape }]));
+            return w.apply(d => {
+                const location = target.location
+                    ? replaceComposable(d, target.location, shape)
+                    : createView(d, "chart", shape, target.baseTableId);
+                d.activeTable = location.tableId;
+                if (target.location)
+                    pruneRetiredChartOutputs(d, location.tableId, active, shape);
+            });
         },
     });
 }

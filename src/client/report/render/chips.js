@@ -7,7 +7,7 @@
 // complete active table ancestry. Inherited and foreign/repeated nodes remain
 // visible but read-only. Only the last node of each kind in the active table's
 // terminal segment is safe for the packaged editors to mutate. The view chip
-// summarizes the active shaped table; its remove activates the grid table.
+// summarizes the shape directly owned by the active table.
 //
 // A chip whose owning feature is not whitelisted still renders (the state is
 // real — a default or saved report put it there) but renders locked: no toggle,
@@ -19,26 +19,18 @@ import { featureEnabled, labelOf } from "../schema.js";
 import { fnLabel } from "./format.js";
 import { chartSummary } from "./chart-view.js";
 import {
-    activeTableLayer,
-    activateTail,
-    locatedComposables,
+    activeShapeLocation,
+    composableLocations,
     modeOf,
-    removeSourceComputedColumn,
-    removeStageComputedColumn,
-    stageOf,
-    tailOf,
+    removeInputComputedColumn,
+    removeTerminalComputedColumn,
 } from "../state.js";
 import { filterDialog, computeDialog, highlightDialog } from "../dialogs/rules.js";
 import { breakDialog, aggregateDialog } from "../dialogs/grid.js";
 import { openViewDialog } from "../dialogs/view.js";
-import { stageContext } from "../stage.js";
+import { tableContext } from "../table.js";
 
 const modeLabel = (w, mode) => w.t(mode === "groupBy" ? "group.label" : `toolbar.${mode}`);
-
-const terminalStage = doc => ({
-    shape: tailOf(doc).at(-1)?.shape,
-    layer: activeTableLayer(doc),
-});
 
 const nodeFields = {
     filter: "filters",
@@ -48,7 +40,7 @@ const nodeFields = {
     aggregate: "aggregates",
 };
 
-const mutableLocation = (doc, location) => locatedComposables(doc).find(candidate =>
+const mutableLocation = (doc, location) => composableLocations(doc).find(candidate =>
     candidate.authorable
     && candidate.tableId.toLowerCase() === location?.tableId?.toLowerCase()
     && candidate.composableIndex === location?.composableIndex
@@ -65,12 +57,18 @@ function chipToggle(w, kind, index, on, location) {
 }
 
 function chipRemove(w, kind, index, location) {
+    if (kind === "view") {
+        w.switchView("grid");
+        return;
+    }
     if (kind === "computed") {
         const found = mutableLocation(w.doc, location);
         const column = found?.composable?.computed?.[index]?.id;
         if (!column) return;
         w.apply(d => {
-            const dropped = removeSourceComputedColumn(d, column);
+            const dropped = found.source
+                ? removeInputComputedColumn(d, column)
+                : (removeTerminalComputedColumn(d, column, found.tableId), []);
             if (dropped.length) {
                 w.notify(
                     w.t("chip.configurationRemoved", {
@@ -82,18 +80,9 @@ function chipRemove(w, kind, index, location) {
         }).catch(err => w.showError(err));
         return;
     }
-    if (kind === "stageComputed") {
-        const found = mutableLocation(w.doc, location);
-        const column = found?.composable?.computed?.[index]?.id;
-        if (!column) return;
-        w.apply(d => removeStageComputedColumn(d, terminalStage(d), column))
-            .catch(err => w.showError(err));
-        return;
-    }
     w.applyOrBanner(d => {
         switch (kind) {
             case "search": d.search = ""; w.els.search.value = ""; break;
-            case "view": activateTail(d, "grid"); break;
             default: {
                 const found = mutableLocation(d, location);
                 const field = nodeFields[found?.composable?.kind];
@@ -110,17 +99,10 @@ function chipEdit(w, kind, index, location) {
     switch (kind) {
         case "search": w.els.search.focus(); w.els.search.select(); break;
         case "filter": filterDialog(w, { editIndex: index }); break;
-        case "stageFilter": filterDialog(w, { editIndex: index }); break;
         case "break": breakDialog(w); break;
-        case "stageBreak": breakDialog(w); break;
         case "aggregate": aggregateDialog(w); break;
-        case "stageAggregate": aggregateDialog(w); break;
         case "computed": computeDialog(w, index); break;
         case "highlight": highlightDialog(w, index); break;
-        // Stage rules edit through the same dialogs; stage context routes them
-        // to the active Group By or Pivot layer.
-        case "stageComputed": computeDialog(w, index); break;
-        case "stageHighlight": highlightDialog(w, index); break;
         case "view": openViewDialog(w, modeOf(w.doc)); break;
     }
 }
@@ -179,19 +161,17 @@ const bySequence = rules => (rules ?? [])
     .map((h, i) => ({ h, i, sequence: h.sequence ?? ((i + 1) * 10) }))
     .sort((left, right) => left.sequence - right.sequence);
 
-/// The view chip's text: a compact summary of the tail's shape.
-function tailSummary(w, mode) {
+/// The view chip's text: a compact summary of the active table's owned shape.
+function shapeSummary(w, mode) {
+    const shape = activeShapeLocation(w.doc)?.composable ?? {};
     if (mode === "chart") {
-        const shape = stageOf(w.doc, "chart")?.shape;
-        return shape ? chartSummary(w, shape) : w.t("toolbar.chart");
+        return shape.kind === "chart" ? chartSummary(w, shape) : w.t("toolbar.chart");
     }
     if (mode === "groupBy") {
-        const group = stageOf(w.doc, "group")?.shape ?? {};
-        return (group.by ?? []).map(c => labelOf(w, c)).join(", ");
+        return (shape.by ?? []).map(c => labelOf(w, c)).join(", ");
     }
-    const pivot = stageOf(w.doc, "pivot")?.shape ?? {};
-    return `${(pivot.rows ?? []).map(c => labelOf(w, c)).join(", ")} × ${(pivot.cols ?? []).map(c => labelOf(w, c)).join(", ")}`
-        + (pivot.totals ? ` · ${w.t("pivot.totals")}` : "");
+    return `${(shape.rows ?? []).map(c => labelOf(w, c)).join(", ")} × ${(shape.cols ?? []).map(c => labelOf(w, c)).join(", ")}`
+        + (shape.totals ? ` · ${w.t("pivot.totals")}` : "");
 }
 
 export function renderChips(w, container) {
@@ -207,32 +187,31 @@ export function renderChips(w, container) {
     if (d.search) {
         chips.push(chip({ w, kind: "search", index: 0, toggleable: false, colLabel: w.t("chip.search"), text: `“${d.search}”`, ...lock("search") }));
     }
-    const terminalColumns = new Map(stageContext(w).columns
+    const terminalColumns = new Map(tableContext(w).columns
         .map(column => [column.name.toLowerCase(), column]));
     const columnLabel = name => terminalColumns.get(String(name).toLowerCase())?.label ?? labelOf(w, name);
 
-    for (const location of locatedComposables(d)) {
+    for (const location of composableLocations(d)) {
         if (!location.participates) continue;
         const node = location.composable ?? {};
-        const stageScoped = !location.source;
         switch (node.kind) {
             case "filter":
                 (node.filters ?? []).forEach((rule, index) => chips.push(chip({
-                    w, kind: stageScoped ? "stageFilter" : "filter", index,
+                    w, kind: "filter", index,
                     off: rule.enabled === false, colLabel: w.t("filter.label"), text: rule.expr,
                     location, ...controls(location, "filter"),
                 })));
                 break;
             case "break":
                 (node.breaks ?? []).forEach((column, index) => chips.push(chip({
-                    w, kind: stageScoped ? "stageBreak" : "break", index,
+                    w, kind: "break", index,
                     toggleable: false, colLabel: w.t("break.label"), text: columnLabel(column),
                     location, ...controls(location, "controlBreak"),
                 })));
                 break;
             case "aggregate":
                 (node.aggregates ?? []).forEach((rule, index) => chips.push(chip({
-                    w, kind: stageScoped ? "stageAggregate" : "aggregate", index,
+                    w, kind: "aggregate", index,
                     toggleable: false, colLabel: "Σ",
                     text: w.t("aggregate.ofColumn", {
                         function: fnLabel(w, rule.fn),
@@ -243,19 +222,18 @@ export function renderChips(w, container) {
                 break;
             case "compute":
                 (node.computed ?? []).forEach((rule, index) => chips.push(chip({
-                    w, kind: stageScoped ? "stageComputed" : "computed", index,
+                    w, kind: "computed", index,
                     off: rule.enabled === false,
-                    colLabel: stageScoped ? w.t("chip.stageComputed") : "ƒ",
+                    colLabel: "ƒ",
                     text: rule.label ?? rule.id,
                     location, ...controls(location, "compute"),
                 })));
                 break;
             case "highlight": {
-                const kind = stageScoped ? "stageHighlight" : "highlight";
                 bySequence(node.highlights).forEach(entry =>
                     chips.push(highlightChip(
                         w,
-                        kind,
+                        "highlight",
                         controls(location, "highlight"),
                         location)(entry)));
                 break;
@@ -263,12 +241,12 @@ export function renderChips(w, container) {
         }
     }
 
-    if (mode !== "grid" && tailOf(d).length) {
+    if (mode !== "grid" && mode !== "custom" && activeShapeLocation(d)) {
         // Remove (back to grid) survives the lock — see the header comment.
         const viewLock = featureEnabled(w, mode) ? {} : { editable: false };
         chips.push(chip({
             w, kind: "view", index: 0, toggleable: false,
-            colLabel: modeLabel(w, mode), text: tailSummary(w, mode), ...viewLock,
+            colLabel: modeLabel(w, mode), text: shapeSummary(w, mode), ...viewLock,
         }));
     }
 

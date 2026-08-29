@@ -10,24 +10,23 @@ const layerKinds = {
     formats: ["formats", "formats"],
 };
 
-export function composables(layer = {}) {
-    return Object.entries(layer).flatMap(([property, value]) => {
+export function composables(fields = {}) {
+    return Object.entries(fields).flatMap(([property, value]) => {
         const spec = layerKinds[property];
         return spec && value !== undefined ? [{ kind: spec[0], [spec[1]]: value }] : [];
     });
 }
 
-export function reportState(layer = {}, stage = null) {
+export function reportState(input = {}, shape = null, terminal = {}) {
     const tables = {
-        base: { from: "definition", composables: composables(layer) },
+        base: { from: "definition", composables: composables(input) },
     };
     let activeTable = "base";
-    if (stage) {
-        activeTable = stage.kind === "group" ? "groupBy" : stage.kind;
-        const { layer: stageLayer, ...shape } = stage;
+    if (shape) {
+        activeTable = shape.kind === "group" ? "groupBy" : shape.kind;
         tables[activeTable] = {
             from: "base",
-            composables: [shape, ...composables(stageLayer)],
+            composables: [shape, ...composables(terminal)],
         };
     }
     return { activeTable, tables };

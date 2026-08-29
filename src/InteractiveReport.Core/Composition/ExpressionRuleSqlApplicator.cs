@@ -15,22 +15,32 @@ internal static class ExpressionRuleSqlApplicator
         Query query,
         CompiledRule<DefineColumnEffect> rule,
         ReportDialect dialect,
-        DateTime evaluationUtcNow)
+        DateTime evaluationUtcNow,
+        IReadOnlyDictionary<string, string>? physicalColumns = null,
+        string? physicalAlias = null)
     {
-        var (sql, bindings) = ExprEmitter.Emit(rule.Expression.Ast, dialect, evaluationUtcNow);
-        query.SelectRaw($"{sql} AS [{rule.Effect.Column.Name}]", bindings.ToArray());
+        var (sql, bindings) = ExprEmitter.Emit(
+            rule.Expression.Ast,
+            dialect,
+            evaluationUtcNow,
+            physicalColumns);
+        query.SelectRaw(
+            $"{sql} AS [{physicalAlias ?? rule.Effect.Column.Name}]",
+            bindings.ToArray());
     }
 
     public static void ApplyRowPredicate(
         Query query,
         CompiledRule<IncludeRowEffect> rule,
         ReportDialect dialect,
-        DateTime evaluationUtcNow)
+        DateTime evaluationUtcNow,
+        IReadOnlyDictionary<string, string>? physicalColumns = null)
     {
         var (sql, bindings) = ExprEmitter.EmitCondition(
             rule.Expression.Ast,
             dialect,
-            evaluationUtcNow);
+            evaluationUtcNow,
+            physicalColumns);
         query.WhereRaw(sql, bindings.ToArray());
     }
 
@@ -38,12 +48,14 @@ internal static class ExpressionRuleSqlApplicator
         Query query,
         CompiledRule<HighlightEffect> rule,
         ReportDialect dialect,
-        DateTime evaluationUtcNow)
+        DateTime evaluationUtcNow,
+        IReadOnlyDictionary<string, string>? physicalColumns = null)
     {
         var (sql, bindings) = ExprEmitter.EmitCondition(
             rule.Expression.Ast,
             dialect,
-            evaluationUtcNow);
+            evaluationUtcNow,
+            physicalColumns);
         query.SelectRaw(
             $"CASE WHEN {sql} THEN 1 ELSE 0 END AS [{rule.Effect.ProjectionName}]",
             bindings.ToArray());

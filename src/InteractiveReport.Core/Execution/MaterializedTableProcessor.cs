@@ -7,9 +7,10 @@ using InteractiveReport.Core.Validation;
 namespace InteractiveReport.Core.Execution;
 
 /// <summary>
-/// Executes ordinary composables over a materialized table. Pivot is necessarily
-/// materialized because its schema is data-dependent; chart output uses the same path.
-/// SQL-backed tables bind the same ValidTableLayer and are covered by conformance tests.
+/// Legacy compatibility path for applying ordinary composables to an already
+/// materialized table. Named-table Pivot now discovers its data-dependent columns and
+/// emits a wide SQL relation; the recursive pipeline does not use this processor.
+/// The shared ValidTableLayer behavior remains covered by conformance tests.
 /// </summary>
 internal static class MaterializedTableProcessor
 {

@@ -77,7 +77,7 @@ test("chips show intermediate ordinary composables read-only and mutate only the
         ordinary.map(chip => chip.textContent),
         [
             "Filter STATUS IS NOT NULL",
-            "ƒ view Half",
+            "ƒ Half",
             "Filter c1 > 0",
             "Filter EARLIER",
             "Filter CURRENT",

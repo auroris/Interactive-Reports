@@ -132,9 +132,9 @@ public sealed class ValidatedState
 }
 
 /// <summary>
-/// The optional validated shape composable. Group produces grouped rows, Pivot uses the
-/// same grouped source and widens it in memory, and Chart produces label/metric points.
-/// Mode is derived from the composable and is an execution descriptor, never a table type.
+/// Legacy single-shape execution descriptor used only by the no-table compatibility
+/// planner. Named-table documents use CompiledShape and keep Pivot as SQL. Even here,
+/// Mode describes an operation; it is never a table type.
 /// </summary>
 public sealed record ValidView(
     ViewMode Mode,

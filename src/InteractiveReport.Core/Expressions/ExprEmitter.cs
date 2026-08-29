@@ -25,8 +25,15 @@ public static class ExprEmitter
         ExprNode ast,
         ReportDialect dialect,
         DateTime evaluationUtcNow)
+        => Emit(ast, dialect, evaluationUtcNow, physicalColumns: null);
+
+    internal static (string Sql, IReadOnlyList<object> Bindings) Emit(
+        ExprNode ast,
+        ReportDialect dialect,
+        DateTime evaluationUtcNow,
+        IReadOnlyDictionary<string, string>? physicalColumns)
     {
-        var ctx = new EmitContext(dialect, evaluationUtcNow);
+        var ctx = new EmitContext(dialect, evaluationUtcNow, physicalColumns);
         ctx.Visit(ast);
         return (ctx.Sql, ctx.Bindings);
     }
@@ -45,14 +52,24 @@ public static class ExprEmitter
         ExprNode ast,
         ReportDialect dialect,
         DateTime evaluationUtcNow)
+        => EmitCondition(ast, dialect, evaluationUtcNow, physicalColumns: null);
+
+    internal static (string Sql, IReadOnlyList<object> Bindings) EmitCondition(
+        ExprNode ast,
+        ReportDialect dialect,
+        DateTime evaluationUtcNow,
+        IReadOnlyDictionary<string, string>? physicalColumns)
     {
-        var ctx = new EmitContext(dialect, evaluationUtcNow);
+        var ctx = new EmitContext(dialect, evaluationUtcNow, physicalColumns);
         ctx.VisitCondition(ast);
         return (ctx.Sql, ctx.Bindings);
     }
 }
 
-internal sealed class EmitContext(ReportDialect dialect, DateTime evaluationUtcNow)
+internal sealed class EmitContext(
+    ReportDialect dialect,
+    DateTime evaluationUtcNow,
+    IReadOnlyDictionary<string, string>? physicalColumns = null)
 {
     private readonly StringBuilder _sb = new();
     private readonly List<object> _bindings = [];
@@ -97,7 +114,11 @@ internal sealed class EmitContext(ReportDialect dialect, DateTime evaluationUtcN
                 break;
 
             case ColumnRef c:
-                _sb.Append('[').Append(c.Column.Name).Append(']');
+                _sb.Append('[').Append(
+                    physicalColumns is not null
+                    && physicalColumns.TryGetValue(c.Column.Name, out var physical)
+                        ? physical
+                        : c.Column.Name).Append(']');
                 break;
 
             case UnaryMinus u:

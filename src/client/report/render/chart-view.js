@@ -5,19 +5,22 @@
 import { el } from "../../core/dom.js";
 import { resolveLocale, translate } from "../../core/localization.js";
 import { labelOf } from "../schema.js";
-import { stageOf } from "../state.js";
+import { activeShapeLocation } from "../state.js";
 import { fnLabel, hasFraction } from "./format.js";
 import { formatForColumn, renderTextValue } from "./column-renderers.js";
 
 export function chartResultColumns(w) {
-    const view = stageOf(w.doc, "chart")?.shape ?? {};
+    const view = activeShapeLocation(w.doc, "chart")?.composable ?? {};
     const columns = w.lastResult?.columns ?? [];
     const find = name => columns.find(column =>
         column.name.toLowerCase() === String(name ?? "").toLowerCase());
     const label = find(view.label);
-    const metricName = !view.value ? "__count" : view.fn ? "v0" : view.value;
+    const metricBaseName = !view.value ? "__count" : view.fn ? "v0" : view.value;
+    const metricName = label?.name.toLowerCase() === String(metricBaseName).toLowerCase()
+        ? `${metricBaseName}_metric`
+        : metricBaseName;
     const metric = find(metricName);
-    return label && metric ? [label, metric] : null;
+    return label && metric && label !== metric ? [label, metric] : null;
 }
 
 export const canRenderChart = w => chartResultColumns(w) !== null;
@@ -44,7 +47,7 @@ export function chartSummary(w, view) {
  */
 export function renderChartView(w, container, chartModule) {
     const result = w.lastResult;
-    const view = stageOf(w.doc, "chart")?.shape ?? {};
+    const view = activeShapeLocation(w.doc, "chart")?.composable ?? {};
     if (!result?.rows.length) {
         container.replaceChildren(el("div", { class: "ir-chart-empty" }, translate(w, "grid.noData")));
         return null;

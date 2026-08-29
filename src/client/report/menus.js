@@ -1,13 +1,13 @@
 // The two popup menus: the toolbar Actions menu and the per-column header menu.
 // Menus are pure dispatch — every entry opens a dialog or applies a one-line
 // doc mutation; nothing here owns state of its own. Every entry is gated by the
-// definition's feature whitelist and enabled per the current stage's
-// capabilities (stage.js): the same Columns/Compute/Filter/Sort/Highlight
+// definition's feature whitelist and enabled per the active table's
+// capabilities: the same Columns/Compute/Filter/Sort/Highlight
 // surfaces operate on whichever named table is active.
 
 import { popupMenu } from "../core/menu.js";
 import { anyMutableFeature, columnFilterable, columnHelp, columnSortable, featureEnabled } from "./schema.js";
-import { stageContext, visibleStageColumnNames } from "./stage.js";
+import { tableContext, visibleTableColumnNames } from "./table.js";
 import { sameColumn } from "./state.js";
 import { columnSettingsDialog, columnsDialog, renameDialog } from "./dialogs/columns.js";
 import { filterDialog, computeDialog, highlightDialog } from "./dialogs/rules.js";
@@ -28,11 +28,11 @@ const joinSections = sections => sections.filter(s => s.length)
     .flatMap((section, i) => i === 0 ? section : ["-", ...section]);
 
 /// The Actions menu entries the whitelist leaves standing. Exported so the
-/// toolbar can hide the Actions button when nothing remains. Entries a stage
-/// cannot use stay visible but disabled — the menu shape is stable; the table
+/// toolbar can hide the Actions button when nothing remains. Entries the active
+/// table cannot use stay visible but disabled — the menu shape is stable; the table
 /// under it changes.
 export function actionsMenuItems(w) {
-    const ctx = w.doc ? stageContext(w) : null;
+    const ctx = w.doc ? tableContext(w) : null;
     const caps = ctx?.caps ?? {};
     const feature = (name, ...entries) => featureEnabled(w, name) ? entries : [];
     const canSave = canManageCurrentSaved(w);
@@ -80,7 +80,7 @@ export function openActionsMenu(w, anchor) {
 }
 
 export function openHeaderMenu(w, col, anchor) {
-    const ctx = stageContext(w);
+    const ctx = tableContext(w);
     const feature = (name, ...entries) => featureEnabled(w, name) ? entries : [];
 
     // Sorting follows the current table, including generated Pivot cells.
@@ -89,11 +89,13 @@ export function openHeaderMenu(w, col, anchor) {
         ? feature("sort",
             {
                 label: w.t("menu.sortAscending"),
-                onPick: () => w.applyOrBanner(d => { ctx.sortLayer(d).sorts = [{ col, dir: "asc" }]; }),
+                onPick: () => w.applyOrBanner(d =>
+                    ctx.edit(d, "sort", node => { node.sorts = [{ col, dir: "asc" }]; })),
             },
             {
                 label: w.t("menu.sortDescending"),
-                onPick: () => w.applyOrBanner(d => { ctx.sortLayer(d).sorts = [{ col, dir: "desc" }]; }),
+                onPick: () => w.applyOrBanner(d =>
+                    ctx.edit(d, "sort", node => { node.sorts = [{ col, dir: "desc" }]; })),
             })
         : [];
 
@@ -107,27 +109,26 @@ export function openHeaderMenu(w, col, anchor) {
     // Hiding is simply a terminal select composable. Dimensions and generated
     // columns obey the same rule as every other column.
     if (ctx.caps.columns && ctx.caps.visibility) {
-        const visible = visibleStageColumnNames(ctx, w);
+        const visible = visibleTableColumnNames(ctx, w);
         presentation.push(...feature("columns", {
             label: w.t("menu.hideColumn"),
             disabled: visible.length <= 1,
-            onPick: () => w.applyOrBanner(d => {
-                ctx.columnsLayer(d).columns = visible.filter(n => !sameColumn(n, col));
-            }),
+            onPick: () => w.applyOrBanner(d => ctx.edit(d, "select", node => {
+                node.columns = visible.filter(n => !sameColumn(n, col));
+            })),
         }));
     }
 
     if (ctx.caps.break && columnSortable(w, col)) {
-        const breaking = (ctx.columnsLayer(w.doc).breaks ?? []).some(b => sameColumn(b, col));
+        const breaking = (ctx.node(w.doc, "break")?.breaks ?? []).some(b => sameColumn(b, col));
         presentation.push(...feature("controlBreak", {
             label: breaking ? w.t("menu.removeControlBreak") : w.t("break.title"),
             checked: breaking,
-            onPick: () => w.applyOrBanner(d => {
-                const layer = ctx.columnsLayer(d);
-                layer.breaks = breaking
-                    ? (layer.breaks ?? []).filter(b => !sameColumn(b, col))
-                    : [...(layer.breaks ?? []), col];
-            }),
+            onPick: () => w.applyOrBanner(d => ctx.edit(d, "break", node => {
+                node.breaks = breaking
+                    ? (node.breaks ?? []).filter(b => !sameColumn(b, col))
+                    : [...(node.breaks ?? []), col];
+            })),
         }));
     }
 

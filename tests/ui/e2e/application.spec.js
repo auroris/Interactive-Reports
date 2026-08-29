@@ -4,7 +4,7 @@ import { test, expect } from "@playwright/test";
 
 const queryPath = /\/api\/reports\/[^/]+\/query$/;
 
-const layerFields = {
+const ordinaryFields = {
     compute: "computed", filter: "filters", sort: "sorts", break: "breaks",
     aggregate: "aggregates", highlight: "highlights", select: "columns",
     labels: "labels", formats: "formats",
@@ -23,21 +23,24 @@ const chainOf = state => {
     }
     return chain;
 };
-const sourceLayerOf = state => Object.fromEntries(
+const inputFieldsOf = state => Object.fromEntries(
     (chainOf(state)[0]?.composables ?? [])
-        .filter(item => layerFields[item.kind])
-        .map(item => [layerFields[item.kind], item[layerFields[item.kind]]]));
-const stageOf = (state, kind) => Object.values(state.tables ?? {})
+        .filter(item => ordinaryFields[item.kind])
+        .map(item => [ordinaryFields[item.kind], item[ordinaryFields[item.kind]]]));
+const shapeOf = (state, kind) => Object.values(state.tables ?? {})
     .flatMap(table => table.composables ?? [])
     .find(item => item.kind === kind) ?? null;
 const modeOf = state => {
-    const kinds = chainOf(state).flatMap(table => table.composables ?? [])
+    const entry = Object.entries(state.tables ?? {})
+        .find(([name]) => name.toLowerCase() === String(state.activeTable).toLowerCase());
+    const kinds = (entry?.[1]?.composables ?? [])
         .map(item => item.kind)
         .filter(kind => ["group", "pivot", "chart"].includes(kind));
-    return kinds.includes("chart") ? "chart"
-        : kinds.includes("pivot") ? "pivot"
-        : kinds.includes("group") ? "groupBy"
-        : "grid";
+    if (kinds.length !== 1)
+        return kinds.length === 0 && String(entry?.[1]?.from).toLowerCase() === "definition"
+            ? "grid"
+            : "custom";
+    return kinds[0] === "group" ? "groupBy" : kinds[0];
 };
 
 async function openWorkbench(page) {
@@ -279,7 +282,7 @@ test("sorts with explicit null placement from the Actions dialog", async ({ page
 
     const response = await runAndWaitForQuery(page, () =>
         dialog.getByRole("button", { name: "Apply", exact: true }).click());
-    expect(sourceLayerOf(response.request().postDataJSON()).sorts).toEqual([
+    expect(inputFieldsOf(response.request().postDataJSON()).sorts).toEqual([
         { col: "NOTES", dir: "desc", nulls: "last" },
     ]);
 
@@ -290,7 +293,7 @@ test("sorts with explicit null placement from the Actions dialog", async ({ page
     await nullSorting.selectOption("");
     const defaultResponse = await runAndWaitForQuery(page, () =>
         reopened.getByRole("button", { name: "Apply", exact: true }).click());
-    expect(sourceLayerOf(defaultResponse.request().postDataJSON()).sorts).toEqual([
+    expect(inputFieldsOf(defaultResponse.request().postDataJSON()).sorts).toEqual([
         { col: "NOTES", dir: "desc" },
     ]);
 });
@@ -313,7 +316,7 @@ test("names highlights and saves their explicit precedence sequence", async ({ p
 
     const response = await runAndWaitForQuery(page, () =>
         dialog.getByRole("button", { name: "Apply", exact: true }).click());
-    expect(sourceLayerOf(response.request().postDataJSON()).highlights).toEqual([
+    expect(inputFieldsOf(response.request().postDataJSON()).highlights).toEqual([
         {
             id: "h1",
             name: "Large orders",
@@ -352,7 +355,11 @@ test("column renderer fields follow Display As through CSS", async ({ page }) =>
 
 test("configures an aggregate chart and returns to the data grid", async ({ page }) => {
     await openWorkbench(page);
-    await page.getByRole("button", { name: "Chart", exact: true }).click();
+    await runAndWaitForQuery(page, () =>
+        page.getByRole("button", { name: "Chart", exact: true }).click());
+    await expect(page.getByRole("dialog")).toHaveCount(0,
+        "the toolbar switches to the uniquely configured Chart table");
+    await clickAction(page, "Chart…");
 
     const dialog = page.getByRole("dialog");
     await expect(dialog).toContainText("Chart");
@@ -364,6 +371,7 @@ test("configures an aggregate chart and returns to the data grid", async ({ page
     await expect(orientation).toBeVisible();
 
     const label = dialog.getByRole("combobox", { name: "Label", exact: true });
+    await label.selectOption("");
     await dialog.getByRole("button", { name: "Apply", exact: true }).click();
     await expect(label).toBeFocused();
     await expect(dialog).toBeVisible();
@@ -386,7 +394,9 @@ test("configures an aggregate chart and returns to the data grid", async ({ page
 
 test("applies control breaks and footer aggregates to a Group By table", async ({ page }) => {
     await openWorkbench(page);
-    await page.getByRole("button", { name: "Group By", exact: true }).click();
+    await runAndWaitForQuery(page, () =>
+        page.getByRole("button", { name: "Group By", exact: true }).click());
+    await clickAction(page, "Group By…");
 
     let dialog = page.getByRole("dialog");
     let selects = dialog.locator("select");
@@ -394,10 +404,6 @@ test("applies control breaks and footer aggregates to a Group By table", async (
     await dialog.getByRole("button", { name: "+ Group Column", exact: true }).click();
     selects = dialog.locator("select");
     await selects.nth(1).selectOption("CUSTOMER");
-    await dialog.getByRole("button", { name: "+ Value", exact: true }).click();
-    selects = dialog.locator("select");
-    await selects.nth(3).selectOption("AMOUNT");
-    await selects.nth(2).selectOption("sum");
     await runAndWaitForQuery(page, () =>
         dialog.getByRole("button", { name: "Apply", exact: true }).click());
 
@@ -425,23 +431,20 @@ test("applies control breaks and footer aggregates to a Group By table", async (
 
 test("adds correctly aggregated total rows to a pivot without a right-side total column", async ({ page }) => {
     await openWorkbench(page);
-    await page.getByRole("button", { name: "Pivot", exact: true }).click();
+    await runAndWaitForQuery(page, () =>
+        page.getByRole("button", { name: "Pivot", exact: true }).click());
+    await clickAction(page, "Pivot…");
 
     const dialog = page.getByRole("dialog");
     let selects = dialog.locator("select");
     await selects.nth(0).selectOption("CUSTOMER");
     await selects.nth(1).selectOption("STATUS");
-    await dialog.getByRole("button", { name: "+ Value", exact: true }).click();
-
-    selects = dialog.locator("select");
-    await selects.nth(3).selectOption("AMOUNT");
-    await selects.nth(2).selectOption("sum");
     await dialog.getByRole("checkbox", { name: "Show total rows", exact: true }).check();
 
     const response = await runAndWaitForQuery(page, () =>
         dialog.getByRole("button", { name: "Apply", exact: true }).click());
     const posted = response.request().postDataJSON();
-    expect(stageOf(posted, "pivot")).toEqual({
+    expect(shapeOf(posted, "pivot")).toEqual({
         kind: "pivot",
         rows: ["CUSTOMER"],
         cols: ["STATUS"],
@@ -454,36 +457,22 @@ test("adds correctly aggregated total rows to a pivot without a right-side total
     await expect(page.getByRole("columnheader", { name: "Total", exact: true })).toHaveCount(0);
 });
 
-test("a saved report retains its grid, pivot, and chart configurations with pivot as its default", async ({ page, request }) => {
+test("a saved report retains its configured tables and switches them without reopening editors", async ({ page, request }) => {
     const title = `views-${randomUUID()}`;
     let savedId;
 
     try {
         await openWorkbench(page);
 
-        await page.getByRole("button", { name: "Chart", exact: true }).click();
-        let dialog = page.getByRole("dialog");
-        let selects = dialog.locator("select");
-        await selects.nth(1).selectOption("STATUS");
-        await selects.nth(3).selectOption("AMOUNT");
-        await selects.nth(2).selectOption("sum");
         await runAndWaitForQuery(page, () =>
-            dialog.getByRole("button", { name: "Apply", exact: true }).click());
-
-        await page.getByRole("button", { name: "Pivot", exact: true }).click();
-        dialog = page.getByRole("dialog");
-        selects = dialog.locator("select");
-        await selects.nth(0).selectOption("CUSTOMER");
-        await selects.nth(1).selectOption("STATUS");
-        await dialog.getByRole("button", { name: "+ Value", exact: true }).click();
-        selects = dialog.locator("select");
-        await selects.nth(3).selectOption("AMOUNT");
-        await selects.nth(2).selectOption("sum");
+            page.getByRole("button", { name: "Chart", exact: true }).click());
+        await expect(page.getByRole("dialog")).toHaveCount(0);
         const pivotResponse = await runAndWaitForQuery(page, () =>
-            dialog.getByRole("button", { name: "Apply", exact: true }).click());
+            page.getByRole("button", { name: "Pivot", exact: true }).click());
+        await expect(page.getByRole("dialog")).toHaveCount(0);
         const configured = pivotResponse.request().postDataJSON();
         expect(modeOf(configured)).toBe("pivot");
-        expect(stageOf(configured, "chart").kind).toBe("chart");
+        expect(shapeOf(configured, "chart").kind).toBe("chart");
 
         await clickAction(page, "Save As…");
         const saveDialog = page.getByRole("dialog");
@@ -496,8 +485,8 @@ test("a saved report retains its grid, pivot, and chart configurations with pivo
         savedId = (await saveResponse.json()).id;
         const savedState = saveResponse.request().postDataJSON().state;
         expect(modeOf(savedState)).toBe("pivot");
-        expect(stageOf(savedState, "chart").kind).toBe("chart");
-        expect(Object.keys(savedState.tables)).toHaveLength(3);
+        expect(shapeOf(savedState, "chart").kind).toBe("chart");
+        expect(Object.keys(savedState.tables)).toHaveLength(4);
         // The schema-snapshot key is retired: the server judges documents on
         // query, so saves no longer stamp one.
         expect(savedState.schema).toBeUndefined();
@@ -532,11 +521,11 @@ test("deleting a computed column also deletes its references", async ({ page }) 
     await expect(computed).toContainText("With Tax");
     const response = await runAndWaitForQuery(page, () =>
         computed.getByRole("button", { name: "Remove ƒ With Tax", exact: true }).click());
-    const layer = sourceLayerOf(response.request().postDataJSON());
+    const input = inputFieldsOf(response.request().postDataJSON());
 
-    expect(layer.computed).toEqual([]);
-    expect(layer.columns).not.toContain("c1");
-    expect(layer.formats).not.toHaveProperty("c1");
+    expect(input.computed).toEqual([]);
+    expect(input.columns).not.toContain("c1");
+    expect(input.formats).not.toHaveProperty("c1");
     await expect(page.getByText(/unknown column 'c1'/)).toHaveCount(0);
 });
 
@@ -737,7 +726,7 @@ test("admin uploads a validated report document and downloads its canonical file
         const document = JSON.parse(await readFile(await downloaded.path(), "utf8"));
         expect(document.title).toBe(title);
         expect(document.primary).toBe(true);
-        expect(sourceLayerOf(document.state).filters).toEqual([{ expr: "AMOUNT > 100", enabled: true }]);
+        expect(inputFieldsOf(document.state).filters).toEqual([{ expr: "AMOUNT > 100", enabled: true }]);
     } finally {
         if (importedId)
             await request.delete(`/api/reports/saved/${importedId}`);

@@ -7,20 +7,20 @@
 import { el, labeled, sel } from "../../core/dom.js";
 import { openDialog } from "../../core/dialog.js";
 import { featureEnabled, typeOf } from "../schema.js";
-import { stageContext, visibleStageColumnNames } from "../stage.js";
+import { structuralTableColumns, tableContext, visibleTableColumnNames } from "../table.js";
 import { lookupValue, sameColumn, setMapEntry } from "../state.js";
 import { colorPick, colOptions } from "./parts.js";
 import { masksFor } from "../render/format.js";
-import { renderColumnValue } from "../render/column-renderers.js";
+import { formatForColumn, renderColumnValue } from "../render/column-renderers.js";
 import { columnClasses } from "../classes.js";
 import { presentationStyle } from "../render/presentation.js";
 
 export function columnsDialog(w) {
-    const ctx = stageContext(w);
+    const ctx = tableContext(w);
     if (!ctx.caps.columns) return;
     const universe = ctx.columns;
     const byName = new Map(universe.map(c => [c.name, c]));
-    const visible = visibleStageColumnNames(ctx, w);
+    const visible = visibleTableColumnNames(ctx, w);
     const displayedNames = visible.filter(n => byName.has(n));
     const hiddenNames = universe.map(c => c.name).filter(n => !displayedNames.includes(n));
 
@@ -64,30 +64,27 @@ export function columnsDialog(w) {
         onApply: () => {
             const names = [...shown.options].map(o => o.value);
             if (!names.length) throw new Error(w.t("columns.displayAtLeastOne"));
-            return w.apply(d => { ctx.columnsLayer(d).columns = names; });
+            return w.apply(d => ctx.edit(d, "select", node => { node.columns = names; }));
         },
     });
 }
 
 /// Per-column settings: visibility, alignment, format mask, and constrained inline
 /// styling. Nothing here is a second source of truth — the Visible checkbox writes
-/// the same layer columns list the shuttle owns (re-shown columns append to the
-/// end), and everything else lives in the stage's formats map, one compact entry
-/// per column. Edits stage per column, so several columns can be configured in
+/// the same Select node the shuttle owns (re-shown columns append to the
+/// end), and everything else lives in the table's terminal Formats node, one compact entry
+/// per column. Edits buffer per column, so several columns can be configured in
 /// one visit.
 export function columnSettingsDialog(w, initialCol) {
-    const ctx = stageContext(w);
+    const ctx = tableContext(w);
     if (!ctx.caps.columnSettings) return;
     const universe = ctx.columns;
     const byName = new Map(universe.map(c => [c.name, c]));
     const columnType = name => byName.get(name)?.type ?? typeOf(w, name);
-    const originallyVisible = visibleStageColumnNames(ctx, w);
+    const originallyVisible = visibleTableColumnNames(ctx, w);
     const canHide = ctx.caps.visibility && featureEnabled(w, "columns");
     const withDisplayAs = ctx.caps.displayAs;
-    const formatsOf = d => {
-        const layer = ctx.formatsLayer(d);
-        return layer.formats ??= {};
-    };
+    const formatsOf = d => ctx.node(d, "formats")?.formats ?? {};
     const staged = new Map();
 
     const colSel = sel(colOptions(w, { columns: universe }), initialCol ?? originallyVisible[0] ?? universe[0]?.name);
@@ -153,7 +150,12 @@ export function columnSettingsDialog(w, initialCol) {
     const canonicalName = value => universe.find(c => sameColumn(c.name, value))?.name;
     const settingsFor = name => {
         if (staged.has(name)) return staged.get(name);
-        const fmt = lookupValue(formatsOf(w.doc), name) ?? {};
+        // Seed a new local entry from the effective composed format. Otherwise
+        // toggling one style on a synthetic metric would replace, and silently
+        // discard, an inherited source mask or renderer configuration.
+        const fmt = lookupValue(formatsOf(w.doc), name)
+            ?? formatForColumn(w, byName.get(name) ?? { name })
+            ?? {};
         const displayAs = typeof fmt.displayAs === "string" ? fmt.displayAs.toLowerCase() : "";
         return {
             visible: originallyVisible.includes(name),
@@ -269,29 +271,32 @@ export function columnSettingsDialog(w, initialCol) {
             }
 
             return w.apply(d => {
-                const formats = formatsOf(d);
-                for (const [name, s] of staged) {
-                    const entry = {};
-                    if (s.mask) entry.mask = s.mask;
-                    if (s.align) entry.align = s.align;
-                    if (s.bold) entry.bold = true;
-                    if (s.italic) entry.italic = true;
-                    if (s.fg) entry.fg = s.fg;
-                    if (s.bg) entry.bg = s.bg;
-                    if (s.displayAs) {
-                        entry.displayAs = s.displayAs;
-                        entry.urlColumn = s.urlColumn || name;
-                        if (s.displayAs === "link") entry.textColumn = s.textColumn || name;
-                    } else if (s.action) {
-                        entry.displayAs = "action";
-                        if (s.action.command) entry.command = s.action.command;
-                        if (s.action.keyColumn) entry.keyColumn = s.action.keyColumn;
+                ctx.edit(d, "formats", node => {
+                    const formats = node.formats ??= {};
+                    for (const [name, s] of staged) {
+                        const entry = {};
+                        if (s.mask) entry.mask = s.mask;
+                        if (s.align) entry.align = s.align;
+                        if (s.bold) entry.bold = true;
+                        if (s.italic) entry.italic = true;
+                        if (s.fg) entry.fg = s.fg;
+                        if (s.bg) entry.bg = s.bg;
+                        if (s.displayAs) {
+                            entry.displayAs = s.displayAs;
+                            entry.urlColumn = s.urlColumn || name;
+                            if (s.displayAs === "link") entry.textColumn = s.textColumn || name;
+                        } else if (s.action) {
+                            entry.displayAs = "action";
+                            if (s.action.command) entry.command = s.action.command;
+                            if (s.action.keyColumn) entry.keyColumn = s.action.keyColumn;
+                        }
+                        const classes = columnClasses(s.classes, { strict: true, context: w });
+                        if (classes.length) entry.classes = classes;
+                        setMapEntry(formats, name, Object.keys(entry).length ? entry : undefined);
                     }
-                    const classes = columnClasses(s.classes, { strict: true, context: w });
-                    if (classes.length) entry.classes = classes;
-                    setMapEntry(formats, name, Object.keys(entry).length ? entry : undefined);
-                }
-                if (visibilityChanged) ctx.columnsLayer(d).columns = columns;
+                });
+                if (visibilityChanged)
+                    ctx.edit(d, "select", node => { node.columns = columns; });
             });
         },
     });
@@ -301,18 +306,22 @@ export function columnSettingsDialog(w, initialCol) {
 /// its heading on that rule; every other heading writes the same terminal labels
 /// composable, regardless of the shape that produced the table.
 export function renameDialog(w, col) {
-    const ctx = stageContext(w);
-    const stageRule = ctx.computeLayer
-        ? (ctx.computeLayer(w.doc).computed ?? []).find(c => sameColumn(c.id, col))
-        : null;
+    const ctx = tableContext(w);
+    const computedRule = (ctx.node(w.doc, "compute")?.computed ?? [])
+        .find(c => sameColumn(c.id, col));
     const column = ctx.columns.find(c => sameColumn(c.name, col));
-    const schemaDefault = stageRule
-        ? stageRule.id
-        : w.schema?.columns?.find(c => sameColumn(c.name, col))?.label ?? column?.label ?? col;
+    const structuralColumn = structuralTableColumns(w)
+        .find(c => sameColumn(c.name, col));
+    const schemaDefault = computedRule
+        ? computedRule.id
+        : structuralColumn?.label
+            ?? w.schema?.columns?.find(c => sameColumn(c.name, col))?.label
+            ?? column?.label
+            ?? col;
 
-    const currentOverride = stageRule
-        ? stageRule.label ?? ""
-        : lookupValue(ctx.labelsLayer(w.doc).labels, col) ?? "";
+    const currentOverride = computedRule
+        ? computedRule.label ?? ""
+        : lookupValue(ctx.node(w.doc, "labels")?.labels, col) ?? "";
 
     const input = el("input", {
         class: "ir-input", type: "text",
@@ -331,19 +340,19 @@ export function renameDialog(w, col) {
         onApply: () => {
             const label = input.value.trim();
             return w.apply(d => {
-                const rule = ctx.computeLayer
-                    ? (ctx.computeLayer(d).computed ?? []).find(c => sameColumn(c.id, col))
-                    : null;
+                const rule = (ctx.node(d, "compute")?.computed ?? [])
+                    .find(c => sameColumn(c.id, col));
                 if (rule) {
                     rule.label = label || rule.id;
                     return;
                 }
-                const layer = ctx.labelsLayer(d);
-                if (!label || label === schemaDefault) {
-                    if (layer.labels) setMapEntry(layer.labels, col, undefined);
-                } else {
-                    setMapEntry(layer.labels ??= {}, col, label);
-                }
+                ctx.edit(d, "labels", node => {
+                    if (!label || label === schemaDefault) {
+                        if (node.labels) setMapEntry(node.labels, col, undefined);
+                    } else {
+                        setMapEntry(node.labels ??= {}, col, label);
+                    }
+                });
             });
         },
     });

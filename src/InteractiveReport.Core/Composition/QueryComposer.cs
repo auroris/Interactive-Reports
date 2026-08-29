@@ -240,10 +240,10 @@ public static class QueryComposer
     }
 
     /// <summary>
-    /// Pivot source: the composed input relation grouped over row + column dimensions, ordered rows
-    /// first so groups arrive row-contiguous, capped at maxGroups+1 so the executor can
-    /// detect overflow. The Pivot itself happens in memory; native PIVOT syntax never
-    /// enters the picture.
+    /// Legacy no-table Pivot source: the input relation grouped over row + column
+    /// dimensions, ordered rows first so groups arrive row-contiguous, and capped at
+    /// maxGroups+1. Named tables instead compile a portable wide SQL relation through
+    /// ComposableSqlPlanner; native provider PIVOT syntax is never required.
     /// </summary>
     public static Query ComposePivotSource(ReportDefinition def, ValidatedState state, int maxGroups)
     {
@@ -498,7 +498,7 @@ public static class QueryComposer
     /// the actual value key retains the requested direction in both cases. Text order
     /// follows the database collation. There is no portable collation name or syntax
     /// shared by all four providers; use a binary/ordinal report collation when exact
-    /// parity with materialized Pivot/Chart sorting is required.
+    /// parity with the legacy materialized Pivot/Chart path is required.
     /// </summary>
     private static void ApplySort(Query query, ValidSort sort, ReportDialect dialect)
     {

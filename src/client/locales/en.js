@@ -261,6 +261,10 @@ export const messages = {
     "group.countNote": "A row count per group is always included.",
     "group.pickColumn": "Pick at least one group column",
     "group.label": "Group by",
+    "view.ambiguous": "Several {mode} tables are configured ({tables}). Select one explicitly before switching or editing this view.",
+    "view.ambiguousBase": "Several base tables are configured ({tables}). Select one explicitly before creating a view.",
+    "view.shapeReadOnly": "The {mode} composable in table {table} is preceded by foreign composables and is read-only in the packaged editor.",
+    "view.baseUnavailable": "No definition-backed base table is available for this view.",
     "pivot.title": "Pivot",
     "pivot.rowColumn": "Row Column",
     "pivot.rows": "Rows",
@@ -306,7 +310,6 @@ export const messages = {
 
     "chip.search": "Search",
     "chip.configurationRemoved": "{modes} configuration removed; it depended on {column}.",
-    "chip.stageComputed": "ƒ view",
     "chip.remove": "Remove {name}",
 
     "report.attributeRequired": "The interactive-report element requires a non-empty report attribute.",

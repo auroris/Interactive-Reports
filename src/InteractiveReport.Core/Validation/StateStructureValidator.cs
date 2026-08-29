@@ -10,6 +10,7 @@ internal static class StateStructureValidator
     // to refresh while leaving ample room for externally authored alternatives.
     internal const int MaxTables = 64;
     internal const int MaxComposables = 512;
+    internal const int MaxTableDepth = 64;
 
     public static List<ValidationError> Collect(ReportState state)
     {

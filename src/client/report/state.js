@@ -52,6 +52,9 @@ export function serializeReportState(source) {
 export function invalidateChangedSchemas(before, after) {
     const next = after?.tables ?? {};
     const changed = new Set();
+    const retainedIds = new Set(Object.keys(next).map(id => id.toLowerCase()));
+    for (const id of Object.keys(before?.tables ?? {}))
+        if (!retainedIds.has(id.toLowerCase())) changed.add(id.toLowerCase());
     for (const [id, table] of Object.entries(next)) {
         const old = tableEntry(before, id)?.table;
         const oldDefinition = old
@@ -61,17 +64,21 @@ export function invalidateChangedSchemas(before, after) {
         if (oldDefinition !== nextDefinition) changed.add(id.toLowerCase());
     }
 
-    // Search can change a pivot's data-dependent columns. Paging and switching the
-    // active table cannot, so those operations retain every cache.
+    // Search can change a Pivot's data-dependent columns, but Group, Chart, and
+    // ordinary table schemas are structural. Seed only Pivot owners here; the
+    // descendant walk below carries invalidation through their completed outputs.
+    // Paging and switching the active table never affect a schema cache.
     if ((before?.search ?? null) !== (after?.search ?? null))
-        for (const id of Object.keys(next)) changed.add(id.toLowerCase());
+        for (const [id, table] of Object.entries(next))
+            if ((table?.composables ?? []).some(item => kindOf(item) === "pivot"))
+                changed.add(id.toLowerCase());
 
     let grew = true;
     while (grew) {
         grew = false;
         for (const [id, table] of Object.entries(next)) {
             const key = id.toLowerCase();
-            if (!changed.has(key) && changed.has(String(table?.from ?? "").toLowerCase())) {
+            if (!changed.has(key) && changed.has(token(table?.from))) {
                 changed.add(key);
                 grew = true;
             }
@@ -86,23 +93,20 @@ export function invalidateChangedSchemas(before, after) {
 // --- table/composable access -------------------------------------------------
 
 const shapeKinds = new Set(["group", "pivot", "chart"]);
-const layerFields = {
-    columns: ["select", "columns"],
-    labels: ["labels", "labels"],
-    formats: ["formats", "formats"],
-    computed: ["compute", "computed"],
-    filters: ["filter", "filters"],
-    sorts: ["sort", "sorts"],
-    highlights: ["highlight", "highlights"],
-    breaks: ["break", "breaks"],
-    aggregates: ["aggregate", "aggregates"],
-};
-const layerKindSet = new Set(Object.values(layerFields).map(([kind]) => kind));
+const ordinaryKindSet = new Set([
+    "select", "labels", "formats", "compute", "filter", "sort", "highlight",
+    "break", "aggregate",
+]);
 const inheritedKindSet = new Set(["compute", "filter", "labels", "formats"]);
+const token = value => String(value ?? "").trim().toLowerCase();
+const kindOf = composable => token(composable?.kind);
+const isKind = (composable, kind) => kindOf(composable) === token(kind);
+const modeKind = mode => mode === "groupBy" ? "group" : mode;
+const kindMode = kind => token(kind) === "group" ? "groupBy" : token(kind);
 
 export const tableEntry = (doc, requested) => {
     if (!requested || !doc?.tables) return null;
-    const wanted = String(requested).toLowerCase();
+    const wanted = token(requested);
     const matches = Object.entries(doc.tables).filter(([id]) => id.toLowerCase() === wanted);
     return matches.length === 1 ? { id: matches[0][0], table: matches[0][1] } : null;
 };
@@ -116,10 +120,10 @@ export const activeChain = (doc, requested = doc?.activeTable) => {
         if (seen.has(key)) return [];
         seen.add(key);
         result.unshift(entry);
-        if (String(entry.table?.from ?? "").toLowerCase() === "definition") break;
+        if (token(entry.table?.from) === "definition") break;
         entry = tableEntry(doc, entry.table?.from);
     }
-    return result.length && String(result[0].table?.from ?? "").toLowerCase() === "definition"
+    return result.length && token(result[0].table?.from) === "definition"
         ? result
         : [];
 };
@@ -128,11 +132,11 @@ export const activeChain = (doc, requested = doc?.activeTable) => {
 /// array position. `participates` mirrors the server fold: parent tables contribute
 /// relational rules and metadata, while their terminal presentation/control state
 /// remains local to those tables. Consumers use these locations instead of
-/// flattening repeated nodes into a synthetic layer. `authorable` is deliberately
+/// flattening repeated nodes into a synthetic settings object. `authorable` is deliberately
 /// narrower than `owned`: the packaged editors can safely write only the last node
 /// of each kind in the active table's terminal segment. Earlier/repeated/foreign
 /// nodes stay preserved and read-only.
-export const locatedComposables = (doc, requested = doc?.activeTable) => {
+export const composableLocations = (doc, requested = doc?.activeTable) => {
     const chain = activeChain(doc, requested);
     if (!chain.length) return [];
     const activeId = chain.at(-1).id.toLowerCase();
@@ -146,19 +150,20 @@ export const locatedComposables = (doc, requested = doc?.activeTable) => {
         let lastShape = -1;
         if (owned) {
             for (let index = 0; index < composables.length; index++)
-                if (shapeKinds.has(composables[index]?.kind)) lastShape = index;
+                if (shapeKinds.has(kindOf(composables[index]))) lastShape = index;
         }
 
         for (let index = 0; index < composables.length; index++) {
             const composable = composables[index];
-            const shape = shapeKinds.has(composable?.kind);
+            const kind = kindOf(composable);
+            const shape = shapeKinds.has(kind);
             const participates = shape
-                || (layerKindSet.has(composable?.kind)
-                    && (owned || inheritedKindSet.has(composable.kind)));
+                || (ordinaryKindSet.has(kind)
+                    && (owned || inheritedKindSet.has(kind)));
             const terminal = owned && !shape && index > lastShape;
             const laterSameKind = terminal && composables
                 .slice(index + 1)
-                .some(item => item?.kind === composable?.kind);
+                .some(item => kindOf(item) === kind);
             result.push({
                 tableId: entry.id,
                 table: entry.table,
@@ -170,7 +175,7 @@ export const locatedComposables = (doc, requested = doc?.activeTable) => {
                 afterShape,
                 source: entry.id.toLowerCase() === rootId && !afterShape,
                 terminal,
-                authorable: terminal && layerKindSet.has(composable?.kind) && !laterSameKind,
+                authorable: terminal && ordinaryKindSet.has(kind) && !laterSameKind,
             });
             if (shape) afterShape = true;
         }
@@ -183,16 +188,21 @@ const composedMap = (doc, kind, field) => {
     let afterShape = false;
     for (const entry of activeChain(doc)) {
         for (const composable of entry.table?.composables ?? []) {
-            if (shapeKinds.has(composable?.kind)) {
+            if (shapeKinds.has(kindOf(composable))) {
                 afterShape = true;
                 continue;
             }
-            if (composable?.kind !== kind) continue;
+            if (!isKind(composable, kind)) continue;
             const values = composable[field];
             if (!values || typeof values !== "object" || Array.isArray(values)) continue;
             const side = afterShape ? "output" : "input";
             result[side] ??= {};
             if (Object.keys(values).length === 0) {
+                // An empty presentation map is a reset at this point in the
+                // composition, not merely an empty override for the current side.
+                // Once a shape exists, source metadata would otherwise leak back
+                // through a generated column's formatSource provenance.
+                if (afterShape) result.input = {};
                 result[side] = {};
                 continue;
             }
@@ -213,56 +223,110 @@ const composedMap = (doc, kind, field) => {
 
 /// Effective presentation metadata over the complete selected ancestry, split at
 /// the optional shape boundary. Later entries on either side win case-insensitively
-/// and an explicit empty map clears that side, matching the server's fold.
+/// and an explicit empty map clears everything accumulated before that point,
+/// matching the server's fold.
 export const composedLabels = doc => composedMap(doc, "labels", "labels");
 export const composedFormats = doc => composedMap(doc, "formats", "formats");
 
-const rangeNodes = (table, start, end, kind) => {
-    const composables = table?.composables ?? [];
-    return composables.slice(start, end).filter(item => item?.kind === kind);
-};
-
-const layerAdapter = (table, start = 0, end = table?.composables?.length ?? 0) => {
-    const layer = {};
-    for (const [property, [kind, field]] of Object.entries(layerFields)) {
-        Object.defineProperty(layer, property, {
-            enumerable: true,
-            get() {
-                const nodes = rangeNodes(table, start, end, kind);
-                if (!nodes.length) return undefined;
-                // An editor always owns one exact composable. Earlier repeated
-                // nodes may have been authored by another UI and remain part of
-                // the composition, but are never flattened into a synthetic
-                // value that a later assignment could accidentally write back.
-                return nodes.at(-1)[field];
-            },
-            set(value) {
-                let node = rangeNodes(table, start, end, kind).at(-1);
-                if (!node) {
-                    node = { kind };
-                    table.composables ??= [];
-                    table.composables.splice(end, 0, node);
-                    end++;
-                }
-                node[field] = value;
-            },
-        });
-    }
-    return layer;
-};
-
-/// The active table's terminal ordinary-composable segment. If the active table
-/// owns a shape, terminal operations begin immediately after its last shape. If
-/// it inherits a shape from `from`, every composable it owns is terminal. Reads
-/// and writes target the last exact node of each kind within that segment.
-export function activeTableLayer(doc) {
-    const entry = tableEntry(doc, doc?.activeTable);
-    if (!entry) return {};
+const ownRange = (doc, requested, { terminal = false, input = false } = {}) => {
+    const entry = tableEntry(doc, requested);
+    if (!entry) return null;
     const composables = entry.table?.composables ?? [];
+    let firstShape = composables.findIndex(item => shapeKinds.has(kindOf(item)));
+    if (firstShape < 0) firstShape = composables.length;
     let lastShape = -1;
     for (let index = 0; index < composables.length; index++)
-        if (shapeKinds.has(composables[index]?.kind)) lastShape = index;
-    return layerAdapter(entry.table, lastShape + 1, composables.length);
+        if (shapeKinds.has(kindOf(composables[index]))) lastShape = index;
+    return {
+        entry,
+        start: terminal ? lastShape + 1 : 0,
+        end: input ? firstShape : composables.length,
+    };
+};
+
+const locationInRange = (range, kind) => {
+    if (!range) return null;
+    const composables = range.entry.table?.composables ?? [];
+    for (let index = range.end - 1; index >= range.start; index--) {
+        if (isKind(composables[index], kind))
+            return {
+                tableId: range.entry.id,
+                table: range.entry.table,
+                composable: composables[index],
+                composableIndex: index,
+            };
+    }
+    return null;
+};
+
+const locationsInRange = (range, kind) => {
+    if (!range) return [];
+    const composables = range.entry.table?.composables ?? [];
+    const result = [];
+    for (let index = range.start; index < range.end; index++) {
+        if (!isKind(composables[index], kind)) continue;
+        result.push({
+            tableId: range.entry.id,
+            table: range.entry.table,
+            composable: composables[index],
+            composableIndex: index,
+        });
+    }
+    return result;
+};
+
+const editInRange = (range, kind, mutate) => {
+    if (!range) throw new Error("The target table is no longer available.");
+    const canonicalKind = token(kind);
+    let location = locationInRange(range, canonicalKind);
+    if (!location) {
+        const composable = { kind: canonicalKind };
+        range.entry.table.composables ??= [];
+        range.entry.table.composables.splice(range.end, 0, composable);
+        location = {
+            tableId: range.entry.id,
+            table: range.entry.table,
+            composable,
+            composableIndex: range.end,
+        };
+    } else location.composable.kind = canonicalKind;
+    mutate(location.composable, location);
+    return location;
+};
+
+/// The last exact composable of `kind` in a table's terminal segment. A table
+/// that owns a shape starts its terminal segment after the final owned shape; a
+/// table that inherits a shape has its complete own composition as the segment.
+export function terminalComposableLocation(doc, kind, requested = doc?.activeTable) {
+    return locationInRange(ownRange(doc, requested, { terminal: true }), kind);
+}
+
+export function editTerminalComposable(doc, kind, mutate, requested = doc?.activeTable) {
+    return editInRange(ownRange(doc, requested, { terminal: true }), kind, mutate);
+}
+
+const definitionInputEntry = doc => {
+    const chain = activeChain(doc);
+    if (chain.length) return chain[0];
+    const roots = Object.entries(doc?.tables ?? {})
+        .filter(([, table]) => token(table?.from) === "definition")
+        .map(([id, table]) => ({ id, table }));
+    return roots.length === 1 ? roots[0] : null;
+};
+
+/// Input-scoped editors (currently scoped search and definition-table cleanup)
+/// target the final same-kind node before the first shape of the selected root.
+export function inputComposableLocation(doc, kind) {
+    const entry = definitionInputEntry(doc);
+    return entry
+        ? locationInRange(ownRange(doc, entry.id, { input: true }), kind)
+        : null;
+}
+
+export function editInputComposable(doc, kind, mutate) {
+    const entry = definitionInputEntry(doc);
+    if (!entry) throw new Error("The definition-input table is ambiguous or unavailable.");
+    return editInRange(ownRange(doc, entry.id, { input: true }), kind, mutate);
 }
 
 /// Server-populated, non-authoritative schema cache for the active table. This
@@ -272,56 +336,49 @@ export function activeTableSchema(doc) {
     return Array.isArray(schema) ? schema : null;
 }
 
-const stageRecord = (entry, index) => {
-    const shape = entry.table.composables[index];
-    return {
-        shape,
-        layer: layerAdapter(entry.table, index + 1, entry.table.composables.length),
-        _tableId: entry.id,
-        _table: entry.table,
-        _shapeIndex: index,
+export const ownShapeLocations = (doc, requested = doc?.activeTable) => {
+    const entry = tableEntry(doc, requested);
+    return entry ? (entry.table?.composables ?? []).flatMap((composable, composableIndex) =>
+        shapeKinds.has(kindOf(composable))
+            ? [{ tableId: entry.id, table: entry.table, composable, composableIndex }]
+            : []) : [];
+};
+
+export const shapeLocations = (doc, requested = doc?.activeTable) => activeChain(doc, requested)
+    .flatMap(entry => ownShapeLocations(doc, entry.id));
+
+export const activeShapeLocation = (doc, kind = null) => ownShapeLocations(doc)
+    .find(location => kind === null || isKind(location.composable, kind)) ?? null;
+
+export function replaceComposable(doc, location, replacement) {
+    const entry = tableEntry(doc, location?.tableId);
+    const index = location?.composableIndex;
+    if (!entry || !Number.isInteger(index)
+        || kindOf(entry.table?.composables?.[index]) !== kindOf(location?.composable))
+        throw new Error("The composable changed while it was being edited.");
+    entry.table.composables[index] = {
+        ...structuredClone(replacement),
+        kind: kindOf(replacement),
     };
-};
-
-const stagesFor = (doc, tableId = doc?.activeTable) => activeChain(doc, tableId).flatMap(entry =>
-    (entry.table?.composables ?? []).flatMap((item, index) =>
-        shapeKinds.has(item?.kind) ? [stageRecord(entry, index)] : []));
-
-const sourceEntry = doc => {
-    const active = activeChain(doc)[0];
-    if (active) return active;
-    const roots = Object.entries(doc?.tables ?? {})
-        .filter(([, table]) => String(table?.from ?? "").toLowerCase() === "definition")
-        .map(([id, table]) => ({ id, table }));
-    return roots.length === 1 ? roots[0] : null;
-};
-
-export function sourceLayer(doc) {
-    const entry = sourceEntry(doc);
-    if (!entry) return {};
-    const firstShape = (entry.table.composables ?? []).findIndex(item => shapeKinds.has(item?.kind));
-    return layerAdapter(entry.table, 0, firstShape < 0 ? entry.table.composables.length : firstShape);
-}
-
-export function stageOf(doc, kind) {
-    return stagesFor(doc).find(stage => stage.shape?.kind === kind) ?? null;
-}
-
-export function stageLayer(stage) {
-    if (!stage) return {};
-    return stage.layer ??= {};
-}
-
-export function tailOf(doc) {
-    return stagesFor(doc);
+    return {
+        tableId: entry.id,
+        table: entry.table,
+        composable: entry.table.composables[index],
+        composableIndex: index,
+    };
 }
 
 /// The built-in UI mode is a predicate over the active composition. Documents
 /// with several shape composables are preserved without assigning a lossy toolbar
 /// mode; the server remains responsible for deciding whether they are executable.
 export function modeOf(doc) {
-    const kinds = stagesFor(doc).map(stage => stage.shape?.kind);
-    if (kinds.length === 0) return "grid";
+    const kinds = ownShapeLocations(doc).map(location => kindOf(location.composable));
+    if (kinds.length === 0) {
+        const active = tableEntry(doc, doc?.activeTable);
+        return token(active?.table?.from) === "definition"
+            ? "grid"
+            : "custom";
+    }
     if (kinds.length !== 1) return "custom";
     return kinds[0] === "group" ? "groupBy"
         : kinds[0] === "pivot" ? "pivot"
@@ -329,64 +386,58 @@ export function modeOf(doc) {
                 : "custom";
 }
 
-const isUiCandidate = (doc, id, mode) => {
-    if (modeOf({ ...doc, activeTable: id }) !== mode) return false;
+const isViewCandidate = (doc, id, mode) => {
     const entry = tableEntry(doc, id);
-    if (!entry) return false;
-    const own = entry.table.composables ?? [];
+    const chain = activeChain(doc, id);
+    if (!entry || !chain.length) return false;
+    const shapes = ownShapeLocations(doc, id);
     if (mode === "grid")
-        return String(entry.table.from ?? "").toLowerCase() === "definition"
-            && own.every(item => layerKindSet.has(item?.kind));
-    const expected = mode === "groupBy" ? "group" : mode;
-    return own[0]?.kind === expected
-        && own.slice(1).every(item => layerKindSet.has(item?.kind));
+        return shapes.length === 0
+            && token(entry.table?.from) === "definition";
+    const expected = modeKind(mode);
+    return shapes.length === 1 && isKind(shapes[0].composable, expected);
 };
 
-const candidatesForMode = (doc, mode) => Object.keys(doc?.tables ?? {})
-    .filter(id => isUiCandidate(doc, id, mode));
+export const viewCandidates = (doc, mode) => Object.keys(doc?.tables ?? {})
+    .filter(id => isViewCandidate(doc, id, mode))
+    .map(id => {
+        const entry = tableEntry(doc, id);
+        return {
+            tableId: entry.id,
+            table: entry.table,
+            shapeLocation: mode === "grid" ? null : ownShapeLocations(doc, entry.id)[0],
+        };
+    });
 
-const uniqueCandidate = (doc, mode) => {
-    if (isUiCandidate(doc, doc?.activeTable, mode)) return tableEntry(doc, doc.activeTable);
-    const ids = candidatesForMode(doc, mode);
-    return ids.length === 1 ? tableEntry(doc, ids[0]) : null;
-};
-
-const plainLayer = layer => {
-    const result = {};
-    for (const property of Object.keys(layerFields)) {
-        const value = layer?.[property];
-        if (value !== undefined) result[property] = structuredClone(value);
-    }
-    return result;
-};
-
-const plainStage = stage => ({
-    shape: structuredClone(stage.shape),
-    layer: plainLayer(stage.layer),
-    // Working-copy coordinates let a shape editor replace only the exact shape
-    // node it opened. serializeReportState strips them before submission.
-    _tableId: stage._tableId,
-    _shapeIndex: stage._shapeIndex,
-});
-
-/// Return the uniquely identifiable table configured for a built-in mode in
-/// the legacy stage-shaped editor form. Map order is never used to break ties.
-export function configuredTail(doc, mode) {
-    const entry = uniqueCandidate(doc, mode);
-    if (!entry || mode === "grid") return null;
-    const stages = stagesFor(doc, entry.id);
-    return stages.length === 1 ? stages.map(plainStage) : null;
+/// Resolve a built-in view without consulting map order. Ambiguity is data the
+/// caller must surface; it is never reinterpreted as an absent view.
+export function resolveView(doc, mode) {
+    const candidates = viewCandidates(doc, mode);
+    const active = candidates.find(candidate => sameColumn(candidate.tableId, doc?.activeTable));
+    if (active) return { status: "active", candidate: active, candidates };
+    if (candidates.length === 0) return { status: "absent", candidate: null, candidates };
+    if (candidates.length === 1) return { status: "available", candidate: candidates[0], candidates };
+    return { status: "ambiguous", candidate: null, candidates };
 }
 
-const composablesFromLayer = layer => Object.entries(layerFields).flatMap(([property, [kind, field]]) => {
-    const value = layer?.[property];
-    return value === undefined ? [] : [{ kind, [field]: structuredClone(value) }];
-});
-
-const composablesFromTail = tail => (tail ?? []).flatMap(stage => [
-    structuredClone(stage.shape ?? {}),
-    ...composablesFromLayer(stage.layer ?? {}),
-]);
+/// Resolve the base input for a newly authored shaped view. The selected
+/// ancestry's base wins; otherwise the same explicit unique/ambiguous result as
+/// toolbar view selection applies.
+export function resolveCreationBase(doc) {
+    const root = activeChain(doc)[0];
+    const isDefinitionBase = candidate => candidate
+        && ownShapeLocations(doc, candidate.id).length === 0
+        && token(candidate.table?.from) === "definition";
+    if (isDefinitionBase(root))
+        return { status: "active", candidate: { tableId: root.id, table: root.table, shapeLocation: null }, candidates: [] };
+    const candidates = Object.entries(doc?.tables ?? {})
+        .map(([id]) => tableEntry(doc, id))
+        .filter(isDefinitionBase)
+        .map(entry => ({ tableId: entry.id, table: entry.table, shapeLocation: null }));
+    if (candidates.length === 0) return { status: "absent", candidate: null, candidates };
+    if (candidates.length === 1) return { status: "available", candidate: candidates[0], candidates };
+    return { status: "ambiguous", candidate: null, candidates };
+}
 
 const nextTableId = (doc, prefix) => {
     const used = new Set(Object.keys(doc.tables ?? {}).map(id => id.toLowerCase()));
@@ -396,45 +447,40 @@ const nextTableId = (doc, prefix) => {
     return `${prefix}${suffix}`;
 };
 
-/// Activate or author a built-in UI table. Existing tables stay in the map;
-/// switching views changes only activeTable. Editing an existing shape replaces
-/// that exact composable and preserves every ordinary or unfamiliar sibling.
-export function activateTail(doc, mode, tail = null) {
+export function selectView(doc, mode, tableId = null) {
+    const candidate = tableId
+        ? viewCandidates(doc, mode).find(item => sameColumn(item.tableId, tableId))
+        : resolveView(doc, mode).candidate;
+    if (!candidate) return false;
+    doc.activeTable = candidate.tableId;
+    return true;
+}
+
+export function createView(doc, mode, shape, fromTableId) {
+    if (mode === "grid") throw new Error("A base table cannot be created as a shaped view.");
+    const source = tableEntry(doc, fromTableId);
+    if (!source
+        || ownShapeLocations(doc, source.id).length !== 0
+        || token(source.table?.from) !== "definition")
+        throw new Error("The selected base table is unavailable.");
+    const kind = modeKind(mode);
+    if (!isKind(shape, kind)) throw new Error(`Expected a ${kind} composable.`);
     doc.tables ??= {};
-    if (mode === "grid") {
-        const grid = uniqueCandidate(doc, "grid") ?? sourceEntry(doc);
-        if (grid) doc.activeTable = grid.id;
-        return doc;
-    }
-
-    let entry = uniqueCandidate(doc, mode);
-    if (tail) {
-        const source = uniqueCandidate(doc, "grid") ?? sourceEntry(doc);
-        if (!source) return doc;
-        if (!entry) {
-            const id = nextTableId(doc, mode);
-            doc.tables[id] = { from: source.id, composables: [] };
-            entry = { id, table: doc.tables[id] };
-            entry.table.composables = composablesFromTail(tail);
-        } else {
-            const edited = tail.length === 1 ? tail[0] : null;
-            const index = Number.isInteger(edited?._shapeIndex)
-                && sameColumn(edited?._tableId, entry.id)
-                ? edited._shapeIndex
-                : (entry.table.composables ?? []).findIndex(item => item?.kind === edited?.shape?.kind);
-            if (index >= 0 && shapeKinds.has(entry.table.composables[index]?.kind))
-                entry.table.composables[index] = structuredClone(edited.shape);
-        }
-        entry.table.from = entry.table.from ?? source.id;
-    }
-    if (entry) doc.activeTable = entry.id;
-    return doc;
+    const id = nextTableId(doc, mode);
+    doc.tables[id] = {
+        from: source.id,
+        composables: [{ ...structuredClone(shape), kind }],
+    };
+    doc.activeTable = id;
+    return {
+        tableId: id,
+        table: doc.tables[id],
+        composable: doc.tables[id].composables[0],
+        composableIndex: 0,
+    };
 }
 
-/// The row dimensions of an active pivot.
-export function pivotRowDims(doc) {
-    return stageOf(doc, "pivot")?.shape?.rows ?? [];
-}
+export const shapeMode = location => kindMode(location?.composable?.kind);
 
 // --- shared helpers ----------------------------------------------------------
 
@@ -515,8 +561,8 @@ export function expressionReferencesColumn(expression, column, { pivotFamily = f
 
 // --- coarse dependency invalidation (T0) -------------------------------------
 
-const tailReferencesColumn = (stages, column) => stages.some(stage => {
-    const shape = stage.shape ?? {};
+const shapesReferenceColumn = (locations, column) => locations.some(location => {
+    const shape = location.composable ?? {};
     return (shape.by ?? []).some(name => sameColumn(name, column))
         || (shape.rows ?? []).some(name => sameColumn(name, column))
         || (shape.cols ?? []).some(name => sameColumn(name, column))
@@ -525,45 +571,83 @@ const tailReferencesColumn = (stages, column) => stages.some(stage => {
         || sameColumn(shape.value, column);
 });
 
-/// Delete one source-table computed column and everything that depends on it.
-/// Within the source table, references are stripped precisely. A descendant
+/// Remove a column and every computed column that depends on it from all
+/// same-kind nodes in one input or terminal segment. Packaged editors author the
+/// final node of a kind, but foreign documents may contain earlier nodes which
+/// remain executable and therefore must not retain dangling references.
+const cleanupColumnReferences = (range, column, { pivotFamily = false } = {}) => {
+    const retired = [];
+    const visited = new Set();
+    const nodes = kind => locationsInRange(range, kind).map(location => location.composable);
+
+    const remove = current => {
+        if (typeof current !== "string" || visited.has(current.toLowerCase())) return;
+        visited.add(current.toLowerCase());
+        retired.push(current);
+        const matches = name => sameColumn(name, current)
+            || (pivotFamily && typeof name === "string"
+                && name.toLowerCase().startsWith(`${current.toLowerCase()}@`));
+        const expressionMatches = expression => expressionReferencesColumn(
+            expression,
+            current,
+            { pivotFamily });
+
+        const removedComputed = [];
+        for (const compute of nodes("compute")) {
+            const removed = (compute.computed ?? []).filter(rule =>
+                matches(rule.id) || expressionMatches(rule.expr));
+            compute.computed = (compute.computed ?? []).filter(rule => !removed.includes(rule));
+            removedComputed.push(...removed);
+        }
+        for (const filter of nodes("filter"))
+            filter.filters = (filter.filters ?? []).filter(rule => !expressionMatches(rule.expr));
+        for (const sort of nodes("sort"))
+            sort.sorts = (sort.sorts ?? []).filter(rule => !matches(rule.col));
+        for (const breaks of nodes("break"))
+            breaks.breaks = (breaks.breaks ?? []).filter(name => !matches(name));
+        for (const aggregate of nodes("aggregate"))
+            aggregate.aggregates = (aggregate.aggregates ?? []).filter(rule => !matches(rule.col));
+        for (const highlight of nodes("highlight"))
+            highlight.highlights = (highlight.highlights ?? []).filter(rule =>
+                !matches(rule.col) && !expressionMatches(rule.expr));
+        for (const select of nodes("select"))
+            if (Array.isArray(select.columns)) select.columns = select.columns.filter(name => !matches(name));
+        for (const labels of nodes("labels")) mapDeleteWhere(labels.labels, matches);
+        for (const formats of nodes("formats")) {
+            for (const [name, format] of Object.entries(formats.formats ?? {})) {
+                if (matches(name)) {
+                    delete formats.formats[name];
+                    continue;
+                }
+                if (matches(format?.urlColumn) || matches(format?.textColumn)) {
+                    delete format.displayAs;
+                    delete format.urlColumn;
+                    delete format.textColumn;
+                }
+            }
+        }
+
+        // A removed computed rule has an output identity of its own. Its
+        // dependants and terminal presentation must retire transitively.
+        for (const rule of removedComputed)
+            if (!sameColumn(rule.id, current)) remove(rule.id);
+    };
+
+    remove(column);
+    return retired;
+};
+
+/// Delete one definition-input computed column and everything that depends on it.
+/// Within the input table, references are stripped precisely. A descendant
 /// table whose shape consumes the column is removed with its descendants (T0
 /// coarse invalidation). Unrelated roots in an externally-authored document are
 /// untouched. Returns the built-in modes that were dropped so callers can say so.
-export function removeSourceComputedColumn(state, column) {
-    const source = sourceEntry(state);
-    const layer = sourceLayer(state);
-    const withoutName = values => Array.isArray(values)
-        ? values.filter(value => !sameColumn(value, column))
-        : values;
-    const withoutColumnRule = values => Array.isArray(values)
-        ? values.filter(value => !sameColumn(value?.col, column))
-        : values;
-
-    layer.computed = (layer.computed ?? []).filter(rule => !sameColumn(rule.id, column));
-    layer.columns = withoutName(layer.columns);
-    layer.sorts = withoutColumnRule(layer.sorts ?? []);
-    layer.breaks = withoutName(layer.breaks);
-    layer.aggregates = withoutColumnRule(layer.aggregates);
-    layer.filters = (layer.filters ?? []).filter(rule => !expressionReferencesColumn(rule.expr, column));
-    layer.highlights = (layer.highlights ?? []).filter(rule =>
-        !sameColumn(rule.col, column) && !expressionReferencesColumn(rule.expr, column));
-    mapDeleteWhere(layer.labels, name => sameColumn(name, column));
-    if (layer.formats) {
-        for (const [name, format] of Object.entries(layer.formats)) {
-            if (sameColumn(name, column)) {
-                delete layer.formats[name];
-                continue;
-            }
-            if (sameColumn(format?.urlColumn, column) || sameColumn(format?.textColumn, column)) {
-                delete format.displayAs;
-                delete format.urlColumn;
-                delete format.textColumn;
-            }
-        }
-    }
-
+export function removeInputComputedColumn(state, column) {
+    const source = definitionInputEntry(state);
     if (!source) return [];
+    const retired = cleanupColumnReferences(
+        ownRange(state, source.id, { input: true }),
+        column);
 
     const descendants = new Set([source.id.toLowerCase()]);
     let changed = true;
@@ -572,7 +656,7 @@ export function removeSourceComputedColumn(state, column) {
         for (const [id, table] of Object.entries(state.tables ?? {})) {
             const key = id.toLowerCase();
             if (descendants.has(key)) continue;
-            if (descendants.has(String(table?.from ?? "").toLowerCase())) {
+            if (descendants.has(token(table?.from))) {
                 descendants.add(key);
                 changed = true;
             }
@@ -582,13 +666,14 @@ export function removeSourceComputedColumn(state, column) {
     const remove = new Set();
     for (const [id] of Object.entries(state.tables ?? {})) {
         if (id.toLowerCase() === source.id.toLowerCase() || !descendants.has(id.toLowerCase())) continue;
-        if (tailReferencesColumn(stagesFor(state, id), column)) remove.add(id.toLowerCase());
+        if (retired.some(name => shapesReferenceColumn(shapeLocations(state, id), name)))
+            remove.add(id.toLowerCase());
     }
     changed = true;
     while (changed) {
         changed = false;
         for (const [id, table] of Object.entries(state.tables ?? {})) {
-            if (!remove.has(id.toLowerCase()) && remove.has(String(table?.from ?? "").toLowerCase())) {
+            if (!remove.has(id.toLowerCase()) && remove.has(token(table?.from))) {
                 remove.add(id.toLowerCase());
                 changed = true;
             }
@@ -602,49 +687,68 @@ export function removeSourceComputedColumn(state, column) {
         if (mode !== "custom" && mode !== "grid" && !dropped.includes(mode)) dropped.push(mode);
         delete state.tables[id];
     }
-    if (remove.has(String(state.activeTable ?? "").toLowerCase())) state.activeTable = source.id;
+    if (remove.has(token(state.activeTable))) state.activeTable = source.id;
     return dropped;
 }
 
-/// Delete one derived-layer computed column and its references within that stage:
-/// filters, sorts, highlights, column selection, and presentation maps.
-export function removeStageComputedColumn(state, stage, column) {
-    const layer = stageLayer(stage);
-    const pivotFamily = stage?.shape?.kind === "pivot";
-    const matches = name => sameColumn(name, column)
-        || (pivotFamily && typeof name === "string"
-            && name.toLowerCase().startsWith(`${String(column).toLowerCase()}@`));
-    const expressionMatches = expression => expressionReferencesColumn(
-        expression,
+/// Delete one terminal computed column and its references in the exact active
+/// table: filters, sorts, highlights, selection, and presentation maps.
+export function removeTerminalComputedColumn(state, column, tableId = state?.activeTable) {
+    const pivotFamily = shapeLocations(state, tableId)
+        .some(location => isKind(location.composable, "pivot"));
+    cleanupColumnReferences(
+        ownRange(state, tableId, { terminal: true }),
         column,
         { pivotFamily });
-    const removedComputed = (layer.computed ?? []).filter(rule =>
-        sameColumn(rule.id, column) || expressionMatches(rule.expr));
-    layer.computed = (layer.computed ?? []).filter(rule => !removedComputed.includes(rule));
-    layer.filters = (layer.filters ?? []).filter(rule =>
-        !expressionMatches(rule.expr));
-    layer.sorts = (layer.sorts ?? []).filter(rule => !matches(rule.col));
-    layer.breaks = (layer.breaks ?? []).filter(name => !matches(name));
-    layer.aggregates = (layer.aggregates ?? []).filter(rule => !matches(rule.col));
-    layer.highlights = (layer.highlights ?? []).filter(rule =>
-        !matches(rule.col) && !expressionMatches(rule.expr));
-    if (Array.isArray(layer.columns))
-        layer.columns = layer.columns.filter(name => !matches(name));
-    mapDeleteWhere(layer.labels, matches);
-    mapDeleteWhere(layer.formats, matches);
-
-    // A computed definition removed because it consumed the retired column has
-    // an identity of its own. Strip that identity from the rest of the layer too.
-    for (const rule of removedComputed)
-        if (!sameColumn(rule.id, column)) removeStageComputedColumn(state, stage, rule.id);
-
     return state;
 }
 
-/// After a Group By / Pivot dialog edit retires metric ids, drop the stage-layer
-/// state that referenced them (the same coarse rule as computed-column removal).
-export function pruneRetiredMetrics(state, stage, retiredIds) {
-    for (const id of retiredIds) removeStageComputedColumn(state, stage, id);
+/// After a Group By / Pivot edit retires metric ids, drop terminal state that
+/// referenced them (the same coarse rule as computed-column removal).
+export function pruneRetiredMetrics(state, tableId, retiredIds) {
+    for (const id of retiredIds) removeTerminalComputedColumn(state, id, tableId);
+    return state;
+}
+
+/// Pivot cell names encode the complete ordered column-dimension key. If that
+/// dimension sequence changes, every old count and metric cell family retires,
+/// even when the metric ids themselves remain stable.
+export function pruneRetiredPivotOutputs(
+    state,
+    tableId,
+    previous,
+    replacement,
+    retiredMetricIds = []) {
+    const oldColumns = previous?.cols ?? [];
+    const nextColumns = replacement?.cols ?? [];
+    const columnsChanged = oldColumns.length !== nextColumns.length
+        || oldColumns.some((name, index) => !sameColumn(name, nextColumns[index]));
+    const retired = [...retiredMetricIds];
+    if (columnsChanged)
+        retired.push("__count", ...(previous?.values ?? []).map(value => value.id));
+    const unique = retired.filter((name, index) => typeof name === "string"
+        && retired.findIndex(candidate => sameColumn(candidate, name)) === index);
+    pruneRetiredMetrics(state, tableId, unique);
+    for (const row of previous?.rows ?? [])
+        if (!(replacement?.rows ?? []).some(candidate => sameColumn(candidate, row)))
+            removeTerminalComputedColumn(state, row, tableId);
+    return state;
+}
+
+const chartOutputColumns = shape => {
+    const label = shape?.label;
+    const metricBase = !shape?.value ? "__count" : shape.fn ? "v0" : shape.value;
+    const metric = sameColumn(label, metricBase) ? `${metricBase}_metric` : metricBase;
+    return [label, metric].filter(name => typeof name === "string" && name.length > 0);
+};
+
+/// Chart output names are stable when an edit changes only presentation or keeps
+/// the same label/metric identities. Retire only names which disappear.
+export function pruneRetiredChartOutputs(state, tableId, previous, replacement) {
+    const retained = chartOutputColumns(replacement);
+    for (const name of chartOutputColumns(previous))
+        if (!retained.some(candidate => sameColumn(candidate, name)))
+            removeTerminalComputedColumn(state, name, tableId);
     return state;
 }
 

@@ -35,6 +35,26 @@ internal sealed class ReportQueryReader(
         IReadOnlyList<ColumnModel> breaks,
         IReadOnlyList<ValidAggregate> aggregates,
         CancellationToken ct)
+        => await ReadTableQueries(queries, breaks, aggregates, pagePublicNames: null, ct);
+
+    public async Task<TableQueryRows> ReadTableQueries(
+        MappedComposedQueries mapped,
+        IReadOnlyList<ColumnModel> breaks,
+        IReadOnlyList<ValidAggregate> aggregates,
+        CancellationToken ct)
+        => await ReadTableQueries(
+            mapped.Queries,
+            breaks,
+            aggregates,
+            mapped.PagePublicNames,
+            ct);
+
+    private async Task<TableQueryRows> ReadTableQueries(
+        ComposedQueries queries,
+        IReadOnlyList<ColumnModel> breaks,
+        IReadOnlyList<ValidAggregate> aggregates,
+        IReadOnlyList<string>? pagePublicNames,
+        CancellationToken ct)
     {
         if (!UseOracleCursorBatch)
         {
@@ -45,7 +65,9 @@ internal sealed class ReportQueryReader(
             var breakTotals = queries.BreakTotals is null
                 ? []
                 : await ReadBreakTotals(queries.BreakTotals, breaks, aggregates, ct);
-            var rows = (await ReadRows(queries.Page, maxRows: null, ct)).Rows;
+            var rows = (pagePublicNames is null
+                ? await ReadRows(queries.Page, maxRows: null, ct)
+                : await ReadRows(queries.Page, pagePublicNames, maxRows: null, ct)).Rows;
             return new TableQueryRows(totalRows, footerValues, breakTotals, rows);
         }
 
@@ -73,7 +95,9 @@ internal sealed class ReportQueryReader(
         }
 
         await RequireNextResult(reader, ct);
-        var pageRows = (await MaterializeRows(reader, maxRows: null, ct)).Rows;
+        var pageRows = (pagePublicNames is null
+            ? await MaterializeRows(reader, maxRows: null, ct)
+            : await MaterializeRows(reader, pagePublicNames, maxRows: null, ct)).Rows;
         await RequireEnd(reader, ct);
         return new TableQueryRows(total, aggregateValues, breakValues, pageRows);
     }
@@ -90,6 +114,37 @@ internal sealed class ReportQueryReader(
         await using var reader = await command.ExecuteReaderAsync(ct);
         return await MaterializeRows(reader, maxRows, ct);
     }
+
+    /// <summary>
+    /// Reads a server-authored physical projection into public protocol names by
+    /// ordinal. This is required for Pivot cells: their public, data-derived names
+    /// are dictionary keys only and are never emitted as SQL identifiers.
+    /// </summary>
+    public async Task<QueryRows> ReadRows(
+        Query query,
+        IReadOnlyList<string> publicNames,
+        int? maxRows,
+        CancellationToken ct)
+    {
+        await using var command = Build(query);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        if (reader.FieldCount != publicNames.Count)
+            throw new InvalidOperationException(
+                $"The composed table returned {reader.FieldCount} columns for a {publicNames.Count}-column projection.");
+
+        var rows = new List<IReadOnlyDictionary<string, object?>>();
+        while (await reader.ReadAsync(ct))
+        {
+            var row = new Dictionary<string, object?>(publicNames.Count, StringComparer.OrdinalIgnoreCase);
+            for (var index = 0; index < publicNames.Count; index++)
+                row[publicNames[index]] = ValueAt(reader, index);
+            rows.Add(row);
+        }
+        return ApplyLimit(rows, maxRows);
+    }
+
+    public Task<long> ReadRowCount(Query query, CancellationToken ct)
+        => ReadCount(query, ct);
 
     /// <summary>
     /// Reads the chart's stable ordinal shape into collision-free protocol keys and
@@ -215,6 +270,26 @@ internal sealed class ReportQueryReader(
             var row = new Dictionary<string, object?>(reader.FieldCount, StringComparer.OrdinalIgnoreCase);
             for (var i = 0; i < reader.FieldCount; i++)
                 row[reader.GetName(i)] = ValueAt(reader, i);
+            rows.Add(row);
+        }
+        return ApplyLimit(rows, maxRows);
+    }
+
+    private static async Task<QueryRows> MaterializeRows(
+        DbDataReader reader,
+        IReadOnlyList<string> publicNames,
+        int? maxRows,
+        CancellationToken ct)
+    {
+        if (reader.FieldCount != publicNames.Count)
+            throw new InvalidOperationException(
+                $"The composed table returned {reader.FieldCount} columns for a {publicNames.Count}-column projection.");
+        var rows = new List<IReadOnlyDictionary<string, object?>>();
+        while (await reader.ReadAsync(ct))
+        {
+            var row = new Dictionary<string, object?>(publicNames.Count, StringComparer.OrdinalIgnoreCase);
+            for (var index = 0; index < publicNames.Count; index++)
+                row[publicNames[index]] = ValueAt(reader, index);
             rows.Add(row);
         }
         return ApplyLimit(rows, maxRows);

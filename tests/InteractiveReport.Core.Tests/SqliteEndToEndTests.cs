@@ -1639,7 +1639,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
             "<a class=\"ir-cell-link\" href=\"/ancestor\">$6,000.00</a>",
             inherited.Rows[0]["m1"]);
 
-        var cleared = await _executor.Export(Definition, Doc(
+        var clearedState = Doc(
             source,
             tail:
             [
@@ -1653,10 +1653,14 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                         Formats = new(),
                     }),
                 },
-            ]), NoParams);
+            ]);
+        var clearedQuery = await _executor.Query(Definition, clearedState, NoParams);
+        var cleared = await _executor.Export(Definition, clearedState, NoParams);
 
-        Assert.Equal("sum(Input revenue)", Assert.Single(cleared.Columns).Label);
-        Assert.Equal("$6,000.00", cleared.Rows[0]["m1"]);
+        Assert.Equal("sum(Amount)", Assert.Single(cleared.Columns).Label);
+        Assert.Equal(6000m, Convert.ToDecimal(cleared.Rows[0]["m1"]));
+        Assert.Null(clearedQuery.Document!.Tables![clearedState.ActiveTable!].Schema!
+            .Single(column => column.Name == "m1").FormatSource);
     }
 
     [Fact]
@@ -1850,7 +1854,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     }
 
     [Fact]
-    public async Task Pie_validation_uses_full_post_filter_rows_before_select_projection()
+    public async Task Pie_with_hidden_metric_falls_back_to_a_generic_table()
     {
         var chart = ChartStage(shape =>
         {
@@ -1865,17 +1869,19 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
             Columns = ["STATUS"],
         });
 
-        var error = await Assert.ThrowsAsync<ReportValidationException>(() =>
-            _executor.Query(Definition, Doc(
+        var state = Doc(
                 source: new StageLayer
                 {
                     Computed = [new ComputedColumn { Id = "c1", Label = "Loss", Expr = "0 - AMOUNT" }],
                 },
-                tail: [chart]), NoParams));
+                tail: [chart]);
+        var result = await _executor.Query(Definition, state, NoParams);
+        var export = await _executor.Export(Definition, state, NoParams);
 
-        Assert.Contains(error.Errors, item =>
-            item.Path == "tables.chart1.composables[0].value"
-            && item.Message.Contains("non-negative", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(["STATUS"], result.Columns.Select(column => column.Name));
+        Assert.All(result.Rows, row => Assert.Equal(["STATUS"], row.Keys));
+        Assert.Equal(["STATUS"], export.Columns.Select(column => column.Name));
+        Assert.All(export.Rows, row => Assert.Equal(["STATUS"], row.Keys));
     }
 
     [Fact]

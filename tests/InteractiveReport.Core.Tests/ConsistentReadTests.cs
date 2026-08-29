@@ -93,7 +93,7 @@ public sealed class ConsistentReadTests : IDisposable
     }
 
     [Fact]
-    public async Task Single_statement_chart_reads_run_without_a_transaction()
+    public async Task Chart_count_and_rows_share_one_read_transaction()
     {
         var result = await Executor().Query(
             Definition(),
@@ -109,11 +109,11 @@ public sealed class ConsistentReadTests : IDisposable
             NoParams);
 
         Assert.Equal(2, result.TotalRows);
-        Assert.Empty(_begun);
+        Assert.Equal([IsolationLevel.Serializable], _begun);
     }
 
     [Fact]
-    public async Task Single_statement_Pivot_without_totals_runs_without_a_transaction()
+    public async Task Pivot_discovery_count_and_rows_share_one_read_transaction()
     {
         var result = await Executor().Query(
             Definition(),
@@ -128,7 +128,7 @@ public sealed class ConsistentReadTests : IDisposable
             NoParams);
 
         Assert.NotEmpty(result.Rows);
-        Assert.Empty(_begun);
+        Assert.Equal([IsolationLevel.Serializable], _begun);
     }
 
     [Fact]

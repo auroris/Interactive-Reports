@@ -5,7 +5,7 @@
 import { el } from "../../core/dom.js";
 import { translate } from "../../core/localization.js";
 import { columnSortable, headerLabelHidden, labelOf } from "../schema.js";
-import { stageContext } from "../stage.js";
+import { tableContext } from "../table.js";
 import { sameColumn } from "../state.js";
 import { formatAgg, formatInteger, fnLabel, hasFraction, parseReportNumber, FN_ORDER } from "./format.js";
 import { formatForColumn, renderColumnValue, renderTextValue } from "./column-renderers.js";
@@ -17,13 +17,13 @@ import { alignmentStyle, presentationStyle } from "./presentation.js";
 export function renderGrid(w, table) {
     const result = w.lastResult;
     if (!result) { table.replaceChildren(); return; }
-    const ctx = stageContext(w);
+    const ctx = tableContext(w);
     const mode = ctx.mode;
     // The definition's edit pencil leads every grid row. One synthetic cell in
     // front of the data columns — every index/colSpan below carries the offset.
     const editLink = activeEditLink(w, mode);
     const cellOffset = editLink ? 1 : 0;
-    const requestedBreaks = ctx.columnsLayer(w.doc).breaks ?? [];
+    const requestedBreaks = ctx.node(w.doc, "break")?.breaks ?? [];
     const breaks = requestedBreaks.map(name =>
         result.columns.find(column => column.name.toLowerCase() === name.toLowerCase())?.name ?? name);
     const breakNames = new Set(breaks);
@@ -39,18 +39,17 @@ export function renderGrid(w, table) {
         .filter(Boolean).join(" ") || undefined;
     const alignStyle = col => alignmentStyle(formatFor(col));
 
-    // Labels resolve client-side: the current stage's universe already layered
+    // Labels resolve client-side: the active table's universe already layered
     // its own labels over source labels and rebuilt synthetic metric captions,
     // so the response's neutral label is only the last resort.
-    const stageColumnByName = new Map(ctx.columns.map(c => [c.name.toLowerCase(), c]));
+    const tableColumnByName = new Map(ctx.columns.map(c => [c.name.toLowerCase(), c]));
     const displayLabel = col =>
-        stageColumnByName.get(col.name.toLowerCase())?.label ?? col.label;
+        tableColumnByName.get(col.name.toLowerCase())?.label ?? col.label;
 
-    // Header. Sort indicators come from the stage that owns ordering: the source
-    // layer in grid, or the active Group By/Pivot layer. A sort the
+    // Header. Sort indicators come from the active table's terminal Sort node. A sort the
     // server strips (definition-restricted column in a stale document) must not
     // draw its glyph, so restricted entries drop out of the indicator map.
-    const activeSorts = (ctx.sortLayer ? (ctx.sortLayer(w.doc).sorts ?? []) : [])
+    const activeSorts = (ctx.node(w.doc, "sort")?.sorts ?? [])
         .filter(s => columnSortable(w, s.col));
     const sortOrd = new Map(activeSorts.map((s, i) => [s.col.toLowerCase(), { dir: s.dir ?? "asc", ord: i + 1 }]));
     const menuAvailable = headerMenuAvailable(w, mode);
@@ -115,9 +114,9 @@ export function renderGrid(w, table) {
             : String(value);
     };
 
-    // Highlight styles belong to whichever layer decorated this table: the
-    // source layer in grid, the group layer when the group stage is terminal.
-    const activeHighlights = ctx.highlightLayer ? (ctx.highlightLayer(w.doc).highlights ?? []) : [];
+    // Highlight styles come from the exact terminal Highlight node owned by the
+    // active table.
+    const activeHighlights = ctx.node(w.doc, "highlight")?.highlights ?? [];
     const styleById = new Map(activeHighlights.map(h => [h.id, h.style ?? {}]));
     const hitsByRow = new Map();
     for (const h of result.highlights ?? []) {
@@ -169,7 +168,7 @@ export function renderGrid(w, table) {
                 closeGroup();
                 const bt = totalsByKey.get(key);
                 const label = breaks.map(b => {
-                    const columnLabel = stageColumnByName.get(b.toLowerCase())?.label ?? labelOf(w, b);
+                    const columnLabel = tableColumnByName.get(b.toLowerCase())?.label ?? labelOf(w, b);
                     return `${columnLabel}: ${breakText(row, b)}`;
                 }).join("  ·  ");
                 bodyRows.push(el("tr", { class: "ir-break-header" },

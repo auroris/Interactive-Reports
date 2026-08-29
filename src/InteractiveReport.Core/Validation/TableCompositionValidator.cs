@@ -85,7 +85,9 @@ internal static partial class TableCompositionValidator
                     {
                         errors.Add(new ValidationError(
                             path,
-                            $"'{kind}' cannot follow the existing '{shape.Value.Kind}' shape composable yet"));
+                            $"StateValidator's legacy static plan cannot follow the existing "
+                            + $"'{shape.Value.Kind}' shape with '{kind}'; use "
+                            + "ReportExecutor.ValidateDocument for recursive named-table validation"));
                         continue;
                     }
                     shape = new LocatedTableComposable(composable, path);
@@ -196,9 +198,18 @@ internal static partial class TableCompositionValidator
         var current = active;
         while (!string.Equals(current, "definition", StringComparison.OrdinalIgnoreCase))
         {
+            if (reversed.Count >= StateStructureValidator.MaxTableDepth)
+            {
+                errors.Add(new ValidationError(
+                    reversed.Count == 0 ? "activeTable" : $"tables.{reversed[^1].Item1}.from",
+                    $"table ancestry may contain at most {StateStructureValidator.MaxTableDepth} tables"));
+                return [];
+            }
             if (!seen.Add(current))
             {
-                errors.Add(new ValidationError("tables", $"table delegation contains a cycle at '{current}'"));
+                errors.Add(new ValidationError(
+                    reversed.Count == 0 ? "activeTable" : $"tables.{reversed[^1].Item1}.from",
+                    $"table delegation contains a cycle at '{current}'"));
                 return [];
             }
             if (!tables.TryGetValue(current, out var table))
@@ -402,7 +413,7 @@ internal static partial class TableCompositionValidator
     /// computed columns extend it afterwards, exactly as input computed columns extend
     /// the definition schema.
     /// </summary>
-    private static ReportSchema BuildStageSchema(
+    internal static ReportSchema BuildStageSchema(
         string reportName,
         IReadOnlyList<ColumnModel> dims,
         IReadOnlyList<ValidMetric> metrics)
@@ -434,7 +445,7 @@ internal static partial class TableCompositionValidator
         return ReportSchema.Create($"{reportName}#group", columns);
     }
 
-    private static List<ValidMetric> ValidateMetrics(
+    internal static List<ValidMetric> ValidateMetrics(
         List<MetricRule>? rules,
         string valuesPath,
         ReportSchema effectiveSchema,
@@ -492,7 +503,7 @@ internal static partial class TableCompositionValidator
     /// must itself be a number. All problems are precise errors — a chart with a broken
     /// spec has no degraded rendering the way a grid with a dropped column does.
     /// </summary>
-    private static ValidChart? ValidateChartShape(
+    internal static ValidChart? ValidateChartShape(
         TableComposable shape,
         string shapePath,
         IReadOnlyDictionary<string, ColumnModel> columns,
@@ -601,7 +612,7 @@ internal static partial class TableCompositionValidator
     private static string? NormalizeTitle(string? title)
         => string.IsNullOrWhiteSpace(title) ? null : title.Trim();
 
-    private static List<ColumnModel> ResolveDimensions(
+    internal static List<ColumnModel> ResolveDimensions(
         List<string>? names,
         string description,
         IReadOnlyDictionary<string, ColumnModel> columns,

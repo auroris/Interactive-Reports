@@ -17,8 +17,10 @@ internal static class TableLayerValidator
         ReportSchema initialSchema,
         ColumnPolicy policy,
         List<ValidationError> errors,
-        List<IgnoredItem> ignored)
+        List<IgnoredItem> ignored,
+        TableLayerValidationContext? sharedContext = null)
     {
+        sharedContext ??= new TableLayerValidationContext();
         var schema = initialSchema;
         var operations = new List<ValidTableOperation>();
         var computed = new List<CompiledRule<DefineColumnEffect>>();
@@ -29,10 +31,9 @@ internal static class TableLayerValidator
         var breaks = new List<ColumnModel>();
         var sortNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var breakNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var computedContext = new ComputedColumnValidator.Context();
-        var aggregateContext = new AggregateRuleValidator.Context();
-        var highlightContext = new HighlightRuleValidator.Context();
-        var filterRuleCount = 0;
+        var computedContext = sharedContext.Computed;
+        var aggregateContext = sharedContext.Aggregates;
+        var highlightContext = sharedContext.Highlights;
         List<ColumnModel>? selected = null;
         var selectAll = true;
         var labels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -62,8 +63,8 @@ internal static class TableLayerValidator
                 }
                 case "filter":
                 {
-                    filterRuleCount += value.Filters?.Count ?? 0;
-                    if (filterRuleCount > 50)
+                    sharedContext.FilterRuleCount += value.Filters?.Count ?? 0;
+                    if (sharedContext.FilterRuleCount > 50)
                     {
                         errors.Add(new ValidationError(
                             $"{located.Path}.filters",
@@ -165,4 +166,12 @@ internal static class TableLayerValidator
         if (clear) target.Clear();
         foreach (var (name, value) in next) target[name] = value;
     }
+}
+
+internal sealed class TableLayerValidationContext
+{
+    internal ComputedColumnValidator.Context Computed { get; } = new();
+    internal AggregateRuleValidator.Context Aggregates { get; } = new();
+    internal HighlightRuleValidator.Context Highlights { get; } = new();
+    internal int FilterRuleCount { get; set; }
 }

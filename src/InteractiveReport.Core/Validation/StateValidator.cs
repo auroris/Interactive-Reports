@@ -1,19 +1,25 @@
 using InteractiveReport.Core.Model;
 using InteractiveReport.Core.Expressions;
+using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Schema;
 
 namespace InteractiveReport.Core.Validation;
 
 /// <summary>
-/// Turns a raw state document into a ValidatedState against the discovered schema.
-/// Policy: elements referencing unknown columns are dropped into ignored[] (saved-report
-/// resilience); structurally wrong requests (bad arity, untypeable values, or expressions
-/// that do not produce the required type) are precise validation errors. The document is
-/// a named table composition: definition-input composables validate against the effective
-/// (base + computed) schema, then the folded result validates against derived schemas.
+/// Legacy synchronous validator for the static, zero-or-one-shape query planner.
+/// Production named-table documents use <see cref="ReportExecutor.ValidateDocument"/>
+/// because recursive composition and dynamic Pivot schemas require an async database
+/// scope. Unknown columns remain ignored for saved-report resilience; structurally or
+/// semantically invalid rules produce precise validation errors.
 /// </summary>
-public static class StateValidator
+internal static class StateValidator
 {
+    /// <summary>
+    /// Validates the legacy synchronous, statically shaped query plan. Named tables
+    /// containing multiple shapes or a data-derived Pivot schema require
+    /// <see cref="ReportExecutor.ValidateDocument"/>, which uses the recursive compiler
+    /// and a database read scope for Pivot discovery.
+    /// </summary>
     public static ValidatedState Validate(
         ReportDefinition def,
         ReportState state,
@@ -214,7 +220,7 @@ public static class StateValidator
     /// against the definition schema: the template is definition-authored, and computed ids
     /// are document-scoped names the definition cannot know.
     /// </summary>
-    private static void AddEditLinkColumns(
+    internal static void AddEditLinkColumns(
         ReportEditLink editLink,
         List<ColumnModel> projection,
         ReportSchema baseSchema,

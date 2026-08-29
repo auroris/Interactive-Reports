@@ -261,6 +261,10 @@ export const messages = {
     "group.countNote": "Le nombre de lignes par groupe est toujours inclus.",
     "group.pickColumn": "Choisissez au moins une colonne de regroupement",
     "group.label": "Regroupement",
+    "view.ambiguous": "Plusieurs tables {mode} sont configurées ({tables}). Sélectionnez-en une explicitement avant de changer ou de modifier cette vue.",
+    "view.ambiguousBase": "Plusieurs tables de base sont configurées ({tables}). Sélectionnez-en une explicitement avant de créer une vue.",
+    "view.shapeReadOnly": "Le composable {mode} de la table {table} est précédé de composables externes et reste en lecture seule dans l’éditeur intégré.",
+    "view.baseUnavailable": "Aucune table de base liée à la définition n’est disponible pour cette vue.",
     "pivot.title": "Tableau croisé",
     "pivot.rowColumn": "Colonne de ligne",
     "pivot.rows": "Lignes",
@@ -306,7 +310,6 @@ export const messages = {
 
     "chip.search": "Recherche",
     "chip.configurationRemoved": "La configuration {modes} a été supprimée, car elle dépendait de {column}.",
-    "chip.stageComputed": "ƒ affichage",
     "chip.remove": "Retirer {name}",
 
     "report.attributeRequired": "L’élément interactive-report exige un attribut report non vide.",

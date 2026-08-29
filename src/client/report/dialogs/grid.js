@@ -3,7 +3,7 @@
 
 import { el, labeled, sel } from "../../core/dom.js";
 import { openDialog } from "../../core/dialog.js";
-import { stageContext } from "../stage.js";
+import { tableContext } from "../table.js";
 import {
     aggregateRowList,
     colOptions,
@@ -44,10 +44,9 @@ export function paginationDialog(w) {
 }
 
 export function sortDialog(w) {
-    const ctx = stageContext(w);
-    const layerOf = ctx.sortLayer;
+    const ctx = tableContext(w);
     const container = el("div", {});
-    const list = rowList(container, layerOf(w.doc).sorts ?? [], (row, item) => {
+    const list = rowList(container, ctx.node(w.doc, "sort")?.sorts ?? [], (row, item) => {
         const colSel = sel(colOptions(w, { none: w.t("common.select"), columns: ctx.sortColumns }), item?.col ?? "");
         const dirSel = sel(dirOptions(w), item?.dir ?? "asc");
         const nullsSel = sel(nullsOptions(w), item?.nulls ?? "");
@@ -68,15 +67,14 @@ export function sortDialog(w) {
         width: "38rem",
         build: body => body.append(container, list.addButton,
             el("p", { class: "ir-dialog-note" }, w.t("sort.breakFirst"))),
-        onApply: () => w.apply(d => { layerOf(d).sorts = list.read(); }),
+        onApply: () => w.apply(d => ctx.edit(d, "sort", node => { node.sorts = list.read(); })),
     });
 }
 
 export function breakDialog(w) {
-    const ctx = stageContext(w);
-    const layerOf = ctx.columnsLayer;
+    const ctx = tableContext(w);
     const container = el("div", {});
-    const list = rowList(container, (layerOf(w.doc).breaks ?? []).map(b => ({ col: b })), (row, item) => {
+    const list = rowList(container, (ctx.node(w.doc, "break")?.breaks ?? []).map(b => ({ col: b })), (row, item) => {
         // Breaks force sorting, so a definition sort restriction removes the
         // column here too.
         const colSel = sel(colOptions(w, { none: w.t("common.select"), columns: ctx.sortColumns }), item?.col ?? "");
@@ -90,18 +88,17 @@ export function breakDialog(w) {
         width: "24rem",
         build: body => body.append(container, list.addButton,
             el("p", { class: "ir-dialog-note" }, w.t("break.note"))),
-        onApply: () => w.apply(d => {
-            layerOf(d).breaks = [...new Set(list.read())];
-        }),
+        onApply: () => w.apply(d => ctx.edit(d, "break", node => {
+            node.breaks = [...new Set(list.read())];
+        })),
     });
 }
 
 export function aggregateDialog(w) {
-    const ctx = stageContext(w);
-    const layerOf = ctx.columnsLayer;
+    const ctx = tableContext(w);
     const { container, list } = aggregateRowList(
         w,
-        layerOf(w.doc).aggregates ?? [],
+        ctx.node(w.doc, "aggregate")?.aggregates ?? [],
         { addLabel: w.t("aggregate.title"), columns: ctx.columns });
 
     openDialog({
@@ -110,6 +107,6 @@ export function aggregateDialog(w) {
         width: "28rem",
         build: body => body.append(container, list.addButton,
             el("p", { class: "ir-dialog-note" }, w.t("aggregate.note"))),
-        onApply: () => w.apply(d => { layerOf(d).aggregates = list.read(); }),
+        onApply: () => w.apply(d => ctx.edit(d, "aggregate", node => { node.aggregates = list.read(); })),
     });
 }

@@ -27,6 +27,48 @@
             "c1": { "mask": "currency:CAD", "classes": [ "amount-column" ] }
           } }
         ]
+      },
+      "groupBy": {
+        "from": "orders",
+        "schema": null,
+        "composables": [
+          {
+            "kind": "group",
+            "by": [ "REGION" ],
+            "values": [
+              { "id": "m1", "col": "AMOUNT", "fn": "sum" }
+            ]
+          },
+          { "kind": "sort", "sorts": [ { "col": "m1", "dir": "desc" } ] }
+        ]
+      },
+      "pivot": {
+        "from": "orders",
+        "schema": null,
+        "composables": [
+          {
+            "kind": "pivot",
+            "rows": [ "REGION" ],
+            "cols": [ "STATUS" ],
+            "values": [
+              { "id": "m1", "col": "AMOUNT", "fn": "sum" }
+            ]
+          }
+        ]
+      },
+      "chart": {
+        "from": "orders",
+        "schema": null,
+        "composables": [
+          {
+            "kind": "chart",
+            "type": "bar",
+            "label": "STATUS",
+            "value": "AMOUNT",
+            "fn": "sum",
+            "sort": { "by": "value", "dir": "desc" }
+          }
+        ]
       }
     }
   }

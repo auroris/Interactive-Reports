@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
-import { sourceLayer } from "../../src/client/report/state.js";
+import { editInputComposable } from "../../src/client/report/state.js";
 import { reportState } from "./report-state-fixture.js";
 
 const window = new Window({ url: "https://host.example/dashboard" });
@@ -162,7 +162,9 @@ test("a mutator that throws mid-way leaves the live document untouched", async (
     await assert.rejects(
         report.apply(d => {
             d.search = "partial";
-            (sourceLayer(d).filters ??= []).push({ enabled: true, expr: "ID = 1" });
+            editInputComposable(d, "filter", node => {
+                (node.filters ??= []).push({ enabled: true, expr: "ID = 1" });
+            });
             throw new Error("staged validation failed");
         }),
         /staged validation failed/);

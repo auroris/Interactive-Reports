@@ -1,18 +1,17 @@
 // Expression-rule dialogs — the client face of the server's composable table
 // algebra: filters (predicate over rows), computed columns (value per row),
 // and highlights (predicate driving row/cell styling). Every rule edits the
-// active table's terminal layer, regardless of the shape that precedes it.
+// exact terminal composable owned by the active table.
 
 import { el, labeled, sel } from "../../core/dom.js";
 import { openDialog } from "../../core/dialog.js";
-import { stageContext } from "../stage.js";
+import { tableContext } from "../table.js";
 import { nextFreeId } from "../state.js";
 import { colorPick, expressionColumnToken, expressionEditor, colOptions } from "./parts.js";
 
 export function filterDialog(w, { editIndex, col } = {}) {
-    const ctx = stageContext(w);
-    const layerOf = ctx.filterLayer;
-    const existing = editIndex !== undefined ? layerOf(w.doc).filters?.[editIndex] : undefined;
+    const ctx = tableContext(w);
+    const existing = editIndex !== undefined ? ctx.node(w.doc, "filter")?.filters?.[editIndex] : undefined;
     const condition = expressionEditor(w, {
         initial: existing?.expr ?? (col ? `${expressionColumnToken(col)} = ` : ""),
         placeholder: w.t("expression.filterPlaceholder"),
@@ -28,18 +27,19 @@ export function filterDialog(w, { editIndex, col } = {}) {
         onApply: () => {
             const rule = { expr: condition._read(), enabled: existing?.enabled ?? true };
             return w.apply(d => {
-                const layer = layerOf(d);
-                layer.filters ??= [];
-                if (editIndex !== undefined) layer.filters[editIndex] = rule;
-                else layer.filters.push(rule);
+                ctx.edit(d, "filter", node => {
+                    node.filters ??= [];
+                    if (editIndex !== undefined) node.filters[editIndex] = rule;
+                    else node.filters.push(rule);
+                });
             });
         },
     });
 }
 
-/// The next computed id, unique across every layer of the document — a group
-/// stage's schema contains source computed columns as dims, so ids can never
-/// be reused between stages.
+/// The next computed id is unique across the document. An active table's schema
+/// contains inherited computed columns, so ids can never
+/// be reused across table ancestry.
 function nextComputedId(doc) {
     const ids = new Set();
     for (const table of Object.values(doc.tables ?? {}))
@@ -50,9 +50,8 @@ function nextComputedId(doc) {
 }
 
 export function computeDialog(w, editIndex) {
-    const ctx = stageContext(w);
-    const layerOf = ctx.computeLayer;
-    const existing = editIndex !== undefined ? layerOf(w.doc).computed?.[editIndex] : undefined;
+    const ctx = tableContext(w);
+    const existing = editIndex !== undefined ? ctx.node(w.doc, "compute")?.computed?.[editIndex] : undefined;
     const labelInp = el("input", {
         class: "ir-input", type: "text", value: existing?.label ?? "",
         placeholder: w.t("compute.headingPlaceholder"),
@@ -61,7 +60,7 @@ export function computeDialog(w, editIndex) {
         initial: existing?.expr,
         placeholder: w.t("expression.gridValuePlaceholder"),
         result: "value",
-        // The current stage's input columns (computed cannot reference computed),
+        // The active table's input columns (computed cannot reference computed),
         // with display labels on the buttons; inserted tokens are always the real
         // names — base columns in grid, dims/__count/metric ids under a group.
         columns: ctx.computeTokens,
@@ -84,20 +83,20 @@ export function computeDialog(w, editIndex) {
                 enabled: existing?.enabled ?? true,
             };
             return w.apply(d => {
-                const layer = layerOf(d);
-                layer.computed ??= [];
-                if (editIndex !== undefined) layer.computed[editIndex] = rule;
-                else layer.computed.push(rule);
+                ctx.edit(d, "compute", node => {
+                    node.computed ??= [];
+                    if (editIndex !== undefined) node.computed[editIndex] = rule;
+                    else node.computed.push(rule);
+                });
             });
         },
     });
 }
 
 export function highlightDialog(w, editIndex) {
-    const ctx = stageContext(w);
-    const layerOf = ctx.highlightLayer;
-    const existing = editIndex !== undefined ? layerOf(w.doc).highlights?.[editIndex] : undefined;
-    const rules = layerOf(w.doc).highlights ?? [];
+    const ctx = tableContext(w);
+    const existing = editIndex !== undefined ? ctx.node(w.doc, "highlight")?.highlights?.[editIndex] : undefined;
+    const rules = ctx.node(w.doc, "highlight")?.highlights ?? [];
     const ids = new Set(rules.map(h => (h.id ?? "").toLowerCase()));
     const freshId = nextFreeId(ids, "h");
     const id = existing?.id ?? freshId;
@@ -169,10 +168,11 @@ export function highlightDialog(w, editIndex) {
             if (bg) rule.style.bg = bg;
             if (fg) rule.style.fg = fg;
             return w.apply(d => {
-                const layer = layerOf(d);
-                layer.highlights ??= [];
-                if (editIndex !== undefined) layer.highlights[editIndex] = rule;
-                else layer.highlights.push(rule);
+                ctx.edit(d, "highlight", node => {
+                    node.highlights ??= [];
+                    if (editIndex !== undefined) node.highlights[editIndex] = rule;
+                    else node.highlights.push(rule);
+                });
             });
         },
     });
