@@ -118,6 +118,31 @@ public sealed class AuthorizationHttpTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Saved_report_queries_and_title_checks_require_report_access()
+    {
+        using var created = await Send(
+            HttpMethod.Post,
+            "/api/reports/configured/saved",
+            "configured-user",
+            new { title = "Private title", state = new { v = 3 } });
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+
+        using var list = await Send(
+            HttpMethod.Get,
+            "/api/reports/configured/saved",
+            "ordinary-user");
+        Assert.Equal(HttpStatusCode.NotFound, list.StatusCode);
+
+        using var collisionProbe = await Send(
+            HttpMethod.Post,
+            "/api/reports/configured/saved",
+            "ordinary-user",
+            new { title = "PRIVATE TITLE", state = new { v = 3 } });
+        Assert.Equal(HttpStatusCode.NotFound, collisionProbe.StatusCode);
+        Assert.Equal("no-store", collisionProbe.Headers.CacheControl?.ToString());
+    }
+
+    [Fact]
     public async Task Administration_can_restrict_and_grant_an_existing_report()
     {
         Assert.Equal(HttpStatusCode.OK, (await GetSchema("database", "ordinary-user")).StatusCode);

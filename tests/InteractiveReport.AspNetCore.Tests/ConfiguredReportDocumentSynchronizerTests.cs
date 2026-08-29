@@ -190,6 +190,13 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
         public Task<IReadOnlyList<SavedReport>> ListVisible(string reportName, string? identity, CancellationToken ct = default)
             => throw new NotSupportedException();
 
+        public Task<SavedReport?> FindByTitle(
+            string reportName,
+            string title,
+            string? exceptId = null,
+            CancellationToken ct = default)
+            => throw new NotSupportedException();
+
         public Task<IReadOnlyList<SavedReport>> ListAll(CancellationToken ct = default)
         {
             Calls.Add("listAll");

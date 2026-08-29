@@ -335,7 +335,9 @@ Saved-report decisions are resource-based: public, owner, or administrator may r
 owner or administrator may update title/state or delete; and the explicit global,
 primary, ownership, list-all, authorization-management, upload, and download actions
 require administrator authority. The API applies these rules regardless of which
-client issued the request.
+client issued the request. Ordinary saved-report summaries expose only the derived
+`mine` flag, not the canonical owner identity; ownership remains a database column and
+is available to the protected administration report and authorization callbacks.
 
 See [Authorization](docs/AUTHORIZATION.md) for complete setup examples for all three
 styles, the action/resource reference, multi-action composition, administrator

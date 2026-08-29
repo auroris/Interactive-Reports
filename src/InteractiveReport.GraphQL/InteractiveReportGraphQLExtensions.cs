@@ -2,6 +2,7 @@ using GraphQL;
 using GraphQL.Server.Transports.AspNetCore;
 using GraphQL.Types;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -40,7 +41,13 @@ public static class InteractiveReportGraphQLExtensions
     {
         ArgumentNullException.ThrowIfNull(endpoints);
 
-        return endpoints.MapGraphQL<InteractiveReportGraphQLSchema>(path, options =>
+        var group = endpoints.MapGroup("");
+        group.AddEndpointFilter(static async (invocation, next) =>
+        {
+            invocation.HttpContext.Response.Headers.CacheControl = "no-store";
+            return await next(invocation);
+        });
+        return group.MapGraphQL<InteractiveReportGraphQLSchema>(path, options =>
         {
             options.HandleGet = true;
             options.HandlePost = true;

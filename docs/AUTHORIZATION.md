@@ -189,6 +189,12 @@ grants and the union of configured/database administrators. The application auth
 receives the operation facts so it can add restrictions or supply administrator
 authority only when both built-in administrator sources are empty.
 
+Definition-level authorization is centralized in `ReportRequestAccess`. Configuration
+stores expose a lightweight name/authorization envelope, allowing authentication,
+policy, administrator, and named-user gates to run before connection resolution and
+saved-default hydration. Saved-report listing and normalized title-collision queries
+occur only after that report-level gate succeeds.
+
 ## Action reference
 
 | Action | Request that emits it | Built-in notes |

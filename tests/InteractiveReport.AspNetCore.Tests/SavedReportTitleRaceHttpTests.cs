@@ -139,6 +139,13 @@ public sealed class SavedReportTitleRaceHttpTests : IAsyncLifetime
         public Task<IReadOnlyList<SavedReport>> ListVisible(string reportName, string? identity, CancellationToken ct = default)
             => inner.ListVisible(reportName, identity, ct);
 
+        public Task<SavedReport?> FindByTitle(
+            string reportName,
+            string title,
+            string? exceptId = null,
+            CancellationToken ct = default)
+            => inner.FindByTitle(reportName, title, exceptId, ct);
+
         public Task<IReadOnlyList<SavedReport>> ListAll(CancellationToken ct = default) => inner.ListAll(ct);
 
         public Task<bool> Update(SavedReport report, CancellationToken ct = default) => inner.Update(report, ct);

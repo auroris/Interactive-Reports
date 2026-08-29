@@ -98,7 +98,7 @@ public sealed class OptionalPersistenceHttpTests
             using var save = await host.Client.PostAsync(
                 "/api/reports/items/saved",
                 JsonContent.Create(new { title = "Mine", state = new { v = 3 } }));
-            await AssertStorageFailure(save);
+            await AssertStorageFailure(save, "Report authorization failed");
 
             using var administration = await host.Client.GetAsync(
                 "/api/reports/admin/authorization");
@@ -158,11 +158,13 @@ public sealed class OptionalPersistenceHttpTests
         return new RunningHost(app, new HttpClient { BaseAddress = new Uri(address) });
     }
 
-    private static async Task AssertStorageFailure(HttpResponseMessage response)
+    private static async Task AssertStorageFailure(
+        HttpResponseMessage response,
+        string title = "Report execution failed")
     {
         Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
         using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        Assert.Equal("Report execution failed", problem.RootElement.GetProperty("title").GetString());
+        Assert.Equal(title, problem.RootElement.GetProperty("title").GetString());
     }
 
     private static async Task<JsonElement> ReadJson(HttpResponseMessage response)

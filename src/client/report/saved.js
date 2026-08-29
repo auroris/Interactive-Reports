@@ -35,7 +35,7 @@ export function refreshSavedSelect(w) {
     const group = (label, items) => {
         if (!items.length) return;
         const g = el("optgroup", { label });
-        for (const s of items) g.append(new Option(s.title + (s.mine || s.isGlobal || s.isPrimary ? "" : ` (${s.owner})`), s.id));
+        for (const s of items) g.append(new Option(s.title, s.id));
         savedSel.append(g);
     };
     group("Primary", w.savedList.filter(s => s.isPrimary && s !== defaultSaved));

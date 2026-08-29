@@ -131,6 +131,21 @@ public abstract class SavedReportStoreCorpus
     }
 
     [SkippableFact]
+    public async Task FindByTitle_is_normalized_scoped_and_can_exclude_the_current_row()
+    {
+        var orders = Make("West region", "alice");
+        var other = Make("West region", "bob", report: "big-orders");
+        await Store.Create(orders);
+        await Store.Create(other);
+
+        var found = await Store.FindByTitle("orders", "  WEST REGION  ");
+
+        Assert.Equal(orders.Id, found?.Id);
+        Assert.Null(await Store.FindByTitle("orders", "West region", orders.Id));
+        Assert.Equal(other.Id, (await Store.FindByTitle("big-orders", "west region"))?.Id);
+    }
+
+    [SkippableFact]
     public async Task Update_rewrites_row_including_owner_reassignment()
     {
         var report = Make("Original", "alice");

@@ -16,6 +16,23 @@ public interface ISavedReportStore
     /// </summary>
     Task<IReadOnlyList<SavedReport>> ListVisible(string reportName, string? identity, CancellationToken ct = default);
 
+    /// <summary>
+    /// Finds a title collision within one already-authorized report definition. The
+    /// scoped lookup prevents endpoint uniqueness checks from loading unrelated saved
+    /// reports into memory.
+    /// </summary>
+    async Task<SavedReport?> FindByTitle(
+        string reportName,
+        string title,
+        string? exceptId = null,
+        CancellationToken ct = default)
+        => (await ListAll(ct))
+            .Where(report => !string.Equals(report.Id, exceptId, StringComparison.OrdinalIgnoreCase)
+                             && string.Equals(report.ReportName, reportName, StringComparison.OrdinalIgnoreCase)
+                             && string.Equals(report.Title, title.Trim(), StringComparison.OrdinalIgnoreCase))
+            .OrderBy(report => report.Origin == SavedReportOrigin.Configured ? 0 : 1)
+            .FirstOrDefault();
+
     /// <summary>Every saved-report row in the system, across reports and origins.</summary>
     Task<IReadOnlyList<SavedReport>> ListAll(CancellationToken ct = default);
 

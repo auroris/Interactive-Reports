@@ -33,6 +33,14 @@ public static class EndpointExtensions
         string prefix = "/api/reports")
     {
         var group = endpoints.MapGroup(prefix);
+        group.AddEndpointFilter(static async (invocation, next) =>
+        {
+            // Data and identity responses are request-specific. Handlers may replace
+            // this policy when their output is deliberately cacheable (the packaged
+            // UI assets do so with no-cache + ETag).
+            invocation.HttpContext.Response.Headers.CacheControl = "no-store";
+            return await next(invocation);
+        });
         group.MapGet("/{name}/schema", GetSchema);
         group.MapPost("/{name}/query", PostQuery);
         group.MapPost("/{name}/export", PostExport);
@@ -104,13 +112,13 @@ public static class EndpointExtensions
     private static async Task<IResult> GetSchema(string name, HttpContext ctx, CancellationToken ct)
     {
         var store = ctx.RequestServices.GetRequiredService<IReportDefinitionStore>();
-        var (def, findError) = await FindDefinition(store, name, ctx, ct);
+        var (def, findError) = await ReportRequestAccess.ResolveDefinition(store, name, ctx, ct);
         if (findError is not null) return findError;
         if (def is null) return Results.NotFound();
         var actions = SavedReportsListingDefinition.Matches(def.Name)
             ? new[] { InteractiveReportAction.ListAllSavedReports }
             : new[] { InteractiveReportAction.ViewReport };
-        if (await ReportRequestAccess.Authorize(
+        if (await ReportRequestAccess.AuthorizeOperations(
                 def,
                 ctx,
                 actions,
@@ -318,7 +326,7 @@ public static class EndpointExtensions
         CancellationToken ct)
     {
         var store = ctx.RequestServices.GetRequiredService<IReportDefinitionStore>();
-        var (definition, findError) = await FindDefinition(store, name, ctx, ct);
+        var (definition, findError) = await ReportRequestAccess.ResolveDefinition(store, name, ctx, ct);
         if (findError is not null) return findError;
         if (definition is null) return Results.NotFound();
         IReadOnlyCollection<InteractiveReportAction> actions =
@@ -327,7 +335,7 @@ public static class EndpointExtensions
                     ? [InteractiveReportAction.ListAllSavedReports, InteractiveReportAction.Export]
                     : [InteractiveReportAction.ListAllSavedReports]
                 : [action];
-        if (await ReportRequestAccess.Authorize(
+        if (await ReportRequestAccess.AuthorizeOperations(
                 definition,
                 ctx,
                 actions,
@@ -394,26 +402,6 @@ public static class EndpointExtensions
     /// unhandled 500. (Startup-time mistakes fail the host before traffic — see
     /// InteractiveReportStartupValidator.)
     /// </summary>
-    internal static async Task<(ReportDefinition? Definition, IResult? Error)> FindDefinition(
-        IReportDefinitionStore store,
-        string name,
-        HttpContext ctx,
-        CancellationToken ct)
-    {
-        try
-        {
-            return (await store.Find(name, ct), null);
-        }
-        catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return (null, ServerError(ctx, name, "definition resolution", ex));
-        }
-    }
-
     internal static IResult ServerError(HttpContext ctx, string reportName, string operation, Exception ex)
     {
         var logger = ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("InteractiveReport");

@@ -152,6 +152,8 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
         Assert.False(saved.GetProperty("isReadOnly").GetBoolean());
 
         var visible = await GetJson($"/api/reports/{ReportName}/saved");
+        Assert.All(visible.EnumerateArray(), summary =>
+            Assert.False(summary.TryGetProperty("owner", out _)));
         var configured = visible.EnumerateArray()
             .Single(summary => summary.GetProperty("title").GetString() == "Regional View");
         Assert.True(configured.GetProperty("isGlobal").GetBoolean());
@@ -285,11 +287,13 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
             $"/api/reports/admin/saved/{configured.GetProperty("ID").GetString()}/document");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
         Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
         Assert.EndsWith(".json", response.Content.Headers.ContentDisposition?.FileName?.Trim('"'));
         var document = await ReadJson(response);
         Assert.Equal("Regional View", document.GetProperty("title").GetString());
         Assert.False(document.GetProperty("primary").GetBoolean());
+        Assert.False(document.TryGetProperty("owner", out _));
         Assert.Equal("ID = 1", document.GetProperty("state").GetProperty("pipeline")[0]
             .GetProperty("layer").GetProperty("filters")[0].GetProperty("expr").GetString());
     }
@@ -346,12 +350,17 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.Created, uploadResponse.StatusCode);
         var imported = await ReadJson(uploadResponse);
         Assert.Equal(title, imported.GetProperty("title").GetString());
-        Assert.Equal(Identity, imported.GetProperty("owner").GetString());
+        Assert.False(imported.TryGetProperty("owner", out _));
         Assert.False(imported.GetProperty("isGlobal").GetBoolean());
         Assert.True(imported.GetProperty("isPrimary").GetBoolean());
 
         var id = imported.GetProperty("id").GetString();
+        var stored = await _app!.Services.GetRequiredService<ISavedReportStore>().Get(id!);
+        Assert.NotNull(stored);
+        Assert.Equal(Identity, stored.Owner);
+        Assert.DoesNotContain("owner", stored.StateJson, StringComparison.OrdinalIgnoreCase);
         var loaded = await GetJson($"/api/reports/saved/{id}");
+        Assert.False(loaded.GetProperty("summary").TryGetProperty("owner", out _));
         Assert.Equal("ID = 2", loaded.GetProperty("state").GetProperty("pipeline")[0]
             .GetProperty("layer").GetProperty("filters")[0].GetProperty("expr").GetString());
 
@@ -360,6 +369,7 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
         var downloaded = await ReadJson(downloadResponse);
         Assert.Equal(title, downloaded.GetProperty("title").GetString());
         Assert.True(downloaded.GetProperty("primary").GetBoolean());
+        Assert.False(downloaded.TryGetProperty("owner", out _));
 
         var admin = await GetAdminRows();
         Assert.DoesNotContain(admin, row =>

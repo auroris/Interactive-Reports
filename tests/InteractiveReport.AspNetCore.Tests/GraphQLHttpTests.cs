@@ -156,6 +156,7 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
 
         using var response = await GraphQL(id, "alice", page: 2, pageSize: 1);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
         var body = await ReadJson(response);
         var result = body.GetProperty("data").GetProperty("report");
         Assert.Equal(3, result.GetProperty("totalRows").GetInt64());

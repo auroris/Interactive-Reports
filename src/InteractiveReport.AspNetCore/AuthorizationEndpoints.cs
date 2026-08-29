@@ -261,11 +261,11 @@ internal static class AuthorizationEndpoints
         CancellationToken ct)
     {
         var definitions = context.RequestServices.GetRequiredService<IReportDefinitionStore>();
-        var (definition, findError) = await EndpointExtensions.FindDefinition(
+        var (definition, findError) = await ReportRequestAccess.ResolveDefinition(
             definitions, SavedReportsListingDefinition.Name, context, ct);
         if (findError is not null) return (null, findError);
         if (definition is null) return (null, Results.NotFound());
-        var denied = await ReportRequestAccess.Authorize(
+        var denied = await ReportRequestAccess.AuthorizeOperations(
             definition,
             context,
             [InteractiveReportAction.ManageAuthorization],

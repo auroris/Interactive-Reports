@@ -60,6 +60,21 @@ public sealed class SqlSavedReportStore : ISavedReportStore
             .ToList();
     }
 
+    public async Task<SavedReport?> FindByTitle(
+        string reportName,
+        string title,
+        string? exceptId = null,
+        CancellationToken ct = default)
+    {
+        var rows = await Select(
+            q => q.Where("REPORT_NAME", reportName).Where("TITLE_KEY", TitleKey(title)),
+            ct);
+        return rows
+            .Where(report => !string.Equals(report.Id, exceptId, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(report => report.Origin == SavedReportOrigin.Configured ? 0 : 1)
+            .FirstOrDefault();
+    }
+
     public Task<IReadOnlyList<SavedReport>> ListAll(CancellationToken ct = default)
         => Select(q => q.OrderBy("REPORT_NAME").OrderBy("TITLE"), ct);
 

@@ -13,7 +13,10 @@ namespace InteractiveReport.AspNetCore;
 /// Config-backed definition store. Definitions are validated on access (fail fast, with
 /// the report named in the error), and a configuration reload clears the schema cache.
 /// </summary>
-public sealed partial class ConfigurationReportDefinitionStore : IReportDefinitionStore, IDisposable
+public sealed partial class ConfigurationReportDefinitionStore :
+    IReportDefinitionStore,
+    IReportDefinitionAuthorizationStore,
+    IDisposable
 {
     private readonly IOptionsMonitor<InteractiveReportOptions> _options;
     private readonly ReportConnectionRegistry _registry;
@@ -112,6 +115,48 @@ public sealed partial class ConfigurationReportDefinitionStore : IReportDefiniti
         }
         return snapshot;
     }
+
+    public ValueTask<ReportDefinitionAuthorization?> FindAuthorization(
+        string name,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        if (SavedReportsListingDefinition.Matches(name))
+        {
+            if (_options.CurrentValue.Reports.ContainsKey(name))
+                throw new InvalidOperationException(
+                    $"Report '{name}': this name is reserved for the built-in saved-reports listing.");
+            if (_synchronizer is null)
+                return ValueTask.FromResult<ReportDefinitionAuthorization?>(null);
+
+            return ValueTask.FromResult<ReportDefinitionAuthorization?>(new(
+                SavedReportsListingDefinition.Name,
+                new ReportAuthorization { AdministratorsOnly = true }));
+        }
+
+        var reports = _options.CurrentValue.Reports;
+        if (!reports.TryGetValue(name, out var definition))
+            return ValueTask.FromResult<ReportDefinitionAuthorization?>(null);
+
+        var configuredName = reports.Keys.FirstOrDefault(key => string.Equals(key, name, StringComparison.Ordinal))
+            ?? reports.Keys.First(key => string.Equals(key, name, StringComparison.OrdinalIgnoreCase));
+        return ValueTask.FromResult<ReportDefinitionAuthorization?>(new(
+            configuredName,
+            SnapshotAuthorization(definition.Authorization)));
+    }
+
+    private static ReportAuthorization? SnapshotAuthorization(ReportAuthorization? source)
+        => source is null
+            ? null
+            : new ReportAuthorization
+            {
+                Policy = source.Policy,
+                AllowAnonymous = source.AllowAnonymous,
+                Restricted = source.Restricted,
+                Users = source.Users is null ? [] : [.. source.Users],
+                AdministratorsOnly = source.AdministratorsOnly,
+            };
 
     /// <summary>
     /// Stamps the resolved connection name and dialect onto the detached snapshot

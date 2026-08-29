@@ -128,14 +128,20 @@ public sealed class DataSourceHttpTests : IAsyncLifetime
             Directory.Delete(_tempRoot, recursive: true);
     }
 
-    private static string MutableConfig(string dataSource) => $$"""
+    private static string MutableConfig(
+        string dataSource,
+        bool allowAnonymous = true,
+        bool restricted = false) => $$"""
         {
           "InteractiveReport": {
             "Reports": {
               "mutable": {
                 "dataSource": "{{dataSource}}",
                 "sql": "SELECT ID, LABEL FROM IR_DS_TEST",
-                "authorization": { "allowAnonymous": true }
+                "authorization": {
+                  "allowAnonymous": {{allowAnonymous.ToString().ToLowerInvariant()}},
+                  "restricted": {{restricted.ToString().ToLowerInvariant()}}
+                }
               }
             }
           }
@@ -198,6 +204,30 @@ public sealed class DataSourceHttpTests : IAsyncLifetime
         Assert.False(string.IsNullOrEmpty(problem.GetProperty("traceId").GetString()));
 
         // Restore for the other tests (fixture instances are per-test-class).
+        await File.WriteAllTextAsync(_mutableConfigPath, MutableConfig("MutableDb"));
+        ((IConfigurationRoot)_app.Services.GetRequiredService<IConfiguration>()).Reload();
+    }
+
+    [Fact]
+    public async Task Authorization_is_resolved_before_a_broken_definition_is_hydrated()
+    {
+        using var before = await _client.PostAsync(
+            "/api/reports/mutable/query", JsonContent.Create(new { v = 3 }));
+        Assert.Equal(HttpStatusCode.OK, before.StatusCode);
+
+        // Both changes arrive in one reload. The report is now protected and its
+        // executable connection is invalid; authentication must win before connection
+        // resolution attempts to hydrate the definition.
+        await File.WriteAllTextAsync(
+            _mutableConfigPath,
+            MutableConfig("GhostDb", allowAnonymous: false, restricted: true));
+        ((IConfigurationRoot)_app!.Services.GetRequiredService<IConfiguration>()).Reload();
+
+        using var denied = await _client.PostAsync(
+            "/api/reports/mutable/query", JsonContent.Create(new { v = 3 }));
+        Assert.Equal(HttpStatusCode.NotFound, denied.StatusCode);
+        Assert.Equal("no-store", denied.Headers.CacheControl?.ToString());
+
         await File.WriteAllTextAsync(_mutableConfigPath, MutableConfig("MutableDb"));
         ((IConfigurationRoot)_app.Services.GetRequiredService<IConfiguration>()).Reload();
     }

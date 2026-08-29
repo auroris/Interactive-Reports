@@ -40,7 +40,10 @@ internal sealed class InteractiveReportGraphQLExecutor(
         var saved = await savedReports.Get(id, ct);
         if (saved is null) throw NotFound();
 
-        var definition = await definitions.Find(saved.ReportName, ct);
+        var (definition, resolutionError) = await ReportRequestAccess.ResolveDefinition(
+            definitions, saved.ReportName, context, ct);
+        if (resolutionError is not null)
+            throw AuthorizationError(resolutionError, context);
         if (definition is null) throw NotFound();
 
         var identity = ReportIdentity.Resolve(context.User, options.CurrentValue.IdentityClaim);
@@ -56,7 +59,7 @@ internal sealed class InteractiveReportGraphQLExecutor(
                 saved.IsPrimary,
                 saved.Origin),
         };
-        if (await ReportRequestAccess.Authorize(
+        if (await ReportRequestAccess.AuthorizeOperations(
                 definition,
                 context,
                 [InteractiveReportAction.ReadSavedReport, InteractiveReportAction.Query],

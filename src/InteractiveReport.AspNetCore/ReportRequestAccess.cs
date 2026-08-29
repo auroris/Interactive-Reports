@@ -1,4 +1,5 @@
 using InteractiveReport.Core.Authorization;
+using InteractiveReport.Core.Definitions;
 using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Identity;
 using InteractiveReport.Core.Model;
@@ -17,12 +18,78 @@ namespace InteractiveReport.AspNetCore;
 internal static class ReportRequestAccess
 {
     /// <summary>
+    /// Resolves and authorizes one report definition. Stores that implement the
+    /// lightweight authorization interface are gated before the executable definition
+    /// is validated, connected, or hydrated from saved-report storage.
+    /// </summary>
+    public static async Task<(ReportDefinition? Definition, IResult? Error)> ResolveDefinition(
+        IReportDefinitionStore store,
+        string name,
+        HttpContext context,
+        CancellationToken ct)
+    {
+        ReportDefinitionAuthorization? authorization = null;
+        if (store is IReportDefinitionAuthorizationStore authorizationStore)
+        {
+            try
+            {
+                authorization = await authorizationStore.FindAuthorization(name, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                return (null, EndpointExtensions.ServerError(
+                    context, name, "authorization metadata resolution", ex));
+            }
+
+            if (authorization is null) return (null, null);
+            if (await AuthorizeDefinition(authorization, context) is { } denied)
+                return (null, denied);
+        }
+
+        ReportDefinition? definition;
+        try
+        {
+            definition = await store.Find(name, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return (null, EndpointExtensions.ServerError(context, name, "definition resolution", ex));
+        }
+
+        if (definition is null) return (null, null);
+        if (authorization is null
+            || !string.Equals(authorization.Name, definition.Name, StringComparison.OrdinalIgnoreCase)
+            || !AuthorizationEquivalent(authorization.Authorization, definition.Authorization))
+        {
+            if (await AuthorizeDefinition(definition, context) is { } denied)
+                return (null, denied);
+        }
+
+        return (definition, null);
+    }
+
+    /// <summary>
     /// Applies definition-level authentication, administrator-list, and policy gates.
     /// Operation authorization is separate so mutation endpoints can hydrate the
     /// client-authored definition before passing it to the application authorizer.
     /// </summary>
-    public static async Task<IResult?> AuthorizeDefinition(
+    private static async Task<IResult?> AuthorizeDefinition(
         ReportDefinition definition,
+        HttpContext context)
+        => await AuthorizeDefinition(
+            new ReportDefinitionAuthorization(definition.Name, definition.Authorization),
+            context);
+
+    private static async Task<IResult?> AuthorizeDefinition(
+        ReportDefinitionAuthorization definition,
         HttpContext context)
     {
         var authorization = definition.Authorization;
@@ -53,6 +120,11 @@ internal static class ReportRequestAccess
             if (!decision.Succeeded) return Results.NotFound();
         }
 
+        // Administrators-only definitions cannot also carry named-user restrictions.
+        // Once the administrator and optional ASP.NET policy gates pass, there is no
+        // report-user authorization row to consult.
+        if (authorization?.AdministratorsOnly == true) return null;
+
         var identity = ReportIdentity.Resolve(context.User, options.IdentityClaim);
         var storageConfigured = ReportConnectionRegistry.IsStoreConfigured(options.SavedReports);
         var databaseAccess = new DatabaseReportAccess(false, false);
@@ -82,6 +154,19 @@ internal static class ReportRequestAccess
             return Results.NotFound();
 
         return null;
+    }
+
+    private static bool AuthorizationEquivalent(
+        ReportAuthorization? left,
+        ReportAuthorization? right)
+    {
+        if (ReferenceEquals(left, right)) return true;
+        if (left is null || right is null) return false;
+        return string.Equals(left.Policy, right.Policy, StringComparison.Ordinal)
+               && left.AllowAnonymous == right.AllowAnonymous
+               && left.Restricted == right.Restricted
+               && left.AdministratorsOnly == right.AdministratorsOnly
+               && (left.Users ?? []).SequenceEqual(right.Users ?? [], StringComparer.Ordinal);
     }
 
     /// <summary>
@@ -178,29 +263,6 @@ internal static class ReportRequestAccess
         return null;
     }
 
-    /// <summary>Definition and operation authorization for endpoints with no body.</summary>
-    public static async Task<IResult?> Authorize(
-        ReportDefinition definition,
-        HttpContext context,
-        IReadOnlyCollection<InteractiveReportAction> actions,
-        InteractiveReportAuthorizationResource resource,
-        bool administratorRequired,
-        bool hideDenied,
-        string? denialDetail,
-        CancellationToken ct)
-    {
-        if (await AuthorizeDefinition(definition, context) is { } denied) return denied;
-        return await AuthorizeOperations(
-            definition,
-            context,
-            actions,
-            resource,
-            administratorRequired,
-            hideDenied,
-            denialDetail,
-            ct);
-    }
-
     /// <summary>
     /// Null when the feature is whitelisted. 403 (not 404) because the caller already
     /// reached an existing, authorized report — only this capability is switched off.
@@ -239,6 +301,16 @@ internal static class ReportRequestAccess
         CancellationToken ct)
     {
         var identity = ReportIdentity.Resolve(context.User, options.IdentityClaim);
+        var configuredGrant = ReportIdentity.IsAdministrator(
+            context.User, options.IdentityClaim, options.Administrators);
+        if (configuredGrant)
+        {
+            // A source-controlled grant is independently sufficient. Do not make a
+            // known administrator's identity check depend on persistence health; the
+            // requested administration operation will still fail when it reaches an
+            // unavailable store.
+            return new AdministratorDecision(Configured: true, Granted: true, Error: null);
+        }
         try
         {
             var database = await context.RequestServices
@@ -246,9 +318,7 @@ internal static class ReportRequestAccess
                 .GetAdministratorAccess(identity, ct);
             return new AdministratorDecision(
                 Configured: options.Administrators.Count > 0 || database.Configured,
-                Granted: ReportIdentity.IsAdministrator(
-                    context.User, options.IdentityClaim, options.Administrators)
-                    || database.UserGranted,
+                Granted: database.UserGranted,
                 Error: null);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)

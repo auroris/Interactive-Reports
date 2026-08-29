@@ -97,6 +97,12 @@ public interface IReportDefinitionStore
 }
 ```
 
+The optional `IReportDefinitionAuthorizationStore` resolves only canonical name and
+authorization settings. The HTTP and GraphQL adapters call the centralized
+authorization module with that envelope before the configuration store validates
+connections or hydrates the executable definition. Stores that do not implement the
+optional interface retain the original full-definition lookup path.
+
 ```json
 "InteractiveReport": {
   "Reports": {
@@ -979,6 +985,10 @@ persistence/administration operations fail until one is configured. An optional
 one validated configuration snapshot, and auto-creation is tracked per
 connection/dialect/table target so live configuration changes cannot mix query and storage
 targets or inherit stale initialization state.
+`OWNER` remains row metadata; it is not embedded in `STATE_JSON` or the canonical
+`ReportDocumentFile` envelope. Ordinary list/load/save responses return `mine` instead
+of the owner identity. The administrator listing and authorization resource retain the
+owner because reassignment and ownership policy require it.
 Database-backed titles are case-insensitively unique within a report at the endpoint
 boundary. Save As detects a visible editable title, confirms replacement, and issues a
 PUT to its stable id; the server rejects duplicate creates and colliding renames with
@@ -1259,6 +1269,9 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   data endpoint keeps the full gate. ETags are content hashes (SHA-256 prefix) with
   `Cache-Control: no-cache` — an assembly-version tag would 304 stale content across
   rebuilds of the same version.
+- Every report, saved-report, identity, administration, and GraphQL response starts
+  with `Cache-Control: no-store`; only the packaged asset handler deliberately replaces
+  it with the ETag-based policy above.
 - The admin element drives the §13 administrator surface: list everything,
   publish/unpublish, reassign owner, inspect the stored state document, download a
   canonical file-backed envelope, upload and validate an envelope as a private saved
