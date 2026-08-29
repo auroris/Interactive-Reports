@@ -55,6 +55,22 @@ test("explains how to build the client when its bundle is missing", async ({ pag
     )).toBeVisible();
 });
 
+test("GraphiQL starts with the configured Default report ready to fetch", async ({ request }) => {
+    const reportsResponse = await request.get("/api/reports/orders/saved");
+    expect(reportsResponse.ok()).toBe(true);
+    const defaultReport = (await reportsResponse.json())
+        .find(report => report.title === "Default" && report.isReadOnly);
+    expect(defaultReport).toBeDefined();
+
+    const graphiqlResponse = await request.get("/graphiql");
+    expect(graphiqlResponse.ok()).toBe(true);
+    const html = await graphiqlResponse.text();
+    expect(html).toContain("query: parameters.query ??");
+    expect(html).toContain("variables: parameters.variables ??");
+    expect(html).toContain("FetchDefaultReport");
+    expect(html).toContain(defaultReport.id);
+});
+
 test("loads the stored primary Default, queries data, paginates from Actions, and changes reports", async ({ page }) => {
     await openWorkbench(page);
 

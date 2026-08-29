@@ -25,9 +25,30 @@ The path defaults to `/graphql` and can be changed. The mapping supports HTTP GE
 POST queries. It disables mutations, batched requests, form posts, subscriptions, and
 WebSockets. The package does not bundle a GraphQL IDE.
 
-The Workbench adds the separate `GraphQL.Server.Ui.GraphiQL` package and serves its
+The Workbench adds the separate `GraphQL.Server.Ui.GraphiQL` package and maps its
 browser IDE at `/graphiql` in Development. Keeping the tool in the host avoids adding
-UI middleware to applications that only need the transport.
+UI middleware to applications that only need the transport. A host can use the same
+query-only setup:
+
+```csharp
+using GraphQL.Server.Ui.GraphiQL;
+
+if (app.Environment.IsDevelopment())
+{
+    app.MapGraphQLGraphiQL("/graphiql", new GraphiQLOptions
+    {
+        GraphQLEndPoint = "/graphql",
+        GraphQLWsSubscriptions = true,
+    });
+}
+```
+
+`GraphQLWsSubscriptions = true` selects GraphiQL's current subscription fetcher. It
+does not enable subscriptions in Interactive Reports; it prevents the legacy fetcher
+from opening a WebSocket during ordinary query and schema-introspection operations.
+Unsupported methods and WebSocket upgrades receive HTTP 405 from the adapter.
+The Workbench additionally resolves its checked-in `orders / Default` report at
+startup and preloads a ready-to-run report query with paging variables.
 
 `MapInteractiveReportGraphQL` returns an `IEndpointConventionBuilder`, so standard
 ASP.NET Core conventions remain available:

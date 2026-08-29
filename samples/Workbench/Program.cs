@@ -1,8 +1,10 @@
 using GraphQL.Server.Ui.GraphiQL;
 using InteractiveReport.AspNetCore;
 using InteractiveReport.Core.Model;
+using InteractiveReport.Core.SavedReports;
 using InteractiveReport.GraphQL;
 using Microsoft.Data.Sqlite;
+using System.Text.Json;
 using Workbench;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -76,15 +78,64 @@ if (app.Environment.IsDevelopment())
         options.DocumentTitle = "Interactive Reports Workbench API";
         options.DisplayRequestDuration();
     });
-    app.UseGraphQLGraphiQL("/graphiql", new GraphiQLOptions
-    {
-        GraphQLEndPoint = "/graphql",
-    });
 }
 
 var interactiveReportLogger = app.Services.GetRequiredService<ILoggerFactory>()
     .CreateLogger("InteractiveReport");
 app.MapInteractiveReports("/api/reports", interactiveReportLogger);
 app.MapInteractiveReportGraphQL("/graphql");
+if (app.Environment.IsDevelopment())
+{
+    await app.Services.GetRequiredService<ConfiguredReportDocumentSynchronizer>().EnsureSynced();
+    var defaultReport = await app.Services.GetRequiredService<ISavedReportStore>()
+        .FindByTitle("orders", "Default")
+        ?? throw new InvalidOperationException(
+            "The Workbench GraphiQL example requires the configured 'orders / Default' report.");
+    const string defaultQuery = """
+        query FetchDefaultReport($id: ID!, $page: Int, $pageSize: Int) {
+          report(id: $id, page: $page, pageSize: $pageSize) {
+            columns { name label type computed }
+            rows
+            page { index size }
+            totalRows
+            elapsedMs
+          }
+        }
+        """;
+    var defaultVariables = JsonSerializer.Serialize(
+        new { id = defaultReport.Id, page = 1, pageSize = 25 },
+        new JsonSerializerOptions { WriteIndented = true });
+
+    app.MapGraphQLGraphiQL("/graphiql", new GraphiQLOptions
+    {
+        GraphQLEndPoint = "/graphql",
+        // The graphql-ws fetcher opens a socket only for subscription operations.
+        // The legacy fetcher connects eagerly, including during schema introspection.
+        GraphQLWsSubscriptions = true,
+        PostConfigure = (_, html) => WithDefaults(html, defaultQuery, defaultVariables),
+    });
+}
 
 app.Run();
+
+static string WithDefaults(string html, string query, string variables)
+{
+    const string queryProperty = "query: parameters.query,";
+    const string variablesProperty = "variables: parameters.variables,";
+    if (!html.Contains(queryProperty, StringComparison.Ordinal)
+        || !html.Contains(variablesProperty, StringComparison.Ordinal))
+    {
+        throw new InvalidOperationException(
+            "The GraphiQL page template no longer contains its query and variables properties.");
+    }
+
+    return html
+        .Replace(
+            queryProperty,
+            $"query: parameters.query ?? {JsonSerializer.Serialize(query)},",
+            StringComparison.Ordinal)
+        .Replace(
+            variablesProperty,
+            $"variables: parameters.variables ?? {JsonSerializer.Serialize(variables)},",
+            StringComparison.Ordinal);
+}

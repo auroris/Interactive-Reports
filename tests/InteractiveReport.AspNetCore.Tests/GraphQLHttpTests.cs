@@ -251,6 +251,20 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
                 .GetProperty("type").GetString());
     }
 
+    [Fact]
+    public async Task Unsupported_transport_method_returns_405_without_falling_off_the_pipeline()
+    {
+        using var response = await Send(HttpMethod.Delete, "/graphql", identity: null);
+
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, response.StatusCode);
+        Assert.Contains("GET", response.Content.Headers.Allow);
+        Assert.Contains("POST", response.Content.Headers.Allow);
+        var body = await ReadJson(response);
+        Assert.Equal(
+            "Unsupported GraphQL transport",
+            body.GetProperty("title").GetString());
+    }
+
     private async Task<string> CreatePrivateReport(string owner, string title)
     {
         using var response = await Send(

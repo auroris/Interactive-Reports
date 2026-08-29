@@ -46,7 +46,25 @@ public static class InteractiveReportGraphQLExtensions
         group.AddEndpointFilter(InteractiveReportLogging.LogRequest);
         group.AddEndpointFilter(static async (invocation, next) =>
         {
-            invocation.HttpContext.Response.Headers.CacheControl = "no-store";
+            var context = invocation.HttpContext;
+            context.Response.Headers.CacheControl = "no-store";
+
+            var request = context.Request;
+            var isWebSocketUpgrade = request.Headers.TryGetValue("Upgrade", out var upgrade)
+                && upgrade.Any(value => string.Equals(
+                    value,
+                    "websocket",
+                    StringComparison.OrdinalIgnoreCase));
+            if ((!HttpMethods.IsGet(request.Method) && !HttpMethods.IsPost(request.Method))
+                || isWebSocketUpgrade)
+            {
+                context.Response.Headers.Allow = "GET, POST";
+                return Results.Problem(
+                    statusCode: StatusCodes.Status405MethodNotAllowed,
+                    title: "Unsupported GraphQL transport",
+                    detail: "Interactive Reports GraphQL supports HTTP GET and POST queries only.");
+            }
+
             return await next(invocation);
         });
         return group.MapGraphQL<InteractiveReportGraphQLSchema>(path, options =>
