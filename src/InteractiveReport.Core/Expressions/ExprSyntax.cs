@@ -92,7 +92,7 @@ internal sealed class ExprSyntaxParser
 
     // --- lexer ---------------------------------------------------------------
 
-    private enum TokKind { Number, String, Ident, Op }
+    private enum TokKind { Number, String, Ident, QuotedIdent, Op }
 
     private readonly record struct Token(TokKind Kind, string Text, int Position);
 
@@ -131,6 +131,34 @@ internal sealed class ExprSyntaxParser
                     i++;
                 }
                 _tokens.Add(new Token(TokKind.String, sb.ToString(), start));
+                continue;
+            }
+
+            // Backticks quote a column name in the portable expression language.
+            // This is needed for data-derived Pivot columns, whose stable names
+            // contain separators and values that are not ordinary identifiers.
+            // A doubled backtick represents one literal backtick.
+            if (c == '`')
+            {
+                var start = i;
+                i++;
+                var sb = new System.Text.StringBuilder();
+                while (true)
+                {
+                    if (i >= _input.Length)
+                        throw new ExprError($"unterminated quoted identifier starting at position {start + 1}");
+                    if (_input[i] == '`')
+                    {
+                        if (i + 1 < _input.Length && _input[i + 1] == '`') { sb.Append('`'); i += 2; continue; }
+                        i++;
+                        break;
+                    }
+                    sb.Append(_input[i]);
+                    i++;
+                }
+                if (sb.Length == 0)
+                    throw new ExprError($"quoted identifier at position {start + 1} cannot be empty");
+                _tokens.Add(new Token(TokKind.QuotedIdent, sb.ToString(), start));
                 continue;
             }
 
@@ -344,16 +372,17 @@ internal sealed class ExprSyntaxParser
             return new StringSyntax(tok.Position, tok.Text); // Text holds the decoded value
         }
 
-        if (tok.Kind == TokKind.Ident)
+        if (tok.Kind is TokKind.Ident or TokKind.QuotedIdent)
         {
-            if (AtKeyword("CASE")) return ParseCase();
-            if (AtKeyword("NULL")) { _pos++; return new NullSyntax(tok.Position); }
-            if (IsKeyword(tok))
+            if (tok.Kind == TokKind.Ident && AtKeyword("CASE")) return ParseCase();
+            if (tok.Kind == TokKind.Ident && AtKeyword("NULL")) { _pos++; return new NullSyntax(tok.Position); }
+            if (tok.Kind == TokKind.Ident && IsKeyword(tok))
                 throw new ExprError($"unexpected {tok.Text.ToUpperInvariant()} at position {tok.Position + 1}");
 
             // Identifier followed by '(' is a call; the binder decides whether the
             // name is a known function. Otherwise it names a column.
-            if (_pos + 1 < _tokens.Count && _tokens[_pos + 1] is { Kind: TokKind.Op, Text: "(" })
+            if (tok.Kind == TokKind.Ident
+                && _pos + 1 < _tokens.Count && _tokens[_pos + 1] is { Kind: TokKind.Op, Text: "(" })
             {
                 var name = tok.Text;
                 _pos += 2;

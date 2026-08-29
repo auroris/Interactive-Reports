@@ -16,7 +16,6 @@ public static class ReportStateResolver
 
         return new ReportState
         {
-            V = requested.V,
             Search = requested.Search ?? defaults?.Search,
             Page = requested.Page ?? defaults?.Page,
             Pipeline = CopyPipeline(requested.Pipeline ?? defaults?.Pipeline),
@@ -53,6 +52,7 @@ public static class ReportStateResolver
             {
                 Kind = shape.Kind,
                 By = Copy(shape.By),
+                Rows = Copy(shape.Rows),
                 Values = shape.Values?.Select(value => new MetricRule
                 {
                     Id = value.Id,

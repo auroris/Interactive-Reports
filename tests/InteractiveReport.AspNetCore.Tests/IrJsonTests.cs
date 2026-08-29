@@ -102,12 +102,13 @@ public sealed class IrJsonTests
                 {
                     Shape = new StageShape
                     {
-                        Kind = "group",
-                        By = ["CUSTOMER", "STATUS"],
+                        Kind = "pivot",
+                        Rows = ["CUSTOMER"],
+                        Cols = ["STATUS"],
                         Values = [new MetricRule { Id = "m1", Col = "AMOUNT", Fn = AggregateFn.Sum }],
+                        Totals = true,
                     },
                 },
-                new PipelineStage { Shape = new StageShape { Kind = "spread", Cols = ["STATUS"], Totals = true } },
             ],
             Shelf = new()
             {
@@ -130,16 +131,17 @@ public sealed class IrJsonTests
         Assert.Equal("source", root.GetProperty("pipeline")[0].GetProperty("shape").GetProperty("kind").GetString());
         Assert.Equal("sum", root.GetProperty("pipeline")[1].GetProperty("shape")
             .GetProperty("values")[0].GetProperty("fn").GetString());          // camelCase enum on the wire
-        Assert.True(root.GetProperty("pipeline")[2].GetProperty("shape").GetProperty("totals").GetBoolean());
+        Assert.True(root.GetProperty("pipeline")[1].GetProperty("shape").GetProperty("totals").GetBoolean());
         Assert.Equal("chart", root.GetProperty("shelf").GetProperty("chart")[0]
             .GetProperty("shape").GetProperty("kind").GetString());           // shelf keys stay verbatim
 
         var roundTrip = JsonSerializer.Deserialize<ReportState>(json, IrJson.Options)!;
-        Assert.Equal(3, roundTrip.Pipeline!.Count);
+        Assert.Equal(2, roundTrip.Pipeline!.Count);
         var metric = Assert.Single(roundTrip.Pipeline[1].Shape!.Values!);
         Assert.Equal(("m1", "AMOUNT", AggregateFn.Sum), (metric.Id, metric.Col, metric.Fn));
-        Assert.Equal(["STATUS"], roundTrip.Pipeline[2].Shape!.Cols!);
-        Assert.True(roundTrip.Pipeline[2].Shape!.Totals);
+        Assert.Equal(["CUSTOMER"], roundTrip.Pipeline[1].Shape!.Rows!);
+        Assert.Equal(["STATUS"], roundTrip.Pipeline[1].Shape!.Cols!);
+        Assert.True(roundTrip.Pipeline[1].Shape!.Totals);
         var shelfChart = Assert.Single(roundTrip.Shelf!["chart"]);
         Assert.Equal(("chart", "pie", "STATUS", AggregateFn.Count),
             (shelfChart.Shape!.Kind, shelfChart.Shape.Type, shelfChart.Shape.Label, shelfChart.Shape.Fn));
@@ -151,7 +153,7 @@ public sealed class IrJsonTests
         // The schema-snapshot contract was retired 2026-08-28; rows saved before
         // then still carry the key, which now falls through as an unknown member.
         var state = JsonSerializer.Deserialize<ReportState>(
-            """{"v":3,"schema":{"AMOUNT":"number"},"search":"open","pipeline":[{"shape":{"kind":"source"}}]}""",
+            """{"schema":{"AMOUNT":"number"},"search":"open","pipeline":[{"shape":{"kind":"source"}}]}""",
             IrJson.Options)!;
 
         Assert.Equal("open", state.Search);
@@ -168,10 +170,10 @@ public sealed class IrJsonTests
         // token (dir: 99) is foreign input; accepting it would deserialize an
         // undefined member that downstream code silently reinterprets.
         Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<ReportState>(
-            """{"v":3,"pipeline":[{"shape":{"kind":"source"},"layer":{"sorts":[{"col":"A","dir":99}]}}]}""",
+            """{"pipeline":[{"shape":{"kind":"source"},"layer":{"sorts":[{"col":"A","dir":99}]}}]}""",
             IrJson.Options));
         Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<ReportState>(
-            """{"v":3,"pipeline":[{"shape":{"kind":"group","by":["A"],"values":[{"id":"m1","col":"A","fn":3}]}}]}""",
+            """{"pipeline":[{"shape":{"kind":"group","by":["A"],"values":[{"id":"m1","col":"A","fn":3}]}}]}""",
             IrJson.Options));
     }
 

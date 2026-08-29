@@ -130,8 +130,13 @@ test("computed, group, and pivot values all use the normal mask path", () => {
 
     w.doc.pipeline = [
         source,
-        { shape: { kind: "group", by: ["CUSTOMER", "STATUS"], values: [{ id: "m1", col: "AMOUNT", fn: "sum" }] }, layer: {} },
-        { shape: { kind: "spread", cols: ["STATUS"] }, layer: {} },
+        {
+            shape: {
+                kind: "pivot", rows: ["CUSTOMER"], cols: ["STATUS"],
+                values: [{ id: "m1", col: "AMOUNT", fn: "sum" }],
+            },
+            layer: {},
+        },
     ];
     w.lastResult.columns = [
         { name: "CUSTOMER", label: "Customer", type: "text", computed: false },

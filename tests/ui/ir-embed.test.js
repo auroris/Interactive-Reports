@@ -37,11 +37,9 @@ globalThis.fetch = async (url, options = {}) => {
     if (String(url).endsWith("/schema")) {
         const reportName = /\/([^/]+)\/schema$/.exec(String(url))?.[1];
         return json({
-            stateVersion: 3,
             // labels here mirror the server contract: friendly names reach the client
             // only as part of the default report; column metadata stays neutral.
             defaultState: {
-                v: 3,
                 page: { index: 1, size: 25 },
                 pipeline: [{ shape: { kind: "source" }, layer: { labels: { ID: "Ident" } } }],
             },
@@ -176,7 +174,8 @@ test("a host can retrieve the current export without initiating a browser downlo
     const request = requests.find(r => r.url.endsWith("/export?format=csv"));
     assert.ok(request, "the public method uses the ordinary report export endpoint");
     assert.equal(request.method, "POST");
-    assert.equal(JSON.parse(request.body).v, 3);
+    assert.equal("v" in JSON.parse(request.body), false);
+    assert.equal(JSON.parse(request.body).pipeline[0].shape.kind, "source");
     assert.equal(document.querySelector('a[download="orders.csv"]'), null,
         "retrieval must not synthesize a browser download anchor");
 

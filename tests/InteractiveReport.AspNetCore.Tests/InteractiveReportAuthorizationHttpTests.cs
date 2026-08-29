@@ -146,7 +146,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
             HttpMethod.Post,
             "/api/reports/orders/saved",
             "callback-admin",
-            new { title = "Default", isPrimary = true, state = new { v = 3 } }));
+            new { title = "Default", isPrimary = true, state = new { } }));
 
         Assert.Equal(HttpStatusCode.Created, save.StatusCode);
         var calls = seen.ToArray();
@@ -160,7 +160,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
             Assert.Equal("Default", call.Resource.Definition!.Title);
             Assert.True(call.Resource.Definition.Primary);
             Assert.True(call.Resource.Definition.StateChanged);
-            Assert.Equal(3, call.Resource.Definition.State!.V);
+            Assert.NotNull(call.Resource.Definition.State);
         });
 
         using var listing = await host.Client.SendAsync(Request(
@@ -249,7 +249,13 @@ public sealed class InteractiveReportAuthorizationHttpTests
                 if (request.Action == InteractiveReportAction.CreateSavedReport)
                 {
                     proposedId = request.Resource.Definition!.Id;
-                    request.Resource.Definition.State = new ReportState { V = 2 };
+                    request.Resource.Definition.State = new ReportState
+                    {
+                        Pipeline =
+                        [
+                            new PipelineStage { Shape = new StageShape { Kind = "group", By = ["ORDER_ID"] } },
+                        ],
+                    };
                 }
                 return ValueTask.FromResult(true);
             }));
@@ -258,7 +264,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
             HttpMethod.Post,
             "/api/reports/orders/saved",
             "ordinary-user",
-            new { title = "Invalid after authorization", state = new { v = 3 } }));
+            new { title = "Invalid after authorization", state = new { } }));
 
         Assert.Equal(HttpStatusCode.BadRequest, save.StatusCode);
         Assert.NotNull(proposedId);

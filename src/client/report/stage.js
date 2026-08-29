@@ -6,14 +6,21 @@
 //
 // Layer routing per mode:
 //   grid    → everything edits the source layer.
-//   groupBy → columns/labels/formats/computed/sorts/highlights edit the group
-//             stage's layer; Filter always edits the source layer (stage 1).
-//   pivot   → labels/formats edit the spread layer (keys are response column
-//             names, including stable cell names); Compute and Sort edit the
-//             GROUP layer — pre-spread computed metrics and row-dim ordering.
+//   groupBy → every table operation edits the group stage's layer.
+//   pivot   → every table operation edits the pivot stage's layer after the
+//             runtime pivot schema has been materialized.
 //   chart   → no table; only source-level features apply.
 
-import { columnOf, columnSortable, labelOf, pickable, sortableColumns, typeOf, featureEnabled } from "./schema.js";
+import {
+    columnFilterable,
+    columnOf,
+    columnSortable,
+    featureEnabled,
+    labelOf,
+    pickable,
+    sortableColumns,
+    typeOf,
+} from "./schema.js";
 import { translate } from "../core/localization.js";
 import { fnLabel } from "./render/format.js";
 import {
@@ -38,8 +45,7 @@ const countColumn = (w, layer) => ({
 
 /// The group stage's output columns, statically derived from its shape: dims
 /// (source labels unless the layer overrides), __count, metrics by stable id,
-/// and — unless excluded — the layer's computed columns. This is the dialog
-/// universe for group-terminal mode and the compute/sort universe for pivot.
+/// and — unless excluded — the layer's computed columns.
 export function groupStageColumns(w, { includeComputed = true } = {}) {
     const stage = stageOf(w.doc, "group");
     if (!stage) return [];
@@ -93,11 +99,11 @@ function resultColumnType(w, name) {
     return w.lastResult?.columns?.find(c => c.name.toLowerCase() === requested)?.type ?? null;
 }
 
-/// The spread output's columns as last reported: row dims plus stable cell
+/// The pivot output's columns as last reported: row dims plus stable cell
 /// columns. Data-dependent by nature, so the last response is the universe.
-function spreadColumns(w) {
-    const spread = stageOf(w.doc, "spread");
-    const layer = spread?.layer ?? {};
+function pivotColumns(w) {
+    const pivot = stageOf(w.doc, "pivot");
+    const layer = pivot?.layer ?? {};
     return (w.lastResult?.columns ?? []).map(c => ({
         name: c.name,
         label: stageLabelOf(layer, c.name) ?? c.label,
@@ -109,8 +115,8 @@ function spreadColumns(w) {
 
 /// The pivot's row dimensions with display labels (sortable universe).
 function pivotRowColumns(w) {
-    const spread = stageOf(w.doc, "spread");
-    const layer = spread?.layer ?? {};
+    const pivot = stageOf(w.doc, "pivot");
+    const layer = pivot?.layer ?? {};
     return pivotRowDims(w.doc).map(dim => {
         const base = columnOf(w, dim);
         return {
@@ -137,6 +143,7 @@ export function stageContext(w) {
             labelsLayer: groupLayer,
             formatsLayer: groupLayer,
             computeLayer: groupLayer,
+            filterLayer: groupLayer,
             sortLayer: groupLayer,
             highlightLayer: groupLayer,
             computeTokens: groupStageColumns(w, { includeComputed: false }),
@@ -144,31 +151,36 @@ export function stageContext(w) {
             // reach them; stage synthetics (__count, metrics, computed) never
             // match an override and stay sortable.
             sortColumns: columns.filter(c => columnSortable(w, c.name)),
+            filterColumns: columns,
             caps: caps(w, {
-                columns: true, columnSettings: true, rename: true, compute: true,
+                columns: true, columnSettings: true, rename: true, compute: true, filter: true,
                 highlight: true, sort: true, visibility: true, displayAs: false,
-                break: false, aggregate: false, pagination: true,
+                break: true, aggregate: true, pagination: true,
             }),
         };
     }
 
     if (mode === "pivot") {
-        const groupLayer = d => stageLayer(stageOf(d, "group"));
-        const spreadLayer = d => stageLayer(stageOf(d, "spread"));
+        const pivotLayer = d => stageLayer(stageOf(d, "pivot"));
+        const columns = pivotColumns(w);
         return {
             mode,
-            columns: spreadColumns(w),
+            columns,
             dims: pivotRowDims(w.doc),
-            labelsLayer: spreadLayer,
-            formatsLayer: spreadLayer,
-            computeLayer: groupLayer,
-            sortLayer: groupLayer,
-            computeTokens: groupStageColumns(w, { includeComputed: false }),
-            sortColumns: pivotRowColumns(w).filter(c => columnSortable(w, c.name)),
+            columnsLayer: pivotLayer,
+            labelsLayer: pivotLayer,
+            formatsLayer: pivotLayer,
+            computeLayer: pivotLayer,
+            filterLayer: pivotLayer,
+            sortLayer: pivotLayer,
+            highlightLayer: pivotLayer,
+            computeTokens: columns.filter(c => !c.computed),
+            sortColumns: columns.filter(c => columnSortable(w, c.name)),
+            filterColumns: columns,
             caps: caps(w, {
-                columns: false, columnSettings: true, rename: true, compute: true,
-                highlight: false, sort: true, visibility: false, displayAs: false,
-                break: false, aggregate: false, pagination: false,
+                columns: true, columnSettings: true, rename: true, compute: true, filter: true,
+                highlight: true, sort: true, visibility: true, displayAs: false,
+                break: false, aggregate: false, pagination: true,
             }),
         };
     }
@@ -178,7 +190,7 @@ export function stageContext(w) {
             mode,
             columns: [],
             caps: caps(w, {
-                columns: false, columnSettings: false, rename: false, compute: false,
+                columns: false, columnSettings: false, rename: false, compute: false, filter: false,
                 highlight: false, sort: false, visibility: false, displayAs: false,
                 break: false, aggregate: false, pagination: false,
             }),
@@ -193,12 +205,14 @@ export function stageContext(w) {
         labelsLayer: source,
         formatsLayer: source,
         computeLayer: source,
+        filterLayer: source,
         sortLayer: source,
         highlightLayer: source,
         computeTokens: pickable(w).filter(c => !c.computed),
         sortColumns: sortableColumns(w),
+        filterColumns: pickable(w).filter(c => columnFilterable(w, c.name)),
         caps: caps(w, {
-            columns: true, columnSettings: true, rename: true, compute: true,
+            columns: true, columnSettings: true, rename: true, compute: true, filter: true,
             highlight: true, sort: true, visibility: true, displayAs: true,
             break: true, aggregate: true, pagination: true,
         }),
@@ -232,7 +246,7 @@ function caps(w, byMode) {
         compute: gate("compute", byMode.compute),
         highlight: gate("highlight", byMode.highlight),
         sort: gate("sort", byMode.sort),
-        filter: featureEnabled(w, "filter"),      // always the source layer
+        filter: featureEnabled(w, "filter") && !!byMode.filter,
         break: gate("controlBreak", byMode.break),
         aggregate: gate("aggregate", byMode.aggregate),
         pagination: gate("pagination", byMode.pagination),

@@ -6,7 +6,7 @@ import { el } from "../../core/dom.js";
 import { translate } from "../../core/localization.js";
 import { columnSortable, headerLabelHidden, labelOf } from "../schema.js";
 import { stageContext } from "../stage.js";
-import { modeOf, sameColumn, sourceLayer } from "../state.js";
+import { sameColumn } from "../state.js";
 import { formatAgg, formatInteger, fnLabel, hasFraction, parseReportNumber, FN_ORDER } from "./format.js";
 import { formatForColumn, renderColumnValue, renderTextValue } from "./column-renderers.js";
 import { activeEditLink, renderEditCell } from "./edit-link.js";
@@ -23,12 +23,14 @@ export function renderGrid(w, table) {
     // front of the data columns — every index/colSpan below carries the offset.
     const editLink = activeEditLink(w, mode);
     const cellOffset = editLink ? 1 : 0;
-    const requestedBreaks = mode === "grid" ? (sourceLayer(w.doc).breaks ?? []) : [];
+    const requestedBreaks = mode === "grid" || mode === "groupBy"
+        ? (ctx.columnsLayer(w.doc).breaks ?? [])
+        : [];
     const breaks = requestedBreaks.map(name =>
         result.columns.find(column => column.name.toLowerCase() === name.toLowerCase())?.name ?? name);
     const breakNames = new Set(breaks);
     // A control-break dimension lives in the heading, not in every detail row.
-    const columns = mode === "grid"
+    const columns = breaks.length
         ? result.columns.filter(column => !breakNames.has(column.name))
         : result.columns;
 
@@ -47,7 +49,7 @@ export function renderGrid(w, table) {
         stageColumnByName.get(col.name.toLowerCase())?.label ?? col.label;
 
     // Header. Sort indicators come from the stage that owns ordering: the source
-    // layer in grid, the group layer under a group or spread tail. A sort the
+    // layer in grid, or the active Group By/Pivot layer. A sort the
     // server strips (definition-restricted column in a stale document) must not
     // draw its glyph, so restricted entries drop out of the indicator map.
     const activeSorts = (ctx.sortLayer ? (ctx.sortLayer(w.doc).sorts ?? []) : [])
@@ -168,7 +170,10 @@ export function renderGrid(w, table) {
             if (key !== currentKey) {
                 closeGroup();
                 const bt = totalsByKey.get(key);
-                const label = breaks.map(b => `${labelOf(w, b)}: ${breakText(row, b)}`).join("  ·  ");
+                const label = breaks.map(b => {
+                    const columnLabel = stageColumnByName.get(b.toLowerCase())?.label ?? labelOf(w, b);
+                    return `${columnLabel}: ${breakText(row, b)}`;
+                }).join("  ·  ");
                 bodyRows.push(el("tr", { class: "ir-break-header" },
                     el("td", { colSpan: Math.max(columns.length, 1) + cellOffset },
                         el("span", {}, label),

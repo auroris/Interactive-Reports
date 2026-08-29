@@ -161,9 +161,9 @@ test("file downloads preserve GET for admin JSON and POST for report exports", a
         assert.equal(file.filename, "orders.test.json");
         assert.equal(await file.blob.text(), "document");
 
-        const exported = await download("/api/reports/orders/export", { v: 2 });
+        const exported = await download("/api/reports/orders/export", { search: "open" });
         assert.equal(calls[1].options.method, "POST");
-        assert.equal(calls[1].options.body, '{"v":2}');
+        assert.equal(calls[1].options.body, '{"search":"open"}');
         assert.equal(exported.truncated, true);
     } finally {
         globalThis.fetch = originalFetch;

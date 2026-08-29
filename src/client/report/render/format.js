@@ -272,8 +272,7 @@ export function formatInteger(value, context = null) {
 export const FN_LABELS = {
     sum: "Sum", avg: "Avg", median: "Median", min: "Min", max: "Max",
     count: "Count", countDistinct: "Count Distinct",
-    // Spread totals for a group-layer computed cell aren't any one aggregate —
-    // the expression re-evaluates over the totals grouping.
+    // Retained for previously stored aggregate payloads using this neutral label.
     total: "Total",
 };
 

@@ -1,13 +1,12 @@
 // Table-shaping dialogs: pagination, sort order, control breaks, and aggregate
 // rows. Sort follows the stage context — the source table in grid, the group
-// stage under a group/spread tail (pivot restricted to row dimensions). Breaks
-// and aggregates are source-stage features (grid only at T0).
+// stage under a Group By or Pivot tail. Breaks and aggregates follow the same
+// context, but Pivot and Chart disable them because their table contracts do not
+// expose those operations.
 
 import { el, labeled, sel } from "../../core/dom.js";
 import { openDialog } from "../../core/dialog.js";
-import { sortableColumns } from "../schema.js";
 import { stageContext } from "../stage.js";
-import { sourceLayer } from "../state.js";
 import {
     aggregateRowList,
     colOptions,
@@ -83,11 +82,13 @@ export function sortDialog(w) {
 }
 
 export function breakDialog(w) {
+    const ctx = stageContext(w);
+    const layerOf = ctx.columnsLayer;
     const container = el("div", {});
-    const list = rowList(container, (sourceLayer(w.doc).breaks ?? []).map(b => ({ col: b })), (row, item) => {
+    const list = rowList(container, (layerOf(w.doc).breaks ?? []).map(b => ({ col: b })), (row, item) => {
         // Breaks force sorting, so a definition sort restriction removes the
         // column here too.
-        const colSel = sel(colOptions(w, { none: w.t("common.select"), columns: sortableColumns(w) }), item?.col ?? "");
+        const colSel = sel(colOptions(w, { none: w.t("common.select"), columns: ctx.sortColumns }), item?.col ?? "");
         row.append(rowField(w.t("common.column"), colSel));
         row._read = () => colSel.value || null;
     }, { addLabel: w.t("break.addColumn"), max: 3, context: w });
@@ -99,14 +100,18 @@ export function breakDialog(w) {
         build: body => body.append(container, list.addButton,
             el("p", { class: "ir-dialog-note" }, w.t("break.note"))),
         onApply: () => w.apply(d => {
-            sourceLayer(d).breaks = [...new Set(list.read())];
+            layerOf(d).breaks = [...new Set(list.read())];
         }),
     });
 }
 
 export function aggregateDialog(w) {
+    const ctx = stageContext(w);
+    const layerOf = ctx.columnsLayer;
     const { container, list } = aggregateRowList(
-        w, sourceLayer(w.doc).aggregates ?? [], { addLabel: w.t("aggregate.title") });
+        w,
+        layerOf(w.doc).aggregates ?? [],
+        { addLabel: w.t("aggregate.title"), columns: ctx.columns });
 
     openDialog({
         owner: w,
@@ -114,6 +119,6 @@ export function aggregateDialog(w) {
         width: "28rem",
         build: body => body.append(container, list.addButton,
             el("p", { class: "ir-dialog-note" }, w.t("aggregate.note"))),
-        onApply: () => w.apply(d => { sourceLayer(d).aggregates = list.read(); }),
+        onApply: () => w.apply(d => { layerOf(d).aggregates = list.read(); }),
     });
 }

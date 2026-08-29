@@ -37,7 +37,7 @@ const sourceName = (w, format, property, fallback) => {
 export function formatForColumn(w, col) {
     const mode = modeOf(w.doc);
     const stage = mode === "groupBy" ? stageOf(w.doc, "group")
-        : mode === "pivot" ? stageOf(w.doc, "spread")
+        : mode === "pivot" ? stageOf(w.doc, "pivot")
         : null;
     const own = stage ? lookupValue(stage.layer?.formats, col.name) : null;
     if (own) return own;

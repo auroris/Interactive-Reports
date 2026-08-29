@@ -131,7 +131,6 @@ public sealed record InteractiveReportSchema(
     InteractiveReportEditLink? EditLink,
     IReadOnlyDictionary<string, InteractiveReportColumnOptions>? ColumnOverrides,
     ReportState DefaultState,
-    int StateVersion,
     InteractiveReportCapabilities Capabilities,
     IReadOnlyList<string> Features,
     InteractiveReportLimits Limits,

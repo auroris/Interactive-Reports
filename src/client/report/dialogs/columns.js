@@ -2,7 +2,7 @@
 // (Select Columns shuttle), what a column's heading says (Rename), and the
 // per-column settings dialog (visibility, alignment, format mask, styling).
 // All three follow the stage context: the source table in grid, the group
-// stage's table under a group tail, the spread output's presentation maps
+// stage's table under a group tail, the Pivot output's presentation maps
 // under a pivot. Display As (link/image renderers) is a source-table
 // affordance — an aggregate is never a link.
 

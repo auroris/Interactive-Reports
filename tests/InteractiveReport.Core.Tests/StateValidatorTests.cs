@@ -10,15 +10,12 @@ public class StateValidatorTests
         => StateValidator.Validate(def ?? OrdersDefinition(ReportDialect.Sqlite), state, OrdersSchema);
 
     [Fact]
-    public void Old_state_versions_are_rejected_with_a_precise_error()
+    public void Legacy_version_metadata_is_ignored()
     {
         foreach (var version in new[] { 1, 2 })
         {
-            var ex = Assert.Throws<ReportValidationException>(() =>
-                Validate(new ReportState { V = version }));
-
-            Assert.Contains(ex.Errors, error => error.Path == "v" && error.Message ==
-                $"state version {version} is not supported; this server requires version 3 pipeline documents");
+            var state = System.Text.Json.JsonSerializer.Deserialize<ReportState>($"{{\"v\":{version}}}")!;
+            Assert.Equal(ViewMode.Grid, Validate(state).View.Mode);
         }
     }
 
@@ -592,13 +589,17 @@ public class StateValidatorTests
     }
 
     [Fact]
-    public void Spread_without_a_group_stage_is_an_unsupported_pipeline_shape()
+    public void Group_and_pivot_cannot_be_composed_into_one_tail()
     {
         var ex = Assert.Throws<ReportValidationException>(() =>
-            Validate(Doc(tail: [Spread(cols: ["STATUS"])])));
+            Validate(Doc(tail:
+            [
+                Group(by: ["CUSTOMER"]),
+                Pivot(rows: ["CUSTOMER"], cols: ["STATUS"]),
+            ])));
 
         Assert.Contains(ex.Errors, e => e.Path == "pipeline"
-            && e.Message.Contains("unsupported pipeline shape [source, spread]"));
+            && e.Message.Contains("unsupported pipeline shape [source, group,pivot]"));
     }
 
     [Fact]
@@ -808,45 +809,43 @@ public class StateValidatorTests
     }
 
     [Fact]
-    public void Group_layer_rejects_source_only_slots()
-    {
-        var filters = Assert.Throws<ReportValidationException>(() =>
-            Validate(Doc(tail:
-            [
-                Group(by: ["REGION"], layer: new StageLayer { Filters = [Filter("1 = 1")] }),
-            ])));
-        Assert.Contains(filters.Errors, e =>
-            e.Path == "pipeline[1].layer.filters" && e.Message.Contains("filters live on the source stage"));
-
-        var breaks = Assert.Throws<ReportValidationException>(() =>
-            Validate(Doc(tail:
-            [
-                Group(by: ["REGION"], layer: new StageLayer { Breaks = ["REGION"] }),
-            ])));
-        Assert.Contains(breaks.Errors, e =>
-            e.Path == "pipeline[1].layer.breaks" && e.Message.Contains("source stage"));
-
-        var aggregates = Assert.Throws<ReportValidationException>(() =>
-            Validate(Doc(tail:
-            [
-                Group(by: ["REGION"], layer: new StageLayer
-                {
-                    Aggregates = [new AggregateRule { Col = "REGION", Fn = AggregateFn.Count }],
-                }),
-            ])));
-        Assert.Contains(aggregates.Errors, e =>
-            e.Path == "pipeline[1].layer.aggregates" && e.Message.Contains("source stage"));
-    }
-
-    // ---- spread tail ----
-
-    [Fact]
-    public void Spread_splits_group_dimensions_into_rows_and_cols()
+    public void Group_layer_validates_filters_breaks_and_aggregates_against_its_output()
     {
         var result = Validate(Doc(tail:
         [
-            Group(by: ["CUSTOMER", "STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)]),
-            Spread(cols: ["STATUS"], totals: true),
+            Group(
+                by: ["REGION", "STATUS"],
+                values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
+                layer: new StageLayer
+                {
+                    Computed = [new ComputedColumn { Id = "c2", Expr = "m1 / __count" }],
+                    Filters = [Filter("__count > 1")],
+                    Breaks = ["REGION"],
+                    Aggregates =
+                    [
+                        new AggregateRule { Col = "m1", Fn = AggregateFn.Sum },
+                        new AggregateRule { Col = "c2", Fn = AggregateFn.Avg },
+                    ],
+                }),
+        ]));
+        var layer = result.View.GroupLayer!;
+        Assert.Single(layer.RowPredicates);
+        Assert.Equal("REGION", Assert.Single(layer.Breaks).Name);
+        Assert.Equal(["m1", "c2"], layer.Aggregates.Select(aggregate => aggregate.Column.Name));
+    }
+
+    // ---- pivot view ----
+
+    [Fact]
+    public void Pivot_declares_its_own_rows_columns_and_values()
+    {
+        var result = Validate(Doc(tail:
+        [
+            Pivot(
+                rows: ["CUSTOMER"],
+                cols: ["STATUS"],
+                values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
+                totals: true),
         ]));
 
         Assert.Equal(ViewMode.Pivot, result.View.Mode);
@@ -857,132 +856,98 @@ public class StateValidatorTests
     }
 
     [Fact]
-    public void Spread_col_not_in_group_by_goes_to_ignored()
+    public void Unknown_pivot_dimension_goes_to_ignored()
     {
         var result = Validate(Doc(tail:
         [
-            Group(by: ["CUSTOMER", "STATUS"]),
-            Spread(cols: ["STATUS", "REGION"]),
+            Pivot(rows: ["CUSTOMER"], cols: ["STATUS", "REMOVED"]),
         ]));
 
         Assert.Equal("STATUS", Assert.Single(result.View.PivotCols).Name);
-        Assert.Contains(result.Ignored, i => i.Kind == "spread"
-            && i.Detail == "spread column 'REGION' is not a group column of the preceding stage");
+        Assert.Contains(result.Ignored, i => i.Kind == "view"
+            && i.Detail == "unknown pivot column 'REMOVED'");
     }
 
     [Fact]
-    public void Spread_requires_a_valid_column_dimension_and_a_leftover_row_dimension()
+    public void Pivot_requires_valid_disjoint_row_and_column_dimensions()
     {
         var noCols = Assert.Throws<ReportValidationException>(() =>
             Validate(Doc(tail:
             [
-                Group(by: ["CUSTOMER"]),
-                Spread(cols: ["REGION"]),   // not a group column → ignored → none left
+                Pivot(rows: ["CUSTOMER"], cols: ["REMOVED"]),
             ])));
-        Assert.Contains(noCols.Errors, e => e.Path == "pipeline[2].shape.cols"
+        Assert.Contains(noCols.Errors, e => e.Path == "pipeline[1].shape.cols"
             && e.Message.Contains("at least one valid column dimension"));
 
-        var noRows = Assert.Throws<ReportValidationException>(() =>
+        var overlap = Assert.Throws<ReportValidationException>(() =>
             Validate(Doc(tail:
             [
-                Group(by: ["STATUS"]),
-                Spread(cols: ["STATUS"]),
+                Pivot(rows: ["STATUS"], cols: ["STATUS"]),
             ])));
-        Assert.Contains(noRows.Errors, e => e.Path == "pipeline[2].shape.cols"
-            && e.Message.Contains("left over as a row dimension"));
+        Assert.Contains(overlap.Errors, e => e.Path == "pipeline[1].shape.cols"
+            && e.Message.Contains("already a row dimension"));
     }
 
     [Fact]
-    public void Spread_layer_carries_labels_and_formats_only()
+    public void Pivot_layer_is_carried_until_the_runtime_schema_is_known()
     {
-        var computed = Assert.Throws<ReportValidationException>(() =>
-            Validate(Doc(tail:
-            [
-                Group(by: ["CUSTOMER", "STATUS"]),
-                Spread(cols: ["STATUS"], layer: new StageLayer
-                {
-                    Computed = [new ComputedColumn { Id = "c1", Expr = "1" }],
-                }),
-            ])));
-        Assert.Contains(computed.Errors, e => e.Path == "pipeline[2].layer.computed");
-
-        var sorts = Assert.Throws<ReportValidationException>(() =>
-            Validate(Doc(tail:
-            [
-                Group(by: ["CUSTOMER", "STATUS"]),
-                Spread(cols: ["STATUS"], layer: new StageLayer
-                {
-                    Sorts = [new SortRule { Col = "CUSTOMER" }],
-                }),
-            ])));
-        Assert.Contains(sorts.Errors, e => e.Path == "pipeline[2].layer.sorts");
-
-        var highlights = Assert.Throws<ReportValidationException>(() =>
-            Validate(Doc(tail:
-            [
-                Group(by: ["CUSTOMER", "STATUS"]),
-                Spread(cols: ["STATUS"], layer: new StageLayer
-                {
-                    Highlights = [new HighlightRule { Id = "h1", Expr = "1 = 1", Style = new HighlightStyle { Bg = "red" } }],
-                }),
-            ])));
-        Assert.Contains(highlights.Errors, e => e.Path == "pipeline[2].layer.highlights");
-
-        var columns = Assert.Throws<ReportValidationException>(() =>
-            Validate(Doc(tail:
-            [
-                Group(by: ["CUSTOMER", "STATUS"]),
-                Spread(cols: ["STATUS"], layer: new StageLayer { Columns = ["CUSTOMER"] }),
-            ])));
-        Assert.Contains(columns.Errors, e => e.Path == "pipeline[2].layer.columns");
-
-        // Labels and formats — presentation, never validated — pass untouched.
         var ok = Validate(Doc(tail:
         [
-            Group(by: ["CUSTOMER", "STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)]),
-            Spread(cols: ["STATUS"], layer: new StageLayer
+            Pivot(rows: ["CUSTOMER"], cols: ["STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)], layer: new StageLayer
             {
+                Computed = [new ComputedColumn { Id = "c1", Expr = "1" }],
+                Filters = [Filter("CUSTOMER = 'Acme Corp'")],
+                Sorts = [new SortRule { Col = "CUSTOMER" }],
+                Columns = ["CUSTOMER"],
+                Highlights = [new HighlightRule { Id = "h1", Expr = "1 = 1", Style = new HighlightStyle { Bg = "red" } }],
                 Labels = new() { ["m1@[\"SHIPPED\"]"] = "Shipped Total", ["GHOST"] = "Dormant" },
                 Formats = new() { ["m1@[\"SHIPPED\"]"] = new ColumnFormat { Mask = "decimal2" } },
             }),
         ]));
-        Assert.Equal("Shipped Total", ok.View.SpreadLabels!["m1@[\"SHIPPED\"]"]);
+        var layer = ok.View.PivotLayer!;
+        Assert.Single(layer.Computed!);
+        Assert.Single(layer.Filters!);
+        Assert.Single(layer.Sorts!);
+        Assert.Single(layer.Highlights!);
+        Assert.Equal("Shipped Total", layer.Labels!["m1@[\"SHIPPED\"]"]);
+
+        var tableOnly = Assert.Throws<ReportValidationException>(() =>
+            Validate(Doc(tail:
+            [
+                Pivot(rows: ["CUSTOMER"], cols: ["STATUS"], layer: new StageLayer
+                {
+                    Breaks = ["CUSTOMER"],
+                    Aggregates = [new AggregateRule { Col = "CUSTOMER", Fn = AggregateFn.Count }],
+                }),
+            ])));
+        Assert.Contains(tableOnly.Errors, error => error.Path == "pipeline[1].layer.breaks");
+        Assert.Contains(tableOnly.Errors, error => error.Path == "pipeline[1].layer.aggregates");
     }
 
     [Fact]
-    public void Under_a_spread_group_highlights_and_metric_sorts_become_notices()
+    public void Group_and_pivot_are_independent_shelf_branches()
     {
-        var result = Validate(Doc(tail:
-        [
-            Group(
-                by: ["CUSTOMER", "STATUS"],
-                values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
-                layer: new StageLayer
-                {
-                    Sorts =
-                    [
-                        new SortRule { Col = "CUSTOMER", Dir = SortDir.Desc },   // row dim: honored
-                        new SortRule { Col = "m1", Dir = SortDir.Desc },         // metric: inert
-                    ],
-                    Highlights =
-                    [
-                        new HighlightRule
+        var result = Validate(Doc(
+            tail:
+            [
+                Pivot(rows: ["CUSTOMER"], cols: ["STATUS"]),
+            ],
+            shelf: new()
+            {
+                ["groupBy"] =
+                [
+                    Group(
+                        by: ["REGION"],
+                        layer: new StageLayer
                         {
-                            Id = "h1", Scope = "row", Expr = "m1 > 1",
-                            Style = new HighlightStyle { Bg = "red" },
-                        },
-                    ],
-                }),
-            Spread(cols: ["STATUS"]),
-        ]));
+                            Filters = [Filter("__count > 1")],
+                        }),
+                ],
+            }));
 
-        var layer = result.View.GroupLayer!;
-        Assert.Equal("CUSTOMER", Assert.Single(layer.Sorts).Column.Name);
-        Assert.Empty(layer.Decorations);
-        Assert.Contains(result.Ignored, i => i.Kind == "sort"
-            && i.Detail.Contains("group sort on 'm1' is inert under a spread"));
-        Assert.Contains(result.Ignored, i => i.Kind == "highlight"
-            && i.Detail.Contains("group-stage highlights are inert under a spread"));
+        Assert.Equal(ViewMode.Pivot, result.View.Mode);
+        Assert.Null(result.View.GroupLayer);
+        Assert.Empty(result.View.Values);
     }
 
     [Fact]
@@ -1006,8 +971,7 @@ public class StateValidatorTests
             },
             tail:
             [
-                Group(by: ["CUSTOMER", "STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)]),
-                Spread(cols: ["STATUS"]),
+                Pivot(rows: ["CUSTOMER"], cols: ["STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)]),
             ],
             shelf: new()
             {

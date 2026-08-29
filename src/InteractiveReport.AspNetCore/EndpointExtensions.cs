@@ -310,7 +310,6 @@ public static class EndpointExtensions
                 EditLink: ResolveEditLink(def, columns, ctx),
                 ColumnOverrides: ResolveColumnOverrides(def, columns),
                 DefaultState: SchemaDefaultState(def),
-                StateVersion: ReportState.CurrentVersion,
                 Capabilities: new InteractiveReportCapabilities(
                     ExpressionLanguageCatalog.Functions,
                     AggregateCatalog.FunctionsByColumnType,

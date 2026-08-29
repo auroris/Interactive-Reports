@@ -22,14 +22,6 @@ public static class StateValidator
 
     public static ValidatedState Validate(ReportDefinition def, ReportState state, ReportSchema schema)
     {
-        if (state.V != ReportState.CurrentVersion)
-        {
-            throw new ReportValidationException(
-                [new ValidationError(
-                    "v",
-                    $"state version {state.V} is not supported; this server requires version {ReportState.CurrentVersion} pipeline documents")]);
-        }
-
         // Structural nulls crash the resolver's deep copy before any schema check runs,
         // so they gate here. A structurally broken caller document is the caller's 400;
         // a broken default state is server-side data and fails as a configuration error.
@@ -178,7 +170,7 @@ public static class StateValidator
         return resolved;
     }
 
-    private static List<ColumnModel> ValidateBreaks(
+    internal static List<ColumnModel> ValidateBreaks(
         List<string>? requested,
         ReportSchema schema,
         List<IgnoredItem> ignored,

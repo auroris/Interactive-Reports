@@ -6,7 +6,7 @@ namespace InteractiveReport.Core.Validation;
 /// <summary>
 /// The typed, schema-checked form of a state document. Only this — never the raw DTO —
 /// reaches the query composer. The flat properties are the source stage's layer; View
-/// carries the validated tail (group/spread/chart) including its own stage layer.
+/// carries the validated independent view (group/pivot/chart) including its own layer.
 /// </summary>
 public sealed class ValidatedState
 {
@@ -45,7 +45,7 @@ public sealed class ValidatedState
     /// <summary>
     /// Returns this state with source Labels applied to every column surface that feeds
     /// response metadata, so server-rendered output (CSV headers, synthetic
-    /// sum(…) labels, spread cells) shows the document's names exactly as the client
+    /// sum(…) labels, Pivot cells) shows the document's names exactly as the client
     /// displays them. Column names are untouched — composition and row keys are
     /// unaffected — and query paths never call this. Stage-layer label overrides are
     /// applied by the export shaper on top of the metadata this produces.
@@ -89,6 +89,10 @@ public sealed class ValidatedState
                 GroupLayer = layer with
                 {
                     SelectColumns = layer.SelectColumns.Select(Relabel).ToList(),
+                    Aggregates = layer.Aggregates
+                        .Select(aggregate => aggregate with { Column = Relabel(aggregate.Column) })
+                        .ToList(),
+                    Breaks = layer.Breaks.Select(Relabel).ToList(),
                 },
             };
         }
@@ -117,7 +121,7 @@ public sealed class ValidatedState
 /// <summary>
 /// The validated pipeline tail. Grid is the bare source stage; GroupBy pushes a GROUP BY
 /// down and paginates groups; Pivot uses the same grouped query (row + column dims) and
-/// spreads in memory; Chart collapses the whole filtered set to (label, metric) points.
+/// pivots in memory; Chart collapses the whole filtered set to (label, metric) points.
 /// Values fall back to the implicit __count when empty.
 /// </summary>
 public sealed record ValidView(
@@ -129,7 +133,7 @@ public sealed record ValidView(
     bool Totals = false,
     ValidChart? Chart = null,
     ValidStageLayer? GroupLayer = null,
-    IReadOnlyDictionary<string, string>? SpreadLabels = null)
+    StageLayer? PivotLayer = null)
 {
     public static readonly ValidView Grid = new(ViewMode.Grid, [], [], [], []);
 }
@@ -138,18 +142,23 @@ public sealed record ValidView(
 /// The validated layer of a group stage, bound to that stage's derived output schema
 /// (dims + __count + metrics + layer computed). Computed and decoration rules push down
 /// through one more SQL wrap; SelectColumns are the visible set when the stage is
-/// terminal; Labels apply to export metadata only.
+/// terminal. Aggregates and control breaks operate over the completed, post-filter
+/// group table, exactly as their source-layer counterparts operate over the filtered
+/// source table. Labels apply to export metadata only.
 /// </summary>
 public sealed record ValidStageLayer(
     ReportSchema StageSchema,
     IReadOnlyList<CompiledRule<DefineColumnEffect>> Computed,
+    IReadOnlyList<CompiledRule<IncludeRowEffect>> RowPredicates,
     IReadOnlyList<CompiledRule<HighlightEffect>> Decorations,
     IReadOnlyList<ValidSort> Sorts,
     IReadOnlyList<ColumnModel> SelectColumns,
+    IReadOnlyList<ValidAggregate> Aggregates,
+    IReadOnlyList<ColumnModel> Breaks,
     IReadOnlyDictionary<string, string> Labels)
 {
     public static ValidStageLayer Empty(ReportSchema stageSchema, IReadOnlyList<ColumnModel> selectColumns)
-        => new(stageSchema, [], [], [], selectColumns, new Dictionary<string, string>());
+        => new(stageSchema, [], [], [], [], selectColumns, [], [], new Dictionary<string, string>());
 }
 
 public enum ViewMode

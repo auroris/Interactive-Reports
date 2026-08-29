@@ -17,7 +17,7 @@ namespace InteractiveReport.Core.Execution;
 /// </summary>
 public sealed class ReportExecutor
 {
-    /// <summary>Hard ceiling on spread source groups regardless of definition settings.</summary>
+    /// <summary>Hard ceiling on Pivot source groups regardless of definition settings.</summary>
     public const int MaxPivotGroups = 10_000;
 
     /// <summary>Ceiling a definition's MaxChartPoints may be configured up to.</summary>
@@ -89,7 +89,13 @@ public sealed class ReportExecutor
         var result = validated.View.Mode switch
         {
             ViewMode.GroupBy => await QueryGroupStage(definition, validated, contextParams, stopwatch, ct),
-            ViewMode.Pivot => await QuerySpread(definition, validated, contextParams, stopwatch, ct),
+            ViewMode.Pivot => await QueryPivot(
+                definition,
+                validated,
+                contextParams,
+                stopwatch,
+                ct,
+                maxRows: definition.MaxRows),
             ViewMode.Chart => await QueryChart(definition, validated, contextParams, stopwatch, ct),
             _ => await QueryGrid(definition, validated, contextParams, stopwatch, ct),
         };
@@ -106,7 +112,7 @@ public sealed class ReportExecutor
     /// Uses the same validated state without paging, capped when MaxRows is positive.
     /// An export is the server rendering what the user sees, so the ingested document's display
     /// labels, stage-layer label overrides, and grid renderers apply here (headers,
-    /// sum(…) labels, spread cells, link/image HTML) — the posted document is the
+    /// sum(…) labels, Pivot cells, link/image HTML) — the posted document is the
     /// source of truth, since the client's state may never have been saved.
     /// </summary>
     public async Task<ExportResult> Export(
@@ -134,20 +140,22 @@ public sealed class ReportExecutor
 
         if (validated.View.Mode == ViewMode.Pivot)
         {
-            var pivot = await QuerySpread(
+            var pivot = await QueryPivot(
                 definition,
                 validated,
                 contextParams,
                 Stopwatch.StartNew(),
-                ct);
+                ct,
+                unpaged: true,
+                maxRows: definition.MaxRows);
             return new ExportResult(
-                ApplyStageLabels(pivot.Columns, validated.View.SpreadLabels),
+                pivot.Columns,
                 PivotTableBuilder.RowsForExport(
                     pivot.Columns,
                     pivot.Rows,
                     pivot.Aggregates,
                     validated.View.PivotRows),
-                Truncated: false);
+                definition.MaxRows > 0 && pivot.TotalRows > pivot.Rows.Count);
         }
 
         if (validated.View.Mode == ViewMode.Chart)
@@ -251,15 +259,29 @@ public sealed class ReportExecutor
         Stopwatch stopwatch,
         CancellationToken ct)
     {
-        var (page, count) = QueryComposer.ComposeGroupStage(definition, state);
+        var composed = QueryComposer.ComposeGroupStageQueries(definition, state);
         var compiler = DialectSupport.GetCompiler(definition.GetEffectiveDialect());
         var layer = state.View.GroupLayer!;
 
         await using var connection = await _connections.Open(definition, ct);
         await using var scope = await _connections.BeginReadScope(connection, definition, ct);
         var reader = CreateReader(connection, compiler, definition, contextParams, scope.Transaction);
-        var queryRows = await reader.ReadCountAndRows(count, page, ct);
+        var queryRows = await reader.ReadTableQueries(
+            composed,
+            layer.Breaks,
+            layer.Aggregates,
+            ct);
         var executionRows = queryRows.Rows;
+        var breakContinues = false;
+        if (layer.Breaks.Count > 0
+            && !state.PageAll
+            && executionRows.Count > state.PageSize)
+        {
+            var boundary = executionRows[state.PageSize];
+            executionRows.RemoveRange(state.PageSize, executionRows.Count - state.PageSize);
+            breakContinues = executionRows.Count > 0
+                && SameBreakKey(executionRows[^1], boundary, layer.Breaks);
+        }
         await scope.CompleteAsync(ct);
         var highlights = layer.Decorations.Count > 0
             ? HighlightEvaluator.Evaluate(layer.Decorations, executionRows)
@@ -274,6 +296,9 @@ public sealed class ReportExecutor
             Rows = rows,
             Page = Page(state),
             TotalRows = queryRows.TotalRows,
+            Aggregates = queryRows.Aggregates,
+            BreakTotals = queryRows.BreakTotals,
+            BreakContinues = breakContinues,
             Highlights = highlights,
             Ignored = state.Ignored,
             ElapsedMs = stopwatch.ElapsedMilliseconds,
@@ -353,42 +378,41 @@ public sealed class ReportExecutor
         IReadOnlyList<ColumnModel> breaks)
         => breaks.All(column => Equals(left[column.Name], right[column.Name]));
 
-    private async Task<ReportResult> QuerySpread(
+    private async Task<ReportResult> QueryPivot(
         ReportDefinition definition,
         ValidatedState state,
         IReadOnlyDictionary<string, object?> contextParams,
         Stopwatch stopwatch,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool unpaged = false,
+        int maxRows = 0)
     {
         var view = state.View;
-        var layer = view.GroupLayer!;
-        var source = QueryComposer.ComposeSpreadSource(definition, state, MaxPivotGroups);
+        var source = QueryComposer.ComposePivotSource(definition, state, MaxPivotGroups);
         var compiler = DialectSupport.GetCompiler(definition.GetEffectiveDialect());
-        var valueCount = view.Values.Count + layer.Computed.Count;
+        var valueCount = view.Values.Count;
 
         List<PivotGroup> groups;
         List<PivotGroup> totalGroups = [];
-        IReadOnlyList<CompiledRule<DefineColumnEffect>> totalsComputed = [];
         await using (var connection = await _connections.Open(definition, ct))
         {
             if (!view.Totals)
             {
                 var reader = CreateReader(connection, compiler, definition, contextParams);
-                groups = await ReadSpreadSource(reader);
-                EnsureSpreadGroupLimit(groups);
+                groups = await ReadPivotSource(reader);
+                EnsurePivotGroupLimit(groups);
             }
             else
             {
                 await using var scope = await _connections.BeginReadScope(connection, definition, ct);
                 var reader = CreateReader(connection, compiler, definition, contextParams, scope.Transaction);
-                groups = await ReadSpreadSource(reader);
-                EnsureSpreadGroupLimit(groups);
-                totalsComputed = QueryComposer.SpreadTotalsComputed(view);
+                groups = await ReadPivotSource(reader);
+                EnsurePivotGroupLimit(groups);
                 totalGroups = await reader.ReadPivotGroups(
-                    QueryComposer.ComposeSpreadTotals(definition, state, totalsComputed),
+                    QueryComposer.ComposePivotTotals(definition, state),
                     0,
                     view.PivotCols.Count,
-                    view.Values.Count + totalsComputed.Count,
+                    view.Values.Count,
                     ct);
                 await scope.CompleteAsync(ct);
             }
@@ -398,22 +422,30 @@ public sealed class ReportExecutor
             groups,
             state,
             definition.MaxPivotColumns,
-            totalGroups,
-            totalsComputed);
+            totalGroups);
+        var processed = PivotLayerProcessor.Apply(
+            pivot,
+            state,
+            definition.GetEffectiveDialect(),
+            unpaged,
+            maxRows);
         stopwatch.Stop();
         return new ReportResult
         {
             AvailableColumns = ReportResultColumns.From(state.Schema),
-            Columns = pivot.Columns,
-            Rows = pivot.Rows,
-            Page = new PageRequest { Index = 1, Size = Math.Max(1, pivot.Rows.Count) },
-            TotalRows = pivot.Rows.Count,
-            Aggregates = pivot.Totals,
-            Ignored = state.Ignored,
+            Columns = processed.Columns,
+            Rows = processed.Rows,
+            Page = unpaged
+                ? new PageRequest { Index = 1, Size = Math.Max(1, processed.Rows.Count) }
+                : Page(state),
+            TotalRows = processed.TotalRows,
+            Aggregates = processed.Totals,
+            Highlights = processed.Highlights,
+            Ignored = processed.Ignored,
             ElapsedMs = stopwatch.ElapsedMilliseconds,
         };
 
-        Task<List<PivotGroup>> ReadSpreadSource(ReportQueryReader reader)
+        Task<List<PivotGroup>> ReadPivotSource(ReportQueryReader reader)
             => reader.ReadPivotGroups(
                 source,
                 view.PivotRows.Count,
@@ -422,13 +454,13 @@ public sealed class ReportExecutor
                 ct);
     }
 
-    private static void EnsureSpreadGroupLimit(IReadOnlyCollection<PivotGroup> groups)
+    private static void EnsurePivotGroupLimit(IReadOnlyCollection<PivotGroup> groups)
     {
         if (groups.Count <= MaxPivotGroups) return;
         throw new ReportValidationException(
             [new ValidationError(
-                "pipeline[2].shape",
-                $"spread source exceeds {MaxPivotGroups} groups — filter further or choose lower-cardinality dimensions")]);
+                "pipeline[1].shape",
+                $"pivot source exceeds {MaxPivotGroups} groups — filter further or choose lower-cardinality dimensions")]);
     }
 
     /// <summary>Export-only: stage-layer label overrides win over generated metadata labels.</summary>

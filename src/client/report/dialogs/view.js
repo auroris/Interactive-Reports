@@ -1,5 +1,5 @@
 // Tail-authoring dialogs: Group By, Pivot, and Chart. Each writes the pipeline's
-// tail stages — [group], [group, spread], or [chart] — and swaps them in through
+// tail stages — [group], [pivot], or [chart] — and swaps them in through
 // the shelf so the toolbar can switch back to any configured mode without
 // re-asking, including after a saved-report reload. Editing a spec preserves the
 // existing stages' layers (per-view columns, labels, formats, computed, sorts,
@@ -77,15 +77,15 @@ function assignMetricIds(rows, previous) {
 
 /// Retired dims and metrics take their dependent stage-layer state with them —
 /// the same coarse rule as deleting a computed column.
-function pruneRetiredStageState(d, retiredMetricIds, retiredDims) {
-    const stage = stageOf(d, "group");
+function pruneRetiredStageState(d, kind, retiredMetricIds, retiredDims) {
+    const stage = stageOf(d, kind);
     if (!stage) return;
     pruneRetiredMetrics(d, stage, retiredMetricIds);
     for (const dim of retiredDims) removeStageComputedColumn(d, stage, dim);
 }
 
 const groupShape = tail => tail?.find(s => (s.shape?.kind ?? "") === "group") ?? null;
-const spreadShape = tail => tail?.find(s => (s.shape?.kind ?? "") === "spread") ?? null;
+const pivotShape = tail => tail?.find(s => (s.shape?.kind ?? "") === "pivot") ?? null;
 
 export function groupByDialog(w) {
     const existingTail = configuredTail(w.doc, "groupBy");
@@ -111,7 +111,7 @@ export function groupByDialog(w) {
                 const stage = structuredClone(existingGroup) ?? {};
                 stage.shape = { kind: "group", by, values: withIds };
                 activateTail(d, "groupBy", [stage]);
-                pruneRetiredStageState(d, retired, retiredDims);
+                pruneRetiredStageState(d, "group", retired, retiredDims);
             });
         },
     });
@@ -119,16 +119,13 @@ export function groupByDialog(w) {
 
 export function pivotDialog(w) {
     const existingTail = configuredTail(w.doc, "pivot");
-    const existingGroup = groupShape(existingTail);
-    const existingSpread = spreadShape(existingTail);
-    const shape = existingGroup?.shape ?? {};
-    const spreadCols = existingSpread?.shape?.cols ?? [];
-    const rowDims = (shape.by ?? []).filter(n => !spreadCols.some(c => sameColumn(c, n)));
+    const existingPivot = pivotShape(existingTail);
+    const shape = existingPivot?.shape ?? {};
 
-    const rows = dimList(w, rowDims, { addLabel: w.t("pivot.rowColumn"), max: 2 });
-    const cols = dimList(w, spreadCols, { addLabel: w.t("common.column"), max: 2 });
+    const rows = dimList(w, shape.rows, { addLabel: w.t("pivot.rowColumn"), max: 2 });
+    const cols = dimList(w, shape.cols, { addLabel: w.t("common.column"), max: 2 });
     const values = valueList(w, shape.values);
-    const totalsInp = el("input", { type: "checkbox", checked: existingSpread?.shape?.totals === true });
+    const totalsInp = el("input", { type: "checkbox", checked: shape.totals === true });
 
     openDialog({
         owner: w,
@@ -146,16 +143,15 @@ export function pivotDialog(w) {
             if (!rowNames.length || !colNames.length)
                 throw new Error(w.t("pivot.pickDimensions"));
             const { values: withIds, retired } = assignMetricIds(values.list.read(), shape.values);
-            const by = [...rowNames, ...colNames];
-            const retiredDims = (shape.by ?? []).filter(old => !by.some(n => sameColumn(n, old)));
+            const dimensions = [...rowNames, ...colNames];
+            const retiredDims = [...(shape.rows ?? []), ...(shape.cols ?? [])]
+                .filter(old => !dimensions.some(n => sameColumn(n, old)));
             return w.apply(d => {
-                const group = structuredClone(existingGroup) ?? {};
-                group.shape = { kind: "group", by, values: withIds };
-                const spread = structuredClone(existingSpread) ?? {};
-                spread.shape = { kind: "spread", cols: colNames };
-                if (totalsInp.checked) spread.shape.totals = true;
-                activateTail(d, "pivot", [group, spread]);
-                pruneRetiredStageState(d, retired, retiredDims);
+                const pivot = structuredClone(existingPivot) ?? {};
+                pivot.shape = { kind: "pivot", rows: rowNames, cols: colNames, values: withIds };
+                if (totalsInp.checked) pivot.shape.totals = true;
+                activateTail(d, "pivot", [pivot]);
+                pruneRetiredStageState(d, "pivot", retired, retiredDims);
             });
         },
     });

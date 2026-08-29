@@ -21,7 +21,7 @@ public abstract class SavedReportStoreCorpus
         Title = title,
         Owner = owner,
         IsGlobal = global,
-        StateJson = """{"v":3,"pipeline":[{"shape":{"kind":"source"},"layer":{"filters":[]}}]}""",
+        StateJson = """{"pipeline":[{"shape":{"kind":"source"},"layer":{"filters":[]}}]}""",
     };
 
     [SkippableFact]
@@ -56,7 +56,7 @@ public abstract class SavedReportStoreCorpus
             Title = "Regional View",
             Owner = null,
             IsGlobal = true,
-            StateJson = """{"v":3,"pipeline":[{"shape":{"kind":"source"},"layer":{}}]}""",
+            StateJson = """{"pipeline":[{"shape":{"kind":"source"},"layer":{}}]}""",
             ModifiedUtc = stamp,
             Origin = SavedReportOrigin.Configured,
         });

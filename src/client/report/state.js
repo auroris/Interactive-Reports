@@ -1,10 +1,10 @@
-// Pure report-state transformations over the v3 pipeline document. Keeping these
+// Pure report-state transformations over the pipeline document. Keeping these
 // outside the custom element makes shape guarantees, tail switching, and
 // dependency cleanup independently testable.
 //
-// A document is: { v, search?, page, pipeline: [stage...], shelf }.
+// A document is: { search?, page, pipeline: [stage...], shelf }.
 // pipeline[0] is always the source stage; the tail (later stages) IS the view —
-// [] grid, [group] groupBy, [group, spread] pivot, [chart] chart. The shelf holds
+// [] grid, [group] groupBy, [pivot] pivot, [chart] chart. The shelf holds
 // the parked tails of inactive modes so the toolbar can switch back losslessly.
 
 import { resolveLocale, translate } from "../core/localization.js";
@@ -17,6 +17,7 @@ export function normalizeReportState(raw, defaultPageSize = 50, defaults = null)
     // The retired schema-snapshot key: server documents are authoritative and
     // the server validates on query, so the client neither checks nor carries it.
     delete state.schema;
+    delete state.v;
     if (!Array.isArray(state.pipeline) || state.pipeline.length === 0)
         state.pipeline = [{}];
     const head = state.pipeline[0];
@@ -29,7 +30,7 @@ export function normalizeReportState(raw, defaultPageSize = 50, defaults = null)
     return state;
 }
 
-export function serializeReportState(source, stateVersion) {
+export function serializeReportState(source) {
     const walk = value => {
         if (Array.isArray(value)) return value.map(walk);
         if (value && typeof value === "object") {
@@ -43,7 +44,9 @@ export function serializeReportState(source, stateVersion) {
         return value;
     };
 
-    return { ...walk(source), v: stateVersion };
+    const result = walk(source);
+    delete result.v;
+    return result;
 }
 
 // --- pipeline access ---------------------------------------------------------
@@ -71,7 +74,7 @@ export function tailOf(doc) {
 export function modeOf(doc) {
     const kinds = tailOf(doc).map(s => s.shape?.kind);
     if (kinds.includes("chart")) return "chart";
-    if (kinds.includes("spread")) return "pivot";
+    if (kinds.includes("pivot")) return "pivot";
     if (kinds.includes("group")) return "groupBy";
     return "grid";
 }
@@ -107,11 +110,9 @@ export function activateTail(doc, mode, tail = null) {
     return doc;
 }
 
-/// The row dimensions of an active pivot: group.by minus spread.cols, in by order.
+/// The row dimensions of an active pivot.
 export function pivotRowDims(doc) {
-    const by = stageOf(doc, "group")?.shape?.by ?? [];
-    const cols = (stageOf(doc, "spread")?.shape?.cols ?? []).map(c => String(c).toLowerCase());
-    return by.filter(name => !cols.includes(String(name).toLowerCase()));
+    return stageOf(doc, "pivot")?.shape?.rows ?? [];
 }
 
 // --- shared helpers ----------------------------------------------------------
@@ -149,9 +150,13 @@ const mapDeleteWhere = (map, predicate) => {
 
 /// True when an expression contains the column as an identifier, excluding quoted
 /// string contents and longer identifiers (c1 does not match c10 or 'c1').
-export function expressionReferencesColumn(expression, column) {
+export function expressionReferencesColumn(expression, column, { pivotFamily = false } = {}) {
     const source = String(expression ?? "");
     const target = String(column ?? "").toLowerCase();
+    const matches = name => {
+        const candidate = name.toLowerCase();
+        return candidate === target || (pivotFamily && candidate.startsWith(`${target}@`));
+    };
     let quoted = false;
     for (let index = 0; index < source.length;) {
         if (source[index] === "'") {
@@ -160,10 +165,25 @@ export function expressionReferencesColumn(expression, column) {
             index++;
             continue;
         }
+        if (!quoted && source[index] === "`") {
+            index++;
+            let identifier = "";
+            while (index < source.length) {
+                if (source[index] === "`" && source[index + 1] === "`") {
+                    identifier += "`";
+                    index += 2;
+                    continue;
+                }
+                if (source[index] === "`") { index++; break; }
+                identifier += source[index++];
+            }
+            if (matches(identifier)) return true;
+            continue;
+        }
         if (!quoted && /[A-Za-z_]/.test(source[index])) {
             let end = index + 1;
             while (end < source.length && /[A-Za-z0-9_]/.test(source[end])) end++;
-            if (source.slice(index, end).toLowerCase() === target) return true;
+            if (matches(source.slice(index, end))) return true;
             index = end;
             continue;
         }
@@ -177,6 +197,8 @@ export function expressionReferencesColumn(expression, column) {
 const tailReferencesColumn = (stages, column) => stages.some(stage => {
     const shape = stage.shape ?? {};
     return (shape.by ?? []).some(name => sameColumn(name, column))
+        || (shape.rows ?? []).some(name => sameColumn(name, column))
+        || (shape.cols ?? []).some(name => sameColumn(name, column))
         || (shape.values ?? []).some(value => sameColumn(value?.col, column))
         || sameColumn(shape.label, column)
         || sameColumn(shape.value, column);
@@ -234,27 +256,38 @@ export function removeSourceComputedColumn(state, column) {
     return dropped;
 }
 
-/// Delete one GROUP-layer computed column and its references within that stage —
-/// sorts, highlights, column selection, presentation maps — plus any spread-cell
-/// presentation keyed to its cell family ("{id}@…").
+/// Delete one derived-layer computed column and its references within that stage:
+/// filters, sorts, highlights, column selection, and presentation maps.
 export function removeStageComputedColumn(state, stage, column) {
     const layer = stageLayer(stage);
-    layer.computed = (layer.computed ?? []).filter(rule =>
-        !sameColumn(rule.id, column) && !expressionReferencesColumn(rule.expr, column));
-    layer.sorts = (layer.sorts ?? []).filter(rule => !sameColumn(rule.col, column));
+    const pivotFamily = stage?.shape?.kind === "pivot";
+    const matches = name => sameColumn(name, column)
+        || (pivotFamily && typeof name === "string"
+            && name.toLowerCase().startsWith(`${String(column).toLowerCase()}@`));
+    const expressionMatches = expression => expressionReferencesColumn(
+        expression,
+        column,
+        { pivotFamily });
+    const removedComputed = (layer.computed ?? []).filter(rule =>
+        sameColumn(rule.id, column) || expressionMatches(rule.expr));
+    layer.computed = (layer.computed ?? []).filter(rule => !removedComputed.includes(rule));
+    layer.filters = (layer.filters ?? []).filter(rule =>
+        !expressionMatches(rule.expr));
+    layer.sorts = (layer.sorts ?? []).filter(rule => !matches(rule.col));
+    layer.breaks = (layer.breaks ?? []).filter(name => !matches(name));
+    layer.aggregates = (layer.aggregates ?? []).filter(rule => !matches(rule.col));
     layer.highlights = (layer.highlights ?? []).filter(rule =>
-        !sameColumn(rule.col, column) && !expressionReferencesColumn(rule.expr, column));
+        !matches(rule.col) && !expressionMatches(rule.expr));
     if (Array.isArray(layer.columns))
-        layer.columns = layer.columns.filter(name => !sameColumn(name, column));
-    mapDeleteWhere(layer.labels, name => sameColumn(name, column));
-    mapDeleteWhere(layer.formats, name => sameColumn(name, column));
+        layer.columns = layer.columns.filter(name => !matches(name));
+    mapDeleteWhere(layer.labels, matches);
+    mapDeleteWhere(layer.formats, matches);
 
-    const prefix = `${String(column).toLowerCase()}@`;
-    const spread = stageOf(state, "spread");
-    if (spread?.layer) {
-        mapDeleteWhere(spread.layer.labels, name => name.toLowerCase().startsWith(prefix));
-        mapDeleteWhere(spread.layer.formats, name => name.toLowerCase().startsWith(prefix));
-    }
+    // A computed definition removed because it consumed the retired column has
+    // an identity of its own. Strip that identity from the rest of the layer too.
+    for (const rule of removedComputed)
+        if (!sameColumn(rule.id, column)) removeStageComputedColumn(state, stage, rule.id);
+
     return state;
 }
 
@@ -270,10 +303,11 @@ export function pruneRetiredMetrics(state, stage, retiredIds) {
 export function scopedSearchExpression(column, type, rawValue, context = null) {
     const value = rawValue.trim();
     if (!value) throw new Error(translate(context, "search.enterValue"));
+    const reference = expressionIdentifier(column);
 
     switch (type) {
         case "text":
-            return `CONTAINS(${column}, ${quote(value)})`;
+            return `CONTAINS(${reference}, ${quote(value)})`;
         case "number": {
             const locale = resolveLocale(context);
             const normalized = locale === "fr-CA"
@@ -283,17 +317,17 @@ export function scopedSearchExpression(column, type, rawValue, context = null) {
                     : value;
             if (!/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(normalized))
                 throw new Error(translate(context, "search.notNumber", { value }));
-            return `${column} = ${normalized}`;
+            return `${reference} = ${normalized}`;
         }
         case "date":
             if (!/^\d{4}-\d{2}-\d{2}$/.test(value))
                 throw new Error(translate(context, "search.notDate", { value }));
-            return `${column} = TO_DATE(${quote(value)})`;
+            return `${reference} = TO_DATE(${quote(value)})`;
         case "bool": {
             const normalized = value.toLowerCase();
             const french = resolveLocale(context) === "fr-CA";
-            if (normalized === "true" || normalized === "1" || (french && normalized === "vrai")) return column;
-            if (normalized === "false" || normalized === "0" || (french && normalized === "faux")) return `NOT ${column}`;
+            if (normalized === "true" || normalized === "1" || (french && normalized === "vrai")) return reference;
+            if (normalized === "false" || normalized === "0" || (french && normalized === "faux")) return `NOT ${reference}`;
             throw new Error(translate(context, "search.notBoolean", { value }));
         }
         default:
@@ -303,4 +337,10 @@ export function scopedSearchExpression(column, type, rawValue, context = null) {
 
 function quote(value) {
     return `'${value.replaceAll("'", "''")}'`;
+}
+
+function expressionIdentifier(name) {
+    const ordinary = /^[A-Za-z_][A-Za-z0-9_$#]*$/.test(name);
+    const keyword = /^(CASE|WHEN|THEN|ELSE|END|AND|OR|NOT|IS|NULL|BETWEEN)$/i.test(name);
+    return ordinary && !keyword ? name : `\`${name.replaceAll("`", "``")}\``;
 }

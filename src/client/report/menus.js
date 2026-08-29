@@ -2,9 +2,8 @@
 // Menus are pure dispatch — every entry opens a dialog or applies a one-line
 // doc mutation; nothing here owns state of its own. Every entry is gated by the
 // definition's feature whitelist and enabled per the current stage's
-// capabilities (stage.js): the same Columns/Compute/Sort/Highlight surfaces
-// operate on whichever table the pipeline's tail produces, while Filter always
-// edits the source stage.
+// capabilities (stage.js): the same Columns/Compute/Filter/Sort/Highlight
+// surfaces operate on whichever table the pipeline's tail produces.
 
 import { popupMenu } from "../core/menu.js";
 import { anyMutableFeature, columnFilterable, columnHelp, columnSortable, featureEnabled } from "./schema.js";
@@ -26,7 +25,7 @@ export function headerMenuAvailable(w, mode) {
         : mode === "groupBy"
             ? ["sort", "rename", "columnSettings", "columns", "filter"]
             : mode === "pivot"
-                ? ["sort", "rename", "columnSettings"]
+                ? ["sort", "rename", "columnSettings", "columns", "filter"]
                 : [];
     return features.some(f => featureEnabled(w, f));
 }
@@ -47,7 +46,7 @@ export function actionsMenuItems(w) {
         [
             ...feature("columns", { label: w.t("menu.columns"), disabled: !caps.columns, onPick: () => columnsDialog(w) }),
             ...feature("columnSettings", { label: w.t("menu.columnSettings"), disabled: !caps.columnSettings, onPick: () => columnSettingsDialog(w) }),
-            ...feature("filter", { label: w.t("menu.filter"), onPick: () => filterDialog(w, {}) }),
+            ...feature("filter", { label: w.t("menu.filter"), disabled: !caps.filter, onPick: () => filterDialog(w, {}) }),
             ...feature("sort", { label: w.t("menu.sort"), disabled: !caps.sort, onPick: () => sortDialog(w) }),
             ...feature("pagination", {
                 label: w.t("menu.pagination"),
@@ -90,15 +89,9 @@ export function openHeaderMenu(w, col, anchor) {
     const ctx = stageContext(w);
     const feature = (name, ...entries) => featureEnabled(w, name) ? entries : [];
     const isDim = (ctx.dims ?? []).some(d => sameColumn(d, col));
-    const column = ctx.columns.find(c => sameColumn(c.name, col));
 
-    // Sorting: grid sorts the source table; group/pivot sort through the group
-    // layer (pivot restricted to row dims — cells have no single order column).
-    // The definition's per-column override gates on top of the mode rule.
-    const sortable = columnSortable(w, col)
-        && (ctx.mode === "grid"
-            || (ctx.mode === "groupBy" && ctx.caps.sort)
-            || (ctx.mode === "pivot" && ctx.caps.sort && isDim));
+    // Sorting follows the current table, including generated Pivot cells.
+    const sortable = ctx.caps.sort && columnSortable(w, col);
     const sortItems = sortable
         ? feature("sort",
             {
@@ -120,9 +113,8 @@ export function openHeaderMenu(w, col, anchor) {
             : []),
     ];
 
-    // Hiding: the terminal table's column selection. Group dims stay visible at
-    // T0 (hiding a dim makes rows look duplicated); spread output has no column
-    // selection at all.
+    // Hiding follows the terminal table's column selection. Row dimensions stay
+    // visible because hiding one makes distinct rows appear duplicated.
     if (ctx.caps.columns && ctx.caps.visibility && !isDim) {
         const visible = visibleStageColumnNames(ctx, w);
         presentation.push(...feature("columns", {
@@ -134,7 +126,7 @@ export function openHeaderMenu(w, col, anchor) {
         }));
     }
 
-    if (ctx.mode === "grid" && columnSortable(w, col)) {
+    if (ctx.caps.break && columnSortable(w, col)) {
         const breaking = (ctx.columnsLayer(w.doc).breaks ?? []).some(b => sameColumn(b, col));
         presentation.push(...feature("controlBreak", {
             label: breaking ? w.t("menu.removeControlBreak") : w.t("break.title"),
@@ -148,11 +140,7 @@ export function openHeaderMenu(w, col, anchor) {
         }));
     }
 
-    // Filter always targets the source stage; offer it where the clicked column
-    // exists there (grid columns; group/pivot pass-through dims), unless the
-    // definition's per-column override withdraws it.
-    const filterable = columnFilterable(w, col)
-        && (ctx.mode === "grid" || (isDim && !column?.metric));
+    const filterable = ctx.caps.filter && columnFilterable(w, col);
     const filterItems = filterable
         ? feature("filter", { label: w.t("menu.filter"), onPick: () => filterDialog(w, { col }) })
         : [];

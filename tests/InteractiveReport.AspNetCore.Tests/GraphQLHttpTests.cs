@@ -34,7 +34,6 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
             {
               "title": "File View",
               "state": {
-                "v": 3,
                 "pipeline": [
                   {
                     "shape": { "kind": "source" },

@@ -28,7 +28,7 @@ const json = value => new Response(JSON.stringify(value), {
     headers: { "Content-Type": "application/json" },
 });
 
-// The view mode derives from the posted pipeline's tail in v3 documents.
+// The view mode derives from the posted pipeline's tail.
 const chartStageOf = state =>
     (state.pipeline ?? []).find(s => s.shape?.kind === "chart")?.shape ?? null;
 
@@ -38,9 +38,7 @@ globalThis.fetch = async (url, options = {}) => {
     if (request.url === "/api") return json([{ name: "orders", title: "Orders" }]);
     if (request.url.endsWith("/schema")) {
         return json({
-            stateVersion: 3,
             defaultState: {
-                v: 3,
                 page: { index: 1, size: 25 },
                 pipeline: [{ shape: { kind: "source" }, layer: {} }],
             },

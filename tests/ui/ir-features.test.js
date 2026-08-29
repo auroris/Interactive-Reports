@@ -30,7 +30,6 @@ const FEATURES = {
 };
 const DEFAULT_STATES = {
     chipsy: {
-        v: 3,
         page: { index: 1, size: 25 },
         search: "acme",
         pipeline: [{
@@ -51,9 +50,7 @@ globalThis.fetch = async (url, options = {}) => {
     const report = /\/([^/]+)\/(schema|query|saved)$/.exec(String(url))?.[1];
     if (String(url).endsWith("/schema")) {
         return json({
-            stateVersion: 3,
             defaultState: DEFAULT_STATES[report] ?? {
-                v: 3,
                 page: { index: 1, size: 25 },
                 pipeline: [{ shape: { kind: "source" }, layer: {} }],
             },

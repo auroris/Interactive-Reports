@@ -32,18 +32,30 @@ internal sealed class ReportQueryReader(
         ComposedQueries queries,
         ValidatedState state,
         CancellationToken ct)
+        => await ReadTableQueries(queries, state.Breaks, state.Aggregates, ct);
+
+    /// <summary>
+    /// Reads the common terminal-table datasets. Both the source grid and Group table
+    /// return a count, optional footer aggregates, optional break subtotals, and rows;
+    /// only the schema-bound break and aggregate lists differ.
+    /// </summary>
+    public async Task<GridQueryRows> ReadTableQueries(
+        ComposedQueries queries,
+        IReadOnlyList<ColumnModel> breaks,
+        IReadOnlyList<ValidAggregate> aggregates,
+        CancellationToken ct)
     {
         if (!UseOracleCursorBatch)
         {
             var totalRows = await ReadCount(queries.Count, ct);
-            var aggregates = queries.Aggregates is null
+            var footerValues = queries.Aggregates is null
                 ? new Dictionary<string, IReadOnlyDictionary<string, object?>>()
-                : await ReadAggregates(queries.Aggregates, state.Aggregates, ct);
+                : await ReadAggregates(queries.Aggregates, aggregates, ct);
             var breakTotals = queries.BreakTotals is null
                 ? []
-                : await ReadBreakTotals(queries.BreakTotals, state.Breaks, state.Aggregates, ct);
+                : await ReadBreakTotals(queries.BreakTotals, breaks, aggregates, ct);
             var rows = (await ReadRows(queries.Page, maxRows: null, ct)).Rows;
-            return new GridQueryRows(totalRows, aggregates, breakTotals, rows);
+            return new GridQueryRows(totalRows, footerValues, breakTotals, rows);
         }
 
         var resultSets = new List<Query> { queries.Count };
@@ -59,39 +71,20 @@ internal sealed class ReportQueryReader(
         if (queries.Aggregates is not null)
         {
             await RequireNextResult(reader, ct);
-            aggregateValues = await MaterializeAggregates(reader, state.Aggregates, ct);
+            aggregateValues = await MaterializeAggregates(reader, aggregates, ct);
         }
 
         List<BreakTotal> breakValues = [];
         if (queries.BreakTotals is not null)
         {
             await RequireNextResult(reader, ct);
-            breakValues = await MaterializeBreakTotals(reader, state.Breaks, state.Aggregates, ct);
+            breakValues = await MaterializeBreakTotals(reader, breaks, aggregates, ct);
         }
 
         await RequireNextResult(reader, ct);
         var pageRows = (await MaterializeRows(reader, maxRows: null, ct)).Rows;
         await RequireEnd(reader, ct);
         return new GridQueryRows(total, aggregateValues, breakValues, pageRows);
-    }
-
-    public async Task<CountAndRowsQueryRows> ReadCountAndRows(
-        Query count,
-        Query rows,
-        CancellationToken ct)
-    {
-        if (!UseOracleCursorBatch)
-            return new CountAndRowsQueryRows(
-                await ReadCount(count, ct),
-                (await ReadRows(rows, maxRows: null, ct)).Rows);
-
-        await using var command = BuildOracleBatch([count, rows]);
-        await using var reader = await command.ExecuteReaderAsync(ct);
-        var total = await MaterializeCount(reader, ct);
-        await RequireNextResult(reader, ct);
-        var materializedRows = (await MaterializeRows(reader, maxRows: null, ct)).Rows;
-        await RequireEnd(reader, ct);
-        return new CountAndRowsQueryRows(total, materializedRows);
     }
 
     private async Task<long> ReadCount(Query query, CancellationToken ct)
@@ -318,10 +311,6 @@ internal sealed record GridQueryRows(
     long TotalRows,
     Dictionary<string, IReadOnlyDictionary<string, object?>> Aggregates,
     List<BreakTotal> BreakTotals,
-    List<IReadOnlyDictionary<string, object?>> Rows);
-
-internal sealed record CountAndRowsQueryRows(
-    long TotalRows,
     List<IReadOnlyDictionary<string, object?>> Rows);
 
 internal sealed record ChartPoint(object? Label, object? Value);

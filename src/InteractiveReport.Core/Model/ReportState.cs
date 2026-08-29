@@ -3,24 +3,21 @@ namespace InteractiveReport.Core.Model;
 /// <summary>
 /// The report state document: simultaneously the query request body, the saved report,
 /// and the shareable view state. Everything in it is data validated against the report's
-/// discovered schema — never code. Version 3 is a literal pipeline of table stages;
-/// versions 1 and 2 are rejected (no external consumers, no migrator by owner decision).
+/// discovered schema — never code. Its structure is self-describing; documents do not
+/// carry a protocol version field.
 /// </summary>
 public sealed class ReportState
 {
-    public const int CurrentVersion = 3;
-
-    public int V { get; set; } = CurrentVersion;
-
     /// <summary>Toolbar search: OR of case-insensitive contains across the source layer's visible text columns.</summary>
     public string? Search { get; set; }
 
     public PageRequest? Page { get; set; }
 
     /// <summary>
-    /// The executing pipeline. The first stage is always "source"; T0 accepts the tails
-    /// [], [group], [group, spread], and [chart]. The client's view mode is derived
-    /// from the tail, never stored. Null or empty means the bare source stage.
+    /// The executing pipeline. The first stage is always "source" and may be followed
+    /// by one independent view derived from that source: group, pivot, or chart. The
+    /// client's view mode is derived from the tail, never stored. Null or empty means
+    /// the bare source stage.
     /// </summary>
     public List<PipelineStage>? Pipeline { get; set; }
 
@@ -41,11 +38,12 @@ public sealed class PipelineStage
 
 /// <summary>
 /// The reshaping half of a stage. Kind selects which fields apply: "source" uses none,
-/// "group" uses By/Values, "spread" uses Cols/Totals, "chart" uses the chart fields.
+/// "group" uses By/Values, "pivot" uses Rows/Cols/Values/Totals, and "chart" uses
+/// the chart fields.
 /// </summary>
 public sealed class StageShape
 {
-    /// <summary>"source", "group", "spread", or "chart".</summary>
+    /// <summary>"source", "group", "pivot", or "chart".</summary>
     public string Kind { get; set; } = "source";
 
     // group
@@ -56,11 +54,13 @@ public sealed class StageShape
     /// <summary>Aggregate metrics with stable ids. Empty means the implicit __count alone.</summary>
     public List<MetricRule>? Values { get; set; }
 
-    // spread
+    // pivot
+
+    /// <summary>Pivot row dimensions, resolved directly against the source table.</summary>
+    public List<string>? Rows { get; set; }
 
     /// <summary>
-    /// The subset of the preceding group stage's By columns whose values spread into
-    /// cell columns; the remaining By columns key the rows.
+    /// Source columns whose distinct values become pivot cell columns.
     /// </summary>
     public List<string>? Cols { get; set; }
 
@@ -105,9 +105,8 @@ public sealed class MetricRule
 
 /// <summary>
 /// The per-table layer of a stage, every field bound to that stage's own output schema.
-/// T0 restrictions: filters, breaks, and aggregates are source-only; spread layers carry
-/// labels/formats only; chart layers stay empty. Absent fields inherit nothing — the
-/// layer is data, and an absent list simply means none.
+/// Chart layers stay empty. Absent fields inherit nothing — the layer is data, and an
+/// absent list simply means none.
 /// </summary>
 public sealed class StageLayer
 {
@@ -128,16 +127,16 @@ public sealed class StageLayer
 
     public List<ComputedColumn>? Computed { get; set; }
 
-    /// <summary>Row predicates over this stage's table. T0: validated on the source stage only.</summary>
+    /// <summary>Row predicates over this stage's table.</summary>
     public List<FilterRule>? Filters { get; set; }
 
     public List<SortRule>? Sorts { get; set; }
     public List<HighlightRule>? Highlights { get; set; }
 
-    /// <summary>Control-break columns (source layer only at T0).</summary>
+    /// <summary>Control-break columns (source and Group layers).</summary>
     public List<string>? Breaks { get; set; }
 
-    /// <summary>Footer aggregates (source layer only at T0).</summary>
+    /// <summary>Whole-table footer and per-break subtotal aggregates (source and Group layers).</summary>
     public List<AggregateRule>? Aggregates { get; set; }
 }
 

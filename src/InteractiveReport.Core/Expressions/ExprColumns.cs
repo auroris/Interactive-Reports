@@ -1,9 +1,7 @@
 namespace InteractiveReport.Core.Expressions;
 
 /// <summary>
-/// Collects the column names a bound expression references. Used to decide whether a
-/// group-layer computed column can participate in a query whose grouping drops some
-/// of its inputs (spread totals re-aggregate by column dimensions only).
+/// Collects the canonical column names referenced by a bound expression.
 /// </summary>
 public static class ExprColumns
 {

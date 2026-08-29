@@ -5,7 +5,7 @@ using static InteractiveReport.Core.Tests.TestFixtures;
 namespace InteractiveReport.Core.Tests;
 
 /// <summary>
-/// The resolver's v3 semantics: search and page resolve property-wise (null inherits,
+/// Resolver semantics: search and page resolve property-wise (null inherits,
 /// explicit empty clears); pipeline and shelf replace the default wholesale when
 /// present; everything is deep-copied so validation never mutates a cached default.
 /// </summary>
@@ -96,7 +96,7 @@ public sealed class ReportStateResolverTests
             });
 
         var resolved = ReportStateResolver.Resolve(defaults, Doc(
-            shelf: new() { ["pivot"] = [Group(by: ["REGION"]), Spread(cols: ["REGION"])] }));
+            shelf: new() { ["pivot"] = [Pivot(rows: ["CUSTOMER"], cols: ["REGION"])] }));
 
         Assert.Equal(["pivot"], resolved.Shelf!.Keys);
 

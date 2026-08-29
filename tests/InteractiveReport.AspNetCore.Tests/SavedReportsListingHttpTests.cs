@@ -38,7 +38,6 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
             {
               "title": "Regional View",
               "state": {
-                "v": 3,
                 "pipeline": [ { "shape": { "kind": "source" }, "layer": { "columns": [ "ID", "LABEL" ] } } ]
               }
             }

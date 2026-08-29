@@ -139,28 +139,34 @@ the host's content root unless absolute:
 ```
 
 Each file contains its selector title, an optional initial primary flag, and the
-normal versioned state document:
+normal state document:
 
 ```json
 {
   "title": "Default",
   "primary": true,
   "state": {
-    "v": 2,
-    "columns": [ "ORDER_ID", "CUSTOMER", "THUMBNAIL_URL", "AMOUNT" ],
-    "sorts": [ { "col": "AMOUNT", "dir": "desc" } ],
-    "formats": {
-      "CUSTOMER": {
-        "displayAs": "link",
-        "urlColumn": "CUSTOMER_URL",
-        "textColumn": "CUSTOMER"
-      },
-      "THUMBNAIL_URL": {
-        "displayAs": "image",
-        "urlColumn": "THUMBNAIL_URL"
-      },
-      "AMOUNT": { "mask": "currency:CAD", "classes": [ "amount-column", "emphasized" ] }
-    }
+    "pipeline": [
+      {
+        "shape": { "kind": "source" },
+        "layer": {
+          "columns": [ "ORDER_ID", "CUSTOMER", "THUMBNAIL_URL", "AMOUNT" ],
+          "sorts": [ { "col": "AMOUNT", "dir": "desc" } ],
+          "formats": {
+            "CUSTOMER": {
+              "displayAs": "link",
+              "urlColumn": "CUSTOMER_URL",
+              "textColumn": "CUSTOMER"
+            },
+            "THUMBNAIL_URL": {
+              "displayAs": "image",
+              "urlColumn": "THUMBNAIL_URL"
+            },
+            "AMOUNT": { "mask": "currency:CAD", "classes": [ "amount-column", "emphasized" ] }
+          }
+        }
+      }
+    ]
   }
 }
 ```
@@ -572,6 +578,13 @@ switched without rebuilding their settings; the view selected when the report is
 is the one it opens with. Only the selected view is validated and executed. Settings
 belonging to inactive views remain available without producing ignored-setting notices
 or validation failures.
+
+Group By is a complete table layer rather than a display-only summary. Its filters run
+after grouping, and its computed columns, sorts, highlights, control breaks, and footer
+aggregates bind to the Group output (`dimensions + __count + metrics + computed`). The
+same aggregate list supplies the whole-table footer and each control-break subtotal, as
+it does on the base grid. A Group break counts Group rows; aggregating `__count` reports
+the corresponding number of filtered source rows.
 
 Save updates the selected saved report. Save As creates a new report when its name is
 unused; when the name matches an editable report, it asks for confirmation and replaces

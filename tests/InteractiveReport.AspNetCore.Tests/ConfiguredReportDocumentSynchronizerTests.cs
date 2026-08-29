@@ -19,11 +19,11 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
         _regionalPath = Path.Combine(_root, "orders.regional.json");
         File.WriteAllText(_primaryPath, """
             { "title": "Committed Primary", "primary": true,
-              "state": { "v": 3, "pipeline": [ { "shape": { "kind": "source" }, "layer": {} } ] } }
+              "state": { "pipeline": [ { "shape": { "kind": "source" }, "layer": {} } ] } }
             """);
         File.WriteAllText(_regionalPath, """
             { "title": "Regional View",
-              "state": { "v": 3, "pipeline": [ { "shape": { "kind": "source" }, "layer": { "filters": [ { "expr": "ID = 1" } ] } } ] } }
+              "state": { "pipeline": [ { "shape": { "kind": "source" }, "layer": { "filters": [ { "expr": "ID = 1" } ] } } ] } }
             """);
     }
 
@@ -98,7 +98,7 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
 
         File.WriteAllText(_regionalPath, """
             { "title": "Regional View v2",
-              "state": { "v": 3, "pipeline": [ { "shape": { "kind": "source" }, "layer": {} } ] } }
+              "state": { "pipeline": [ { "shape": { "kind": "source" }, "layer": {} } ] } }
             """);
         File.SetLastWriteTimeUtc(_regionalPath, DateTime.UtcNow.AddMinutes(1));
 
@@ -117,7 +117,7 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
 
         File.WriteAllText(_regionalPath, """
             { "title": "A substantially longer regional view title",
-              "state": { "v": 3, "pipeline": [ { "shape": { "kind": "source" }, "layer": {} } ] } }
+              "state": { "pipeline": [ { "shape": { "kind": "source" }, "layer": {} } ] } }
             """);
         File.SetLastWriteTimeUtc(_regionalPath, originalTimestamp);
 
@@ -165,7 +165,7 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
         row.IsPrimary = false;
         File.WriteAllText(_primaryPath, """
             { "title": "Committed Primary v2", "primary": true,
-              "state": { "v": 3, "pipeline": [ { "shape": { "kind": "source" }, "layer": {} } ] } }
+              "state": { "pipeline": [ { "shape": { "kind": "source" }, "layer": {} } ] } }
             """);
         File.SetLastWriteTimeUtc(_primaryPath, DateTime.UtcNow.AddMinutes(1));
 

@@ -63,9 +63,7 @@ globalThis.fetch = (url, options = {}) => {
     const path = String(url);
     if (path.endsWith("/schema")) {
         return Promise.resolve(json({
-            stateVersion: 3,
             defaultState: {
-                v: 3,
                 page: { index: 1, size: 25 },
                 pipeline: [{ shape: { kind: "source" }, layer: {} }],
             },
@@ -217,7 +215,6 @@ test("saved-report loads are last-request-wins even when GET responses arrive ou
     await settle(() => heldSavedDocuments.length === 2);
 
     const state = search => ({
-        v: 3,
         search,
         page: { index: 1, size: 25 },
         pipeline: [{ shape: { kind: "source" }, layer: {} }],
@@ -308,7 +305,6 @@ test("a successful delete stays removed from the local list when its refresh fai
     savedDocuments = new Map([[summary.id, {
         summary,
         state: {
-            v: 3,
             search: "delete",
             page: { index: 1, size: 25 },
             pipeline: [{ shape: { kind: "source" }, layer: {} }],
@@ -343,7 +339,7 @@ test("a saved-report load whose query fails restores doc, selection, and search 
     }];
     savedDocuments = new Map([["saved-1", {
         summary: savedReports[0],
-        state: { v: 3, search: "Acme", page: { index: 1, size: 25 }, pipeline: [{ shape: { kind: "source" }, layer: {} }] },
+        state: { search: "Acme", page: { index: 1, size: 25 }, pipeline: [{ shape: { kind: "source" }, layer: {} }] },
     }]]);
     const report = await mount();
 
@@ -396,7 +392,6 @@ test("a saved report with a stale recorded schema is adopted — the server is t
     savedDocuments = new Map([["stale-1", {
         summary: savedReports[0],
         state: {
-            v: 3,
             schema: { GONE: "number" },   // authored against a schema that moved on
             search: "Acme",
             page: { index: 1, size: 25 },

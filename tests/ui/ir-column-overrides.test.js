@@ -33,9 +33,7 @@ const json = value => new Response(JSON.stringify(value), {
 globalThis.fetch = async url => {
     if (String(url).endsWith("/schema")) {
         return json({
-            stateVersion: 3,
             defaultState: {
-                v: 3,
                 page: { index: 1, size: 25 },
                 pipeline: [{
                     shape: { kind: "source" },

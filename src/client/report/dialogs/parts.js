@@ -84,10 +84,12 @@ export function rowList(container, items, buildRow, { addLabel = null, max, cont
 /// A function select slaved to a column select: the options track the column's
 /// type (the server's aggregateFunctions catalog), keeping the current pick
 /// when it survives the change. Wires the column select's change event.
-export function fnSelectFor(w, colSel, initialFn) {
+export function fnSelectFor(w, colSel, initialFn, columns = null) {
     const fnSel = el("select", { class: "ir-select" });
     const refresh = keep => {
-        const fns = colSel.value ? fnsFor(w, typeOf(w, colSel.value)) : [];
+        const selectedType = columns?.find(column =>
+            column.name.toLowerCase() === colSel.value.toLowerCase())?.type;
+        const fns = colSel.value ? fnsFor(w, selectedType ?? typeOf(w, colSel.value)) : [];
         fnSel.replaceChildren(...fns.map(f => new Option(fnLabel(w, f), f)));
         if (keep && fns.includes(keep)) fnSel.value = keep;
     };
@@ -99,11 +101,11 @@ export function fnSelectFor(w, colSel, initialFn) {
 /// The aggregate function/column row shared by report aggregates and grouped
 /// view values. One implementation keeps option behavior, labels, and reading
 /// semantics aligned across every caller.
-export function aggregateRowList(w, initial, { addLabel = null } = {}) {
+export function aggregateRowList(w, initial, { addLabel = null, columns = null } = {}) {
     const container = el("div", {});
     const list = rowList(container, initial ?? [], (row, item) => {
-        const colSel = sel(colOptions(w, { none: w.t("common.select") }), item?.col ?? "");
-        const fnSel = fnSelectFor(w, colSel, item?.fn);
+        const colSel = sel(colOptions(w, { none: w.t("common.select"), columns }), item?.col ?? "");
+        const fnSel = fnSelectFor(w, colSel, item?.fn, columns);
         row.append(
             rowField(w.t("common.function"), fnSel),
             el("span", { class: "ir-row-of", "aria-hidden": "true" }, w.t("common.of")),
@@ -116,6 +118,12 @@ export function aggregateRowList(w, initial, { addLabel = null } = {}) {
 }
 
 // --- expression-rule editor --------------------------------------------------
+
+export function expressionColumnToken(name) {
+    const ordinary = /^[A-Za-z_][A-Za-z0-9_$#]*$/.test(name);
+    const keyword = /^(CASE|WHEN|THEN|ELSE|END|AND|OR|NOT|IS|NULL|BETWEEN)$/i.test(name);
+    return ordinary && !keyword ? name : `\`${name.replaceAll("`", "``")}\``;
+}
 
 export function expressionEditor(w, { initial, placeholder, result, columns }) {
     const exprInp = el("textarea", {
@@ -148,7 +156,7 @@ export function expressionEditor(w, { initial, placeholder, result, columns }) {
         labeled(w.t("expression.expression"), exprInp),
         el("div", { class: "ir-token-group" },
             el("span", { class: "ir-field-label" }, w.t("expression.columns")),
-            el("div", {}, ...availableColumns.map(c => tokenBtn(c.label, c.name)))),
+            el("div", {}, ...availableColumns.map(c => tokenBtn(c.label, expressionColumnToken(c.name))))),
         el("div", { class: "ir-token-group" },
             el("span", { class: "ir-field-label" }, w.t("expression.functions")),
             el("div", {}, ...expressionFunctions(w).map(f => tokenBtn(f, `${f}(`)))),

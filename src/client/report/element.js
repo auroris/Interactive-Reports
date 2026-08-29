@@ -222,7 +222,7 @@ export class InteractiveReportElement extends WidgetElement {
     /// Canonical state: explicit empty values survive so they can clear report defaults;
     /// undefined values and underscore-prefixed working data do not cross the protocol.
     serialize() {
-        return serializeReportState(this.doc, this.schema?.stateVersion ?? 3);
+        return serializeReportState(this.doc);
     }
 
     reportUrl(resource) {

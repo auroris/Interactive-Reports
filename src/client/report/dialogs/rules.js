@@ -1,27 +1,23 @@
 // Expression-rule dialogs — the client face of the server's unified expression
 // pipeline: filters (predicate over rows), computed columns (value per row),
-// and highlights (predicate driving row/cell styling). Filters always edit the
-// source stage; Compute and Highlight edit whichever layer the current stage
-// context routes to — the source table in grid, the group stage's table under
-// a group or spread tail (where computed metrics derive from dims, __count,
-// and metrics, and spread them into cells).
+// and highlights (predicate driving row/cell styling). Every rule edits the
+// layer of the table currently being displayed: source, Group By, or Pivot.
 
 import { el, labeled, sel } from "../../core/dom.js";
 import { openDialog } from "../../core/dialog.js";
-import { filterableColumns } from "../schema.js";
 import { stageContext } from "../stage.js";
 import { nextFreeId, sourceLayer } from "../state.js";
-import { colorPick, expressionEditor, colOptions } from "./parts.js";
+import { colorPick, expressionColumnToken, expressionEditor, colOptions } from "./parts.js";
 
 export function filterDialog(w, { editIndex, col } = {}) {
-    const existing = editIndex !== undefined ? sourceLayer(w.doc).filters?.[editIndex] : undefined;
+    const ctx = stageContext(w);
+    const layerOf = ctx.filterLayer ?? (d => sourceLayer(d));
+    const existing = editIndex !== undefined ? layerOf(w.doc).filters?.[editIndex] : undefined;
     const condition = expressionEditor(w, {
-        initial: existing?.expr ?? (col ? `${col} = ` : ""),
+        initial: existing?.expr ?? (col ? `${expressionColumnToken(col)} = ` : ""),
         placeholder: w.t("expression.filterPlaceholder"),
         result: "predicate",
-        // Token buttons omit definition-restricted columns; a typed reference
-        // still reaches the server, which strips the rule into ignored[].
-        columns: filterableColumns(w),
+        columns: ctx.filterColumns ?? ctx.columns,
     });
 
     openDialog({
@@ -32,7 +28,7 @@ export function filterDialog(w, { editIndex, col } = {}) {
         onApply: () => {
             const rule = { expr: condition._read(), enabled: existing?.enabled ?? true };
             return w.apply(d => {
-                const layer = sourceLayer(d);
+                const layer = layerOf(d);
                 layer.filters ??= [];
                 if (editIndex !== undefined) layer.filters[editIndex] = rule;
                 else layer.filters.push(rule);

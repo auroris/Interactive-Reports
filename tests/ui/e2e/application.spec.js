@@ -4,13 +4,13 @@ import { test, expect } from "@playwright/test";
 
 const queryPath = /\/api\/reports\/[^/]+\/query$/;
 
-// v3 documents: the source layer carries grid state; the tail stages are the view.
+// The source layer carries base state; one tail stage is the active view.
 const sourceLayerOf = state => state.pipeline?.[0]?.layer ?? {};
 const stageOf = (state, kind) => (state.pipeline ?? []).find(s => s.shape?.kind === kind)?.shape ?? null;
 const modeOf = state => {
     const kinds = (state.pipeline ?? []).slice(1).map(s => s.shape?.kind);
     return kinds.includes("chart") ? "chart"
-        : kinds.includes("spread") ? "pivot"
+        : kinds.includes("pivot") ? "pivot"
         : kinds.includes("group") ? "groupBy"
         : "grid";
 };
@@ -359,6 +359,43 @@ test("configures an aggregate chart and returns to the data grid", async ({ page
     await expect(page.getByRole("columnheader")).toHaveCount(8);
 });
 
+test("applies control breaks and footer aggregates to a Group By table", async ({ page }) => {
+    await openWorkbench(page);
+    await page.getByRole("button", { name: "Group By", exact: true }).click();
+
+    let dialog = page.getByRole("dialog");
+    let selects = dialog.locator("select");
+    await selects.nth(0).selectOption("STATUS");
+    await dialog.getByRole("button", { name: "+ Group Column", exact: true }).click();
+    selects = dialog.locator("select");
+    await selects.nth(1).selectOption("CUSTOMER");
+    await dialog.getByRole("button", { name: "+ Value", exact: true }).click();
+    selects = dialog.locator("select");
+    await selects.nth(3).selectOption("AMOUNT");
+    await selects.nth(2).selectOption("sum");
+    await runAndWaitForQuery(page, () =>
+        dialog.getByRole("button", { name: "Apply", exact: true }).click());
+
+    await clickAction(page, "Control Break…");
+    dialog = page.getByRole("dialog");
+    await dialog.getByRole("combobox", { name: "Column", exact: true }).selectOption("STATUS");
+    await runAndWaitForQuery(page, () =>
+        dialog.getByRole("button", { name: "Apply", exact: true }).click());
+
+    await clickAction(page, "Aggregate…");
+    dialog = page.getByRole("dialog");
+    await dialog.getByRole("combobox", { name: "Column", exact: true }).selectOption("m1");
+    await dialog.getByRole("combobox", { name: "Function", exact: true }).selectOption("sum");
+    const response = await runAndWaitForQuery(page, () =>
+        dialog.getByRole("button", { name: "Apply", exact: true }).click());
+
+    const group = response.request().postDataJSON().pipeline.find(stage => stage.shape?.kind === "group");
+    expect(group.layer.breaks).toEqual(["STATUS"]);
+    expect(group.layer.aggregates).toEqual([{ col: "m1", fn: "sum" }]);
+    await expect(page.locator("tr.ir-break-header")).not.toHaveCount(0);
+    await expect(page.locator("tr.ir-grand-total")).toHaveCount(1);
+});
+
 test("adds correctly aggregated total rows to a pivot without a right-side total column", async ({ page }) => {
     await openWorkbench(page);
     await page.getByRole("button", { name: "Pivot", exact: true }).click();
@@ -377,12 +414,13 @@ test("adds correctly aggregated total rows to a pivot without a right-side total
     const response = await runAndWaitForQuery(page, () =>
         dialog.getByRole("button", { name: "Apply", exact: true }).click());
     const posted = response.request().postDataJSON();
-    expect(stageOf(posted, "group")).toEqual({
-        kind: "group",
-        by: ["CUSTOMER", "STATUS"],
+    expect(stageOf(posted, "pivot")).toEqual({
+        kind: "pivot",
+        rows: ["CUSTOMER"],
+        cols: ["STATUS"],
         values: [{ id: "m1", col: "AMOUNT", fn: "sum" }],
+        totals: true,
     });
-    expect(stageOf(posted, "spread")).toEqual({ kind: "spread", cols: ["STATUS"], totals: true });
 
     await expect(page.locator("tr.ir-grand-total")).toHaveCount(1);
     await expect(page.locator("tr.ir-grand-total")).toContainText("Sum:");
@@ -639,7 +677,6 @@ test("admin uploads a validated report document and downloads its canonical file
                 title,
                 primary: true,
                 state: {
-                    v: 3,
                     pipeline: [{
                         shape: { kind: "source" },
                         layer: { filters: [{ expr: "AMOUNT > 100" }] },
@@ -827,7 +864,7 @@ test("a definition edit link and per-column overrides shape the managed report",
     // A stale saved document sorting on the restricted column degrades into
     // ignored[] instead of erroring.
     const stale = await page.request.post("/api/reports/orders-managed/query", {
-        data: { v: 3, pipeline: [{ shape: { kind: "source" }, layer: { sorts: [{ col: "NOTES" }] } }] },
+        data: { pipeline: [{ shape: { kind: "source" }, layer: { sorts: [{ col: "NOTES" }] } }] },
     });
     expect(stale.ok()).toBe(true);
     const staleResult = await stale.json();

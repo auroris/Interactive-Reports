@@ -51,9 +51,7 @@ globalThis.fetch = async (url, options = {}) => {
     const report = /\/([^/]+)\/(schema|query|saved)$/.exec(String(url))?.[1];
     if (String(url).endsWith("/schema")) {
         return json({
-            stateVersion: 3,
             defaultState: {
-                v: 3,
                 pipeline: [{ shape: { kind: "source" }, layer: { columns: ["ID", "NAME"] } }],
                 page: { index: 1, size: 25 },
             },

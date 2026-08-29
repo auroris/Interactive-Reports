@@ -39,7 +39,7 @@ public sealed class ConfigurationReportDefinitionStoreTests
             Connection = "db",
             Dialect = ReportDialect.Sqlite,
             Sql = "select 1 as ID",
-            // The config-bound default state is a v3 pipeline document.
+            // The config-bound default state is a pipeline document.
             DefaultState = new ReportState
             {
                 Search = "configured",

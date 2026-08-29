@@ -23,8 +23,8 @@ import { visibleStageColumnNames } from "../../src/client/report/stage.js";
 const src = layer => ({ shape: { kind: "source" }, layer });
 const group = (by, values = [], layer = undefined) =>
     ({ shape: { kind: "group", by, values }, layer });
-const spread = (cols, layer = undefined, totals = undefined) =>
-    ({ shape: { kind: "spread", cols, ...(totals ? { totals } : {}) }, layer });
+const pivot = (rows, cols, values = [], layer = undefined, totals = undefined) =>
+    ({ shape: { kind: "pivot", rows, cols, values, ...(totals ? { totals } : {}) }, layer });
 
 test("normalization clones input, guarantees the source stage, and resets only the page index", () => {
     const input = {
@@ -63,9 +63,15 @@ test("the mode derives from the tail; switching parks tails on the shelf lossles
     const state = normalizeReportState({
         pipeline: [
             src({}),
-            group(["CUSTOMER", "STATUS"], [{ id: "m1", col: "AMOUNT", fn: "sum" }],
-                { computed: [{ id: "c2", expr: "m1 / __count" }] }),
-            spread(["STATUS"], { labels: { 'm1@["SHIPPED"]': "Shipped" } }, true),
+            pivot(
+                ["CUSTOMER"],
+                ["STATUS"],
+                [{ id: "m1", col: "AMOUNT", fn: "sum" }],
+                {
+                    computed: [{ id: "c2", expr: '`m1@["SHIPPED"]` / 2' }],
+                    labels: { 'm1@["SHIPPED"]': "Shipped" },
+                },
+                true),
         ],
     }, 25);
 
@@ -76,9 +82,9 @@ test("the mode derives from the tail; switching parks tails on the shelf lossles
     assert.equal(modeOf(state), "chart");
     // The pivot tail survives on the shelf, layers included.
     const parked = configuredTail(state, "pivot");
-    assert.equal(parked.length, 2);
+    assert.equal(parked.length, 1);
     assert.equal(parked[0].layer.computed[0].id, "c2");
-    assert.equal(parked[1].layer.labels['m1@["SHIPPED"]'], "Shipped");
+    assert.equal(parked[0].layer.labels['m1@["SHIPPED"]'], "Shipped");
 
     activateTail(state, "grid");
     assert.equal(modeOf(state), "grid");
@@ -88,9 +94,9 @@ test("the mode derives from the tail; switching parks tails on the shelf lossles
     activateTail(state, "pivot");
     assert.equal(modeOf(state), "pivot");
     assert.equal(state.shelf.pivot, undefined);
-    assert.equal(stageOf(state, "group").layer.computed[0].id, "c2");
+    assert.equal(stageOf(state, "pivot").layer.computed[0].id, "c2");
 
-    const saved = serializeReportState(state, 3);
+    const saved = serializeReportState(state);
     const reloaded = normalizeReportState(saved, 25);
     assert.equal(modeOf(reloaded), "pivot");
     assert.equal(configuredTail(reloaded, "chart")[0].shape.type, "pie");
@@ -102,10 +108,9 @@ test("serialization preserves explicit clears and removes working fields", () =>
         pipeline: [src({ filters: [], columns: [] })],
         _transient: true,
         omitted: undefined,
-    }, 7);
+    });
 
     assert.deepEqual(result, {
-        v: 7,
         search: "",
         pipeline: [{ shape: { kind: "source" }, layer: { filters: [], columns: [] } }],
     });
@@ -117,7 +122,7 @@ test("source label overrides inherit from defaults and an emptied map survives a
     assert.deepEqual(sourceLayer(inherited).labels, { ORDER_ID: "Order #" });
 
     delete sourceLayer(inherited).labels.ORDER_ID;
-    assert.deepEqual(serializeReportState(inherited, 3).pipeline[0].layer.labels, {});
+    assert.deepEqual(serializeReportState(inherited).pipeline[0].layer.labels, {});
 });
 
 test("source computed deletion strips the source layer precisely and drops dependent tails whole", () => {
@@ -149,8 +154,7 @@ test("source computed deletion strips the source layer precisely and drops depen
                     AMOUNT: { mask: "currency:CAD" },
                 },
             }),
-            group(["CUSTOMER"], [{ id: "m1", col: "c1", fn: "sum" }]),
-            spread(["CUSTOMER"]),
+            pivot(["CUSTOMER"], ["STATUS"], [{ id: "m1", col: "c1", fn: "sum" }]),
         ],
         shelf: {
             groupBy: [group(["REGION"], [{ id: "m1", col: "c1", fn: "sum" }])],
@@ -200,7 +204,7 @@ test("a tail that references the computed column only through a dim also dies wh
     assert.equal(modeOf(charted), "grid");
 });
 
-test("stage computed deletion strips the group layer and the cell family's presentation", () => {
+test("stage computed deletion strips only its owning derived layer", () => {
     const state = normalizeReportState({
         pipeline: [
             src({}),
@@ -210,6 +214,8 @@ test("stage computed deletion strips the group layer and the cell family's prese
                     { id: "c3", label: "Uses c2? No", expr: "m1 * 2" },
                 ],
                 sorts: [{ col: "c2", dir: "desc" }, { col: "CUSTOMER", dir: "asc" }],
+                breaks: ["c2", "CUSTOMER"],
+                aggregates: [{ col: "c2", fn: "avg" }, { col: "m1", fn: "sum" }],
                 highlights: [
                     { id: "h1", scope: "cell", col: "c2", expr: "m1 > 0" },
                     { id: "h2", scope: "row", expr: "c2 > 10" },
@@ -219,10 +225,6 @@ test("stage computed deletion strips the group layer and the cell family's prese
                 labels: { c2: "Share" },
                 formats: { c2: { mask: "percent1" } },
             }),
-            spread(["STATUS"], {
-                labels: { 'c2@["SHIPPED"]': "Shipped Share", 'm1@["SHIPPED"]': "Shipped Total" },
-                formats: { 'c2@["SHIPPED"]': { bold: true } },
-            }),
         ],
     }, 25);
 
@@ -231,13 +233,48 @@ test("stage computed deletion strips the group layer and the cell family's prese
     const layer = stageOf(state, "group").layer;
     assert.deepEqual(layer.computed.map(r => r.id), ["c3"]);
     assert.deepEqual(layer.sorts, [{ col: "CUSTOMER", dir: "asc" }]);
+    assert.deepEqual(layer.breaks, ["CUSTOMER"]);
+    assert.deepEqual(layer.aggregates, [{ col: "m1", fn: "sum" }]);
     assert.deepEqual(layer.highlights.map(r => r.id), ["h3"]);
     assert.deepEqual(layer.columns, ["CUSTOMER", "STATUS", "__count", "m1", "c3"]);
     assert.deepEqual(layer.labels, {});
     assert.deepEqual(layer.formats, {});
-    const spreadLayer = stageOf(state, "spread").layer;
-    assert.deepEqual(spreadLayer.labels, { 'm1@["SHIPPED"]': "Shipped Total" });
-    assert.deepEqual(spreadLayer.formats, {});
+});
+
+test("retiring a Pivot metric prunes its generated cell family", () => {
+    const shipped = 'm1@["SHIPPED"]';
+    const pending = 'm1@["PENDING"]';
+    const state = normalizeReportState({
+        pipeline: [
+            src({}),
+            pivot(["CUSTOMER"], ["STATUS"], [{ id: "m1", col: "AMOUNT", fn: "sum" }], {
+                computed: [
+                    { id: "c2", expr: '`m1@["SHIPPED"]` / 2' },
+                    { id: "c3", expr: "CUSTOMER || '!'" },
+                ],
+                filters: [{ expr: '`m1@["PENDING"]` > 0' }],
+                sorts: [{ col: shipped, dir: "desc" }, { col: "CUSTOMER", dir: "asc" }],
+                highlights: [
+                    { id: "h1", scope: "cell", col: pending, expr: "CUSTOMER IS NOT NULL" },
+                    { id: "h2", scope: "row", expr: "CUSTOMER IS NOT NULL" },
+                ],
+                columns: ["CUSTOMER", shipped, pending, "c2", "c3"],
+                labels: { [shipped]: "Shipped", CUSTOMER: "Customer" },
+                formats: { [pending]: { bold: true }, CUSTOMER: { italic: true } },
+            }),
+        ],
+    }, 25);
+
+    const stage = stageOf(state, "pivot");
+    removeStageComputedColumn(state, stage, "m1");
+
+    assert.deepEqual(stage.layer.computed.map(rule => rule.id), ["c3"]);
+    assert.deepEqual(stage.layer.filters, []);
+    assert.deepEqual(stage.layer.sorts, [{ col: "CUSTOMER", dir: "asc" }]);
+    assert.deepEqual(stage.layer.highlights.map(rule => rule.id), ["h2"]);
+    assert.deepEqual(stage.layer.columns, ["CUSTOMER", "c3"]);
+    assert.deepEqual(stage.layer.labels, { CUSTOMER: "Customer" });
+    assert.deepEqual(stage.layer.formats, { CUSTOMER: { italic: true } });
 });
 
 test("the retired schema-snapshot key never enters the working copy", () => {
@@ -255,12 +292,18 @@ test("expression column references skip quoted contents and longer identifiers",
     assert.equal(expressionReferencesColumn("CUSTOMER = 'c1'", "c1"), false);
     assert.equal(expressionReferencesColumn("c10 > 0", "c1"), false);
     assert.equal(expressionReferencesColumn("CUSTOMER = 'it''s c1'", "c1"), false);
+    assert.equal(expressionReferencesColumn('`m1@["SHIPPED"]` > 0', 'm1@["SHIPPED"]'), true);
+    assert.equal(expressionReferencesColumn('`m1@["SHIPPED"]` > 0', "m1"), false);
+    assert.equal(expressionReferencesColumn('`m1@["SHIPPED"]` > 0', "m1", { pivotFamily: true }), true);
 });
 
 test("scoped text search emits an escaped expression rule", () => {
     assert.equal(
         scopedSearchExpression("CUSTOMER", "text", "O'Brien"),
         "CONTAINS(CUSTOMER, 'O''Brien')");
+    assert.equal(
+        scopedSearchExpression("Customer Name", "text", "Acme"),
+        "CONTAINS(`Customer Name`, 'Acme')");
 });
 
 test("scoped search emits typed number, date, and boolean predicates", () => {

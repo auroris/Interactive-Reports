@@ -32,9 +32,9 @@ public static class TestFixtures
 
     public static FilterRule Filter(string expression) => new() { Expr = expression };
 
-    // ---- v3 pipeline document construction shorthand ----
+    // ---- pipeline document construction shorthand ----
 
-    /// <summary>A v3 document: source stage with the given layer plus optional tail stages.</summary>
+    /// <summary>A report document: source stage with the given layer plus an optional independent view.</summary>
     public static ReportState Doc(
         StageLayer? source = null,
         IEnumerable<PipelineStage>? tail = null,
@@ -66,10 +66,22 @@ public static class TestFixtures
             Layer = layer,
         };
 
-    public static PipelineStage Spread(string[] cols, bool? totals = null, StageLayer? layer = null)
+    public static PipelineStage Pivot(
+        string[] rows,
+        string[] cols,
+        MetricRule[]? values = null,
+        bool? totals = null,
+        StageLayer? layer = null)
         => new()
         {
-            Shape = new StageShape { Kind = "spread", Cols = [.. cols], Totals = totals },
+            Shape = new StageShape
+            {
+                Kind = "pivot",
+                Rows = [.. rows],
+                Cols = [.. cols],
+                Values = values?.ToList(),
+                Totals = totals,
+            },
             Layer = layer,
         };
 

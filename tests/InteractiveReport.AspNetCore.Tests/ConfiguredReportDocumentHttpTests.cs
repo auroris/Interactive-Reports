@@ -36,7 +36,6 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
               "title": "Committed Primary",
               "primary": true,
               "state": {
-                "v": 3,
                 "pipeline": [
                   {
                     "shape": { "kind": "source" },
@@ -53,7 +52,6 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
             {
               "title": "Regional View",
               "state": {
-                "v": 3,
                 "pipeline": [
                   {
                     "shape": { "kind": "source" },
@@ -224,7 +222,6 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
             {
               "title": {{JsonSerializer.Serialize(hostile)}},
               "state": {
-                "v": 3,
                 "pipeline": [ { "shape": { "kind": "source" }, "layer": {} } ]
               }
             }

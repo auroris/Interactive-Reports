@@ -24,7 +24,6 @@ public sealed class SchemaDefaultStateTests
     {
         var state = EndpointExtensions.SchemaDefaultState(Definition());
 
-        Assert.Equal(ReportState.CurrentVersion, state.V);
         var stage = Assert.Single(state.Pipeline!);
         Assert.Equal("source", stage.Shape!.Kind);
         Assert.NotNull(stage.Layer);

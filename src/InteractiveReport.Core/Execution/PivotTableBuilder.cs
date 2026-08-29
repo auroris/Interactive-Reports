@@ -7,7 +7,7 @@ using InteractiveReport.Core.Validation;
 namespace InteractiveReport.Core.Execution;
 
 /// <summary>
-/// Transforms provider-neutral grouped rows into the spread response matrix. Cell
+/// Transforms provider-neutral grouped rows into the Pivot response matrix. Cell
 /// columns carry stable value-derived names — {metricId}@{JSON array of column-key
 /// strings} — so per-cell presentation state survives data drift and spec reordering.
 /// Clients treat the names as opaque keys; the server is their only author.
@@ -24,7 +24,7 @@ internal static class PivotTableBuilder
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
-    /// <summary>One spread cell family: a metric or group-layer computed column.</summary>
+    /// <summary>One Pivot cell family: a declared metric or the implicit row count.</summary>
     private sealed record CellDef(
         string Id,
         string Label,
@@ -38,11 +38,10 @@ internal static class PivotTableBuilder
         IReadOnlyList<PivotGroup> groups,
         ValidatedState state,
         int maxColumns,
-        IReadOnlyList<PivotGroup>? totalGroups = null,
-        IReadOnlyList<CompiledRule<DefineColumnEffect>>? totalsComputed = null)
+        IReadOnlyList<PivotGroup>? totalGroups = null)
     {
         var rowDimensions = state.View.PivotRows;
-        var cells = CellDefinitions(state.View, totalsComputed ?? []);
+        var cells = CellDefinitions(state.View);
 
         // Source rows are ordered by row dimensions first, so first-seen column-key
         // order is not global. Sort distinct keys explicitly.
@@ -56,8 +55,8 @@ internal static class PivotTableBuilder
         {
             throw new ReportValidationException(
                 [new ValidationError(
-                    "pipeline[2].shape.cols",
-                    $"spread would produce {columnKeys.Count} column groups (max {maxColumns}) — filter further or choose a lower-cardinality column dimension")]);
+                    "pipeline[1].shape.cols",
+                    $"pivot would produce {columnKeys.Count} column groups (max {maxColumns}) — filter further or choose a lower-cardinality column dimension")]);
         }
 
         var keyNames = columnKeys.ToDictionary(
@@ -128,17 +127,11 @@ internal static class PivotTableBuilder
     }
 
     /// <summary>
-    /// The spread's cell families: declared metrics in order, then group-layer computed
-    /// columns; the implicit __count when neither exists. Value ordinals follow the
-    /// composed SELECT (metrics, then computed appended by the ir_stage wrap); totals
-    /// ordinals cover only the computed columns whose expressions survive re-grouping
-    /// by the column dimensions alone.
+    /// The pivot's cell families: declared metrics in order, or implicit __count when
+    /// no metric is declared.
     /// </summary>
-    private static List<CellDef> CellDefinitions(
-        ValidView view,
-        IReadOnlyList<CompiledRule<DefineColumnEffect>> totalsComputed)
+    private static List<CellDef> CellDefinitions(ValidView view)
     {
-        var layer = view.GroupLayer!;
         var cells = new List<CellDef>();
         for (var i = 0; i < view.Values.Count; i++)
         {
@@ -152,23 +145,6 @@ internal static class PivotTableBuilder
                 IsComputed: false,
                 ValueOrdinal: i,
                 TotalsOrdinal: i));
-        }
-
-        var totalsIndex = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        for (var i = 0; i < totalsComputed.Count; i++)
-            totalsIndex[totalsComputed[i].Effect.Column.Name] = view.Values.Count + i;
-
-        for (var i = 0; i < layer.Computed.Count; i++)
-        {
-            var column = layer.Computed[i].Effect.Column;
-            cells.Add(new CellDef(
-                column.Name,
-                column.Label,
-                column.KindName,
-                FormatSource: null,
-                IsComputed: true,
-                ValueOrdinal: view.Values.Count + i,
-                TotalsOrdinal: totalsIndex.TryGetValue(column.Name, out var ordinal) ? ordinal : -2));
         }
 
         if (cells.Count == 0)

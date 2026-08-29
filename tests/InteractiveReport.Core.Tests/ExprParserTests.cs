@@ -58,6 +58,22 @@ public class ExprParserTests
     }
 
     [Fact]
+    public void Backticks_quote_data_derived_column_names()
+    {
+        const string name = "m1@[\"SHIP`PED\"]";
+        var schema = new Dictionary<string, ColumnModel>(StringComparer.OrdinalIgnoreCase)
+        {
+            [name] = new ColumnModel { Name = name, Label = "Shipped", ClrType = typeof(decimal) },
+        };
+
+        var (ast, error) = ExprParser.Parse("`m1@[\"SHIP``PED\"]` / 2", schema);
+
+        Assert.Null(error);
+        var reference = Assert.IsType<ColumnRef>(Assert.IsType<BinaryOp>(ast).Left);
+        Assert.Equal(name, reference.Column.Name);
+    }
+
+    [Fact]
     public void Concat_operator_yields_text()
     {
         var ast = Parse("UPPER(CUSTOMER) || '!' || AMOUNT");

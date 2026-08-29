@@ -923,7 +923,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     }
 
     [Fact]
-    public async Task Group_layer_computed_metric_sort_and_highlight_ride_the_stage()
+    public async Task Group_layer_compute_filter_sort_and_highlight_ride_the_stage()
     {
         var result = await _executor.Query(Definition, Doc(tail:
         [
@@ -936,6 +936,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                     [
                         new ComputedColumn { Id = "c2", Label = "Per Order", Expr = "ROUND(m1 * 1.0 / __count, 2)" },
                     ],
+                    Filters = [Filter("c2 >= 1000")],
                     Sorts = [new SortRule { Col = "m1", Dir = SortDir.Desc }],
                     Highlights =
                     [
@@ -948,7 +949,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                 }),
         ]), NoParams);
 
-        Assert.Equal(4, result.TotalRows);
+        Assert.Equal(3, result.TotalRows);
 
         // Metadata comes from ForGroupStage: dims, __count, metrics by id, layer computed.
         Assert.Equal(["STATUS", "__count", "m1", "c2"], result.Columns.Select(c => c.Name));
@@ -959,10 +960,10 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         Assert.Null(result.Columns[3].FormatSource);
 
         // Sorted by the metric, descending; computed values derive from m1 and __count.
-        Assert.Equal(["SHIPPED", "PENDING", "CANCELLED", "NEW"], result.Rows.Select(r => (string)r["STATUS"]!));
-        Assert.Equal([26000m, 14800m, 6000m, 400m], result.Rows.Select(r => Convert.ToDecimal(r["m1"])));
-        Assert.Equal([5L, 3L, 1L, 1L], result.Rows.Select(r => Convert.ToInt64(r["__count"])));
-        Assert.Equal([5200m, 4933.33m, 6000m, 400m], result.Rows.Select(r => Convert.ToDecimal(r["c2"])));
+        Assert.Equal(["SHIPPED", "PENDING", "CANCELLED"], result.Rows.Select(r => (string)r["STATUS"]!));
+        Assert.Equal([26000m, 14800m, 6000m], result.Rows.Select(r => Convert.ToDecimal(r["m1"])));
+        Assert.Equal([5L, 3L, 1L], result.Rows.Select(r => Convert.ToInt64(r["__count"])));
+        Assert.Equal([5200m, 4933.33m, 6000m], result.Rows.Select(r => Convert.ToDecimal(r["c2"])));
         Assert.All(result.Rows, row => Assert.Equal(["STATUS", "__count", "m1", "c2"], row.Keys));
 
         // The group-layer highlight evaluated in SQL against the stage table.
@@ -973,12 +974,59 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     }
 
     [Fact]
+    public async Task Group_layer_breaks_and_aggregates_describe_the_completed_group_table()
+    {
+        var result = await _executor.Query(Definition, Doc(
+            tail:
+            [
+                Group(
+                    by: ["STATUS", "CUSTOMER"],
+                    values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
+                    layer: new StageLayer
+                    {
+                        Computed =
+                        [
+                            new ComputedColumn { Id = "c2", Expr = "m1 * 1.0 / __count" },
+                        ],
+                        Filters = [Filter("m1 >= 1000")],
+                        Breaks = ["STATUS"],
+                        Aggregates =
+                        [
+                            new AggregateRule { Col = "m1", Fn = AggregateFn.Sum },
+                            new AggregateRule { Col = "__count", Fn = AggregateFn.Sum },
+                            new AggregateRule { Col = "c2", Fn = AggregateFn.Sum },
+                        ],
+                    }),
+            ],
+            page: new PageRequest { Index = 1, Size = 4 }), NoParams);
+
+        Assert.Equal(7, result.TotalRows); // NEW and Umbrella's small PENDING group were filtered post-group.
+        Assert.Equal(4, result.Rows.Count);
+        Assert.Equal(["CANCELLED", "PENDING", "PENDING", "SHIPPED"], result.Rows.Select(row => row["STATUS"]));
+        Assert.True(result.BreakContinues); // The next page also begins inside SHIPPED.
+
+        Assert.Equal(46000m, Convert.ToDecimal(result.Aggregates["m1"]["sum"]));
+        Assert.Equal(8m, Convert.ToDecimal(result.Aggregates["__count"]["sum"]));
+        Assert.Equal(40000m, Convert.ToDecimal(result.Aggregates["c2"]["sum"]));
+
+        var pending = result.BreakTotals.Single(total => Equals(total.Key["STATUS"], "PENDING"));
+        Assert.Equal(2, pending.Rows); // Two surviving Group rows, not source rows.
+        Assert.Equal(14000m, Convert.ToDecimal(pending.Aggregates["m1"]["sum"]));
+        Assert.Equal(2m, Convert.ToDecimal(pending.Aggregates["__count"]["sum"]));
+
+        var shipped = result.BreakTotals.Single(total => Equals(total.Key["STATUS"], "SHIPPED"));
+        Assert.Equal(4, shipped.Rows); // Four customer groups contain five source rows.
+        Assert.Equal(26000m, Convert.ToDecimal(shipped.Aggregates["m1"]["sum"]));
+        Assert.Equal(5m, Convert.ToDecimal(shipped.Aggregates["__count"]["sum"]));
+        Assert.Equal(20000m, Convert.ToDecimal(shipped.Aggregates["c2"]["sum"]));
+    }
+
+    [Fact]
     public async Task Pivot_view_builds_the_matrix_in_memory()
     {
         var state = Doc(tail:
         [
-            Group(by: ["CUSTOMER", "STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)]),
-            Spread(cols: ["STATUS"], totals: true),
+            Pivot(rows: ["CUSTOMER"], cols: ["STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)], totals: true),
         ]);
         var result = await _executor.Query(Definition, state, NoParams);
 
@@ -1006,8 +1054,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
 
         var averages = await _executor.Query(Definition, Doc(tail:
         [
-            Group(by: ["CUSTOMER", "STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Avg)]),
-            Spread(cols: ["STATUS"], totals: true),
+            Pivot(rows: ["CUSTOMER"], cols: ["STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Avg)], totals: true),
         ]), NoParams);
         Assert.Equal(5200d, Convert.ToDouble(averages.Aggregates["m1@[\"SHIPPED\"]"]["avg"]));
     }
@@ -1017,8 +1064,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     {
         var result = await _executor.Query(Definition, Doc(tail:
         [
-            Group(by: ["CUSTOMER", "STATUS"]),
-            Spread(cols: ["STATUS"]),
+            Pivot(rows: ["CUSTOMER"], cols: ["STATUS"]),
         ]), NoParams);
 
         var acme = result.Rows.Single(r => (string?)r["CUSTOMER"] == "Acme Corp");
@@ -1027,57 +1073,59 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
 
         var explicitCount = await _executor.Query(Definition, Doc(tail:
         [
-            Group(by: ["CUSTOMER", "STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Count)]),
-            Spread(cols: ["STATUS"]),
+            Pivot(rows: ["CUSTOMER"], cols: ["STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Count)]),
         ]), NoParams);
         Assert.All(explicitCount.Columns.Skip(1), column => Assert.Null(column.FormatSource));
     }
 
     [Fact]
-    public async Task Pivot_spreads_pre_spread_computed_cells_and_totals_them_when_safe()
+    public async Task Pivot_layer_computes_filters_sorts_highlights_and_projects_generated_cells()
     {
+        const string shipped = "m1@[\"SHIPPED\"]";
+        const string pending = "m1@[\"PENDING\"]";
         var state = Doc(tail:
         [
-            Group(
-                by: ["CUSTOMER", "STATUS"],
+            Pivot(
+                rows: ["CUSTOMER"],
+                cols: ["STATUS"],
                 values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
                 layer: new StageLayer
                 {
                     Computed =
                     [
-                        // Metrics and __count only: survives the cols-only totals re-grouping.
-                        new ComputedColumn { Id = "c2", Label = "Per Order", Expr = "ROUND(m1 * 1.0 / __count, 2)" },
-                        // References the row dimension CUSTOMER: cells spread, totals excluded.
-                        new ComputedColumn { Id = "c3", Label = "Acme Only", Expr = "CASE WHEN CUSTOMER = 'Acme Corp' THEN m1 ELSE 0 END" },
+                        new ComputedColumn
+                        {
+                            Id = "c2",
+                            Label = "Shipped Less Pending",
+                            Expr = $"COALESCE(`{shipped}`, 0) - COALESCE(`{pending}`, 0)",
+                        },
                     ],
+                    Filters = [Filter("c2 >= 10000")],
+                    Sorts = [new SortRule { Col = "c2", Dir = SortDir.Desc }],
+                    Highlights =
+                    [
+                        new HighlightRule
+                        {
+                            Id = "h1", Scope = "cell", Col = shipped,
+                            Expr = $"`{shipped}` > 10000",
+                            Style = new HighlightStyle { Bg = "gold" },
+                        },
+                    ],
+                    Columns = ["CUSTOMER", shipped, "c2"],
+                    Labels = new() { [shipped] = "Shipped", ["c2"] = "Shipped Less Pending" },
                 }),
-            Spread(cols: ["STATUS"], totals: true),
         ]);
 
         var result = await _executor.Query(Definition, state, NoParams);
 
-        // One cell family per metric and per group-layer computed column, stable names.
-        Assert.Equal(1 + 4 * 3, result.Columns.Count);
-        Assert.Contains(result.Columns, c => c.Name == "m1@[\"SHIPPED\"]" && !c.Computed && c.FormatSource == "AMOUNT");
-        Assert.Contains(result.Columns, c => c.Name == "c2@[\"SHIPPED\"]" && c.Computed && c.FormatSource is null);
-        Assert.Contains(result.Columns, c => c.Name == "c3@[\"SHIPPED\"]" && c.Computed);
-        Assert.Equal("SHIPPED · Per Order", result.Columns.Single(c => c.Name == "c2@[\"SHIPPED\"]").Label);
-
-        var acme = result.Rows.Single(r => (string?)r["CUSTOMER"] == "Acme Corp");
-        Assert.Equal(12000m, Convert.ToDecimal(acme["m1@[\"SHIPPED\"]"]));
-        Assert.Equal(6000m, Convert.ToDecimal(acme["c2@[\"SHIPPED\"]"]));        // 12000 over 2 orders
-        Assert.Equal(12000m, Convert.ToDecimal(acme["c3@[\"SHIPPED\"]"]));
-
-        var globex = result.Rows.Single(r => (string?)r["CUSTOMER"] == "Globex");
-        Assert.Equal(0m, Convert.ToDecimal(globex["c3@[\"SHIPPED\"]"]));
-
-        // Totals: metric cells re-aggregate ("sum"), totals-safe computed cells carry
-        // the "total" function key, and the row-dim-dependent computed has no total.
-        Assert.Equal(26000m, Convert.ToDecimal(result.Aggregates["m1@[\"SHIPPED\"]"]["sum"]));
-        Assert.Equal(5200m, Convert.ToDecimal(result.Aggregates["c2@[\"SHIPPED\"]"]["total"]));
-        Assert.Equal(4933.33m, Convert.ToDecimal(result.Aggregates["c2@[\"PENDING\"]"]["total"]));
-        Assert.DoesNotContain("c3@[\"SHIPPED\"]", result.Aggregates.Keys);
-        Assert.Equal(8, result.Aggregates.Count);                                // (m1 + c2) × 4 statuses
+        var acme = Assert.Single(result.Rows);
+        Assert.Equal("Acme Corp", acme["CUSTOMER"]);
+        Assert.Equal(12000m, Convert.ToDecimal(acme[shipped]));
+        Assert.Equal(12000m, Convert.ToDecimal(acme["c2"]));
+        Assert.Equal(["CUSTOMER", shipped, "c2"], acme.Keys);
+        Assert.Equal(["Customer", "Shipped", "Shipped Less Pending"], result.Columns.Select(column => column.Label));
+        var hit = Assert.Single(result.Highlights);
+        Assert.Equal((0, "h1", shipped), (hit.Row, hit.Id, hit.Col));
     }
 
     [Fact]
@@ -1089,11 +1137,10 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         var ex = await Assert.ThrowsAsync<ReportValidationException>(() =>
             _executor.Query(def, Doc(tail:
             [
-                Group(by: ["STATUS", "CUSTOMER"]),
-                Spread(cols: ["CUSTOMER"]),
+                Pivot(rows: ["STATUS"], cols: ["CUSTOMER"]),
             ]), NoParams));
 
-        Assert.Contains(ex.Errors, e => e.Path == "pipeline[2].shape.cols" && e.Message.Contains("max 2"));
+        Assert.Contains(ex.Errors, e => e.Path == "pipeline[1].shape.cols" && e.Message.Contains("max 2"));
     }
 
     [Fact]

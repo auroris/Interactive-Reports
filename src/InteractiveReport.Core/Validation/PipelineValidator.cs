@@ -1,16 +1,14 @@
 using System.Text.RegularExpressions;
 using InteractiveReport.Core.Execution;
+using InteractiveReport.Core.Expressions;
 using InteractiveReport.Core.Model;
 using InteractiveReport.Core.Schema;
 
 namespace InteractiveReport.Core.Validation;
 
 /// <summary>
-/// Normalizes the stage pipeline and validates its tail. T0 accepts exactly four
-/// pipelines — [source], [source, group], [source, group, spread], [source, chart] —
-/// anything else is a precise error. The group stage's output schema is derived
-/// statically (dims + __count + metrics by id + layer computed), so its layer binds
-/// through the same rule pipeline the source layer uses.
+/// Normalizes the stage pipeline and validates its tail. Group, pivot, and chart are
+/// independent views over the same source table; none consumes another view.
 /// </summary>
 internal static partial class PipelineValidator
 {
@@ -19,12 +17,11 @@ internal static partial class PipelineValidator
         StageLayer Source,
         StageShape? Group,
         StageLayer? GroupLayer,
-        StageShape? Spread,
-        StageLayer? SpreadLayer,
+        StageShape? Pivot,
+        StageLayer? PivotLayer,
         StageShape? Chart)
     {
-        public bool IsGrid => Group is null && Chart is null;
-        public bool HasSpread => Spread is not null;
+        public bool IsGrid => Group is null && Pivot is null && Chart is null;
     }
 
     private static readonly Stages BareSource = new(new StageLayer(), null, null, null, null, null);
@@ -58,20 +55,14 @@ internal static partial class PipelineValidator
                 return new Stages(source, null, null, null, null, null);
             case "group":
                 return new Stages(source, pipeline[1].Shape!, pipeline[1].Layer, null, null, null);
-            case "group,spread":
-                return new Stages(
-                    source,
-                    pipeline[1].Shape!,
-                    pipeline[1].Layer,
-                    pipeline[2].Shape!,
-                    pipeline[2].Layer,
-                    null);
+            case "pivot":
+                return new Stages(source, null, null, pipeline[1].Shape!, pipeline[1].Layer, null);
             case "chart":
                 return new Stages(source, null, null, null, null, pipeline[1].Shape!);
             default:
                 errors.Add(new ValidationError(
                     "pipeline",
-                    $"unsupported pipeline shape [source, {tail}] — supported tails are none, group, group+spread, and chart"));
+                    $"unsupported pipeline shape [source, {tail}] — supported tails are none, group, pivot, and chart"));
                 return new Stages(source, null, null, null, null, null);
         }
     }
@@ -87,6 +78,8 @@ internal static partial class PipelineValidator
     {
         if (stages.Chart is { } chart)
             return ValidateChart(chart, effectiveSchema.Lookup, errors);
+        if (stages.Pivot is not null)
+            return ValidatePivot(stages, reportName, effectiveSchema, errors, ignored);
         if (stages.Group is null)
             return ValidView.Grid;
 
@@ -122,50 +115,6 @@ internal static partial class PipelineValidator
 
         var metrics = ValidateMetrics(shape.Values, effectiveSchema, errors, ignored);
 
-        // Row/column split for a following spread stage. Cols reference resolved dims;
-        // a dim dropped by ignored[] resilience drops its spread reference the same way.
-        IReadOnlyList<ColumnModel> rows = [];
-        IReadOnlyList<ColumnModel> cols = [];
-        var totals = false;
-        if (stages.Spread is { } spread)
-        {
-            var dimLookup = dims.ToDictionary(d => d.Name, StringComparer.OrdinalIgnoreCase);
-            var resolvedCols = new List<ColumnModel>();
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var name in spread.Cols ?? [])
-            {
-                if (!dimLookup.TryGetValue(name, out var column))
-                {
-                    ignored.Add(new IgnoredItem(
-                        "spread",
-                        $"spread column '{name}' is not a group column of the preceding stage"));
-                    continue;
-                }
-                if (seen.Add(column.Name)) resolvedCols.Add(column);
-            }
-
-            var colNames = new HashSet<string>(resolvedCols.Select(c => c.Name), StringComparer.OrdinalIgnoreCase);
-            var rowDims = dims.Where(d => !colNames.Contains(d.Name)).ToList();
-            if (resolvedCols.Count == 0)
-                errors.Add(new ValidationError(
-                    "pipeline[2].shape.cols",
-                    "a spread stage requires at least one valid column dimension"));
-            if (rowDims.Count == 0)
-                errors.Add(new ValidationError(
-                    "pipeline[2].shape.cols",
-                    "a spread stage requires at least one group column left over as a row dimension"));
-            rows = rowDims;
-            cols = resolvedCols;
-            totals = spread.Totals == true;
-
-            RejectUnsupportedLayer(
-                stages.SpreadLayer,
-                "pipeline[2].layer",
-                errors,
-                allowLabels: true,
-                allowFormats: true);
-        }
-
         RejectUnsupportedLayer(
             stages.GroupLayer,
             "pipeline[1].layer",
@@ -174,16 +123,17 @@ internal static partial class PipelineValidator
             allowFormats: true,
             allowColumns: true,
             allowComputed: true,
+            allowFilters: true,
             allowSorts: true,
-            allowHighlights: true);
+            allowHighlights: true,
+            allowBreaks: true,
+            allowAggregates: true);
 
         var stageSchema = BuildStageSchema(reportName, dims, metrics);
         var layer = ValidateGroupLayer(
             stages,
             reportName,
             stageSchema,
-            dims,
-            rows,
             errors,
             ignored,
             policy);
@@ -191,19 +141,67 @@ internal static partial class PipelineValidator
         if (errors.Count > before)
             return ValidView.Grid;
 
-        var spreadLabels = stages.HasSpread
-            ? StateValidator.ResolveLabels(stages.SpreadLayer?.Labels)
-            : null;
+        return new ValidView(
+            ViewMode.GroupBy,
+            dims,
+            [],
+            [],
+            metrics,
+            GroupLayer: layer);
+    }
+
+    private static ValidView ValidatePivot(
+        Stages stages,
+        string reportName,
+        ReportSchema effectiveSchema,
+        List<ValidationError> errors,
+        List<IgnoredItem> ignored)
+    {
+        var shape = stages.Pivot!;
+        var before = errors.Count;
+        var rows = ResolveDimensions(shape.Rows, "pivot row", effectiveSchema.Lookup, ignored);
+        var cols = ResolveDimensions(shape.Cols, "pivot", effectiveSchema.Lookup, ignored);
+
+        if (rows.Count == 0)
+            errors.Add(new ValidationError(
+                "pipeline[1].shape.rows",
+                "a pivot stage requires at least one valid row dimension"));
+        if (cols.Count == 0)
+            errors.Add(new ValidationError(
+                "pipeline[1].shape.cols",
+                "a pivot stage requires at least one valid column dimension"));
+
+        var rowNames = new HashSet<string>(rows.Select(column => column.Name), StringComparer.OrdinalIgnoreCase);
+        var overlap = cols.FirstOrDefault(column => rowNames.Contains(column.Name));
+        if (overlap is not null)
+            errors.Add(new ValidationError(
+                "pipeline[1].shape.cols",
+                $"pivot column '{overlap.Name}' is already a row dimension"));
+
+        var metrics = ValidateMetrics(shape.Values, effectiveSchema, errors, ignored);
+        RejectUnsupportedLayer(
+            stages.PivotLayer,
+            "pipeline[1].layer",
+            errors,
+            allowLabels: true,
+            allowFormats: true,
+            allowColumns: true,
+            allowComputed: true,
+            allowFilters: true,
+            allowSorts: true,
+            allowHighlights: true);
+
+        if (errors.Count > before)
+            return ValidView.Grid;
 
         return new ValidView(
-            stages.HasSpread ? ViewMode.Pivot : ViewMode.GroupBy,
-            dims,
+            ViewMode.Pivot,
+            [],
             rows,
             cols,
             metrics,
-            totals,
-            GroupLayer: layer,
-            SpreadLabels: spreadLabels);
+            shape.Totals == true,
+            PivotLayer: stages.PivotLayer ?? new StageLayer());
     }
 
     /// <summary>
@@ -247,14 +245,11 @@ internal static partial class PipelineValidator
         Stages stages,
         string reportName,
         ReportSchema stageSchema,
-        IReadOnlyList<ColumnModel> dims,
-        IReadOnlyList<ColumnModel> spreadRowDims,
         List<ValidationError> errors,
         List<IgnoredItem> ignored,
         ColumnPolicy? policy)
     {
         var layer = stages.GroupLayer ?? new StageLayer();
-        var terminal = !stages.HasSpread;
 
         var computed = ComputedColumnValidator.Validate(
             layer.Computed,
@@ -265,46 +260,51 @@ internal static partial class PipelineValidator
             $"{reportName}#group",
             computed.Select(rule => rule.Effect.Column));
 
+        var filters = ExpressionRuleCompiler.Compile<FilterRule, IncludeRowEffect>(
+            layer.Filters,
+            maxRules: 50,
+            collectionPath: "pipeline[1].layer.filters",
+            extended.Lookup,
+            ExpressionRequirement.Predicate,
+            prepareEffect: static (_, _) => _ => new IncludeRowEffect(),
+            errors);
+
         // The policy reaches pass-through dims here: a dim is the base ColumnModel
         // itself, so a non-sortable base column stays unsortable under a group tail.
         var sorts = StateValidator.ValidateSorts(layer.Sorts, extended, ignored, policy);
-        if (stages.HasSpread)
-        {
-            // Under a spread, ordering can only choose row order: sorts on metrics or
-            // spread columns have no single column to bind to after spreading.
-            var rowNames = new HashSet<string>(
-                spreadRowDims.Select(d => d.Name),
-                StringComparer.OrdinalIgnoreCase);
-            foreach (var sort in sorts.Where(s => !rowNames.Contains(s.Column.Name)))
-                ignored.Add(new IgnoredItem(
-                    "sort",
-                    $"group sort on '{sort.Column.Name}' is inert under a spread (row dimensions order the matrix)"));
-            sorts = sorts.Where(s => rowNames.Contains(s.Column.Name)).ToList();
-        }
+        var decorations = HighlightRuleValidator.Validate(
+            layer.Highlights,
+            extended.Lookup,
+            errors,
+            ignored,
+            collectionPath: "pipeline[1].layer.highlights");
+        var select = StateValidator.ValidateColumns(layer.Columns, extended, ignored);
+        var aggregates = AggregateRuleValidator.Validate(
+            layer.Aggregates,
+            "pipeline[1].layer.aggregates",
+            extended.Lookup,
+            errors,
+            ignored);
+        var breaks = StateValidator.ValidateBreaks(layer.Breaks, extended, ignored, policy);
 
-        var decorations = terminal
-            ? HighlightRuleValidator.Validate(
-                layer.Highlights,
-                extended.Lookup,
-                errors,
-                ignored,
-                collectionPath: "pipeline[1].layer.highlights")
-            : [];
-        if (!terminal && layer.Highlights is { Count: > 0 })
-            ignored.Add(new IgnoredItem(
-                "highlight",
-                "group-stage highlights are inert under a spread"));
-
-        var select = terminal
-            ? StateValidator.ValidateColumns(layer.Columns, extended, ignored)
-            : extended.Columns.ToList();
+        // A break key is structural row data. Keep it in the result even when an
+        // explicit projection omitted it so the renderer can recognize boundaries.
+        foreach (var column in breaks)
+            if (!select.Any(selected => string.Equals(
+                    selected.Name,
+                    column.Name,
+                    StringComparison.OrdinalIgnoreCase)))
+                select.Add(column);
 
         return new ValidStageLayer(
             extended,
             computed,
+            filters,
             decorations,
             sorts,
             select,
+            aggregates,
+            breaks,
             StateValidator.ResolveLabels(layer.Labels));
     }
 
@@ -368,8 +368,11 @@ internal static partial class PipelineValidator
         bool allowFormats = false,
         bool allowColumns = false,
         bool allowComputed = false,
+        bool allowFilters = false,
         bool allowSorts = false,
-        bool allowHighlights = false)
+        bool allowHighlights = false,
+        bool allowBreaks = false,
+        bool allowAggregates = false)
     {
         if (layer is null) return;
 
@@ -383,11 +386,11 @@ internal static partial class PipelineValidator
         Reject(allowLabels, layer.Labels is { Count: > 0 }, "labels", "this stage does not support labels");
         Reject(allowFormats, layer.Formats is { Count: > 0 }, "formats", "this stage does not support formats");
         Reject(allowComputed, layer.Computed is { Count: > 0 }, "computed", "computed columns are not supported on this stage yet");
-        Reject(false, layer.Filters is { Count: > 0 }, "filters", "stage filters are not supported yet — filters live on the source stage");
+        Reject(allowFilters, layer.Filters is { Count: > 0 }, "filters", "this stage does not support filters");
         Reject(allowSorts, layer.Sorts is { Count: > 0 }, "sorts", "this stage does not support sorts");
         Reject(allowHighlights, layer.Highlights is { Count: > 0 }, "highlights", "highlights are not supported on this stage yet");
-        Reject(false, layer.Breaks is { Count: > 0 }, "breaks", "control breaks live on the source stage");
-        Reject(false, layer.Aggregates is { Count: > 0 }, "aggregates", "footer aggregates live on the source stage");
+        Reject(allowBreaks, layer.Breaks is { Count: > 0 }, "breaks", "this stage does not support control breaks");
+        Reject(allowAggregates, layer.Aggregates is { Count: > 0 }, "aggregates", "this stage does not support footer aggregates");
     }
 
     /// <summary>

@@ -5,10 +5,9 @@
 //
 // Source-layer chips (search, filters, breaks, aggregates, computed, highlights)
 // always display: they are the stage-1 state every view consumes or returns to.
-// When the pipeline has a group tail, the group layer's computed and highlight
-// rules chip alongside them, marked as view-scoped. The view chip summarizes the
-// tail; its remove returns to the grid (parking the tail on the shelf) and stays
-// available as the way out of a view whose button and dialog are gone.
+// The active Group By or Pivot layer's rules chip alongside the base rules,
+// marked as view-scoped. Group also owns breaks and aggregates. The view chip
+// summarizes the tail; its remove returns to the grid (parking the tail on the shelf).
 //
 // A chip whose owning feature is not whitelisted still renders (the state is
 // real — a default or saved report put it there) but renders locked: no toggle,
@@ -31,16 +30,25 @@ import {
 import { filterDialog, computeDialog, highlightDialog } from "../dialogs/rules.js";
 import { breakDialog, aggregateDialog } from "../dialogs/grid.js";
 import { openViewDialog } from "../dialogs/view.js";
+import { stageContext } from "../stage.js";
 
 const modeLabel = (w, mode) => w.t(mode === "groupBy" ? "group.label" : `toolbar.${mode}`);
+
+function viewStage(doc) {
+    const mode = modeOf(doc);
+    return mode === "groupBy" ? stageOf(doc, "group")
+        : mode === "pivot" ? stageOf(doc, "pivot")
+        : null;
+}
 
 function chipToggle(w, kind, index, on) {
     w.applyOrBanner(d => {
         const list = kind === "filter" ? sourceLayer(d).filters
             : kind === "computed" ? sourceLayer(d).computed
             : kind === "highlight" ? sourceLayer(d).highlights
-            : kind === "stageComputed" ? stageOf(d, "group")?.layer?.computed
-            : kind === "stageHighlight" ? stageOf(d, "group")?.layer?.highlights
+            : kind === "stageFilter" ? viewStage(d)?.layer?.filters
+            : kind === "stageComputed" ? viewStage(d)?.layer?.computed
+            : kind === "stageHighlight" ? viewStage(d)?.layer?.highlights
             : null;
         const item = list?.[index];
         if (item) item.enabled = on;
@@ -65,9 +73,9 @@ function chipRemove(w, kind, index) {
         return;
     }
     if (kind === "stageComputed") {
-        const column = stageOf(w.doc, "group")?.layer?.computed?.[index]?.id;
+        const column = viewStage(w.doc)?.layer?.computed?.[index]?.id;
         if (!column) return;
-        w.apply(d => removeStageComputedColumn(d, stageOf(d, "group"), column))
+        w.apply(d => removeStageComputedColumn(d, viewStage(d), column))
             .catch(err => w.showError(err));
         return;
     }
@@ -79,7 +87,10 @@ function chipRemove(w, kind, index) {
             case "break": layer.breaks = (layer.breaks ?? []).filter((_, i) => i !== index); break;
             case "aggregate": layer.aggregates?.splice(index, 1); break;
             case "highlight": layer.highlights?.splice(index, 1); break;
-            case "stageHighlight": stageOf(d, "group")?.layer?.highlights?.splice(index, 1); break;
+            case "stageFilter": viewStage(d)?.layer?.filters?.splice(index, 1); break;
+            case "stageBreak": viewStage(d).layer.breaks = (viewStage(d).layer.breaks ?? []).filter((_, i) => i !== index); break;
+            case "stageAggregate": viewStage(d)?.layer?.aggregates?.splice(index, 1); break;
+            case "stageHighlight": viewStage(d)?.layer?.highlights?.splice(index, 1); break;
             case "view": activateTail(d, "grid"); break;
         }
     });
@@ -89,12 +100,15 @@ function chipEdit(w, kind, index) {
     switch (kind) {
         case "search": w.els.search.focus(); w.els.search.select(); break;
         case "filter": filterDialog(w, { editIndex: index }); break;
+        case "stageFilter": filterDialog(w, { editIndex: index }); break;
         case "break": breakDialog(w); break;
+        case "stageBreak": breakDialog(w); break;
         case "aggregate": aggregateDialog(w); break;
+        case "stageAggregate": aggregateDialog(w); break;
         case "computed": computeDialog(w, index); break;
         case "highlight": highlightDialog(w, index); break;
-        // Stage rules edit through the same dialogs — the stage context already
-        // routes them to the group layer while its view is active.
+        // Stage rules edit through the same dialogs; stage context routes them
+        // to the active Group By or Pivot layer.
         case "stageComputed": computeDialog(w, index); break;
         case "stageHighlight": highlightDialog(w, index); break;
         case "view": openViewDialog(w, modeOf(w.doc)); break;
@@ -154,14 +168,13 @@ function tailSummary(w, mode) {
         const shape = stageOf(w.doc, "chart")?.shape;
         return shape ? chartSummary(w, shape) : w.t("toolbar.chart");
     }
-    const group = stageOf(w.doc, "group")?.shape ?? {};
-    if (mode === "groupBy")
+    if (mode === "groupBy") {
+        const group = stageOf(w.doc, "group")?.shape ?? {};
         return (group.by ?? []).map(c => labelOf(w, c)).join(", ");
-    const spread = stageOf(w.doc, "spread")?.shape ?? {};
-    const colNames = (spread.cols ?? []).map(c => c.toLowerCase());
-    const rows = (group.by ?? []).filter(c => !colNames.includes(c.toLowerCase()));
-    return `${rows.map(c => labelOf(w, c)).join(", ")} × ${(spread.cols ?? []).map(c => labelOf(w, c)).join(", ")}`
-        + (spread.totals ? ` · ${w.t("pivot.totals")}` : "");
+    }
+    const pivot = stageOf(w.doc, "pivot")?.shape ?? {};
+    return `${(pivot.rows ?? []).map(c => labelOf(w, c)).join(", ")} × ${(pivot.cols ?? []).map(c => labelOf(w, c)).join(", ")}`
+        + (pivot.totals ? ` · ${w.t("pivot.totals")}` : "");
 }
 
 export function renderChips(w, container) {
@@ -172,41 +185,49 @@ export function renderChips(w, container) {
     const lock = feature => featureEnabled(w, feature)
         ? {}
         : { toggleable: false, removable: false, editable: false };
+    // A source rule remains visible in a derived view, but its dialog would be
+    // editing that derived table. Switch back to the grid to edit it.
+    const sourceRuleLock = feature => ({
+        ...lock(feature),
+        ...(mode !== "grid" ? { editable: false } : {}),
+    });
 
     if (d.search) {
         chips.push(chip({ w, kind: "search", index: 0, toggleable: false, colLabel: w.t("chip.search"), text: `“${d.search}”`, ...lock("search") }));
     }
     (layer.filters ?? []).forEach((f, i) =>
-        chips.push(chip({ w, kind: "filter", index: i, off: f.enabled === false, colLabel: w.t("filter.label"), text: f.expr, ...lock("filter") })));
+        chips.push(chip({ w, kind: "filter", index: i, off: f.enabled === false, colLabel: w.t("filter.label"), text: f.expr, ...sourceRuleLock("filter") })));
     (layer.breaks ?? []).forEach((b, i) =>
-        chips.push(chip({ w, kind: "break", index: i, toggleable: false, colLabel: w.t("break.label"), text: labelOf(w, b), ...lock("controlBreak") })));
+        chips.push(chip({ w, kind: "break", index: i, toggleable: false, colLabel: w.t("break.label"), text: labelOf(w, b), ...sourceRuleLock("controlBreak") })));
     (layer.aggregates ?? []).forEach((a, i) =>
         chips.push(chip({
             w, kind: "aggregate", index: i, toggleable: false, colLabel: "Σ",
             text: w.t("aggregate.ofColumn", { function: fnLabel(w, a.fn), column: labelOf(w, a.col) }),
-            ...lock("aggregate"),
+            ...sourceRuleLock("aggregate"),
         })));
-    // Editing a source rule reopens its dialog, and the dialogs route to the
-    // CURRENT stage's layer — so outside the grid, source computed/highlight
-    // chips keep toggle and remove but drop edit (switch to grid to edit them).
-    const sourceRuleLock = feature => ({
-        ...lock(feature),
-        ...(mode !== "grid" ? { editable: false } : {}),
-    });
     (layer.computed ?? []).forEach((c, i) =>
         chips.push(chip({ w, kind: "computed", index: i, off: c.enabled === false, colLabel: "ƒ", text: c.label ?? c.id, ...sourceRuleLock("compute") })));
     bySequence(layer.highlights).forEach(entry =>
         chips.push(highlightChip(w, "highlight", sourceRuleLock("highlight"))(entry)));
 
-    // The active group stage's own rules: computed metrics (group and pivot)
-    // and, when the group is the terminal table, its highlights.
-    const group = stageOf(d, "group");
-    if (group && (mode === "groupBy" || mode === "pivot")) {
-        (group.layer?.computed ?? []).forEach((c, i) =>
+    const stage = viewStage(d);
+    if (stage) {
+        const stageColumns = new Map(stageContext(w).columns.map(column => [column.name.toLowerCase(), column]));
+        const stageLabel = name => stageColumns.get(name.toLowerCase())?.label ?? labelOf(w, name);
+        (stage.layer?.filters ?? []).forEach((f, i) =>
+            chips.push(chip({ w, kind: "stageFilter", index: i, off: f.enabled === false, colLabel: w.t("filter.label"), text: f.expr, ...lock("filter") })));
+        (stage.layer?.breaks ?? []).forEach((b, i) =>
+            chips.push(chip({ w, kind: "stageBreak", index: i, toggleable: false, colLabel: w.t("break.label"), text: stageLabel(b), ...lock("controlBreak") })));
+        (stage.layer?.aggregates ?? []).forEach((a, i) =>
+            chips.push(chip({
+                w, kind: "stageAggregate", index: i, toggleable: false, colLabel: "Σ",
+                text: w.t("aggregate.ofColumn", { function: fnLabel(w, a.fn), column: stageLabel(a.col) }),
+                ...lock("aggregate"),
+            })));
+        (stage.layer?.computed ?? []).forEach((c, i) =>
             chips.push(chip({ w, kind: "stageComputed", index: i, off: c.enabled === false, colLabel: w.t("chip.stageComputed"), text: c.label ?? c.id, ...lock("compute") })));
-        if (mode === "groupBy")
-            bySequence(group.layer?.highlights).forEach(entry =>
-                chips.push(highlightChip(w, "stageHighlight", lock("highlight"))(entry)));
+        bySequence(stage.layer?.highlights).forEach(entry =>
+            chips.push(highlightChip(w, "stageHighlight", lock("highlight"))(entry)));
     }
 
     if (mode !== "grid" && tailOf(d).length) {

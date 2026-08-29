@@ -594,7 +594,7 @@ public class LiveDialectTests
 
     [SkippableTheory]
     [MemberData(nameof(Dialects))]
-    public async Task Group_and_spread_stages(ReportDialect dialect)
+    public async Task Group_By_and_Pivot_stages(ReportDialect dialect)
     {
         var live = LiveDb.For(dialect);
 
@@ -605,10 +605,27 @@ public class LiveDialectTests
         Assert.Equal([1L, 1L, 3L, 5L], grouped.Rows.Select(r => Convert.ToInt64(r["__count"])));
         Assert.Equal([6000m, 400m, 14800m, 26000m], grouped.Rows.Select(r => Convert.ToDecimal(r["m1"])));
 
+        var groupedTable = await live.Executor.Query(live.Definition(), Doc(tail:
+        [
+            Group(
+                by: ["STATUS", "CUSTOMER"],
+                values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
+                layer: new StageLayer
+                {
+                    Filters = [Filter("m1 >= 1000")],
+                    Breaks = ["STATUS"],
+                    Aggregates = [new AggregateRule { Col = "m1", Fn = AggregateFn.Sum }],
+                }),
+        ]), NoParams);
+        Assert.Equal(7, groupedTable.TotalRows);
+        Assert.Equal(46000m, Convert.ToDecimal(groupedTable.Aggregates["m1"]["sum"]));
+        var shippedGroups = groupedTable.BreakTotals.Single(total => Equals(total.Key["STATUS"], "SHIPPED"));
+        Assert.Equal(4, shippedGroups.Rows);
+        Assert.Equal(26000m, Convert.ToDecimal(shippedGroups.Aggregates["m1"]["sum"]));
+
         var pivot = await live.Executor.Query(live.Definition(), Doc(tail:
         [
-            Group(by: ["CUSTOMER", "STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)]),
-            Spread(cols: ["STATUS"], totals: true),
+            Pivot(rows: ["CUSTOMER"], cols: ["STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)], totals: true),
         ]), NoParams);
         var acme = pivot.Rows.Single(r => (string?)r["CUSTOMER"] == "Acme Corp");
         Assert.Equal(12000m, Convert.ToDecimal(acme["m1@[\"SHIPPED\"]"]));

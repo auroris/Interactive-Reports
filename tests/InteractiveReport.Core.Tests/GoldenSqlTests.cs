@@ -451,6 +451,47 @@ public class GoldenSqlTests
             DialectSupport.GetCompiler(ReportDialect.Sqlite).Compile(page).Sql);
     }
 
+    [Theory]
+    [InlineData(ReportDialect.Sqlite, "\"REGION\"", "\"STATUS\"", "\"m1\"", "\"a0\"")]
+    [InlineData(ReportDialect.SqlServer, "[REGION]", "[STATUS]", "[m1]", "[a0]")]
+    [InlineData(ReportDialect.Oracle, "\"REGION\"", "\"STATUS\"", "\"m1\"", "\"a0\"")]
+    [InlineData(ReportDialect.Postgres, "\"REGION\"", "\"STATUS\"", "\"m1\"", "\"a0\"")]
+    public void Group_breaks_and_footer_aggregates_wrap_the_completed_stage_portably(
+        ReportDialect dialect,
+        string region,
+        string status,
+        string metric,
+        string aggregateAlias)
+    {
+        var def = OrdersDefinition(dialect);
+        var validated = StateValidator.Validate(def, Doc(
+            tail:
+            [
+                Group(
+                    by: ["REGION", "STATUS"],
+                    values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
+                    layer: new StageLayer
+                    {
+                        Breaks = ["REGION"],
+                        Sorts = [new SortRule { Col = "STATUS", Dir = SortDir.Desc }],
+                        Aggregates = [new AggregateRule { Col = "m1", Fn = AggregateFn.Sum }],
+                    }),
+            ],
+            page: new PageRequest { Index = 1, Size = 10 }), OrdersSchema);
+        var queries = QueryComposer.ComposeGroupStageQueries(def, validated);
+        var compiler = DialectSupport.GetCompiler(dialect);
+        var page = compiler.Compile(queries.Page).Sql;
+        var footer = compiler.Compile(queries.Aggregates!).Sql;
+        var breaks = compiler.Compile(queries.BreakTotals!).Sql;
+
+        Assert.Contains($"ORDER BY {region}, {status} DESC", page);
+        Assert.Contains($"SUM({metric}) AS {aggregateAlias}", footer);
+        Assert.Contains($"GROUP BY {region}", breaks);
+        Assert.Contains($"ORDER BY {region}", breaks);
+        Assert.Contains("ir_groups", footer);
+        Assert.Contains("ir_groups", breaks);
+    }
+
     [Fact]
     public void Group_layer_computed_column_wraps_the_grouped_query_as_ir_stage()
     {
@@ -553,15 +594,14 @@ public class GoldenSqlTests
     }
 
     [Fact]
-    public void Spread_source_groups_all_dims_ordered_and_capped()
+    public void Pivot_source_groups_all_dims_ordered_and_capped()
     {
         var def = OrdersDefinition(ReportDialect.Sqlite);
         var validated = StateValidator.Validate(def, Doc(tail:
         [
-            Group(by: ["REGION", "STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)]),
-            Spread(cols: ["STATUS"]),
+            Pivot(rows: ["REGION"], cols: ["STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)]),
         ]), OrdersSchema);
-        var source = QueryComposer.ComposeSpreadSource(def, validated, 10_000);
+        var source = QueryComposer.ComposePivotSource(def, validated, 10_000);
 
         Assert.Equal(
             "SELECT \"REGION\", \"STATUS\", COUNT(*) AS \"__count\", SUM(\"AMOUNT\") AS \"m1\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base GROUP BY \"REGION\", \"STATUS\" ORDER BY \"REGION\", \"STATUS\" LIMIT @p0",
@@ -569,17 +609,15 @@ public class GoldenSqlTests
     }
 
     [Fact]
-    public void Spread_totals_reaggregate_by_column_dimensions()
+    public void Pivot_totals_reaggregate_by_column_dimensions()
     {
         var def = OrdersDefinition(ReportDialect.Sqlite);
         var validated = StateValidator.Validate(def, Doc(tail:
         [
-            Group(by: ["CUSTOMER", "STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)]),
-            Spread(cols: ["STATUS"], totals: true),
+            Pivot(rows: ["CUSTOMER"], cols: ["STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)], totals: true),
         ]), OrdersSchema);
 
-        var totals = QueryComposer.ComposeSpreadTotals(
-            def, validated, QueryComposer.SpreadTotalsComputed(validated.View));
+        var totals = QueryComposer.ComposePivotTotals(def, validated);
 
         Assert.Equal(
             "SELECT \"STATUS\", COUNT(*) AS \"__count\", SUM(\"AMOUNT\") AS \"m1\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base GROUP BY \"STATUS\" ORDER BY \"STATUS\"",

@@ -98,16 +98,17 @@ public sealed class ConsistentReadTests : IDisposable
     }
 
     [Fact]
-    public async Task Single_statement_spread_without_totals_runs_without_a_transaction()
+    public async Task Single_statement_Pivot_without_totals_runs_without_a_transaction()
     {
         var result = await Executor().Query(
             Definition(),
             Doc(tail:
             [
-                Group(
-                    ["ORDER_ID", "CUSTOMER"],
-                    [Metric("m1", "AMOUNT", AggregateFn.Sum)]),
-                Spread(["CUSTOMER"], totals: false),
+                Pivot(
+                    rows: ["ORDER_ID"],
+                    cols: ["CUSTOMER"],
+                    values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
+                    totals: false),
             ]),
             NoParams);
 
