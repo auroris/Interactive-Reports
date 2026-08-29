@@ -145,10 +145,41 @@ test("menus close on Tab and hand focus back to their trigger on pick", async ({
     await expect(actions).toHaveAttribute("aria-expanded", "false");
 
     await actions.click();
+    const menu = page.getByRole("menu");
+    const menuBox = await menu.boundingBox();
+    const actionsBox = await actions.boundingBox();
+    expect(menuBox).not.toBeNull();
+    expect(actionsBox).not.toBeNull();
+    expect(Math.abs(menuBox.x - actionsBox.x)).toBeLessThanOrEqual(1);
+    expect(menuBox.y).toBeGreaterThanOrEqual(8);
+    expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(page.viewportSize().height - 8);
+    expect(await menu.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true);
     const download = page.waitForEvent("download");
     await page.getByRole("menuitem", { name: "CSV", exact: true }).click();
     await download;
     await expect(actions).toBeFocused();
+});
+
+test("a tall menu uses the roomier side and scrolls its final command into view", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 380 });
+    await openWorkbench(page);
+    const actions = page.getByRole("button", { name: "Actions", exact: true });
+
+    await actions.click();
+    const menu = page.getByRole("menu");
+    const menuBox = await menu.boundingBox();
+    const actionsBox = await actions.boundingBox();
+    expect(menuBox).not.toBeNull();
+    expect(actionsBox).not.toBeNull();
+    expect(Math.abs(menuBox.x - actionsBox.x)).toBeLessThanOrEqual(1);
+    expect(menuBox.y).toBeGreaterThanOrEqual(8);
+    expect(menuBox.y + menuBox.height).toBeLessThan(actionsBox.y);
+    expect(await menu.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true);
+
+    await page.keyboard.press("End");
+    const csv = page.getByRole("menuitem", { name: "CSV", exact: true });
+    await expect(csv).toBeFocused();
+    await expect(csv).toBeInViewport();
 });
 
 test("editor windows are named, modeless, movable, and leave the report interactive", async ({ page }) => {

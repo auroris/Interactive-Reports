@@ -11,6 +11,10 @@
 //   saved-report — optional saved-report title to load initially
 //   api-base     — API prefix; defaults to the prefix this script was served from
 //   base         — compatibility alias for api-base
+// Public methods:
+//   getExport(format = "csv", { signal } = {})
+//              — retrieve { blob, filename, contentType, truncated } without
+//                initiating a browser download
 
 import { InteractiveReportElement } from "./report/element.js";
 

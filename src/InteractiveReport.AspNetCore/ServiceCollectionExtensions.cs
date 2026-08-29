@@ -2,6 +2,7 @@ using System.Data.Common;
 using InteractiveReport.Core.Authorization;
 using InteractiveReport.Core.Definitions;
 using InteractiveReport.Core.Execution;
+using InteractiveReport.Core.Export;
 using InteractiveReport.Core.Model;
 using InteractiveReport.Core.SavedReports;
 using InteractiveReport.Core.Schema;
@@ -61,6 +62,7 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<IReportConnectionFactory>(),
             sp.GetRequiredService<SchemaCache>(),
             logging.For<ReportExecutor>()));
+        services.AddSingleton<IReportFileExporter, ReportFileExporter>();
         services.AddSingleton<IReportAccessService, ReportAccessService>();
         services.TryAddSingleton<IContextParameterResolver, ClaimContextParameterResolver>();
 

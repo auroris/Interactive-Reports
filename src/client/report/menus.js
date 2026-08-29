@@ -16,7 +16,7 @@ import { paginationDialog, sortDialog, breakDialog, aggregateDialog } from "./di
 import { groupByDialog, pivotDialog, chartDialog } from "./dialogs/view.js";
 import { saveDialog } from "./dialogs/save.js";
 import { canManageCurrentSaved, deleteCurrentSaved, resetWorkingCopy } from "./saved.js";
-import { exportCsv } from "./export.js";
+import { downloadExport } from "./export.js";
 
 /// Features whose entries live in the header menu per mode; if none of them are
 /// whitelisted the header offers nothing and should not open (nor look clickable).
@@ -78,7 +78,7 @@ export function actionsMenuItems(w) {
     ];
     if (report.length) items.push({ heading: w.t("menu.report") }, ...report);
     if (featureEnabled(w, "download"))
-        items.push({ heading: w.t("menu.download") }, { label: w.t("menu.csv"), onPick: () => exportCsv(w) });
+        items.push({ heading: w.t("menu.download") }, { label: w.t("menu.csv"), onPick: () => downloadExport(w, "csv") });
     return items;
 }
 

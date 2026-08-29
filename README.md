@@ -603,6 +603,46 @@ There is no configured-report catalog or report selector. Server authorization s
 applies when the component requests that report's schema, saved reports, queries, and
 exports.
 
+Once the initial report has loaded, an embedding application can retrieve an export
+without presenting it as a browser download. `getExport` accepts the format token and
+an optional `AbortSignal`, and resolves to `{ blob, filename, contentType, truncated }`:
+
+```js
+const report = document.querySelector("interactive-report");
+const abortController = new AbortController();
+const artifact = await report.getExport("csv", { signal: abortController.signal });
+
+// The host decides what retrieval means: upload it, attach it, cache it, or save it.
+await uploadReport(artifact.blob, artifact.filename, artifact.contentType);
+```
+
+The Actions-menu CSV command retrieves the same artifact and then invokes the browser's
+download behavior.
+
+Server-side integrations should use the registered `IReportFileExporter` directly,
+not make an HTTP request back into their own application:
+
+```csharp
+var exporter = serviceProvider.GetRequiredService<IReportFileExporter>();
+var artifact = await exporter.Export(
+    "open-orders",
+    state,
+    contextParameters,
+    format: "csv",
+    ct: ct);
+
+await store.Put(artifact.FileName, artifact.ContentType, artifact.Bytes, ct);
+```
+
+The in-process exporter is transport-neutral and returns `Bytes`, `FileName`,
+`ContentType`, and `Truncated`. It does not invoke HTTP authorization, apply the
+endpoint's `download` feature gate, or infer context from a user; the calling
+application is the trust boundary and supplies any context parameters explicitly. It
+still resolves the configured definition and runs the same state validation, query
+composition, row caps, and CSV renderer. The browser export endpoint performs its
+existing authorization and `download` feature checks, resolves request context
+parameters, and then delegates to this same exporter.
+
 The widget adapts to the definition's `features` whitelist (docs/ARCHITECTURE.md §4):
 menu entries, view buttons, the search bar, and the saved-report select render only
 for whitelisted features, and the server additionally refuses CSV export and

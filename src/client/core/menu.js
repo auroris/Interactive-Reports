@@ -23,16 +23,32 @@ export function closeMenuOwnedBy(host) {
 }
 
 const anchorPositioningAvailable = () =>
-    window.CSS?.supports?.("position-anchor: --ir-popup-anchor") === true;
+    window.CSS?.supports?.("position-anchor: --ir-popup-anchor") === true
+    && window.CSS.supports("position-area: bottom span-right")
+    && window.CSS.supports("position-try-order: most-height");
+
+const VIEWPORT_MARGIN = 8;
+const ANCHOR_GAP = 2;
+
+/// Legacy geometry path: cap the menu to the larger space above or below its
+/// anchor. A menu taller than either side becomes a scroll container instead
+/// of extending beyond the viewport. Modern browsers get this sizing from the
+/// CSS position area.
+function constrainFallbackHeight(menu, anchor) {
+    const a = anchor.getBoundingClientRect();
+    const below = window.innerHeight - VIEWPORT_MARGIN - a.bottom - ANCHOR_GAP;
+    const above = a.top - ANCHOR_GAP - VIEWPORT_MARGIN;
+    menu.style.maxHeight = `${Math.max(0, below, above)}px`;
+}
 
 function placeFallback(menu, anchor) {
     const a = anchor.getBoundingClientRect();
     const m = menu.getBoundingClientRect();
-    let left = Math.min(a.left, window.innerWidth - m.width - 8);
-    let top = a.bottom + 2;
-    if (top + m.height > window.innerHeight - 8)
-        top = Math.max(8, a.top - m.height - 2);
-    menu.style.left = `${Math.max(8, left)}px`;
+    let left = Math.min(a.left, window.innerWidth - m.width - VIEWPORT_MARGIN);
+    let top = a.bottom + ANCHOR_GAP;
+    if (top + m.height > window.innerHeight - VIEWPORT_MARGIN)
+        top = Math.max(VIEWPORT_MARGIN, a.top - m.height - ANCHOR_GAP);
+    menu.style.left = `${Math.max(VIEWPORT_MARGIN, left)}px`;
     menu.style.top = `${top}px`;
 }
 
@@ -99,7 +115,12 @@ export function popupMenu(anchor, items) {
         const path = event.composedPath?.() ?? [event.target];
         if (!path.includes(menu) && !path.includes(anchor)) closePopups();
     };
-    const onScroll = () => { if (scrollArmed) closePopups(); };
+    // Scrolling the newly constrained menu is expected. Scrolling an ancestor
+    // invalidates fallback coordinates and closes it as before.
+    const onScroll = event => {
+        if (event?.target === menu) return;
+        if (scrollArmed) closePopups();
+    };
     const cleanup = () => {
         if (closed) return;
         closed = true;
@@ -158,6 +179,7 @@ export function popupMenu(anchor, items) {
         document.addEventListener("mousedown", onDocDown, { capture: true, signal: controller.signal });
 
     if (!anchored) {
+        constrainFallbackHeight(menu, anchor);
         placeFallback(menu, anchor);
         requestAnimationFrame(() => { scrollArmed = true; });
         window.addEventListener("scroll", onScroll, { capture: true, signal: controller.signal });

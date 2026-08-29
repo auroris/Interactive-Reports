@@ -1,7 +1,9 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Security.Claims;
+using System.Text;
 using System.Text.Json;
+using InteractiveReport.Core.Export;
 using InteractiveReport.Core.Model;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -131,6 +133,24 @@ public sealed class FeatureWhitelistHttpTests : IAsyncLifetime
             "/api/reports/open/export?format=csv", JsonContent.Create(new { }));
         Assert.Equal(HttpStatusCode.OK, allowed.StatusCode);
         Assert.Equal("text/csv", allowed.Content.Headers.ContentType?.MediaType);
+    }
+
+    [Fact]
+    public async Task In_process_file_exporter_returns_bytes_without_transport_authorization()
+    {
+        var exporter = _app!.Services.GetRequiredService<IReportFileExporter>();
+
+        // "locked" deliberately has no download feature. That feature gate belongs
+        // to the HTTP adapter; the host's in-process service is a trusted boundary.
+        var export = await exporter.Export("locked", new ReportState());
+
+        Assert.Equal("locked.csv", export.FileName);
+        Assert.Equal("text/csv; charset=utf-8", export.ContentType);
+        Assert.False(export.Truncated);
+        var csv = Encoding.UTF8.GetString(export.Bytes);
+        Assert.Contains("Id,Label", csv);
+        Assert.Contains("1,first", csv);
+        Assert.Contains("2,second", csv);
     }
 
     [Fact]

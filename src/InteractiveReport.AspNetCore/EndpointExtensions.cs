@@ -1,5 +1,6 @@
 using System.Text.Json;
 using InteractiveReport.Core.Execution;
+using InteractiveReport.Core.Export;
 using InteractiveReport.Core.Expressions;
 using InteractiveReport.Core.Model;
 using InteractiveReport.Core.Validation;
@@ -455,19 +456,23 @@ public static class EndpointExtensions
                 if (Access(context).RequireFeature(definition, ReportFeatures.Download) is { } disabled)
                     return disabled;
                 var format = context.Request.Query["format"].FirstOrDefault() ?? "csv";
-                return string.Equals(format, "csv", StringComparison.OrdinalIgnoreCase)
+                var exporter = context.RequestServices.GetRequiredService<IReportFileExporter>();
+                return exporter.SupportedFormats.Contains(format.Trim(), StringComparer.OrdinalIgnoreCase)
                     ? null
                     : Error(
                         InteractiveReportErrorCodes.UnsupportedExportFormat,
                         StatusCodes.Status400BadRequest,
-                        $"format '{format}' is not supported (csv only for now)");
+                        $"format '{format}' is not supported; supported formats: "
+                        + string.Join(", ", exporter.SupportedFormats));
             },
-            static async (context, definition, executor, state, contextParams, token) =>
+            static async (context, definition, _, state, contextParams, token) =>
             {
-                var export = await executor.Export(definition, state, contextParams, token);
-                var csv = Core.Export.CsvWriter.Write(export.Columns, export.Rows);
+                var format = context.Request.Query["format"].FirstOrDefault() ?? "csv";
+                var export = await context.RequestServices
+                    .GetRequiredService<IReportFileExporter>()
+                    .Export(definition, state, contextParams, format, token);
                 context.Response.Headers["X-IR-Truncated"] = export.Truncated ? "true" : "false";
-                return Results.File(csv, "text/csv; charset=utf-8", $"{definition.Name}.csv");
+                return Results.File(export.Bytes, export.ContentType, export.FileName);
             },
             ct);
 

@@ -336,7 +336,10 @@
     inset: auto;
     margin: 0;
     z-index: 1000;
+    box-sizing: border-box;
     min-width: 190px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
     background: var(--ir-bg);
     border: 1px solid #ccd4dc;
     border-radius: 4px;
@@ -347,10 +350,18 @@
 }
 .ir-popup:popover-open,
 .ir-popup[data-ir-popover-open] { display: block; }
-@supports (position-anchor: --ir-popup-anchor) {
+@supports (position-anchor: --ir-popup-anchor)
+    and (position-area: bottom span-right)
+    and (position-try-order: most-height) {
     .ir-popup {
-        top: anchor(bottom);
-        right: anchor(right);
+        /* The position area is also the menu's sizing container: 100% is the
+           available block space from the anchor to the viewport edge. The
+           roomier side wins, and an over-tall menu scrolls inside that area. */
+        position-area: bottom span-right;
+        position-try-order: most-height;
+        justify-self: start;
+        align-self: start;
+        max-height: calc(100% - 10px);
         margin-top: 2px;
         position-try-fallbacks: flip-block, flip-inline;
     }

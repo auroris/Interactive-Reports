@@ -1323,6 +1323,17 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   locked — visible state, no toggle/edit/remove (except leaving a locked view for the
   grid, which stays possible). Reset remains as long as any doc-mutating feature
   exists; a missing `features` field (older server) means everything is on.
+- **Host export API**: after the initial query, `interactive-report.getExport(format,
+  { signal })` posts the current canonical state to the ordinary export endpoint and
+  resolves to `{ blob, filename, contentType, truncated }` without causing browser
+  navigation or download UI. The CSV menu command is a thin retrieval-plus-`saveBlob`
+  wrapper over that method. Format is an open string carried to the endpoint, so future
+  exporters do not change the element API. Server-side integrators resolve the
+  transport-neutral `IReportFileExporter` and receive `ReportExportFile` bytes and
+  metadata directly. That in-process boundary does not authorize, apply the endpoint
+  feature gate, or infer a user; the host supplies explicit context parameters. The HTTP
+  endpoint retains its authorization and `download` feature gates, resolves request
+  context, then delegates its already-resolved definition and state to the same exporter.
 - **Chart rendering**: `ir-chart.js` is a third self-contained bundle (Chart.js
   tree-shaken to bar/line/area/pie plus scales, tooltip, legend, filler) that the
   main bundle loads with a runtime-computed dynamic `import()` the first time chart

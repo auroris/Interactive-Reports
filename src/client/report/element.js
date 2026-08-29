@@ -25,6 +25,7 @@ import { renderGrid } from "./render/grid.js";
 import { renderChartView } from "./render/chart-view.js";
 import { renderPager } from "./render/pager.js";
 import { openViewDialog } from "./dialogs/view.js";
+import { retrieveExport } from "./export.js";
 
 // Chart.js glue ships as its own bundle beside ir.js and loads the first time
 // any report on the page enters chart view. The URL is computed at runtime so
@@ -226,6 +227,15 @@ export class InteractiveReportElement extends WidgetElement {
 
     reportUrl(resource) {
         return apiUrl(this.base, this.reportName, resource);
+    }
+
+    /**
+     * Public host-integration API. Retrieve the current report in a generated
+     * format without presenting it as a browser download. The resolved object
+     * contains { blob, filename, contentType, truncated }.
+     */
+    getExport(format = "csv", options = {}) {
+        return retrieveExport(this, format, options);
     }
 
     async runQuery(opts = {}) {

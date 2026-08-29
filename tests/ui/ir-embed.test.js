@@ -66,6 +66,15 @@ globalThis.fetch = async (url, options = {}) => {
             ignored: [],
         });
     }
+    if (String(url).endsWith("/export?format=csv")) {
+        return new Response("\ufeffIdent\r\n1\r\n", {
+            headers: {
+                "Content-Type": "text/csv; charset=utf-8",
+                "Content-Disposition": 'attachment; filename="orders.csv"',
+                "X-IR-Truncated": "true",
+            },
+        });
+    }
     return new Response(null, { status: 404 });
 };
 
@@ -145,6 +154,33 @@ test("the report is style-isolated and uses its explicit API base", async () => 
 
     report.remove();
     assert.equal(report.shadowRoot.querySelector(".ir-dialog"), null, "transient UI should be disposed on unmount");
+});
+
+test("a host can retrieve the current export without initiating a browser download", async () => {
+    requests.length = 0;
+    const report = document.createElement("interactive-report");
+    report.setAttribute("report", "orders");
+    report.setAttribute("api-base", "/custom-report-api");
+    document.body.append(report);
+
+    for (let attempt = 0; attempt < 20 && !requests.some(r => r.url.endsWith("/query")); attempt++)
+        await new Promise(resolve => setTimeout(resolve, 1));
+
+    const artifact = await report.getExport("CSV");
+    assert.equal(artifact.filename, "orders.csv");
+    assert.equal(artifact.contentType, "text/csv; charset=utf-8");
+    assert.equal(artifact.truncated, true);
+    // Blob.text() decodes and consumes the UTF-8 BOM; the raw Blob retains it.
+    assert.equal(await artifact.blob.text(), "Ident\r\n1\r\n");
+
+    const request = requests.find(r => r.url.endsWith("/export?format=csv"));
+    assert.ok(request, "the public method uses the ordinary report export endpoint");
+    assert.equal(request.method, "POST");
+    assert.equal(JSON.parse(request.body).v, 3);
+    assert.equal(document.querySelector('a[download="orders.csv"]'), null,
+        "retrieval must not synthesize a browser download anchor");
+
+    report.remove();
 });
 
 test("the configured report is loaded directly and can be changed through its attribute", async () => {
