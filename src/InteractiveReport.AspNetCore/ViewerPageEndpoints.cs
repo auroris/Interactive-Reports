@@ -1,5 +1,6 @@
 using System.Text.Encodings.Web;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Localization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
@@ -22,6 +23,10 @@ internal static class ViewerPageEndpoints
 
         var prefix = HtmlEncoder.Default.Encode(StripSegments(ctx, segments: 2));
         var encodedName = HtmlEncoder.Default.Encode(name);
+        var language = Language(ctx);
+        var fallback = language == "fr-CA"
+            ? $"Cette page nécessite JavaScript et le script de rapport fourni ({prefix}/ui/ir.js). Si ce message demeure affiché, le chargement du script a échoué."
+            : $"This page needs JavaScript and the packaged report script ({prefix}/ui/ir.js). If this message persists, the script failed to load.";
         var savedReport = ctx.Request.Query["saved-report"].ToString();
         var savedAttribute = string.IsNullOrEmpty(savedReport)
             ? ""
@@ -29,7 +34,7 @@ internal static class ViewerPageEndpoints
 
         return Page(ctx, $$"""
             <!doctype html>
-            <html lang="en">
+            <html lang="{{language}}">
             <head>
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -43,8 +48,7 @@ internal static class ViewerPageEndpoints
             <body>
             <main>
             <interactive-report report="{{encodedName}}"{{savedAttribute}}>
-              <p>This page needs JavaScript and the packaged report script ({{prefix}}/ui/ir.js).
-              If this message persists, the script failed to load.</p>
+              <p>{{fallback}}</p>
             </interactive-report>
             </main>
             </body>
@@ -57,13 +61,20 @@ internal static class ViewerPageEndpoints
         if (!Enabled(ctx)) return Results.NotFound();
 
         var prefix = HtmlEncoder.Default.Encode(StripSegments(ctx, segments: 1));
+        var language = Language(ctx);
+        var title = language == "fr-CA"
+            ? "Administration des rapports enregistrés"
+            : "Saved report administration";
+        var fallback = language == "fr-CA"
+            ? $"Cette page nécessite JavaScript et le script d’administration fourni ({prefix}/ui/ir-admin.js). Si ce message demeure affiché, le chargement du script a échoué."
+            : $"This page needs JavaScript and the packaged administration script ({prefix}/ui/ir-admin.js). If this message persists, the script failed to load.";
         return Page(ctx, $$"""
             <!doctype html>
-            <html lang="en">
+            <html lang="{{language}}">
             <head>
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>Saved report administration</title>
+            <title>{{title}}</title>
             <style>
               body { margin: 0; font-family: system-ui, sans-serif; background: #f5f6f8; color: #1c2430; }
               main { max-width: 1280px; margin: 0 auto; padding: 16px; }
@@ -73,8 +84,7 @@ internal static class ViewerPageEndpoints
             <body>
             <main>
             <interactive-report-admin>
-              <p>This page needs JavaScript and the packaged administration script ({{prefix}}/ui/ir-admin.js).
-              If this message persists, the script failed to load.</p>
+              <p>{{fallback}}</p>
             </interactive-report-admin>
             </main>
             </body>
@@ -92,6 +102,55 @@ internal static class ViewerPageEndpoints
         // at mismatched bundles — nothing here is worth caching.
         ctx.Response.Headers.CacheControl = "no-store";
         return Results.Content(html, "text/html; charset=utf-8");
+    }
+
+    /// <summary>
+    /// Respect an application's RequestLocalization middleware when present, then
+    /// negotiate the two packaged locales directly for the standalone pages.
+    /// Components embedded by a host continue to inherit that host page's lang.
+    /// </summary>
+    private static string Language(HttpContext ctx)
+    {
+        var requestCulture = ctx.Features.Get<IRequestCultureFeature>()
+            ?.RequestCulture.UICulture.Name;
+        var configured = SupportedLanguage(requestCulture);
+        if (configured is not null) return configured;
+
+        var bestLanguage = "en";
+        var bestQuality = -1d;
+        foreach (var item in ctx.Request.Headers.AcceptLanguage.ToString().Split(','))
+        {
+            var parts = item.Trim().Split(';', 2);
+            var candidate = SupportedLanguage(parts[0]);
+            if (candidate is null) continue;
+
+            var quality = 1d;
+            if (parts.Length == 2)
+            {
+                var parameter = parts[1].Trim();
+                if (parameter.StartsWith("q=", StringComparison.OrdinalIgnoreCase)
+                    && (!double.TryParse(parameter[2..], System.Globalization.NumberStyles.AllowDecimalPoint,
+                        System.Globalization.CultureInfo.InvariantCulture, out quality)
+                        || quality <= 0))
+                    continue;
+            }
+            if (quality <= bestQuality) continue;
+            bestLanguage = candidate;
+            bestQuality = quality;
+        }
+        return bestLanguage;
+    }
+
+    private static string? SupportedLanguage(string? language)
+    {
+        if (string.IsNullOrWhiteSpace(language)) return null;
+        if (language.Equals("fr", StringComparison.OrdinalIgnoreCase)
+            || language.StartsWith("fr-", StringComparison.OrdinalIgnoreCase))
+            return "fr-CA";
+        if (language.Equals("en", StringComparison.OrdinalIgnoreCase)
+            || language.StartsWith("en-", StringComparison.OrdinalIgnoreCase))
+            return "en";
+        return null;
     }
 
     /// <summary>

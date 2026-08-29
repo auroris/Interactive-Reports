@@ -7,6 +7,8 @@
 // [] grid, [group] groupBy, [group, spread] pivot, [chart] chart. The shelf holds
 // the parked tails of inactive modes so the toolbar can switch back losslessly.
 
+import { resolveLocale, translate } from "../core/localization.js";
+
 export function normalizeReportState(raw, defaultPageSize = 50, defaults = null) {
     const state = defaults ? structuredClone(defaults) : {};
     for (const [key, value] of Object.entries(raw ? structuredClone(raw) : {}))
@@ -265,29 +267,37 @@ export function pruneRetiredMetrics(state, stage, retiredIds) {
 
 // --- scoped search -----------------------------------------------------------
 
-export function scopedSearchExpression(column, type, rawValue) {
+export function scopedSearchExpression(column, type, rawValue, context = null) {
     const value = rawValue.trim();
-    if (!value) throw new Error("Enter a search value");
+    if (!value) throw new Error(translate(context, "search.enterValue"));
 
     switch (type) {
         case "text":
             return `CONTAINS(${column}, ${quote(value)})`;
-        case "number":
-            if (!/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(value))
-                throw new Error(`'${value}' is not a number`);
-            return `${column} = ${value}`;
+        case "number": {
+            const locale = resolveLocale(context);
+            const normalized = locale === "fr-CA"
+                ? value.replace(/[\s\u00a0\u202f]/g, "").replace(",", ".")
+                : /^(?:[+-])?(?:\d{1,3}(?:,\d{3})+)(?:\.\d+)?$/.test(value)
+                    ? value.replaceAll(",", "")
+                    : value;
+            if (!/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(normalized))
+                throw new Error(translate(context, "search.notNumber", { value }));
+            return `${column} = ${normalized}`;
+        }
         case "date":
             if (!/^\d{4}-\d{2}-\d{2}$/.test(value))
-                throw new Error(`'${value}' is not an ISO date (YYYY-MM-DD)`);
+                throw new Error(translate(context, "search.notDate", { value }));
             return `${column} = TO_DATE(${quote(value)})`;
         case "bool": {
             const normalized = value.toLowerCase();
-            if (normalized === "true" || normalized === "1") return column;
-            if (normalized === "false" || normalized === "0") return `NOT ${column}`;
-            throw new Error(`'${value}' is not true or false`);
+            const french = resolveLocale(context) === "fr-CA";
+            if (normalized === "true" || normalized === "1" || (french && normalized === "vrai")) return column;
+            if (normalized === "false" || normalized === "0" || (french && normalized === "faux")) return `NOT ${column}`;
+            throw new Error(translate(context, "search.notBoolean", { value }));
         }
         default:
-            throw new Error(`Column '${column}' does not support scoped search`);
+            throw new Error(translate(context, "search.unsupportedColumn", { column }));
     }
 }
 

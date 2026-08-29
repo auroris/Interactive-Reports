@@ -429,11 +429,36 @@ not apply:
 
 The `IR-nnnn` catalog behaves like a product-specific ORA series: each code is a stable,
 language-independent core message identity. Context such as paths and rejected values
-lives in `details`, which is not translated. The packaged client currently translates
-known error titles and descriptions into English or Canadian French, selected from the
-nearest `lang` attribute and then browser preferences; unknown codes retain the server's
-English fallback. Unexpected server failures remain sanitized and add `traceId` for
-correlation with the server log.
+lives in `details`, which is not translated. Known codes replace the server's English
+title and description; unknown codes retain that fallback so client and server versions
+can be deployed independently. Unexpected server failures remain sanitized and add
+`traceId` for correlation with the server log.
+
+The packaged report and administration components localize their complete static UI in
+English (`en`) and Canadian French (`fr-CA`). Set `lang` on the component, or on one of
+its ancestors:
+
+```html
+<interactive-report lang="fr-CA" report="orders"></interactive-report>
+```
+
+The nearest `lang` value wins, including across the component's shadow root. The page
+language is used next, then browser preferences when the page has no language, with
+English as the final fallback. All French variants currently resolve to the Canadian
+French catalog. Toolbar and menu text, dialogs, validation, notices, coded errors,
+accessible labels, plural messages, and client-formatted numbers and dates follow the
+selected locale. Report titles, column labels, query data, and server error `details`
+remain application data and are displayed as supplied.
+
+The packaged `{prefix}/{name}/view` and `{prefix}/admin` pages set their document
+language from ASP.NET Core Request Localization when configured, then from the request's
+`Accept-Language` header. Their page title and JavaScript fallback copy use the same
+locale.
+
+Catalogs live in `src/client/locales`; stable semantic message keys and ICU message
+syntax keep component code independent of sentence structure. `intl-messageformat` is
+compiled into the packaged bundles, so consuming applications do not install an npm
+package or make a separate catalog request.
 
 The supplied logger owns filtering and destinations. For the category created above,
 Debug can be enabled with:

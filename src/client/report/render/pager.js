@@ -4,6 +4,7 @@
 // the one mutation that must not reset the page index back to 1.
 
 import { el } from "../../core/dom.js";
+import { translate } from "../../core/localization.js";
 import { modeOf } from "../state.js";
 import { formatInteger, parseReportNumber } from "./format.js";
 
@@ -19,7 +20,7 @@ export function renderPager(w, container) {
     const totalCount = parseReportNumber(total) ?? parseReportNumber(0);
     const zero = totalCount.eq(0);
     const mode = modeOf(w.doc);
-    const unit = mode === "groupBy" ? "groups" : mode === "chart" ? "points" : "rows";
+    const unit = mode === "groupBy" ? "Groups" : mode === "chart" ? "Points" : "Rows";
     const start = zero ? totalCount : all ? parseReportNumber(1) : parseReportNumber(index - 1).times(size).plus(1);
     const end = zero ? totalCount : start.plus(result.rows.length).minus(1);
     const hasNext = !all && parseReportNumber(index).times(size).lt(totalCount);
@@ -28,14 +29,19 @@ export function renderPager(w, container) {
         el("div", { class: "ir-pager-left" },
             el("button", {
                 type: "button", class: "ir-btn ir-page-btn", disabled: index <= 1,
-                "aria-label": "Previous page", onclick: () => gotoPage(w, index - 1),
+                "aria-label": translate(w, "pagination.previous"), onclick: () => gotoPage(w, index - 1),
             }, "‹"),
             el("span", { class: "ir-page-info" },
-                zero ? `0 ${unit}`
-                    : `${formatInteger(start.toString())} – ${formatInteger(end.toString())} of ${formatInteger(totalCount.toString())} ${unit}`),
+                zero
+                    ? translate(w, `pagination.zero${unit}`, { count: 0 })
+                    : translate(w, `pagination.range${unit}`, {
+                        start: formatInteger(start.toString(), w),
+                        end: formatInteger(end.toString(), w),
+                        total: formatInteger(totalCount.toString(), w),
+                    })),
             el("button", {
                 type: "button", class: "ir-btn ir-page-btn", disabled: !hasNext,
-                "aria-label": "Next page", onclick: () => gotoPage(w, index + 1),
+                "aria-label": translate(w, "pagination.next"), onclick: () => gotoPage(w, index + 1),
             }, "›")),
-        el("div", { class: "ir-pager-right" }, `${result.elapsedMs} ms`));
+        el("div", { class: "ir-pager-right" }, translate(w, "pagination.elapsed", { milliseconds: result.elapsedMs })));
 }

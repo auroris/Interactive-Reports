@@ -32,8 +32,8 @@ Chart.register(
     PointElement,
     Tooltip);
 
-const formatNumber = value =>
-    typeof value === "number" ? value.toLocaleString(undefined, { maximumFractionDigits: 2 }) : String(value);
+const formatNumber = (value, locale) =>
+    typeof value === "number" ? value.toLocaleString(locale, { maximumFractionDigits: 2 }) : String(value);
 
 /**
  * Render one chart. spec:
@@ -86,7 +86,7 @@ export function renderChart(canvas, spec) {
         beginAtZero: spec.type !== "line",
         grid: { color: theme.grid, drawTicks: false },
         border: { display: false },
-        ticks: { color: theme.text, font, callback: value => formatNumber(value), padding: 6 },
+        ticks: { color: theme.text, font, callback: value => formatNumber(value, spec.locale), padding: 6 },
         title: axisTitle(spec.valueAxisTitle),
     };
 
@@ -120,10 +120,10 @@ export function renderChart(canvas, spec) {
                     callbacks: {
                         label: ctx => {
                             const value = tooltipValue(ctx);
-                            const display = spec.displayValues?.[ctx.dataIndex] ?? formatNumber(value);
+                            const display = spec.displayValues?.[ctx.dataIndex] ?? formatNumber(value, spec.locale);
                             if (!pie) return `${spec.metricLabel}: ${display}`;
                             const total = spec.values.reduce((sum, v) => sum + (v ?? 0), 0);
-                            const pct = total ? ` (${(value / total * 100).toLocaleString(undefined, { maximumFractionDigits: 1 })}%)` : "";
+                            const pct = total ? ` (${(value / total * 100).toLocaleString(spec.locale, { maximumFractionDigits: 1 })}%)` : "";
                             return `${spec.metricLabel}: ${display}${pct}`;
                         },
                     },

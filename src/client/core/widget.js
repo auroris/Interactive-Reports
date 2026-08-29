@@ -7,6 +7,7 @@ import { defaultApiBase, errorText } from "./api.js";
 import { banner, el, transientBanner } from "./dom.js";
 import { closeMenuOwnedBy } from "./menu.js";
 import { closeDialogsOwnedBy } from "./dialog.js";
+import { resolveLocale, translate } from "./localization.js";
 
 const BASE_DEFAULT = defaultApiBase();
 
@@ -106,12 +107,14 @@ export class WidgetElement extends HTMLElement {
         else this.setAttribute("api-base", String(value));
     }
     get base() { return this.apiBase.replace(/\/+$/, ""); }
+    get locale() { return resolveLocale(this); }
+    t(key, values = {}) { return translate(this, key, values); }
 
     showError(err, message = null) {
         const slot = this.els?.errorSlot;
         if (!slot) return;
         slot.replaceChildren(
-            banner("error", errorText(err, message, this), () => this.clearError()));
+            banner("error", errorText(err, message, this), () => this.clearError(), this));
     }
 
     clearError() {
@@ -120,7 +123,7 @@ export class WidgetElement extends HTMLElement {
 
     notify(text, kind = "ok") {
         if (this.els?.transientSlot)
-            transientBanner(this.els.transientSlot, kind, text);
+            transientBanner(this.els.transientSlot, kind, text, 4000, this);
     }
 
     disconnectedCallback() {

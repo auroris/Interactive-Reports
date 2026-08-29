@@ -16,7 +16,7 @@ export function doSearch(w) {
     const col = w.searchScopeCol;
     const type = typeOf(w, col);
     let expr;
-    try { expr = scopedSearchExpression(col, type, raw); }
+    try { expr = scopedSearchExpression(col, type, raw, w); }
     catch (error) { w.showError(error); return; }
     w.els.search.value = "";
     w.applyOrBanner(d => { (sourceLayer(d).filters ??= []).push({ enabled: true, expr }); });
@@ -25,7 +25,7 @@ export function doSearch(w) {
 export function openSearchScopeMenu(w, anchor) {
     const searchableColumns = pickable(w).filter(c => ["text", "number", "date", "bool"].includes(c.type));
     popupMenu(anchor, [
-        { label: "All Text Columns", checked: !w.searchScopeCol, onPick: () => setSearchScope(w, null) },
+        { label: w.t("menu.allTextColumns"), checked: !w.searchScopeCol, onPick: () => setSearchScope(w, null) },
         "-",
         ...searchableColumns.map(c => ({ label: c.label, checked: w.searchScopeCol === c.name, onPick: () => setSearchScope(w, c.name) })),
     ]);
@@ -33,7 +33,9 @@ export function openSearchScopeMenu(w, anchor) {
 
 function setSearchScope(w, col) {
     w.searchScopeCol = col;
-    w.els.search.placeholder = col ? `Search: ${labelOf(w, col)}` : "Search";
+    w.els.search.placeholder = col
+        ? w.t("toolbar.searchColumn", { column: labelOf(w, col) })
+        : w.t("toolbar.search");
     w.els.search.setAttribute("aria-label", w.els.search.placeholder);
     w.els.search.focus();
 }

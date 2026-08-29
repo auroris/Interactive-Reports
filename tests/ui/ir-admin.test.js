@@ -72,16 +72,38 @@ const settle = async condition => {
         await new Promise(resolve => setTimeout(resolve, 5));
 };
 
-async function mount() {
+async function mount(language = null) {
     whoamiCalls = 0;
     usersCalls = 0;
     authorizationCalls = [];
     const admin = document.createElement("interactive-report-admin");
     admin.setAttribute("api-base", "/admin-api");
+    if (language) admin.setAttribute("lang", language);
     document.body.append(admin);
     await settle(() => admin.shadowRoot?.querySelector(".ir-banner"));
     return admin;
 }
+
+test("the administration shell and its embedded report share the selected locale", async () => {
+    whoami = {
+        authenticated: true,
+        identity: "administrateur",
+        isAdministrator: true,
+        administratorListConfigured: true,
+        applicationAuthorizationConfigured: false,
+    };
+    whoamiStatus = 200;
+    const admin = await mount("fr-CA");
+
+    const buttons = [...admin.shadowRoot.querySelectorAll(".ir-admin-bar button")]
+        .map(button => button.textContent.trim());
+    assert.deepEqual(buttons, ["Actualiser", "Téléverser un JSON…", "Autorisation…"]);
+    assert.equal(admin.shadowRoot.querySelector(".ir-admin-count").textContent,
+        "Connecté en tant que administrateur");
+    assert.equal(admin.shadowRoot.querySelector("interactive-report").getAttribute("lang"), "fr-CA");
+
+    admin.remove();
+});
 
 test("authorization editor distinguishes configured and database grants", async () => {
     whoami = {

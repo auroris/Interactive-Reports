@@ -14,7 +14,8 @@
 //   chart   → no table; only source-level features apply.
 
 import { columnOf, columnSortable, labelOf, pickable, sortableColumns, typeOf, featureEnabled } from "./schema.js";
-import { FN_LABELS } from "./render/format.js";
+import { translate } from "../core/localization.js";
+import { fnLabel } from "./render/format.js";
 import {
     lookupValue,
     modeOf,
@@ -27,9 +28,9 @@ import {
 
 export const stageLabelOf = (layer, name) => lookupValue(layer?.labels, name);
 
-const countColumn = layer => ({
+const countColumn = (w, layer) => ({
     name: "__count",
-    label: stageLabelOf(layer, "__count") ?? "Count",
+    label: stageLabelOf(layer, "__count") ?? fnLabel(w, "count"),
     type: "number",
     computed: false,
     metric: true,
@@ -56,13 +57,16 @@ export function groupStageColumns(w, { includeComputed = true } = {}) {
             dim: true,
         });
     }
-    columns.push(countColumn(layer));
+    columns.push(countColumn(w, layer));
     for (const value of shape.values ?? []) {
         const minMax = value.fn === "min" || value.fn === "max";
         columns.push({
             name: value.id,
             label: stageLabelOf(layer, value.id)
-                ?? `${FN_LABELS[value.fn] ?? value.fn} of ${labelOf(w, value.col)}`,
+                ?? translate(w, "aggregate.ofColumn", {
+                    function: fnLabel(w, value.fn),
+                    column: labelOf(w, value.col),
+                }),
             type: minMax ? typeOf(w, value.col) : "number",
             computed: false,
             metric: true,

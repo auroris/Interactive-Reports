@@ -45,40 +45,40 @@ export function actionsMenuItems(w) {
     const canSave = canManageCurrentSaved(w);
     const items = joinSections([
         [
-            ...feature("columns", { label: "Columns…", disabled: !caps.columns, onPick: () => columnsDialog(w) }),
-            ...feature("columnSettings", { label: "Column Settings…", disabled: !caps.columnSettings, onPick: () => columnSettingsDialog(w) }),
-            ...feature("filter", { label: "Filter…", onPick: () => filterDialog(w, {}) }),
-            ...feature("sort", { label: "Sort…", disabled: !caps.sort, onPick: () => sortDialog(w) }),
+            ...feature("columns", { label: w.t("menu.columns"), disabled: !caps.columns, onPick: () => columnsDialog(w) }),
+            ...feature("columnSettings", { label: w.t("menu.columnSettings"), disabled: !caps.columnSettings, onPick: () => columnSettingsDialog(w) }),
+            ...feature("filter", { label: w.t("menu.filter"), onPick: () => filterDialog(w, {}) }),
+            ...feature("sort", { label: w.t("menu.sort"), disabled: !caps.sort, onPick: () => sortDialog(w) }),
             ...feature("pagination", {
-                label: "Pagination…",
+                label: w.t("menu.pagination"),
                 disabled: !caps.pagination,
                 onPick: () => paginationDialog(w),
             }),
         ],
         [
-            ...feature("controlBreak", { label: "Control Break…", disabled: !caps.break, onPick: () => breakDialog(w) }),
-            ...feature("highlight", { label: "Highlight…", disabled: !caps.highlight, onPick: () => highlightDialog(w) }),
-            ...feature("aggregate", { label: "Aggregate…", disabled: !caps.aggregate, onPick: () => aggregateDialog(w) }),
-            ...feature("compute", { label: "Compute…", disabled: !caps.compute, onPick: () => computeDialog(w) }),
+            ...feature("controlBreak", { label: w.t("menu.controlBreak"), disabled: !caps.break, onPick: () => breakDialog(w) }),
+            ...feature("highlight", { label: w.t("menu.highlight"), disabled: !caps.highlight, onPick: () => highlightDialog(w) }),
+            ...feature("aggregate", { label: w.t("menu.aggregate"), disabled: !caps.aggregate, onPick: () => aggregateDialog(w) }),
+            ...feature("compute", { label: w.t("menu.compute"), disabled: !caps.compute, onPick: () => computeDialog(w) }),
         ],
         [
-            ...feature("groupBy", { label: "Group By…", onPick: () => groupByDialog(w) }),
-            ...feature("pivot", { label: "Pivot…", onPick: () => pivotDialog(w) }),
-            ...feature("chart", { label: "Chart…", onPick: () => chartDialog(w) }),
+            ...feature("groupBy", { label: w.t("menu.groupBy"), onPick: () => groupByDialog(w) }),
+            ...feature("pivot", { label: w.t("menu.pivot"), onPick: () => pivotDialog(w) }),
+            ...feature("chart", { label: w.t("menu.chart"), onPick: () => chartDialog(w) }),
         ],
     ]);
     const report = [
         ...feature("savedReports",
-            ...(canSave ? [{ label: "Save", onPick: () => saveDialog(w, { asNew: false }) }] : []),
-            { label: "Save As…", onPick: () => saveDialog(w, { asNew: true }) },
-            ...(canSave ? [{ label: "Delete…", onPick: () => deleteCurrentSaved(w) }] : [])),
+            ...(canSave ? [{ label: w.t("menu.save"), onPick: () => saveDialog(w, { asNew: false }) }] : []),
+            { label: w.t("menu.saveAs"), onPick: () => saveDialog(w, { asNew: true }) },
+            ...(canSave ? [{ label: w.t("menu.delete"), onPick: () => deleteCurrentSaved(w) }] : [])),
         // Reset stays as long as the doc can diverge at all — it is the way back
         // from a state the disabled dialogs could no longer undo.
-        ...(anyMutableFeature(w) ? [{ label: "Reset", onPick: () => resetWorkingCopy(w) }] : []),
+        ...(anyMutableFeature(w) ? [{ label: w.t("menu.reset"), onPick: () => resetWorkingCopy(w) }] : []),
     ];
-    if (report.length) items.push({ heading: "Report" }, ...report);
+    if (report.length) items.push({ heading: w.t("menu.report") }, ...report);
     if (featureEnabled(w, "download"))
-        items.push({ heading: "Download" }, { label: "CSV", onPick: () => exportCsv(w) });
+        items.push({ heading: w.t("menu.download") }, { label: w.t("menu.csv"), onPick: () => exportCsv(w) });
     return items;
 }
 
@@ -102,11 +102,11 @@ export function openHeaderMenu(w, col, anchor) {
     const sortItems = sortable
         ? feature("sort",
             {
-                label: "Sort Ascending",
+                label: w.t("menu.sortAscending"),
                 onPick: () => w.applyOrBanner(d => { ctx.sortLayer(d).sorts = [{ col, dir: "asc" }]; }),
             },
             {
-                label: "Sort Descending",
+                label: w.t("menu.sortDescending"),
                 onPick: () => w.applyOrBanner(d => { ctx.sortLayer(d).sorts = [{ col, dir: "desc" }]; }),
             })
         : [];
@@ -114,9 +114,9 @@ export function openHeaderMenu(w, col, anchor) {
     if (ctx.mode === "chart") return;
 
     const presentation = [
-        ...(ctx.caps.rename ? feature("rename", { label: "Rename…", onPick: () => renameDialog(w, col) }) : []),
+        ...(ctx.caps.rename ? feature("rename", { label: w.t("menu.rename"), onPick: () => renameDialog(w, col) }) : []),
         ...(ctx.caps.columnSettings
-            ? feature("columnSettings", { label: "Column Settings…", onPick: () => columnSettingsDialog(w, col) })
+            ? feature("columnSettings", { label: w.t("menu.columnSettings"), onPick: () => columnSettingsDialog(w, col) })
             : []),
     ];
 
@@ -126,7 +126,7 @@ export function openHeaderMenu(w, col, anchor) {
     if (ctx.caps.columns && ctx.caps.visibility && !isDim) {
         const visible = visibleStageColumnNames(ctx, w);
         presentation.push(...feature("columns", {
-            label: "Hide Column",
+            label: w.t("menu.hideColumn"),
             disabled: visible.length <= 1,
             onPick: () => w.applyOrBanner(d => {
                 ctx.columnsLayer(d).columns = visible.filter(n => !sameColumn(n, col));
@@ -137,7 +137,7 @@ export function openHeaderMenu(w, col, anchor) {
     if (ctx.mode === "grid" && columnSortable(w, col)) {
         const breaking = (ctx.columnsLayer(w.doc).breaks ?? []).some(b => sameColumn(b, col));
         presentation.push(...feature("controlBreak", {
-            label: breaking ? "Remove Control Break" : "Control Break",
+            label: breaking ? w.t("menu.removeControlBreak") : w.t("break.title"),
             checked: breaking,
             onPick: () => w.applyOrBanner(d => {
                 const layer = ctx.columnsLayer(d);
@@ -154,7 +154,7 @@ export function openHeaderMenu(w, col, anchor) {
     const filterable = columnFilterable(w, col)
         && (ctx.mode === "grid" || (isDim && !column?.metric));
     const filterItems = filterable
-        ? feature("filter", { label: "Filter…", onPick: () => filterDialog(w, { col }) })
+        ? feature("filter", { label: w.t("menu.filter"), onPick: () => filterDialog(w, { col }) })
         : [];
 
     const items = joinSections([sortItems, presentation, filterItems]);

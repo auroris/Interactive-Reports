@@ -52,26 +52,26 @@ export function columnsDialog(w) {
 
     openDialog({
         owner: w,
-        title: "Select Columns",
+        title: w.t("columns.selectTitle"),
         width: "34rem",
         build: body => body.append(
             el("div", { class: "ir-shuttle" },
-                el("label", { class: "ir-shuttle-col" }, el("span", { class: "ir-shuttle-head" }, "Do Not Display"), hidden),
+                el("label", { class: "ir-shuttle-col" }, el("span", { class: "ir-shuttle-head" }, w.t("columns.doNotDisplay")), hidden),
                 el("div", { class: "ir-shuttle-btns" },
-                    btn("›", "Display selected", () => move(hidden, shown)),
-                    btn("‹", "Hide selected", () => move(shown, hidden)),
-                    btn("»", "Display all", () => move(hidden, shown, true)),
-                    btn("«", "Hide all", () => move(shown, hidden, true))),
-                el("label", { class: "ir-shuttle-col" }, el("span", { class: "ir-shuttle-head" }, "Display in Report"), shown),
+                    btn("›", w.t("columns.displaySelected"), () => move(hidden, shown)),
+                    btn("‹", w.t("columns.hideSelected"), () => move(shown, hidden)),
+                    btn("»", w.t("columns.displayAll"), () => move(hidden, shown, true)),
+                    btn("«", w.t("columns.hideAll"), () => move(shown, hidden, true))),
+                el("label", { class: "ir-shuttle-col" }, el("span", { class: "ir-shuttle-head" }, w.t("columns.displayInReport")), shown),
                 el("div", { class: "ir-shuttle-btns" },
-                    btn("↑", "Move up", () => nudge(-1)),
-                    btn("↓", "Move down", () => nudge(1)))),
+                    btn("↑", w.t("columns.moveUp"), () => nudge(-1)),
+                    btn("↓", w.t("columns.moveDown"), () => nudge(1)))),
             pinned.length
-                ? el("p", { class: "ir-dialog-note" }, "Group columns always display.")
+                ? el("p", { class: "ir-dialog-note" }, w.t("columns.groupAlwaysDisplay"))
                 : null),
         onApply: () => {
             const names = [...shown.options].map(o => o.value);
-            if (!pinned.length && !names.length) throw new Error("Display at least one column");
+            if (!pinned.length && !names.length) throw new Error(w.t("columns.displayAtLeastOne"));
             return w.apply(d => { ctx.columnsLayer(d).columns = [...pinned, ...names]; });
         },
     });
@@ -101,44 +101,44 @@ export function columnSettingsDialog(w, initialCol) {
 
     const colSel = sel(colOptions(w, { columns: universe }), initialCol ?? originallyVisible[0] ?? universe[0]?.name);
     const visChk = el("input", { type: "checkbox" });
-    const visLine = canHide ? el("label", { class: "ir-checkline" }, visChk, "Visible") : null;
+    const visLine = canHide ? el("label", { class: "ir-checkline" }, visChk, w.t("columns.visible")) : null;
     const displayAsSel = sel([
-        { value: "", label: "Text (Default)" },
-        { value: "link", label: "Link" },
-        { value: "image", label: "Image" },
+        { value: "", label: w.t("columns.textDefault") },
+        { value: "link", label: w.t("columns.link") },
+        { value: "image", label: w.t("columns.image") },
     ]);
     displayAsSel.classList.add("ir-display-as");
     const urlColumnSel = sel(colOptions(w));
     const textColumnSel = sel(colOptions(w));
-    const urlColumnField = labeled("URL Column", urlColumnSel);
-    const textColumnField = labeled("Link Text Column", textColumnSel);
+    const urlColumnField = labeled(w.t("columns.urlColumn"), urlColumnSel);
+    const textColumnField = labeled(w.t("columns.linkTextColumn"), textColumnSel);
     urlColumnField.classList.add("ir-url-only");
     textColumnField.classList.add("ir-text-only");
     const alignSel = sel([
-        { value: "", label: "Default" },
-        { value: "left", label: "Left" },
-        { value: "center", label: "Center" },
-        { value: "right", label: "Right" },
+        { value: "", label: w.t("common.default") },
+        { value: "left", label: w.t("columns.left") },
+        { value: "center", label: w.t("columns.center") },
+        { value: "right", label: w.t("columns.right") },
     ]);
-    const maskSel = sel([{ value: "", label: "Default" }]);
-    const maskField = labeled("Format Mask", maskSel);
+    const maskSel = sel([{ value: "", label: w.t("common.default") }]);
+    const maskField = labeled(w.t("columns.formatMask"), maskSel);
     const boldChk = el("input", { type: "checkbox" });
     const italicChk = el("input", { type: "checkbox" });
-    const fgPick = colorPick("Text", null, "#9f1239");
-    const bgPick = colorPick("Background", null, "#fff3cd");
+    const fgPick = colorPick(w.t("columns.textColor"), null, "#9f1239", w);
+    const bgPick = colorPick(w.t("common.background"), null, "#fff3cd", w);
     const classesInp = el("input", {
         type: "text", class: "ir-input", maxLength: 500,
-        placeholder: "e.g. amount-column emphasized",
+        placeholder: w.t("columns.cssPlaceholder"),
     });
     const preview = el("div", { class: "ir-format-preview" });
 
     for (const [control, label] of [
-        [colSel, "Column"],
-        [displayAsSel, "Display As"],
-        [urlColumnSel, "URL Column"],
-        [textColumnSel, "Link Text Column"],
-        [alignSel, "Alignment"],
-        [maskSel, "Format Mask"],
+        [colSel, w.t("common.column")],
+        [displayAsSel, w.t("columns.displayAs")],
+        [urlColumnSel, w.t("columns.urlColumn")],
+        [textColumnSel, w.t("columns.linkTextColumn")],
+        [alignSel, w.t("columns.alignment")],
+        [maskSel, w.t("columns.formatMask")],
     ]) control.setAttribute("aria-label", label);
 
     const read = () => ({
@@ -188,7 +188,7 @@ export function columnSettingsDialog(w, initialCol) {
         return type === "number" ? 1234567.891
             : type === "date" ? "2026-08-07T14:30:00"
             : type === "bool" ? true
-            : "Sample text";
+            : w.t("columns.sampleText");
     };
 
     const updatePreview = () => {
@@ -208,7 +208,7 @@ export function columnSettingsDialog(w, initialCol) {
         }));
         preview.className = "ir-format-preview";
         preview.classList.add(...columnClasses(s.classes));
-        maskField.hidden = masksFor(type).length === 0
+        maskField.hidden = masksFor(type, w).length === 0
             || s.displayAs === "image"
             || (s.displayAs === "link" && s.textColumn !== name);
     };
@@ -222,8 +222,8 @@ export function columnSettingsDialog(w, initialCol) {
         urlColumnSel.value = s.urlColumn;
         textColumnSel.value = s.textColumn;
         alignSel.value = s.align ?? "";
-        const masks = masksFor(columnType(name));
-        maskSel.replaceChildren(new Option("Default", ""), ...masks.map(m => new Option(m.label, m.value)));
+        const masks = masksFor(columnType(name), w);
+        maskSel.replaceChildren(new Option(w.t("common.default"), ""), ...masks.map(m => new Option(m.label, m.value)));
         maskSel.value = masks.some(m => m.value === s.mask) ? s.mask : "";
         boldChk.checked = s.bold;
         italicChk.checked = s.italic;
@@ -244,26 +244,26 @@ export function columnSettingsDialog(w, initialCol) {
 
     openDialog({
         owner: w,
-        title: "Column Settings",
+        title: w.t("columns.settingsTitle"),
         width: "26rem",
         build: body => body.append(
-            labeled("Column", colSel),
+            labeled(w.t("common.column"), colSel),
             visLine,
-            withDisplayAs ? labeled("Display As", displayAsSel) : null,
+            withDisplayAs ? labeled(w.t("columns.displayAs"), displayAsSel) : null,
             withDisplayAs ? urlColumnField : null,
             withDisplayAs ? textColumnField : null,
-            labeled("Alignment", alignSel),
+            labeled(w.t("columns.alignment"), alignSel),
             maskField,
             el("div", { class: "ir-checklines" },
-                el("label", { class: "ir-checkline" }, boldChk, "Bold"),
-                el("label", { class: "ir-checkline" }, italicChk, "Italic")),
+                el("label", { class: "ir-checkline" }, boldChk, w.t("common.bold")),
+                el("label", { class: "ir-checkline" }, italicChk, w.t("common.italic"))),
             el("div", { class: "ir-colors" },
                 fgPick.node,
                 bgPick.node),
-            labeled("CSS Classes", classesInp),
+            labeled(w.t("columns.cssClasses"), classesInp),
             el("p", { class: "ir-dialog-note" },
-                "Space-separated classes from the report's configured stylesheet. The ir- prefix is reserved."),
-            labeled("Preview", preview)),
+                w.t("columns.cssNote")),
+            labeled(w.t("columns.preview"), preview)),
         onApply: () => {
             staged.set(active, read());
 
@@ -276,7 +276,7 @@ export function columnSettingsDialog(w, initialCol) {
                     if (s.visible && !visible) { columns.push(name); visibilityChanged = true; }
                     else if (!s.visible && visible) { columns = columns.filter(n => n !== name); visibilityChanged = true; }
                 }
-                if (!columns.length) throw new Error("Display at least one column");
+                if (!columns.length) throw new Error(w.t("columns.displayAtLeastOne"));
             }
 
             return w.apply(d => {
@@ -298,7 +298,7 @@ export function columnSettingsDialog(w, initialCol) {
                         if (s.action.command) entry.command = s.action.command;
                         if (s.action.keyColumn) entry.keyColumn = s.action.keyColumn;
                     }
-                    const classes = columnClasses(s.classes, { strict: true });
+                    const classes = columnClasses(s.classes, { strict: true, context: w });
                     if (classes.length) entry.classes = classes;
                     setMapEntry(formats, name, Object.keys(entry).length ? entry : undefined);
                 }
@@ -339,12 +339,12 @@ export function renameDialog(w, col) {
 
     openDialog({
         owner: w,
-        title: "Rename Column",
+        title: w.t("columns.renameTitle"),
         width: "24rem",
         build: body => body.append(
-            labeled("Column Heading", input),
+            labeled(w.t("columns.heading"), input),
             el("p", { class: "ir-dialog-note" },
-                `Changes the heading only — expressions keep using ${col}. Leave blank to restore "${schemaDefault}".`)),
+                w.t("columns.renameNote", { column: col, defaultLabel: schemaDefault }))),
         onApply: () => {
             const label = input.value.trim();
             return w.apply(d => {

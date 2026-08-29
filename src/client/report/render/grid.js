@@ -3,10 +3,11 @@
 // Pure DOM out of the widget's state — no fetching in here.
 
 import { el } from "../../core/dom.js";
+import { translate } from "../../core/localization.js";
 import { columnSortable, headerLabelHidden, labelOf } from "../schema.js";
 import { stageContext } from "../stage.js";
 import { modeOf, sameColumn, sourceLayer } from "../state.js";
-import { formatAgg, formatInteger, hasFraction, parseReportNumber, FN_LABELS, FN_ORDER } from "./format.js";
+import { formatAgg, formatInteger, fnLabel, hasFraction, parseReportNumber, FN_ORDER } from "./format.js";
 import { formatForColumn, renderColumnValue, renderTextValue } from "./column-renderers.js";
 import { activeEditLink, renderEditCell } from "./edit-link.js";
 import { headerMenuAvailable, openHeaderMenu } from "../menus.js";
@@ -55,7 +56,7 @@ export function renderGrid(w, table) {
     const menuAvailable = headerMenuAvailable(w, mode);
     const headRow = el("tr", {});
     if (editLink)
-        headRow.append(el("th", { class: "ir-th-edit", scope: "col", "aria-label": editLink.label ?? "Edit" }));
+        headRow.append(el("th", { class: "ir-th-edit", scope: "col", "aria-label": editLink.label ?? translate(w, "grid.edit") }));
     for (const col of columns) {
         const interactive = menuAvailable && mode !== "chart";
         const s = sortOrd.get(col.name.toLowerCase());
@@ -107,7 +108,7 @@ export function renderGrid(w, table) {
     const breakColumns = new Map(result.columns.map(c => [c.name, c]));
     const breakText = (row, name) => {
         const value = row[name];
-        if (value === null || value === undefined) return "(blank)";
+        if (value === null || value === undefined) return translate(w, "grid.blank");
         const col = breakColumns.get(name);
         return col
             ? renderTextValue(w, row, col, decimalCols.has(name), formatFor(col))
@@ -141,10 +142,10 @@ export function renderGrid(w, table) {
                     style: alignStyle(col),
                 });
                 if (idx === 0) {
-                    td.append(el("span", { class: "ir-agg-fn" }, `${FN_LABELS[fn] ?? fn}:`));
-                    if (has) td.append(" ", formatAgg(aggregates[col.name][fn], aggregateType, aggregateMask));
+                    td.append(el("span", { class: "ir-agg-fn" }, `${fnLabel(w, fn)}:`));
+                    if (has) td.append(" ", formatAgg(aggregates[col.name][fn], aggregateType, aggregateMask, w));
                 } else if (has) {
-                    td.textContent = formatAgg(aggregates[col.name][fn], aggregateType, aggregateMask);
+                    td.textContent = formatAgg(aggregates[col.name][fn], aggregateType, aggregateMask, w);
                 }
                 tr.append(td);
             });
@@ -171,12 +172,14 @@ export function renderGrid(w, table) {
                 bodyRows.push(el("tr", { class: "ir-break-header" },
                     el("td", { colSpan: Math.max(columns.length, 1) + cellOffset },
                         el("span", {}, label),
-                        bt ? el("span", { class: "ir-break-count" }, `${formatInteger(bt.rows)} rows`) : null)));
+                        bt ? el("span", { class: "ir-break-count" }, translate(w,
+                            parseReportNumber(bt.rows)?.eq(1) ? "break.oneRow" : "break.rows",
+                            { count: formatInteger(bt.rows, w) })) : null)));
                 currentKey = key;
             }
         }
         const tr = el("tr", { class: "ir-row" });
-        if (editLink) tr.append(el("td", { class: "ir-td-edit" }, renderEditCell(editLink, row)));
+        if (editLink) tr.append(el("td", { class: "ir-td-edit" }, renderEditCell(editLink, row, w)));
         for (const col of columns) {
             const fmt = formatFor(col);
             const cls = classesFor(
@@ -221,7 +224,7 @@ export function renderGrid(w, table) {
 
     if (!result.rows.length)
         bodyRows.push(el("tr", { class: "ir-empty" },
-            el("td", { colSpan: Math.max(columns.length, 1) + cellOffset }, "No data found.")));
+            el("td", { colSpan: Math.max(columns.length, 1) + cellOffset }, translate(w, "grid.noData"))));
 
     table.replaceChildren(el("thead", {}, headRow), el("tbody", {}, ...bodyRows));
 }

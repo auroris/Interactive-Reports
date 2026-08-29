@@ -35,7 +35,7 @@ const loadChartModule = () =>
         .catch(err => { chartModulePromise = undefined; throw err; });
 
 export class InteractiveReportElement extends WidgetElement {
-    static observedAttributes = ["report", "saved-report", "api-base", "base"];
+    static observedAttributes = ["report", "saved-report", "api-base", "base", "lang"];
 
     constructor() {
         super();
@@ -115,7 +115,7 @@ export class InteractiveReportElement extends WidgetElement {
 
         const requested = this.requestedReportName?.trim();
         if (!requested) {
-            this.showError(new Error("The interactive-report element requires a non-empty report attribute."));
+            this.showError(new Error(this.t("report.attributeRequired")));
             return;
         }
 
@@ -124,7 +124,9 @@ export class InteractiveReportElement extends WidgetElement {
             if (seq !== this._seq) return;
             this.whoami = identity.whoami;
             if (identity.error)
-                this.notify(`Sign-in state could not be determined: ${errorText(identity.error)}.`, "warn");
+                this.notify(this.t("report.identityUnknown", {
+                    message: errorText(identity.error, null, this),
+                }), "warn");
             await this.activateReport(requested, seq);
         } catch (err) {
             if (err.name !== "AbortError" && seq === this._seq) this.showError(err);
@@ -168,7 +170,7 @@ export class InteractiveReportElement extends WidgetElement {
                 ? saved.filter(candidate => sameTitle(candidate.title, requestedSaved))
                 : [];
             let savedWarning = savedError
-                ? `Saved reports could not be loaded (${savedError.message}).`
+                ? this.t("saved.loadFailed", { message: savedError.message })
                 : undefined;
             if (savedMatches.length === 1) {
                 const docResponse = await api(apiUrl(this.base, "saved", savedMatches[0].id));
@@ -181,8 +183,8 @@ export class InteractiveReportElement extends WidgetElement {
                     candidate.isPrimary && sameTitle(candidate.title, "Default")) ?? null;
                 if (requestedSaved && !savedError) {
                     savedWarning = savedMatches.length === 0
-                        ? `Saved report "${requestedSaved}" is not available; loaded Default.`
-                        : `Saved report name "${requestedSaved}" is ambiguous; loaded Default.`;
+                        ? this.t("saved.requestedUnavailable", { title: requestedSaved })
+                        : this.t("saved.requestedAmbiguous", { title: requestedSaved });
                 }
             }
             refreshSavedSelect(this);
@@ -288,7 +290,7 @@ export class InteractiveReportElement extends WidgetElement {
             // failure into the current view.
             if (this.lastResult !== result || modeOf(this.doc) !== "chart" || !this.isConnected) return;
             this.els.chartWrap.replaceChildren();
-            this.showError(new Error("The charting module failed to load. Reload the page and try again."));
+            this.showError(new Error(this.t("chart.loadFailed")));
         }
     }
 
@@ -394,17 +396,20 @@ export class InteractiveReportElement extends WidgetElement {
         // coded server error is more precise than either stock phrase.
         const error = err?.error ?? err?.problem ?? {};
         const hasServerText = error.title || error.description || error.detail;
-        const friendly = err?.status === 401 && !hasServerText ? "Sign in to use this report."
+        const friendly = err?.status === 401 && !hasServerText ? this.t("report.signIn")
             : err?.status === 404 && !hasServerText
-                ? "Report not found — or you don't have access."
+                ? this.t("report.notFound")
                 : null;
         super.showError(err, friendly);
     }
 
     renderIgnored(ignored) {
         if (!ignored?.length) { this.els.ignoredSlot.replaceChildren(); return; }
-        const text = "Some settings were ignored: " + ignored.map(i => `${i.kind} (${i.detail})`).join("; ");
-        this.els.ignoredSlot.replaceChildren(banner("warn", text, () => this.els.ignoredSlot.replaceChildren()));
+        const text = this.t("report.ignored", {
+            details: ignored.map(i => `${i.kind} (${i.detail})`).join("; "),
+        });
+        this.els.ignoredSlot.replaceChildren(banner(
+            "warn", text, () => this.els.ignoredSlot.replaceChildren(), this));
     }
 
     // --- view switching ------------------------------------------------------

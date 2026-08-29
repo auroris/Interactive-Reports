@@ -4,7 +4,7 @@
 
 import { errorLines } from "./api.js";
 import { el, icon } from "./dom.js";
-import { errorReference } from "./localization.js";
+import { errorReference, translate } from "./localization.js";
 import { closePopups } from "./menu.js";
 import { hidePopover, popoverIsOpen, showPopover } from "./popover.js";
 
@@ -144,7 +144,7 @@ export function openDialog({
     width,
     cls,
     build,
-    applyLabel = "Apply",
+    applyLabel,
     onApply,
     destructive = false,
     modal = false,
@@ -215,24 +215,24 @@ export function openDialog({
         ? el("button", {
             type: "submit",
             class: "ir-btn ir-btn-primary" + (destructive ? " ir-btn-danger" : ""),
-        }, applyLabel)
+        }, applyLabel ?? translate(owner, "common.apply"))
         : null;
 
     const cancelBtn = el("button", {
         type: "button",
         class: "ir-btn",
         onclick: () => dlg.close(),
-    }, onApply ? "Cancel" : "Close");
+    }, translate(owner, onApply ? "common.cancel" : "common.close"));
     const closeBtn = el("button", {
         type: "button",
         class: "ir-dialog-x",
-        "aria-label": "Close",
+        "aria-label": translate(owner, "common.close"),
         onclick: () => dlg.close(),
     }, icon("close"));
     const titleBar = el("div", {
         class: "ir-dialog-title" + (modal ? "" : " ir-dialog-title-draggable"),
         tabIndex: modal ? undefined : 0,
-        "aria-label": modal ? undefined : `Move ${title} window; use Alt plus arrow keys`,
+        "aria-label": modal ? undefined : translate(owner, "dialog.moveWindow", { title }),
     }, el("span", { id: titleId, class: "ir-dialog-title-text" }, title), closeBtn);
     dlg.titleBar = titleBar;
 
@@ -293,14 +293,14 @@ export function openDialog({
     return dlg;
 }
 
-export function confirmDialog(owner, title, message, confirmLabel = "Delete") {
+export function confirmDialog(owner, title, message, confirmLabel = null) {
     return new Promise(resolve => {
         let confirmed = false;
         const dlg = openDialog({
             owner,
             title,
             width: "26rem",
-            applyLabel: confirmLabel,
+            applyLabel: confirmLabel ?? translate(owner, "common.delete"),
             destructive: true,
             modal: true,
             build: body => body.append(el("p", { class: "ir-confirm-text" }, message)),

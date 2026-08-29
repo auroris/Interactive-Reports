@@ -3,6 +3,8 @@
 // textContent — report data never passes through innerHTML (the only innerHTML
 // below is our own static icon markup).
 
+import { translate } from "./localization.js";
+
 export function el(tag, props = {}, ...children) {
     const node = document.createElement(tag);
     for (const [k, v] of Object.entries(props)) {
@@ -38,19 +40,19 @@ export function icon(name) {
 }
 
 /// Notice banner: kinds error | warn | ok. Pass onDismiss for a close button.
-export function banner(kind, text, onDismiss) {
+export function banner(kind, text, onDismiss, context = null) {
     return el("div", { class: `ir-banner ir-banner-${kind}` },
         el("span", { class: "ir-banner-text" }, text),
         onDismiss ? el("button", {
-            type: "button", class: "ir-banner-x", "aria-label": "Dismiss", onclick: onDismiss,
+            type: "button", class: "ir-banner-x", "aria-label": translate(context, "common.dismiss"), onclick: onDismiss,
         }, icon("close")) : null);
 }
 
 /// Append a short-lived status message to a persistent live region. Keeping the
 /// role on the slot (rather than on a node inserted with its text already filled)
 /// gives assistive technology a stable region to observe.
-export function transientBanner(slot, kind, text, timeout = 4000) {
-    const node = banner(kind, text);
+export function transientBanner(slot, kind, text, timeout = 4000, context = null) {
+    const node = banner(kind, text, null, context);
     slot.append(node);
     const timer = setTimeout(() => node.remove(), timeout);
     return () => { clearTimeout(timer); node.remove(); };

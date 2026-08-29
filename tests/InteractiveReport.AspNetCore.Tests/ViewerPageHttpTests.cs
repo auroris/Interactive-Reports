@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -116,6 +117,27 @@ public sealed class ViewerPageHttpTests : IAsyncLifetime
         var html = await page.Content.ReadAsStringAsync();
         Assert.Contains("src=\"/api/reports/ui/ir-admin.js\"", html);
         Assert.Contains("<interactive-report-admin>", html);
+    }
+
+    [Fact]
+    public async Task The_packaged_pages_negotiate_Canadian_French()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/reports/secured/view");
+        request.Headers.AcceptLanguage.Add(new StringWithQualityHeaderValue("en", 0.5));
+        request.Headers.AcceptLanguage.Add(new StringWithQualityHeaderValue("fr-CA", 0.9));
+        using var page = await _client.SendAsync(request);
+        var html = await page.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.OK, page.StatusCode);
+        Assert.Contains("<html lang=\"fr-CA\">", html);
+        Assert.Contains("Cette page nécessite JavaScript", html);
+
+        using var adminRequest = new HttpRequestMessage(HttpMethod.Get, "/api/reports/admin");
+        adminRequest.Headers.AcceptLanguage.Add(new StringWithQualityHeaderValue("fr"));
+        using var admin = await _client.SendAsync(adminRequest);
+        var adminHtml = await admin.Content.ReadAsStringAsync();
+        Assert.Contains("<html lang=\"fr-CA\">", adminHtml);
+        Assert.Contains("<title>Administration des rapports enregistrés</title>", adminHtml);
     }
 
     [Fact]

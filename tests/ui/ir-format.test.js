@@ -49,6 +49,16 @@ test("currency, percentage, and expanded date/time masks use the exact scalar fo
     assert.match(applyMask("2026-08-07T14:30:45", "date", "timeSeconds"), /30.*45/);
 });
 
+test("number, date, and boolean presentation follows the report locale", () => {
+    const decimal = applyMask("1234.5", "number", "decimal2", "fr-CA");
+    const date = applyMask("2026-08-07T14:30:45", "date", "dateLong", "fr-CA");
+
+    assert.match(decimal, /1[\s\u00a0\u202f]234,50/);
+    assert.match(date.toLocaleLowerCase("fr-CA"), /août/);
+    assert.equal(formatValue(true, "boolean", false, null, "fr-CA"), "vrai");
+    assert.equal(formatValue(false, "boolean", false, null, "fr-CA"), "faux");
+});
+
 test("link text composes the source column's ordinary formatter", () => {
     const w = {
         doc: {

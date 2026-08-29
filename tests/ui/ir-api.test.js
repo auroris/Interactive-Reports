@@ -1,8 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { IntlMessageFormat } from "intl-messageformat";
 import { ApiError, apiUrl, download, downloadFile, errorLines, errorText } from "../../src/client/core/api.js";
 import { loadWhoami } from "../../src/client/core/identity.js";
-import { localizedError, supportedErrorCodes, supportedLocales } from "../../src/client/core/localization.js";
+import {
+    localeCatalogs,
+    localizedError,
+    supportedErrorCodes,
+    supportedLocales,
+    supportedMessageKeys,
+    translate,
+} from "../../src/client/core/localization.js";
 
 test("API URLs normalize the base and encode every path segment", () => {
     assert.equal(
@@ -62,6 +70,29 @@ test("every client error code has English and Canadian French copy", () => {
             assert.ok(message?.description, `${code} has a ${locale} description`);
         }
     }
+});
+
+test("the full UI catalogs have matching, valid ICU messages", () => {
+    assert.equal(new Set(supportedMessageKeys).size, supportedMessageKeys.length);
+    for (const locale of supportedLocales) {
+        const keys = Object.keys(localeCatalogs[locale].messages);
+        assert.deepEqual(keys, supportedMessageKeys, `${locale} follows the canonical key order`);
+        for (const key of keys) {
+            const message = localeCatalogs[locale].messages[key];
+            assert.ok(message, `${key} has ${locale} copy`);
+            assert.doesNotThrow(
+                () => new IntlMessageFormat(message, locale),
+                `${key} has valid ${locale} ICU syntax`);
+        }
+    }
+
+    assert.equal(
+        translate("fr-CA", "chart.description", {
+            type: "bar",
+            summary: "revenus par région",
+            count: 2,
+        }),
+        "Graphique à barres de revenus par région. 2 points de données.");
 });
 
 test("whoami shares the optional-endpoint policy and coalesces concurrent requests", async () => {

@@ -269,6 +269,9 @@ test("scoped search emits typed number, date, and boolean predicates", () => {
         scopedSearchExpression("ORDER_DATE", "date", "2026-08-06"),
         "ORDER_DATE = TO_DATE('2026-08-06')");
     assert.equal(scopedSearchExpression("ACTIVE", "bool", "false"), "NOT ACTIVE");
+    assert.equal(scopedSearchExpression("AMOUNT", "number", "1 234,50", "fr-CA"), "AMOUNT = 1234.50");
+    assert.equal(scopedSearchExpression("ACTIVE", "bool", "vrai", "fr-CA"), "ACTIVE");
+    assert.equal(scopedSearchExpression("ACTIVE", "bool", "faux", "fr-CA"), "NOT ACTIVE");
 });
 
 test("scoped search rejects invalid typed input before requesting the server", () => {

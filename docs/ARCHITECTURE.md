@@ -72,7 +72,7 @@ still avoiding the worst dialect divergence (native PIVOT syntax) entirely.
 | `src/InteractiveReport.AspNetCore` | Endpoint mapping (`MapInteractiveReports`), standard OpenAPI metadata and public wire contracts, config-backed definition store, auth integration, JSON protocol shaping, coded errors. `Ui/dist` holds the generated client assets (§14), embedded and served by the same mapping. |
 | `src/InteractiveReport.GraphQL` | Optional GraphQL.NET transport over saved reports. Looks up every origin through `ISavedReportStore` and reuses ASP.NET authorization, context resolution, validation, and execution. |
 | `src/client` | Product UI source modules and the three browser-bundle entry points. |
-| `samples/Workbench` | Dev harness: SQLite sample DB. `index.html` and `admin.html` host the packaged report and administration elements; Swagger UI and GraphiQL expose the REST and GraphQL developer surfaces. |
+| `samples/Workbench` | Dev harness: SQLite sample DB. `index.html`, `fr.html`, and `admin.html` host the packaged report in English and Canadian French plus the administration element; Swagger UI and GraphiQL expose the REST and GraphQL developer surfaces. |
 | `tests/InteractiveReport.Core.Tests` | Composer golden tests (state doc → expected SQL, ×4 dialects), expression parser tests, SQLite end-to-end integration tests. |
 | `tests/InteractiveReport.AspNetCore.Tests` | HTTP, saved-report, authorization, configured-document, and GraphQL transport integration tests. |
 
@@ -639,11 +639,21 @@ detail. Authentication challenges and hidden 404 denials use the same shape, so 
 client no longer needs status-specific bodiless fallbacks. Static viewer-page and asset
 misses remain ordinary bodyless 404s because those routes are not JSON APIs.
 
-The packaged client's `core/localization.js` owns English and Canadian French error
-catalogs. It selects the nearest `lang` attribute, then a browser language, with English
-as the final fallback. Known codes replace the server title and description; `details`
-is appended unchanged. An unknown code shows the server fallback so separately deployed
-client and server packages remain operable while their catalogs are briefly out of step.
+The packaged client's `locales/en.js` and `locales/fr-CA.js` catalogs own the complete
+English and Canadian French presentation layer, including the coded-error catalog.
+`core/localization.js` resolves the nearest `lang` attribute across shadow boundaries,
+then the page language and browser preferences, with English as the final fallback.
+All French variants currently select `fr-CA`. Stable semantic keys are formatted by the
+bundled `intl-messageformat` runtime using ICU messages, so interpolation and plural
+rules remain translator-owned instead of being assembled in component code.
+
+Static report and administration chrome, validation, notices, accessible labels, and
+client-side number/date presentation use that locale. Server-owned report titles,
+column labels, data, and error `details` are deliberately not translated. A known error
+code replaces the server title and description; `details` is appended unchanged. An
+unknown code shows the server fallback so separately deployed client and server packages
+remain operable while their catalogs are briefly out of step. Catalogs are compiled into
+the self-contained bundles and add no client-side request.
 
 The current HTTP code catalog is:
 
@@ -1216,8 +1226,9 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   is exposed. The optional `saved-report` attribute selects an initially loaded saved
   report by case-insensitive title. Exactly one visible saved report must match;
   otherwise the widget loads Default and displays a warning. Changing `report`,
-  `saved-report`, or the API location re-initializes in place. Consumers need no build
-  step.
+  `saved-report`, the API location, or `lang` re-initializes in place. `lang` supports
+  English and Canadian French and may instead be inherited from an ancestor. Consumers
+  need no build step.
 - Each element renders into its own shadow root, including menus and dialog windows. Editor
   windows use manual popovers to enter the browser top layer without making the report
   inert; short destructive confirmations use native modal dialogs. The
@@ -1230,8 +1241,8 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   three bundle entries (`ir.js`, `ir-admin.js`, `ir-chart.js` — thin registration/
   re-export files whose basenames fix the `Ui/dist` output names) and the shared
   `ir.css`. `core/` is widget-agnostic plumbing: `api.js` (fetch + coded errors +
-  served-prefix inference + canonical error text), `localization.js` (locale
-  selection plus English/Canadian French coded-error catalogs), `identity.js` (the shared
+  served-prefix inference + canonical error text), `localization.js` (locale selection,
+  ICU formatting, and locale-aware scalar helpers), `identity.js` (the shared
   optional-whoami policy and concurrent-request coalescing), `dom.js` (element
   builder, icons, banners, form helpers), `menu.js` (popup menus), `dialog.js`
   (modal dialogs), `widget.js` (shadow-root mount/teardown, shared notices,
@@ -1246,7 +1257,8 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   `chart-view.js`, `pager.js`) and `dialogs/` (`parts.js` shared building blocks,
   `columns.js`, `rules.js` — the expression-rule dialogs mirroring the server's
   unified rule pipeline, `grid.js`, `view.js`, `save.js`). `admin/element.js` is
-  the admin widget; `chart/` (`theme.js`, `render.js`) backs the chart bundle.
+  the admin widget; `chart/` (`theme.js`, `render.js`) backs the chart bundle; and
+  `locales/` contains the key-aligned English and Canadian French UI and error catalogs.
   Feature modules are free functions over the widget instance `w` — nothing
   imports the element class except its entry, so the graph stays acyclic.
   `npm run build` uses esbuild to compile the stylesheet and modules into three
@@ -1257,7 +1269,9 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 - **Packaged pages**: `GET {prefix}/{name}/view` hosts `<interactive-report>` and
   `GET {prefix}/admin` hosts `<interactive-report-admin>` — minimal shells emitting
   an absolute-prefix script URL so the client's script-relative api-base inference
-  resolves with no `api-base` attribute. Served anonymously for the same reason the
+  resolves with no `api-base` attribute. Their document language follows ASP.NET Core
+  Request Localization when present, then `Accept-Language`, restricted to the two
+  packaged locales. Served anonymously for the same reason the
   assets are: a shell is public package markup with zero data, and it renders
   identically for any name, so it discloses nothing — the element's schema request
   is the actual gate. Injected values (report name, `?saved-report=`) are

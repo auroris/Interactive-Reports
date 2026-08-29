@@ -6,6 +6,7 @@
 // renderer protocol allowlist, so row data can never smuggle a scheme.
 
 import { el, icon } from "../../core/dom.js";
+import { translate } from "../../core/localization.js";
 import { safeRendererUrl } from "./column-renderers.js";
 
 /// The active edit link, or null. The pencil is a grid-row affordance: grouped,
@@ -40,11 +41,11 @@ export function substituteEditUrl(template, row) {
 /// The cell content for one row: an anchor with the pencil icon, or "" when the
 /// row withholds its link. A real href with no click handler, so middle-click,
 /// ctrl-click, and open-in-new-tab behave natively.
-export function renderEditCell(editLink, row) {
+export function renderEditCell(editLink, row, context = null) {
     const url = substituteEditUrl(editLink.urlTemplate, row);
     const href = url === null ? null : safeRendererUrl(url, "link");
     if (!href) return "";
-    const label = editLink.label ?? "Edit";
+    const label = editLink.label ?? translate(context, "grid.edit");
     const blank = editLink.target === "_blank";
     return el("a", {
         class: "ir-cell-edit",

@@ -15,7 +15,7 @@ export function saveDialog(w, { asNew }) {
     const titleInp = el("input", {
         class: "ir-input", type: "text", maxLength: 200, required: true,
         value: updating ? w.currentSaved.title : "",
-        placeholder: "Saved report name",
+        placeholder: w.t("saved.namePlaceholder"),
     });
     const globalChk = el("input", {
         type: "checkbox",
@@ -28,35 +28,35 @@ export function saveDialog(w, { asNew }) {
 
     openDialog({
         owner: w,
-        title: updating ? "Save Report" : "Save Report As",
+        title: w.t(updating ? "saved.saveTitle" : "saved.saveAsTitle"),
         width: "26rem",
-        applyLabel: "Save",
+        applyLabel: w.t("menu.save"),
         build: body => {
-            body.append(labeled("Name", titleInp));
+            body.append(labeled(w.t("common.name"), titleInp));
             if (canRequestAdministration(w)) {
                 body.append(
                     el("label", { class: "ir-checkline" }, primaryChk,
-                        "Primary — visible to everyone with access to this report"),
+                        w.t("saved.primaryHelp")),
                     el("label", { class: "ir-checkline" }, globalChk,
-                        "Global — visible to everyone with access to this report"));
+                        w.t("saved.globalHelp")));
             }
         },
         onApply: async () => {
             const title = titleInp.value.trim();
-            if (!title) throw new Error("Enter a name");
+            if (!title) throw new Error(w.t("saved.enterName"));
             if (!updating) {
                 const matches = (w.savedList ?? []).filter(saved => sameTitle(saved.title, title));
                 if (matches.length > 1)
-                    throw new Error(`Several saved reports are named "${title}". Delete the duplicate before replacing one.`);
+                    throw new Error(w.t("saved.duplicateNames", { title }));
                 if (matches.length === 1) {
                     const target = matches[0];
                     if (!canManageSaved(w, target))
-                        throw new Error(`"${title}" already exists and cannot be replaced. Choose another name.`);
+                        throw new Error(w.t("saved.cannotReplace", { title }));
                     const replace = await confirmDialog(
                         w,
-                        "Replace Saved Report",
-                        `Replace "${target.title}"? Its saved settings will be overwritten.`,
-                        "Replace");
+                        w.t("saved.replaceTitle"),
+                        w.t("saved.replaceConfirm", { title: target.title }),
+                        w.t("saved.replace"));
                     if (!replace) return false;
                     await saveReport(w, {
                         title: target.title,

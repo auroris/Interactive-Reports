@@ -1,7 +1,7 @@
 // Fetch layer for the report protocol: coded-error aware, JSON in/out, blob export.
 // Shared by the report widget (ir.js) and the admin widget (ir-admin.js).
 
-import { errorReference, localizedError } from "./localization.js";
+import { errorReference, localizedError, translate } from "./localization.js";
 
 /// Default API prefix for a widget with no api-base attribute: the prefix this
 /// script was served from. …/api/reports/ui/ir.js → …/api/reports
@@ -37,7 +37,7 @@ function serverErrorLines(error, locale = null) {
 export class ApiError extends Error {
     constructor(error, status) {
         error = error && typeof error === "object" ? error : {};
-        super(serverErrorLines(error).join(" — ") || `HTTP ${status}`);
+        super(serverErrorLines(error).join(" — ") || translate(null, "error.http", { status }));
         this.name = "ApiError";
         this.status = status;
         this.error = error;
@@ -53,9 +53,9 @@ export class ApiError extends Error {
 export function errorLines(err, locale = null) {
     if (typeof err === "string") return [err];
     const error = err?.error ?? err?.problem;
-    if (!error || typeof error !== "object") return [err?.message || "Something went wrong."];
+    if (!error || typeof error !== "object") return [err?.message || translate(locale, "error.generic")];
     const lines = serverErrorLines(error, locale);
-    if (!lines.length) lines.push(err.message || `HTTP ${err.status}`);
+    if (!lines.length) lines.push(err.message || translate(locale, "error.http", { status: err.status }));
     return lines;
 }
 

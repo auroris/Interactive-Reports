@@ -12,15 +12,15 @@ import { loadSavedById, refreshSavedSelect, resetToPrimary } from "./saved.js";
 export function buildSkeleton(w) {
     const scopeBtn = el("button", {
         type: "button", class: "ir-btn ir-search-scope",
-        title: "Choose search column", "aria-label": "Choose search column",
+        title: w.t("toolbar.chooseSearchColumn"), "aria-label": w.t("toolbar.chooseSearchColumn"),
         "aria-haspopup": "menu", "aria-expanded": "false",
         onclick: () => openSearchScopeMenu(w, scopeBtn),
     }, icon("search"), icon("caret"));
     const search = el("input", {
-        class: "ir-search-input", type: "search", placeholder: "Search",
-        name: "search", "aria-label": "Search",
+        class: "ir-search-input", type: "search", placeholder: w.t("toolbar.search"),
+        name: "search", "aria-label": w.t("toolbar.search"),
     });
-    const go = el("button", { type: "submit", class: "ir-btn ir-go" }, "Go");
+    const go = el("button", { type: "submit", class: "ir-btn ir-go" }, w.t("toolbar.go"));
 
     const viewBtn = (mode, iconName, label) => el("button", {
         type: "button", class: "ir-btn ir-viewbtn", dataset: { mode },
@@ -28,24 +28,24 @@ export function buildSkeleton(w) {
         "aria-pressed": "false",
         onclick: () => w.switchView(mode),
     }, icon(iconName));
-    const views = el("div", { class: "ir-viewbtns", role: "group", "aria-label": "View" },
-        viewBtn("grid", "grid", "Grid"),
-        viewBtn("groupBy", "group", "Group By"),
-        viewBtn("pivot", "pivot", "Pivot"),
-        viewBtn("chart", "chart", "Chart"));
+    const views = el("div", { class: "ir-viewbtns", role: "group", "aria-label": w.t("toolbar.view") },
+        viewBtn("grid", "grid", w.t("toolbar.grid")),
+        viewBtn("groupBy", "group", w.t("toolbar.groupBy")),
+        viewBtn("pivot", "pivot", w.t("toolbar.pivot")),
+        viewBtn("chart", "chart", w.t("toolbar.chart")));
 
     const actionsBtn = el("button", {
         type: "button", class: "ir-btn ir-actionsbtn",
         "aria-haspopup": "menu", "aria-expanded": "false",
         onclick: () => openActionsMenu(w, actionsBtn),
-    }, "Actions", icon("caret"));
+    }, w.t("toolbar.actions"), icon("caret"));
 
     const savedSel = el("select", {
         class: "ir-select ir-saved-select",
         onchange: () => savedSel.value ? loadSavedById(w, savedSel.value) : resetToPrimary(w),
     });
     const savedWrap = el("label", { class: "ir-saved", hidden: true },
-        el("span", { class: "ir-saved-label" }, "Saved Report"), savedSel);
+        el("span", { class: "ir-saved-label" }, w.t("toolbar.savedReport")), savedSel);
     const searchWrap = el("form", {
         class: "ir-search", role: "search",
         onsubmit: event => { event.preventDefault(); doSearch(w); },

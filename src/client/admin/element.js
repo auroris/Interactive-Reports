@@ -16,7 +16,7 @@ import { WidgetElement } from "../core/widget.js";
 const LISTING_REPORT = "__saved-reports";
 
 export class InteractiveReportAdminElement extends WidgetElement {
-    static observedAttributes = ["api-base", "base"];
+    static observedAttributes = ["api-base", "base", "lang"];
 
     connectedCallback() { this._connected = true; this.init(); }
     disconnectedCallback() {
@@ -34,6 +34,7 @@ export class InteractiveReportAdminElement extends WidgetElement {
         const report = el("interactive-report", {
             report: LISTING_REPORT,
             "api-base": this.apiBase,
+            lang: this.locale,
         });
         report.addEventListener("ir-action", event => { void this.onAction(event.detail); });
         this.els = {
@@ -44,12 +45,12 @@ export class InteractiveReportAdminElement extends WidgetElement {
         };
         this._mount.replaceChildren(
             el("div", { class: "ir-toolbar ir-admin-bar", part: "toolbar" },
-                el("button", { type: "button", class: "ir-btn", onclick: () => this.refresh() }, "Refresh"),
-                el("button", { type: "button", class: "ir-btn", onclick: () => this.uploadDocument() }, "Upload JSON…"),
+                el("button", { type: "button", class: "ir-btn", onclick: () => this.refresh() }, this.t("admin.refresh")),
+                el("button", { type: "button", class: "ir-btn", onclick: () => this.uploadDocument() }, this.t("admin.uploadJson")),
                 el("button", {
                     type: "button", class: "ir-btn",
                     onclick: () => { void this.authorizationDialog().catch(err => this.showError(err)); },
-                }, "Authorization…"),
+                }, this.t("admin.authorization")),
                 el("span", { class: "ir-spacer" }),
                 this.els.identity),
             el("div", { class: "ir-notices", part: "notices" }, this.els.errorSlot, this.els.transientSlot),
@@ -59,7 +60,7 @@ export class InteractiveReportAdminElement extends WidgetElement {
         if (seq !== this._seq || !this.isConnected) return;
         this.whoami = identity.whoami;
         if (this.whoami?.identity)
-            this.els.identity.textContent = `Signed in as ${this.whoami.identity}`;
+            this.els.identity.textContent = this.t("admin.signedInAs", { identity: this.whoami.identity });
         // The embedded report answers 404 for non-administrators; when whoami is
         // available, replace that generic denial with precise guidance. When it is
         // not (WhoamiEnabled is off — the default), say what this page needs instead
@@ -67,16 +68,15 @@ export class InteractiveReportAdminElement extends WidgetElement {
         if (identity.error) {
             this.showError(identity.error);
         } else if (this.whoami === null) {
-            this.els.errorSlot.replaceChildren(banner("warn",
-                "This page requires a signed-in administrator (InteractiveReport:Administrators). "
-                + "Enable InteractiveReport:WhoamiEnabled for precise identity guidance here."));
+            this.els.errorSlot.replaceChildren(banner(
+                "warn", this.t("admin.whoamiDisabled"), null, this));
         } else if (this.whoami.administratorListConfigured && !this.whoami.isAdministrator) {
-            this.els.errorSlot.replaceChildren(banner("error",
-                "Administrator access required. Add your identity to InteractiveReport:Administrators."));
+            this.els.errorSlot.replaceChildren(banner(
+                "error", this.t("admin.accessRequired"), null, this));
         } else if (!this.whoami.isAdministrator
             && !this.whoami.applicationAuthorizationConfigured) {
-            this.els.errorSlot.replaceChildren(banner("error",
-                "Administrator access requires a configured administrator or application authorization."));
+            this.els.errorSlot.replaceChildren(banner(
+                "error", this.t("admin.accessConfigurationRequired"), null, this));
         }
     }
 
@@ -109,18 +109,19 @@ export class InteractiveReportAdminElement extends WidgetElement {
     async toggleGlobal(id, row) {
         const makeGlobal = row.SCOPE !== "Global";
         await api(apiUrl(this.base, "saved", id), { method: "PUT", body: { isGlobal: makeGlobal } });
-        this.notify(makeGlobal
-            ? `"${row.TITLE}" is now global.`
-            : `"${row.TITLE}" is now private to ${row.OWNER}.`);
+        this.notify(this.t(makeGlobal ? "admin.nowGlobal" : "admin.nowPrivate", {
+            title: row.TITLE,
+            owner: row.OWNER,
+        }));
         this.refresh();
     }
 
     async togglePrimary(id, row) {
         const makePrimary = row.PRIMARY_STATUS !== "Yes";
         await api(apiUrl(this.base, "saved", id), { method: "PUT", body: { isPrimary: makePrimary } });
-        this.notify(makePrimary
-            ? `"${row.TITLE}" is now primary.`
-            : `"${row.TITLE}" is no longer primary.`);
+        this.notify(this.t(makePrimary ? "admin.nowPrimary" : "admin.noLongerPrimary", {
+            title: row.TITLE,
+        }));
         this.refresh();
     }
 
@@ -133,31 +134,31 @@ export class InteractiveReportAdminElement extends WidgetElement {
             const current = users.find(user =>
                 String(user.value).toLocaleLowerCase() === String(row.OWNER ?? "").toLocaleLowerCase());
             const options = users.map(user => ({ label: user.display, value: user.value }));
-            if (!current) options.unshift({ label: "Select a user", value: "" });
+            if (!current) options.unshift({ label: this.t("admin.selectUser"), value: "" });
             ownerInp = sel(options, current?.value ?? "");
             ownerInp.required = true;
-            note = "The application supplies these accounts. The selected value is stored as the canonical owner identity.";
+            note = this.t("admin.directoryOwnerNote");
         } else {
             ownerInp = el("input", {
                 class: "ir-input", type: "text", value: row.OWNER ?? "", required: true,
             });
-            note = "The exact identity value — what GET …/whoami reports for that user.";
+            note = this.t("admin.identityOwnerNote");
         }
 
         openDialog({
             owner: this,
-            title: "Reassign Owner",
+            title: this.t("admin.reassignOwner"),
             width: "26rem",
-            applyLabel: "Reassign",
+            applyLabel: this.t("admin.reassign"),
             build: body => body.append(
                 el("p", { class: "ir-confirm-text" }, `"${row.TITLE}" (${row.REPORT_NAME})`),
-                labeled("New owner (identity value)", ownerInp),
+                labeled(this.t("admin.newOwner"), ownerInp),
                 el("p", { class: "ir-dialog-note" }, note)),
             onApply: async () => {
                 const owner = ownerInp.value.trim();
-                if (!owner) throw new Error("Enter an identity value");
+                if (!owner) throw new Error(this.t("admin.enterIdentity"));
                 await api(apiUrl(this.base, "saved", id), { method: "PUT", body: { owner } });
-                this.notify(`"${row.TITLE}" reassigned to ${owner}.`);
+                this.notify(this.t("admin.reassigned", { title: row.TITLE, owner }));
                 this.refresh();
             },
         });
@@ -191,7 +192,7 @@ export class InteractiveReportAdminElement extends WidgetElement {
 
         openDialog({
             owner: this,
-            title: "Authorization",
+            title: this.t("admin.authorizationTitle"),
             width: "48rem",
             build: (body, dlg) => {
                 const reload = async () => {
@@ -212,7 +213,7 @@ export class InteractiveReportAdminElement extends WidgetElement {
                 const identityControl = () => {
                     if (users.length) {
                         const control = sel([
-                            { label: "Select a user", value: "" },
+                            { label: this.t("admin.selectUser"), value: "" },
                             ...users.map(user => ({ label: user.display, value: user.value })),
                         ], "");
                         control.required = true;
@@ -220,7 +221,7 @@ export class InteractiveReportAdminElement extends WidgetElement {
                     }
                     return el("input", {
                         class: "ir-input", type: "text", required: true,
-                        placeholder: "Identity value", autocomplete: "off",
+                        placeholder: this.t("admin.identityPlaceholder"), autocomplete: "off",
                     });
                 };
                 const identityRows = (configured, database, remove) => {
@@ -228,21 +229,21 @@ export class InteractiveReportAdminElement extends WidgetElement {
                     for (const identity of configured ?? []) {
                         rows.push(el("div", { class: "ir-auth-row" },
                             el("span", {}, displayIdentity(identity)),
-                            el("span", { class: "ir-auth-source" }, "appsettings.json")));
+                            el("span", { class: "ir-auth-source" }, this.t("admin.sourceConfiguration"))));
                     }
                     for (const identity of database ?? []) {
                         rows.push(el("div", { class: "ir-auth-row" },
                             el("span", {}, displayIdentity(identity)),
-                            el("span", { class: "ir-auth-source" }, "administration center"),
+                            el("span", { class: "ir-auth-source" }, this.t("admin.sourceCenter")),
                             el("button", {
                                 type: "button", class: "ir-btn ir-row-x",
-                                "aria-label": `Remove ${identity}`,
+                                "aria-label": this.t("common.removeNamed", { name: identity }),
                                 onclick: () => { void mutate(() => remove(identity)); },
-                            }, "Remove")));
+                            }, this.t("common.remove"))));
                     }
                     return rows.length
                         ? el("div", { class: "ir-auth-list" }, rows)
-                        : el("p", { class: "ir-dialog-note" }, "No identities are explicitly granted.");
+                        : el("p", { class: "ir-dialog-note" }, this.t("admin.noExplicitIdentities"));
                 };
                 const addIdentity = (label, operation) => {
                     const control = identityControl();
@@ -250,24 +251,24 @@ export class InteractiveReportAdminElement extends WidgetElement {
                         type: "button", class: "ir-btn",
                         onclick: () => {
                             const identity = control.value.trim();
-                            if (!identity) { dlg.setError("Select or enter an identity value."); return; }
+                            if (!identity) { dlg.setError(this.t("admin.selectOrEnterIdentity")); return; }
                             void mutate(() => operation(identity));
                         },
-                    }, "Add");
+                    }, this.t("common.add"));
                     return el("div", { class: "ir-auth-add" }, labeled(label, control), button);
                 };
                 const render = () => {
                     const administratorSection = el("section", { class: "ir-auth-section" },
-                        el("h3", {}, "Administration access"),
+                        el("h3", {}, this.t("admin.administrationAccess")),
                         el("p", { class: "ir-dialog-note" },
-                            "These identities may use the administration center. Configuration and database grants are additive."),
+                            this.t("admin.administrationAccessNote")),
                         identityRows(
                             authorization.configuredAdministrators,
                             authorization.databaseAdministrators,
                             identity => api(apiUrl(this.base, "admin", "authorization", "administrators"), {
                                 method: "DELETE", body: { identity },
                             })),
-                        addIdentity("Administrator", identity => api(
+                        addIdentity(this.t("admin.administrator"), identity => api(
                             apiUrl(this.base, "admin", "authorization", "administrators"),
                             { method: "POST", body: { identity } })));
 
@@ -275,7 +276,7 @@ export class InteractiveReportAdminElement extends WidgetElement {
                     const reportSelect = sel(reports.map(report => ({
                         label: report.title, value: report.name,
                     })), selectedReport);
-                    reportSelect.setAttribute("aria-label", "Report");
+                    reportSelect.setAttribute("aria-label", this.t("admin.report"));
                     reportSelect.onchange = () => {
                         selectedReport = reportSelect.value;
                         render();
@@ -283,10 +284,10 @@ export class InteractiveReportAdminElement extends WidgetElement {
                     const report = reports.find(item => item.name === selectedReport);
                     let reportBody;
                     if (!report) {
-                        reportBody = el("p", { class: "ir-dialog-note" }, "No configured reports are available.");
+                        reportBody = el("p", { class: "ir-dialog-note" }, this.t("admin.noReports"));
                     } else if (!report.canRestrict) {
                         reportBody = el("p", { class: "ir-dialog-note" },
-                            "This report is anonymous or administrators-only and cannot use named-user restrictions.");
+                            this.t("admin.reportCannotRestrict"));
                     } else {
                         const restricted = el("input", {
                             type: "checkbox",
@@ -298,12 +299,12 @@ export class InteractiveReportAdminElement extends WidgetElement {
                         });
                         reportBody = el("div", { class: "ir-auth-report" },
                             el("label", { class: "ir-checkline" }, restricted,
-                                el("span", {}, "Restrict this report to explicitly granted users")),
+                                el("span", {}, this.t("admin.restrictReport"))),
                             report.configuredRestricted
                                 ? el("p", { class: "ir-dialog-note" },
-                                    "This restriction is set in appsettings.json and cannot be removed here.")
+                                    this.t("admin.configuredRestriction"))
                                 : null,
-                            el("h4", {}, "Granted users"),
+                            el("h4", {}, this.t("admin.grantedUsers")),
                             identityRows(
                                 report.configuredUsers,
                                 report.databaseUsers,
@@ -311,19 +312,19 @@ export class InteractiveReportAdminElement extends WidgetElement {
                                     this.base, "admin", "authorization", "reports", report.name, "users"), {
                                     method: "DELETE", body: { identity },
                                 })),
-                            addIdentity("Report user", identity => api(apiUrl(
+                            addIdentity(this.t("admin.reportUser"), identity => api(apiUrl(
                                 this.base, "admin", "authorization", "reports", report.name, "users"), {
                                 method: "POST", body: { identity },
                             })),
                             !report.restricted
                                 ? el("p", { class: "ir-dialog-note" },
-                                    "User grants are stored now and take effect when this report is restricted.")
+                                    this.t("admin.inactiveGrants"))
                                 : null);
                     }
 
                     const reportSection = el("section", { class: "ir-auth-section" },
-                        el("h3", {}, "Report access"),
-                        reports.length ? labeled("Report", reportSelect) : null,
+                        el("h3", {}, this.t("admin.reportAccess")),
+                        reports.length ? labeled(this.t("admin.report"), reportSelect) : null,
                         reportBody);
                     body.replaceChildren(administratorSection, reportSection);
                 };
@@ -336,7 +337,7 @@ export class InteractiveReportAdminElement extends WidgetElement {
         const doc = await api(apiUrl(this.base, "saved", id));
         openDialog({
             owner: this,
-            title: `${row.TITLE} — state document`,
+            title: this.t("admin.stateDocumentTitle", { title: row.TITLE }),
             width: "36rem",
             build: body => body.append(
                 el("pre", { class: "ir-state-pre" }, JSON.stringify(doc.state, null, 2))),
@@ -352,16 +353,21 @@ export class InteractiveReportAdminElement extends WidgetElement {
     // ordinary element removal into a phantom delete action (found by a test that
     // unmounted the element).
     async deleteSavedReport(id, row) {
-        const scope = row.SCOPE === "Global" ? "the GLOBAL report" : `${row.OWNER}'s report`;
-        if (!await confirmDialog(this, "Delete Saved Report", `Delete ${scope} "${row.TITLE}"? This cannot be undone.`)) return;
+        const scope = row.SCOPE === "Global"
+            ? this.t("admin.globalReport")
+            : this.t("admin.ownerReport", { owner: row.OWNER });
+        if (!await confirmDialog(
+            this,
+            this.t("saved.deleteTitle"),
+            this.t("admin.deleteConfirm", { scope, title: row.TITLE }))) return;
         await api(apiUrl(this.base, "saved", id), { method: "DELETE" });
-        this.notify(`"${row.TITLE}" deleted.`);
+        this.notify(this.t("admin.deleted", { title: row.TITLE }));
         this.refresh();
     }
 
     uploadDocument() {
         const reportInp = el("input", {
-            class: "ir-input", type: "text", placeholder: "Configured report name",
+            class: "ir-input", type: "text", placeholder: this.t("admin.reportNamePlaceholder"),
             autocomplete: "off", required: true,
         });
         const fileInp = el("input", {
@@ -369,35 +375,34 @@ export class InteractiveReportAdminElement extends WidgetElement {
         });
         openDialog({
             owner: this,
-            title: "Upload Report Document",
+            title: this.t("admin.uploadTitle"),
             width: "30rem",
-            applyLabel: "Upload",
+            applyLabel: this.t("admin.upload"),
             build: body => body.append(
-                labeled("Report name", reportInp),
-                labeled("Report document JSON", fileInp),
+                labeled(this.t("admin.reportName"), reportInp),
+                labeled(this.t("admin.reportDocumentJson"), fileInp),
                 el("p", { class: "ir-dialog-note" },
-                    "The title and state are imported after schema validation. " +
-                    "A primary flag publishes the report; a primary report named Default replaces the generated Default.")),
+                    this.t("admin.uploadNote"))),
             onApply: async () => {
                 const reportName = reportInp.value.trim();
-                if (!reportName) throw new Error("Enter the configured report name.");
+                if (!reportName) throw new Error(this.t("admin.enterReportName"));
                 const file = fileInp.files?.[0];
-                if (!file) throw new Error("Choose a report document JSON file.");
+                if (!file) throw new Error(this.t("admin.chooseJson"));
 
                 let document;
                 try {
                     document = JSON.parse(await file.text());
                 } catch {
-                    throw new Error("The selected file is not valid JSON.");
+                    throw new Error(this.t("admin.invalidJson"));
                 }
 
                 const imported = await api(apiUrl(this.base, "admin", reportName, "documents"), {
                     method: "POST",
                     body: document,
                 });
-                this.notify(imported.isPrimary
-                    ? `"${imported.title}" uploaded as a primary saved report.`
-                    : `"${imported.title}" uploaded as a private saved report.`);
+                this.notify(this.t(imported.isPrimary
+                    ? "admin.uploadedPrimary"
+                    : "admin.uploadedPrivate", { title: imported.title }));
                 this.refresh();
             },
         });

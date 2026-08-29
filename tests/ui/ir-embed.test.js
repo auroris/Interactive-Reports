@@ -186,6 +186,35 @@ test("a report attribute is required", async () => {
     report.remove();
 });
 
+test("the report chrome and dialogs follow the host language", async () => {
+    requests.length = 0;
+
+    const report = document.createElement("interactive-report");
+    report.setAttribute("lang", "fr-CA");
+    report.setAttribute("report", "orders");
+    report.setAttribute("api-base", "/custom-report-api");
+    document.body.append(report);
+
+    for (let attempt = 0; attempt < 40 && !requests.some(r => r.url.endsWith("/orders/query")); attempt++)
+        await new Promise(resolve => setTimeout(resolve, 5));
+
+    assert.equal(report.shadowRoot.querySelector(".ir-search-input").placeholder, "Rechercher");
+    assert.match(report.shadowRoot.querySelector(".ir-saved-label").textContent, /Rapport enregistré/);
+    assert.match(report.shadowRoot.querySelector(".ir-actionsbtn").textContent, /Actions/);
+
+    report.shadowRoot.querySelector(".ir-actionsbtn").click();
+    const columns = [...report.shadowRoot.querySelectorAll(".ir-popup .ir-menu-item")]
+        .find(item => item.textContent.includes("Colonnes"));
+    assert.ok(columns, "the French Actions menu contains the columns command");
+    columns.click();
+
+    const dialog = report.shadowRoot.querySelector(".ir-dialog");
+    assert.equal(dialog.querySelector(".ir-dialog-title-text").textContent, "Sélectionner les colonnes");
+    assert.equal(dialog.querySelector(".ir-dialog-footer .ir-btn:not(.ir-btn-primary)").textContent, "Annuler");
+
+    report.remove();
+});
+
 test("labels resolve client-side: default report seeds them, rename overrides, clearing restores", async () => {
     requests.length = 0;
 

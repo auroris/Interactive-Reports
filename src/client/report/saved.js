@@ -31,16 +31,16 @@ export function canManageSaved(w, s) {
 export function refreshSavedSelect(w) {
     const { savedSel, savedWrap } = w.els;
     const defaultSaved = (w.savedList ?? []).find(s => s.isPrimary && sameTitle(s.title, "Default"));
-    savedSel.replaceChildren(new Option("Default", defaultSaved?.id ?? ""));
+    savedSel.replaceChildren(new Option(w.t("saved.default"), defaultSaved?.id ?? ""));
     const group = (label, items) => {
         if (!items.length) return;
         const g = el("optgroup", { label });
         for (const s of items) g.append(new Option(s.title, s.id));
         savedSel.append(g);
     };
-    group("Primary", w.savedList.filter(s => s.isPrimary && s !== defaultSaved));
-    group("Global", w.savedList.filter(s => !s.isPrimary && s.isGlobal));
-    group("Private", w.savedList.filter(s => !s.isPrimary && !s.isGlobal));
+    group(w.t("saved.primary"), w.savedList.filter(s => s.isPrimary && s !== defaultSaved));
+    group(w.t("saved.global"), w.savedList.filter(s => !s.isPrimary && s.isGlobal));
+    group(w.t("saved.private"), w.savedList.filter(s => !s.isPrimary && !s.isGlobal));
     savedSel.value = w.currentSaved?.id ?? defaultSaved?.id ?? "";
     savedWrap.hidden = w.savedList.length === 0 || !featureEnabled(w, "savedReports");
 }
@@ -52,7 +52,7 @@ async function loadSavedList(w) {
         // 404 = the feature is off. A real failure keeps the list we have —
         // wiping it would present a server problem as "no saved reports".
         if (err.status === 404) { w.savedList = []; return; }
-        w.notify(`The saved-report list could not be refreshed (${err.message}).`, "warn");
+        w.notify(w.t("saved.listRefreshFailed", { message: err.message }), "warn");
     }
 }
 
@@ -87,7 +87,7 @@ export async function loadSavedById(w, id) {
         // the previous grid is still on screen.
         w.restoreLastGood();
         if (err.status === 404) {
-            w.showError(new Error("That saved report is no longer available — it may have been deleted."));
+            w.showError(new Error(w.t("saved.unavailable")));
             await loadSavedList(w);
             if (w.isCurrentStateTransition(transition)) refreshSavedSelect(w);
         } else {
@@ -109,8 +109,12 @@ export async function resetToPrimary(w) {
 }
 
 export async function resetWorkingCopy(w) {
-    const target = w.currentSaved ? `"${w.currentSaved.title}"` : "its default settings";
-    if (!await confirmDialog(w, "Reset", `Restore this report to ${target}? Unsaved changes are lost.`, "Reset")) return;
+    const target = w.currentSaved ? `“${w.currentSaved.title}”` : w.t("saved.resetTarget");
+    if (!await confirmDialog(
+        w,
+        w.t("saved.resetTitle"),
+        w.t("saved.resetConfirm", { target }),
+        w.t("menu.reset"))) return;
     if (w.currentSaved) await loadSavedById(w, w.currentSaved.id);
     else await resetToPrimary(w);
 }
@@ -125,7 +129,7 @@ export async function saveReport(w, { title, isGlobal, isPrimary, asNew, target 
         });
     } else {
         const saved = target ?? w.currentSaved;
-        if (!saved) throw new Error("Select a saved report to replace");
+        if (!saved) throw new Error(w.t("saved.selectReplacement"));
         const body = { title, state };
         if (canRequestAdministration(w)) {
             body.isGlobal = isGlobal;
@@ -142,13 +146,13 @@ export async function saveReport(w, { title, isGlobal, isPrimary, asNew, target 
     w.recordSaved(savedSummary, revision);
     await loadSavedList(w);
     refreshSavedSelect(w);
-    w.notify("Report saved.");
+    w.notify(w.t("saved.saved"));
 }
 
 export async function deleteCurrentSaved(w) {
     const s = w.currentSaved;
     if (!s) return;
-    if (!await confirmDialog(w, "Delete Saved Report", `Delete "${s.title}"? This cannot be undone.`)) return;
+    if (!await confirmDialog(w, w.t("saved.deleteTitle"), w.t("saved.deleteConfirm", { title: s.title }))) return;
     const revision = w.stateRevision;
     try {
         await api(apiUrl(w.base, "saved", s.id), { method: "DELETE" });
@@ -162,7 +166,7 @@ export async function deleteCurrentSaved(w) {
         // resets the working document to Default.
         if (deletedCurrent && w.isCurrentStateTransition(revision)) await resetToPrimary(w);
         else refreshSavedSelect(w);
-        w.notify("Saved report deleted.");
+        w.notify(w.t("saved.deleted"));
     } catch (err) {
         w.showError(err);
     }

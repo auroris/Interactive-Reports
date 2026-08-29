@@ -3,42 +3,53 @@
 // paths need to round-trip an exact database value through JavaScript Number.
 
 import Big from "big.js";
+import { resolveLocale, translate } from "../../core/localization.js";
 
 /// Format masks are a closed token vocabulary per column type. Legacy number
 /// tokens remain valid report-document data even as the chooser grows.
 export const NUMBER_MASKS = [
-    { value: "integer", label: "Number: 1,235" },
-    { value: "decimal1", label: "Number: 1,234.6" },
-    { value: "decimal2", label: "Number: 1,234.57" },
-    { value: "decimal3", label: "Number: 1,234.568" },
-    { value: "decimal4", label: "Number: 1,234.5679" },
-    { value: "plain", label: "Plain: 1234.57" },
-    { value: "currency:CAD", label: "Currency: CAD" },
-    { value: "currency:USD", label: "Currency: USD" },
-    { value: "currency:EUR", label: "Currency: EUR" },
-    { value: "currency:GBP", label: "Currency: GBP" },
-    { value: "currency:JPY", label: "Currency: JPY" },
-    { value: "percent0", label: "Percent: 12%" },
-    { value: "percent1", label: "Percent: 12.3%" },
-    { value: "percent2", label: "Percent: 12.35%" },
+    { value: "integer", key: "format.number", sample: "1234.6" },
+    { value: "decimal1", key: "format.number", sample: "1234.56" },
+    { value: "decimal2", key: "format.number", sample: "1234.567" },
+    { value: "decimal3", key: "format.number", sample: "1234.5678" },
+    { value: "decimal4", key: "format.number", sample: "1234.56789" },
+    { value: "plain", key: "format.plain", sample: "1234.567" },
+    { value: "currency:CAD", key: "format.currency", currency: "CAD" },
+    { value: "currency:USD", key: "format.currency", currency: "USD" },
+    { value: "currency:EUR", key: "format.currency", currency: "EUR" },
+    { value: "currency:GBP", key: "format.currency", currency: "GBP" },
+    { value: "currency:JPY", key: "format.currency", currency: "JPY" },
+    { value: "percent0", key: "format.percent", sample: "0.123456" },
+    { value: "percent1", key: "format.percent", sample: "0.123456" },
+    { value: "percent2", key: "format.percent", sample: "0.123456" },
 ];
 
 export const DATE_MASKS = [
-    { value: "date", label: "2026-08-07" },
-    { value: "datetime", label: "2026-08-07 14:30" },
-    { value: "datetimeSeconds", label: "2026-08-07 14:30:45" },
-    { value: "time", label: "2:30 PM" },
-    { value: "timeSeconds", label: "2:30:45 PM" },
-    { value: "dateMedium", label: "Aug 7, 2026" },
-    { value: "dateLong", label: "August 7, 2026" },
-    { value: "dateTimeMedium", label: "Aug 7, 2026, 2:30 PM" },
-    { value: "dateTimeLong", label: "August 7, 2026, 2:30:45 PM" },
+    { value: "date" },
+    { value: "datetime" },
+    { value: "datetimeSeconds" },
+    { value: "time" },
+    { value: "timeSeconds" },
+    { value: "dateMedium" },
+    { value: "dateLong" },
+    { value: "dateTimeMedium" },
+    { value: "dateTimeLong" },
 ];
 
 const CURRENCY_DIGITS = { CAD: 2, USD: 2, EUR: 2, GBP: 2, JPY: 0 };
 
-export function masksFor(type) {
-    return type === "number" ? NUMBER_MASKS : type === "date" ? DATE_MASKS : [];
+export function masksFor(type, context = null) {
+    if (type === "number") return NUMBER_MASKS.map(mask => ({
+        value: mask.value,
+        label: translate(context, mask.key, mask.currency
+            ? { currency: mask.currency }
+            : { example: applyMask(mask.sample, "number", mask.value, context) }),
+    }));
+    if (type === "date") return DATE_MASKS.map(mask => ({
+        value: mask.value,
+        label: applyMask("2026-08-07T14:30:45", "date", mask.value, context),
+    }));
+    return [];
 }
 
 // All number-like column values, whether legacy JSON numbers or exact JSON strings,
@@ -67,33 +78,45 @@ function fixedParts(number, fractionDigits) {
     };
 }
 
-const integerFormat = new Intl.NumberFormat(undefined, { useGrouping: true, maximumFractionDigits: 0 });
-const decimalSeparator = new Intl.NumberFormat(undefined, {
-    minimumFractionDigits: 1,
-    maximumFractionDigits: 1,
-}).formatToParts(1.1).find(part => part.type === "decimal")?.value ?? ".";
-const digitFormatter = new Intl.NumberFormat(undefined, { useGrouping: false, maximumFractionDigits: 0 });
-const localizedDigits = Array.from({ length: 10 }, (_, digit) => digitFormatter.format(digit));
-const localizeDigits = value => [...value].map(digit => localizedDigits[+digit]).join("");
+const localeParts = new Map();
+function numberLocaleParts(locale) {
+    let parts = localeParts.get(locale);
+    if (!parts) {
+        const digitFormatter = new Intl.NumberFormat(locale, { useGrouping: false, maximumFractionDigits: 0 });
+        parts = {
+            integerFormat: new Intl.NumberFormat(locale, { useGrouping: true, maximumFractionDigits: 0 }),
+            decimalSeparator: new Intl.NumberFormat(locale, {
+                minimumFractionDigits: 1,
+                maximumFractionDigits: 1,
+            }).formatToParts(1.1).find(part => part.type === "decimal")?.value ?? ".",
+            digits: Array.from({ length: 10 }, (_, digit) => digitFormatter.format(digit)),
+        };
+        localeParts.set(locale, parts);
+    }
+    return parts;
+}
 const numericPartTypes = new Set(["integer", "group", "decimal", "fraction", "nan", "infinity"]);
 
-function localizedMagnitude(parts, grouping) {
-    const integer = grouping ? integerFormat.format(BigInt(parts.integer)) : parts.integer;
-    const fraction = grouping ? localizeDigits(parts.fraction) : parts.fraction;
-    return fraction ? `${integer}${grouping ? decimalSeparator : "."}${fraction}` : integer;
+function localizedMagnitude(parts, grouping, locale) {
+    const formats = numberLocaleParts(locale);
+    const integer = grouping ? formats.integerFormat.format(BigInt(parts.integer)) : parts.integer;
+    const fraction = grouping
+        ? [...parts.fraction].map(digit => formats.digits[+digit]).join("")
+        : parts.fraction;
+    return fraction ? `${integer}${grouping ? formats.decimalSeparator : "."}${fraction}` : integer;
 }
 
 // Intl formatter construction dominates per-cell formatting cost (an order of
 // magnitude over formatting itself), so instances are cached per shape. The
 // closed mask vocabulary keeps both caches tiny.
 const decorationFormats = new Map();
-function decorationFormat(style, currency, fractionDigits) {
-    const key = `${style}:${currency ?? ""}:${fractionDigits}`;
+function decorationFormat(locale, style, currency, fractionDigits) {
+    const key = `${locale}:${style}:${currency ?? ""}:${fractionDigits}`;
     let format = decorationFormats.get(key);
     if (!format) {
         const options = { style, minimumFractionDigits: fractionDigits, maximumFractionDigits: fractionDigits };
         if (currency) options.currency = currency;
-        format = new Intl.NumberFormat(undefined, options);
+        format = new Intl.NumberFormat(locale, options);
         decorationFormats.set(key, format);
     }
     return format;
@@ -101,8 +124,8 @@ function decorationFormat(style, currency, fractionDigits) {
 
 // Obtain signs, spacing, currency placement, and percent placement from Intl, but
 // replace its numeric run with our exact string. Intl never receives the real value.
-function decorateNumber(numberText, negative, style, currency, fractionDigits) {
-    const parts = decorationFormat(style, currency, fractionDigits).formatToParts(negative ? -1 : 1);
+function decorateNumber(numberText, negative, locale, style, currency, fractionDigits) {
+    const parts = decorationFormat(locale, style, currency, fractionDigits).formatToParts(negative ? -1 : 1);
     let inserted = false;
     let result = "";
     for (const part of parts) {
@@ -116,7 +139,7 @@ function decorateNumber(numberText, negative, style, currency, fractionDigits) {
     return result;
 }
 
-function exactNumber(value, { minimum = 0, maximum = minimum, grouping = true, style = "decimal", currency = null, scale = 0 } = {}) {
+function exactNumber(value, { minimum = 0, maximum = minimum, grouping = true, style = "decimal", currency = null, scale = 0 } = {}, context = null) {
     const number = parseReportNumber(value);
     if (!number) return null;
     const adjusted = scale
@@ -125,9 +148,10 @@ function exactNumber(value, { minimum = 0, maximum = minimum, grouping = true, s
     const parts = fixedParts(adjusted, maximum);
     while (parts.fraction.length > minimum && parts.fraction.endsWith("0"))
         parts.fraction = parts.fraction.slice(0, -1);
-    const magnitude = localizedMagnitude(parts, grouping);
+    const locale = resolveLocale(context);
+    const magnitude = localizedMagnitude(parts, grouping, locale);
     if (!grouping && style === "decimal") return `${parts.negative ? "-" : ""}${magnitude}`;
-    return decorateNumber(magnitude, parts.negative, style, currency, parts.fraction.length);
+    return decorateNumber(magnitude, parts.negative, locale, style, currency, parts.fraction.length);
 }
 
 const LOCALIZED_DATE_MASKS = {
@@ -139,11 +163,12 @@ const LOCALIZED_DATE_MASKS = {
     dateTimeLong: { year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" },
 };
 const dateMaskFormats = new Map();
-function dateMaskFormat(mask) {
-    let format = dateMaskFormats.get(mask);
+function dateMaskFormat(locale, mask) {
+    const key = `${locale}:${mask}`;
+    let format = dateMaskFormats.get(key);
     if (!format) {
-        format = new Intl.DateTimeFormat(undefined, LOCALIZED_DATE_MASKS[mask]);
-        dateMaskFormats.set(mask, format);
+        format = new Intl.DateTimeFormat(locale, LOCALIZED_DATE_MASKS[mask]);
+        dateMaskFormats.set(key, format);
     }
     return format;
 }
@@ -161,10 +186,10 @@ const parseDateText = value => {
     };
 };
 
-export function applyMask(value, type, mask) {
+export function applyMask(value, type, mask, context = null) {
     if (type === "number") {
         const fixed = /^decimal([1-4])$/.exec(mask);
-        if (fixed) return exactNumber(value, { minimum: +fixed[1], maximum: +fixed[1] });
+        if (fixed) return exactNumber(value, { minimum: +fixed[1], maximum: +fixed[1] }, context);
         const currency = /^currency:([A-Z]{3})$/.exec(mask);
         if (currency && Object.hasOwn(CURRENCY_DIGITS, currency[1])) {
             const digits = CURRENCY_DIGITS[currency[1]];
@@ -174,7 +199,7 @@ export function applyMask(value, type, mask) {
                     maximum: digits,
                     style: "currency",
                     currency: currency[1],
-                });
+                }, context);
             } catch (error) {
                 if (!(error instanceof RangeError)) throw error;
                 return null;
@@ -183,11 +208,11 @@ export function applyMask(value, type, mask) {
         const percent = /^percent([0-2])$/.exec(mask);
         if (percent) {
             const digits = +percent[1];
-            return exactNumber(value, { minimum: digits, maximum: digits, style: "percent", scale: 2 });
+            return exactNumber(value, { minimum: digits, maximum: digits, style: "percent", scale: 2 }, context);
         }
         switch (mask) {
-            case "integer": return exactNumber(value, { maximum: 0 });
-            case "plain": return exactNumber(value, { minimum: 2, maximum: 2, grouping: false });
+            case "integer": return exactNumber(value, { maximum: 0 }, context);
+            case "plain": return exactNumber(value, { minimum: 2, maximum: 2, grouping: false }, context);
         }
         return null;
     }
@@ -200,26 +225,27 @@ export function applyMask(value, type, mask) {
             case "datetime": return `${parsed.text} ${parsed.time}`;
             case "datetimeSeconds": return `${parsed.text} ${parsed.timeSeconds}`;
         }
-        if (Object.hasOwn(LOCALIZED_DATE_MASKS, mask)) return dateMaskFormat(mask).format(parsed.date);
+        if (Object.hasOwn(LOCALIZED_DATE_MASKS, mask))
+            return dateMaskFormat(resolveLocale(context), mask).format(parsed.date);
     }
     return null;
 }
 
 /// decimal: another value in this result column has a fractional component, so
 /// whole values still render consistently as decimals.
-export function formatValue(value, type, decimal = false, mask = null) {
+export function formatValue(value, type, decimal = false, mask = null, context = null) {
     if (value === null || value === undefined) return "";
     if (mask) {
-        const masked = applyMask(value, type, mask);
+        const masked = applyMask(value, type, mask, context);
         if (masked !== null) return masked;
     }
-    if (typeof value === "boolean") return value ? "true" : "false";
+    if (typeof value === "boolean") return translate(context, value ? "format.true" : "format.false");
     if (type === "number") {
         const number = parseReportNumber(value);
         if (number) {
             if (!decimal && number.mod(1).eq(0))
                 return number.toFixed(0);
-            return exactNumber(value, { minimum: 2, maximum: 2 });
+            return exactNumber(value, { minimum: 2, maximum: 2 }, context);
         }
     }
     if (type === "date") {
@@ -229,18 +255,18 @@ export function formatValue(value, type, decimal = false, mask = null) {
     return String(value);
 }
 
-export function formatAgg(value, type = "number", mask = null) {
+export function formatAgg(value, type = "number", mask = null, context = null) {
     if (value === null || value === undefined) return "—";
     if (mask) {
-        const masked = applyMask(value, type, mask);
+        const masked = applyMask(value, type, mask, context);
         if (masked !== null) return masked;
     }
-    if (type === "number") return exactNumber(value, { maximum: 2 }) ?? String(value);
-    return formatValue(value, type);
+    if (type === "number") return exactNumber(value, { maximum: 2 }, context) ?? String(value);
+    return formatValue(value, type, false, null, context);
 }
 
-export function formatInteger(value) {
-    return exactNumber(value, { maximum: 0 }) ?? String(value);
+export function formatInteger(value, context = null) {
+    return exactNumber(value, { maximum: 0 }, context) ?? String(value);
 }
 
 export const FN_LABELS = {
@@ -250,5 +276,11 @@ export const FN_LABELS = {
     // the expression re-evaluates over the totals grouping.
     total: "Total",
 };
+
+export function fnLabel(context, fn) {
+    const key = `aggregate.${fn}`;
+    const label = translate(context, key);
+    return label === key ? FN_LABELS[fn] ?? fn : label;
+}
 
 export const FN_ORDER = ["sum", "avg", "median", "min", "max", "count", "countDistinct", "total"];

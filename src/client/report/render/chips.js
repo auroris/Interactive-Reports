@@ -15,8 +15,9 @@
 // no edit, no remove.
 
 import { el, icon } from "../../core/dom.js";
+import { formatList } from "../../core/localization.js";
 import { featureEnabled, labelOf } from "../schema.js";
-import { FN_LABELS } from "./format.js";
+import { fnLabel } from "./format.js";
 import { chartSummary } from "./chart-view.js";
 import {
     activateTail,
@@ -31,7 +32,7 @@ import { filterDialog, computeDialog, highlightDialog } from "../dialogs/rules.j
 import { breakDialog, aggregateDialog } from "../dialogs/grid.js";
 import { openViewDialog } from "../dialogs/view.js";
 
-const MODE_LABELS = { groupBy: "Group by", pivot: "Pivot", chart: "Chart" };
+const modeLabel = (w, mode) => w.t(mode === "groupBy" ? "group.label" : `toolbar.${mode}`);
 
 function chipToggle(w, kind, index, on) {
     w.applyOrBanner(d => {
@@ -54,7 +55,10 @@ function chipRemove(w, kind, index) {
             const dropped = removeSourceComputedColumn(d, column);
             if (dropped.length) {
                 w.notify(
-                    `${dropped.map(m => MODE_LABELS[m] ?? m).join(" and ")} configuration removed — it depended on ${column}.`,
+                    w.t("chip.configurationRemoved", {
+                        modes: formatList(w, dropped.map(mode => modeLabel(w, mode))),
+                        column,
+                    }),
                     "warn");
             }
         }).catch(err => w.showError(err));
@@ -106,7 +110,7 @@ function chip({ w, kind, index, text, colLabel, off, toggleable = true, removabl
     if (toggleable) {
         node.append(el("input", {
             type: "checkbox", class: "ir-chip-check", checked: !off,
-            title: off ? "Enable" : "Disable",
+            title: w.t(off ? "common.enable" : "common.disable"),
             "aria-label": name,
             onchange: e => chipToggle(w, kind, index, e.target.checked),
         }));
@@ -114,7 +118,7 @@ function chip({ w, kind, index, text, colLabel, off, toggleable = true, removabl
     if (swatch) node.append(el("span", { class: "ir-chip-swatch", style: { background: swatch } }));
     const label = editable
         ? el("button", {
-            type: "button", class: "ir-chip-label", title: "Edit",
+            type: "button", class: "ir-chip-label", title: w.t("common.edit"),
             onclick: () => chipEdit(w, kind, index),
         })
         : el("span", { class: "ir-chip-label ir-chip-static" });
@@ -123,7 +127,7 @@ function chip({ w, kind, index, text, colLabel, off, toggleable = true, removabl
     node.append(label);
     if (removable) {
         node.append(el("button", {
-            type: "button", class: "ir-chip-x", "aria-label": `Remove ${name}`, title: "Remove",
+            type: "button", class: "ir-chip-x", "aria-label": w.t("chip.remove", { name }), title: w.t("common.remove"),
             onclick: () => chipRemove(w, kind, index),
         }, icon("close")));
     }
@@ -135,8 +139,8 @@ const highlightChip = (w, kind, lock) => ({ h, i, sequence }) => chip({
     // Preview whichever color the rule actually sets; the dialog's default
     // background is the last resort for legacy rules with no style at all.
     swatch: h.style?.bg ?? h.style?.fg ?? "#fff3cd",
-    colLabel: h.name ?? h.id ?? "Highlight",
-    text: `#${sequence} · ${h.expr}` + (h.scope === "cell" ? ` (${h.col} cell)` : " (row)"),
+    colLabel: h.name ?? h.id ?? w.t("highlight.label"),
+    text: `#${sequence} · ${h.expr} ${w.t(h.scope === "cell" ? "highlight.scopeCell" : "highlight.scopeRow", { column: h.col })}`,
     ...lock,
 });
 
@@ -148,7 +152,7 @@ const bySequence = rules => (rules ?? [])
 function tailSummary(w, mode) {
     if (mode === "chart") {
         const shape = stageOf(w.doc, "chart")?.shape;
-        return shape ? chartSummary(w, shape) : "Chart";
+        return shape ? chartSummary(w, shape) : w.t("toolbar.chart");
     }
     const group = stageOf(w.doc, "group")?.shape ?? {};
     if (mode === "groupBy")
@@ -157,7 +161,7 @@ function tailSummary(w, mode) {
     const colNames = (spread.cols ?? []).map(c => c.toLowerCase());
     const rows = (group.by ?? []).filter(c => !colNames.includes(c.toLowerCase()));
     return `${rows.map(c => labelOf(w, c)).join(", ")} × ${(spread.cols ?? []).map(c => labelOf(w, c)).join(", ")}`
-        + (spread.totals ? " · totals" : "");
+        + (spread.totals ? ` · ${w.t("pivot.totals")}` : "");
 }
 
 export function renderChips(w, container) {
@@ -170,14 +174,18 @@ export function renderChips(w, container) {
         : { toggleable: false, removable: false, editable: false };
 
     if (d.search) {
-        chips.push(chip({ w, kind: "search", index: 0, toggleable: false, colLabel: "Search", text: `'${d.search}'`, ...lock("search") }));
+        chips.push(chip({ w, kind: "search", index: 0, toggleable: false, colLabel: w.t("chip.search"), text: `“${d.search}”`, ...lock("search") }));
     }
     (layer.filters ?? []).forEach((f, i) =>
-        chips.push(chip({ w, kind: "filter", index: i, off: f.enabled === false, colLabel: "Filter", text: f.expr, ...lock("filter") })));
+        chips.push(chip({ w, kind: "filter", index: i, off: f.enabled === false, colLabel: w.t("filter.label"), text: f.expr, ...lock("filter") })));
     (layer.breaks ?? []).forEach((b, i) =>
-        chips.push(chip({ w, kind: "break", index: i, toggleable: false, colLabel: "Break", text: labelOf(w, b), ...lock("controlBreak") })));
+        chips.push(chip({ w, kind: "break", index: i, toggleable: false, colLabel: w.t("break.label"), text: labelOf(w, b), ...lock("controlBreak") })));
     (layer.aggregates ?? []).forEach((a, i) =>
-        chips.push(chip({ w, kind: "aggregate", index: i, toggleable: false, colLabel: "Σ", text: `${FN_LABELS[a.fn] ?? a.fn} of ${labelOf(w, a.col)}`, ...lock("aggregate") })));
+        chips.push(chip({
+            w, kind: "aggregate", index: i, toggleable: false, colLabel: "Σ",
+            text: w.t("aggregate.ofColumn", { function: fnLabel(w, a.fn), column: labelOf(w, a.col) }),
+            ...lock("aggregate"),
+        })));
     // Editing a source rule reopens its dialog, and the dialogs route to the
     // CURRENT stage's layer — so outside the grid, source computed/highlight
     // chips keep toggle and remove but drop edit (switch to grid to edit them).
@@ -195,7 +203,7 @@ export function renderChips(w, container) {
     const group = stageOf(d, "group");
     if (group && (mode === "groupBy" || mode === "pivot")) {
         (group.layer?.computed ?? []).forEach((c, i) =>
-            chips.push(chip({ w, kind: "stageComputed", index: i, off: c.enabled === false, colLabel: "ƒ view", text: c.label ?? c.id, ...lock("compute") })));
+            chips.push(chip({ w, kind: "stageComputed", index: i, off: c.enabled === false, colLabel: w.t("chip.stageComputed"), text: c.label ?? c.id, ...lock("compute") })));
         if (mode === "groupBy")
             bySequence(group.layer?.highlights).forEach(entry =>
                 chips.push(highlightChip(w, "stageHighlight", lock("highlight"))(entry)));
@@ -206,7 +214,7 @@ export function renderChips(w, container) {
         const viewLock = featureEnabled(w, mode) ? {} : { editable: false };
         chips.push(chip({
             w, kind: "view", index: 0, toggleable: false,
-            colLabel: MODE_LABELS[mode], text: tailSummary(w, mode), ...viewLock,
+            colLabel: modeLabel(w, mode), text: tailSummary(w, mode), ...viewLock,
         }));
     }
 

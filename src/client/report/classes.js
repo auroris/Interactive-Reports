@@ -1,10 +1,12 @@
 // Custom per-column class tokens. Report state may select application-defined rules,
 // but it cannot inject CSS and cannot opt into the component's reserved ir-* classes.
 
+import { translate } from "../core/localization.js";
+
 const TOKEN = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/;
 const MAX_CLASSES = 20;
 
-export function columnClasses(value, { strict = false } = {}) {
+export function columnClasses(value, { strict = false, context = null } = {}) {
     const source = Array.isArray(value)
         ? value
         : typeof value === "string" ? value.trim().split(/\s+/).filter(Boolean) : [];
@@ -14,15 +16,16 @@ export function columnClasses(value, { strict = false } = {}) {
         const token = typeof candidate === "string" ? candidate.trim() : "";
         const valid = TOKEN.test(token) && !token.toLowerCase().startsWith("ir-");
         if (!valid) {
-            if (strict) throw new Error(
-                `CSS class "${String(candidate)}" is invalid or reserved; start with a letter or _, then use letters, digits, _ or -, and do not start with ir-`);
+            if (strict) throw new Error(translate(context, "columns.invalidCssClass", {
+                name: String(candidate),
+            }));
             continue;
         }
         if (!classes.includes(token)) classes.push(token);
     }
 
     if (classes.length > MAX_CLASSES) {
-        if (strict) throw new Error(`Use at most ${MAX_CLASSES} CSS classes per column`);
+        if (strict) throw new Error(translate(context, "columns.tooManyCssClasses", { maximum: MAX_CLASSES }));
         return classes.slice(0, MAX_CLASSES);
     }
     return classes;

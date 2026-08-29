@@ -8,7 +8,7 @@ export async function exportCsv(w) {
         const { blob, filename, truncated } = await download(
             `${w.reportUrl("export")}?format=csv`, w.serialize());
         saveBlob(blob, filename ?? `${w.reportName}.csv`);
-        if (truncated) w.notify("Export truncated at the report's row cap.", "warn");
+        if (truncated) w.notify(w.t("report.exportTruncated"), "warn");
     } catch (err) {
         w.showError(err);
     }

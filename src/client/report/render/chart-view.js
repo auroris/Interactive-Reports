@@ -3,20 +3,24 @@
 // come from the lazily loaded chart bundle the widget hands in.
 
 import { el } from "../../core/dom.js";
+import { resolveLocale, translate } from "../../core/localization.js";
 import { labelOf } from "../schema.js";
 import { stageOf } from "../state.js";
-import { hasFraction, FN_LABELS } from "./format.js";
+import { fnLabel, hasFraction } from "./format.js";
 import { formatForColumn, renderTextValue } from "./column-renderers.js";
-
-const CHART_TYPE_LABELS = { bar: "Bar", line: "Line", area: "Line with Area", pie: "Pie" };
 
 /// "Sum of Amount by Status" — the chart's human name, shared by the view chip
 /// and the accessible description.
 export function chartSummary(w, view) {
-    const by = ` by ${labelOf(w, view.label)}`;
-    if (!view.fn) return labelOf(w, view.value) + by;
-    const fn = FN_LABELS[view.fn] ?? view.fn;
-    return view.value ? `${fn} of ${labelOf(w, view.value)}${by}` : fn + by;
+    const value = !view.fn
+        ? labelOf(w, view.value)
+        : view.value
+            ? translate(w, "aggregate.ofColumn", {
+                function: fnLabel(w, view.fn),
+                column: labelOf(w, view.value),
+            })
+            : fnLabel(w, view.fn);
+    return translate(w, "chart.by", { value, label: labelOf(w, view.label) });
 }
 
 /**
@@ -29,7 +33,7 @@ export function renderChartView(w, container, chartModule) {
     const result = w.lastResult;
     const view = stageOf(w.doc, "chart")?.shape ?? {};
     if (!result?.rows.length) {
-        container.replaceChildren(el("div", { class: "ir-chart-empty" }, "No data found."));
+        container.replaceChildren(el("div", { class: "ir-chart-empty" }, translate(w, "grid.noData")));
         return null;
     }
 
@@ -39,7 +43,7 @@ export function renderChartView(w, container, chartModule) {
     const labels = result.rows.map(r => {
         const value = r[labelCol.name];
         return value === null || value === undefined
-            ? "(blank)"
+            ? translate(w, "chart.blank")
             : renderTextValue(w, r, labelCol, hasFraction(value), labelFormat);
     });
     const values = result.rows.map(r => {
@@ -62,11 +66,14 @@ export function renderChartView(w, container, chartModule) {
     // The metric column is synthetic (v0/__count) when aggregated, so its server
     // label embeds the raw column label — rebuild it from the chart spec instead.
     const metricLabel = view.fn
-        ? (view.value ? `${view.fn}(${labelOf(w, view.value)})` : "Count")
+        ? (view.value ? `${view.fn}(${labelOf(w, view.value)})` : fnLabel(w, "count"))
         : labelOf(w, valueCol.formatSource ?? valueCol.name);
 
-    const description =
-        `${CHART_TYPE_LABELS[view.type] ?? "Chart"} chart of ${chartSummary(w, view)}. ${labels.length} data points.`;
+    const description = translate(w, "chart.description", {
+        type: ["bar", "line", "area", "pie"].includes(view.type) ? view.type : "other",
+        summary: chartSummary(w, view),
+        count: labels.length,
+    });
     const canvas = el("canvas", { class: "ir-chart-canvas", role: "img", "aria-label": description });
     const table = el("table", { class: "ir-table ir-chart-table" },
         el("thead", {}, el("tr", {},
@@ -79,7 +86,7 @@ export function renderChartView(w, container, chartModule) {
     container.replaceChildren(
         el("div", { class: "ir-chart-region" }, canvas),
         el("details", { class: "ir-chart-data" },
-            el("summary", {}, "View chart data"),
+            el("summary", {}, translate(w, "chart.viewData")),
             el("div", { class: "ir-tablewrap" }, table)));
 
     // No 2d context (headless/print environments): the description and data
@@ -95,5 +102,6 @@ export function renderChartView(w, container, chartModule) {
         metricLabel,
         labelAxisTitle: view.labelAxisTitle ?? null,
         valueAxisTitle: view.valueAxisTitle ?? null,
+        locale: resolveLocale(w),
     });
 }

@@ -50,7 +50,7 @@ function sourceColumn(w, name, fallback) {
 
 export function renderTextValue(w, row, col, decimal = false, format = null) {
     const effective = format ?? formatForColumn(w, col);
-    return formatValue(row[col.name], col.type, decimal, effective?.mask);
+    return formatValue(row[col.name], col.type, decimal, effective?.mask, w);
 }
 
 function linkTextValue(w, row, col, decimal, format) {

@@ -21,12 +21,12 @@ import { pickable, typeOf, chartFnsFor } from "../schema.js";
 import {
     aggregateRowList,
     colOptions,
-    DIR_OPTIONS,
+    dirOptions,
     fieldGroup,
     rowField,
     rowList,
 } from "./parts.js";
-import { FN_LABELS } from "../render/format.js";
+import { fnLabel } from "../render/format.js";
 
 /// Open the configuration dialog for a non-grid view mode. Toolbar switches and
 /// the view chip both land here.
@@ -41,15 +41,15 @@ export function openViewDialog(w, mode) {
 function dimList(w, initial, { addLabel, max }) {
     const container = el("div", {});
     const list = rowList(container, (initial ?? []).map(c => ({ col: c })), (row, item) => {
-        const colSel = sel(colOptions(w, { none: "— Select —" }), item?.col ?? "");
+        const colSel = sel(colOptions(w, { none: w.t("common.select") }), item?.col ?? "");
         row.append(rowField(addLabel, colSel));
         row._read = () => colSel.value || null;
-    }, { addLabel, max });
+    }, { addLabel, max, context: w });
     return { container, list };
 }
 
 function valueList(w, initial) {
-    return aggregateRowList(w, initial, { addLabel: "Value" });
+    return aggregateRowList(w, initial, { addLabel: w.t("common.value") });
 }
 
 /// Assign stable metric ids to the dialog's (col, fn) rows. A row that matches a
@@ -91,20 +91,20 @@ export function groupByDialog(w) {
     const existingTail = configuredTail(w.doc, "groupBy");
     const existingGroup = groupShape(existingTail);
     const shape = existingGroup?.shape ?? {};
-    const dims = dimList(w, shape.by, { addLabel: "Group Column", max: 3 });
+    const dims = dimList(w, shape.by, { addLabel: w.t("group.addColumn"), max: 3 });
     const values = valueList(w, shape.values);
 
     openDialog({
         owner: w,
-        title: "Group By",
+        title: w.t("group.title"),
         width: "30rem",
         build: body => body.append(
-            fieldGroup("Group by", dims.container, dims.list.addButton),
-            fieldGroup("Aggregate values", values.container, values.list.addButton),
-            el("p", { class: "ir-dialog-note" }, "A row count per group is always included.")),
+            fieldGroup(w.t("group.by"), dims.container, dims.list.addButton),
+            fieldGroup(w.t("aggregate.values"), values.container, values.list.addButton),
+            el("p", { class: "ir-dialog-note" }, w.t("group.countNote"))),
         onApply: () => {
             const by = [...new Set(dims.list.read())];
-            if (!by.length) throw new Error("Pick at least one group column");
+            if (!by.length) throw new Error(w.t("group.pickColumn"));
             const { values: withIds, retired } = assignMetricIds(values.list.read(), shape.values);
             const retiredDims = (shape.by ?? []).filter(old => !by.some(n => sameColumn(n, old)));
             return w.apply(d => {
@@ -125,26 +125,26 @@ export function pivotDialog(w) {
     const spreadCols = existingSpread?.shape?.cols ?? [];
     const rowDims = (shape.by ?? []).filter(n => !spreadCols.some(c => sameColumn(c, n)));
 
-    const rows = dimList(w, rowDims, { addLabel: "Row Column", max: 2 });
-    const cols = dimList(w, spreadCols, { addLabel: "Column", max: 2 });
+    const rows = dimList(w, rowDims, { addLabel: w.t("pivot.rowColumn"), max: 2 });
+    const cols = dimList(w, spreadCols, { addLabel: w.t("common.column"), max: 2 });
     const values = valueList(w, shape.values);
     const totalsInp = el("input", { type: "checkbox", checked: existingSpread?.shape?.totals === true });
 
     openDialog({
         owner: w,
-        title: "Pivot",
+        title: w.t("pivot.title"),
         width: "30rem",
         build: body => body.append(
-            fieldGroup("Rows", rows.container, rows.list.addButton),
-            fieldGroup("Columns (become headings)", cols.container, cols.list.addButton),
-            fieldGroup("Values", values.container, values.list.addButton),
-            el("label", { class: "ir-checkline ir-gap-above" }, totalsInp, "Show total rows"),
-            el("p", { class: "ir-dialog-note" }, "No values = a count per cell.")),
+            fieldGroup(w.t("pivot.rows"), rows.container, rows.list.addButton),
+            fieldGroup(w.t("pivot.columns"), cols.container, cols.list.addButton),
+            fieldGroup(w.t("pivot.values"), values.container, values.list.addButton),
+            el("label", { class: "ir-checkline ir-gap-above" }, totalsInp, w.t("pivot.showTotals")),
+            el("p", { class: "ir-dialog-note" }, w.t("pivot.countNote"))),
         onApply: () => {
             const rowNames = [...new Set(rows.list.read())];
             const colNames = [...new Set(cols.list.read())].filter(c => !rowNames.some(n => sameColumn(n, c)));
             if (!rowNames.length || !colNames.length)
-                throw new Error("Pick at least one row column and one distinct column heading");
+                throw new Error(w.t("pivot.pickDimensions"));
             const { values: withIds, retired } = assignMetricIds(values.list.read(), shape.values);
             const by = [...rowNames, ...colNames];
             const retiredDims = (shape.by ?? []).filter(old => !by.some(n => sameColumn(n, old)));
@@ -163,27 +163,25 @@ export function pivotDialog(w) {
 
 // --- Chart -------------------------------------------------------------------
 
-const CHART_TYPES = [
-    { value: "bar", label: "Bar" },
-    { value: "line", label: "Line" },
-    { value: "area", label: "Line with Area" },
-    { value: "pie", label: "Pie" },
-];
-
 export function chartDialog(w) {
     const existingTail = configuredTail(w.doc, "chart");
     const active = existingTail?.find(s => (s.shape?.kind ?? "") === "chart")?.shape;
     const chartable = pickable(w).filter(c => c.type !== "other");
 
-    const typeSel = sel(CHART_TYPES, active?.type ?? "bar");
+    const typeSel = sel([
+        { value: "bar", label: w.t("chart.bar") },
+        { value: "line", label: w.t("chart.line") },
+        { value: "area", label: w.t("chart.area") },
+        { value: "pie", label: w.t("chart.pie") },
+    ], active?.type ?? "bar");
     typeSel.classList.add("ir-chart-type");
     const labelSel = sel([
-        { value: "", label: "— Select —" },
+        { value: "", label: w.t("common.select") },
         ...chartable.map(c => ({ value: c.name, label: c.computed ? `ƒ ${c.label}` : c.label })),
     ], active?.label ?? "");
     labelSel.required = true;
     const valueSel = sel([
-        { value: "", label: "— Row Count —" },
+        { value: "", label: w.t("chart.rowCount") },
         ...pickable(w).map(c => ({ value: c.name, label: c.computed ? `ƒ ${c.label}` : c.label })),
     ], active?.value ?? "");
 
@@ -194,11 +192,11 @@ export function chartDialog(w) {
     const refreshFns = keep => {
         const options = [];
         if (!valueSel.value) {
-            options.push({ value: "count", label: FN_LABELS.count });
+            options.push({ value: "count", label: fnLabel(w, "count") });
         } else {
             const type = typeOf(w, valueSel.value);
-            options.push(...chartFnsFor(w, type).map(f => ({ value: f, label: FN_LABELS[f] ?? f })));
-            if (type === "number") options.push({ value: "", label: "— Each Row —" });
+            options.push(...chartFnsFor(w, type).map(f => ({ value: f, label: fnLabel(w, f) })));
+            if (type === "number") options.push({ value: "", label: w.t("chart.eachRow") });
         }
         fnSel.replaceChildren(...options.map(o => new Option(o.label, o.value)));
         if (keep !== undefined && [...fnSel.options].some(o => o.value === keep)) fnSel.value = keep;
@@ -207,41 +205,44 @@ export function chartDialog(w) {
     refreshFns(active ? (active.fn ?? "") : undefined);
 
     const orientSel = sel([
-        { value: "vertical", label: "Vertical" },
-        { value: "horizontal", label: "Horizontal" },
+        { value: "vertical", label: w.t("chart.vertical") },
+        { value: "horizontal", label: w.t("chart.horizontal") },
     ], active?.orientation ?? "vertical");
-    const sortBySel = sel([{ value: "label", label: "Label" }, { value: "value", label: "Value" }], active?.sort?.by ?? "label");
-    const sortDirSel = sel(DIR_OPTIONS, active?.sort?.dir ?? "asc");
+    const sortBySel = sel([
+        { value: "label", label: w.t("chart.sortByLabel") },
+        { value: "value", label: w.t("chart.sortByValue") },
+    ], active?.sort?.by ?? "label");
+    const sortDirSel = sel(dirOptions(w), active?.sort?.dir ?? "asc");
 
-    const labelTitleInp = el("input", { class: "ir-input", type: "text", value: active?.labelAxisTitle ?? "", placeholder: "Optional" });
-    const valueTitleInp = el("input", { class: "ir-input", type: "text", value: active?.valueAxisTitle ?? "", placeholder: "Optional" });
+    const labelTitleInp = el("input", { class: "ir-input", type: "text", value: active?.labelAxisTitle ?? "", placeholder: w.t("common.optional") });
+    const valueTitleInp = el("input", { class: "ir-input", type: "text", value: active?.valueAxisTitle ?? "", placeholder: w.t("common.optional") });
 
-    const orientField = labeled("Orientation", orientSel);
-    const labelTitleField = labeled("Label Axis Title", labelTitleInp);
-    const valueTitleField = labeled("Value Axis Title", valueTitleInp);
+    const orientField = labeled(w.t("chart.orientation"), orientSel);
+    const labelTitleField = labeled(w.t("chart.labelAxisTitle"), labelTitleInp);
+    const valueTitleField = labeled(w.t("chart.valueAxisTitle"), valueTitleInp);
     for (const field of [orientField, labelTitleField, valueTitleField])
         field.classList.add("ir-non-pie");
 
     openDialog({
         owner: w,
-        title: "Chart",
+        title: w.t("chart.title"),
         width: "30rem",
         build: body => body.append(
-            labeled("Chart Type", typeSel),
-            labeled("Label", labelSel),
-            fieldGroup("Value",
+            labeled(w.t("chart.type"), typeSel),
+            labeled(w.t("common.label"), labelSel),
+            fieldGroup(w.t("common.value"),
                 el("div", { class: "ir-dlgrow ir-chart-valuerow" },
-                    rowField("Function", fnSel),
-                    el("span", { class: "ir-row-of", "aria-hidden": "true" }, "of"),
-                    rowField("Column", valueSel))),
+                    rowField(w.t("common.function"), fnSel),
+                    el("span", { class: "ir-row-of", "aria-hidden": "true" }, w.t("common.of")),
+                    rowField(w.t("common.column"), valueSel))),
             orientField,
-            fieldGroup("Sort",
+            fieldGroup(w.t("chart.sort"),
                 el("div", { class: "ir-dlgrow" },
-                    rowField("By", sortBySel), rowField("Direction", sortDirSel))),
+                    rowField(w.t("common.by"), sortBySel), rowField(w.t("common.direction"), sortDirSel))),
             labelTitleField,
             valueTitleField,
             el("p", { class: "ir-dialog-note" },
-                "The chart draws the whole filtered result — never just the visible page — up to the report's point limit.")),
+                w.t("chart.note"))),
         onApply: () => {
             const shape = {
                 kind: "chart",
