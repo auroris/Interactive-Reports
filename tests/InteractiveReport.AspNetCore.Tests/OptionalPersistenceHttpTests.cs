@@ -58,7 +58,8 @@ public sealed class OptionalPersistenceHttpTests
             await AssertStorageFailure(administration);
 
             using var directory = await host.Client.GetAsync("/api/reports/admin/users");
-            await AssertStorageFailure(directory);
+            Assert.Equal(HttpStatusCode.OK, directory.StatusCode);
+            Assert.Equal(0, (await ReadJson(directory)).GetArrayLength());
 
             Assert.False(Directory.Exists(Path.Combine(tempRoot, "App_Data")));
             Assert.Equal(

@@ -11,10 +11,37 @@ public interface ISavedReportStore
     Task<SavedReport?> Get(string id, CancellationToken ct = default);
 
     /// <summary>
+    /// Reads only authorization and presentation metadata. Implementations should
+    /// avoid fetching the state document; the default preserves compatibility for
+    /// custom stores that have not added a projection yet.
+    /// </summary>
+    async Task<SavedReportMetadata?> GetMetadata(string id, CancellationToken ct = default)
+        => (await Get(id, ct))?.Metadata();
+
+    /// <summary>
     /// Saved reports for one report definition visible to an identity: primary and
     /// global ones plus their own.
     /// </summary>
     Task<IReadOnlyList<SavedReport>> ListVisible(string reportName, string? identity, CancellationToken ct = default);
+
+    /// <summary>Metadata-only counterpart to <see cref="ListVisible"/>.</summary>
+    async Task<IReadOnlyList<SavedReportMetadata>> ListVisibleMetadata(
+        string reportName,
+        string? identity,
+        CancellationToken ct = default)
+        => (await ListVisible(reportName, identity, ct)).Select(report => report.Metadata()).ToList();
+
+    /// <summary>
+    /// The primary report titled Default that overrides a configured definition.
+    /// User-origin rows win an externally introduced configured-title collision.
+    /// </summary>
+    async Task<SavedReport?> FindPrimaryDefault(string reportName, CancellationToken ct = default)
+        => (await ListVisible(reportName, identity: null, ct))
+            .Where(report => report.IsPrimary
+                && string.Equals(report.Title, "Default", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(report => report.Origin == SavedReportOrigin.User ? 0 : 1)
+            .ThenByDescending(report => report.ModifiedUtc)
+            .FirstOrDefault();
 
     /// <summary>
     /// Finds a title collision within one already-authorized report definition. The
@@ -86,7 +113,28 @@ public sealed record SavedReport
     public SavedReportOrigin Origin { get; set; } = SavedReportOrigin.User;
 
     public static string NewId() => Guid.NewGuid().ToString("n");
+
+    public SavedReportMetadata Metadata() => new(
+        Id,
+        ReportName,
+        Title,
+        Owner,
+        IsGlobal,
+        IsPrimary,
+        ModifiedUtc,
+        Origin);
 }
+
+/// <summary>Saved-report fields needed for access checks and summaries, without state JSON.</summary>
+public sealed record SavedReportMetadata(
+    string Id,
+    string ReportName,
+    string Title,
+    string? Owner,
+    bool IsGlobal,
+    bool IsPrimary,
+    DateTime ModifiedUtc,
+    SavedReportOrigin Origin);
 
 /// <summary>Storage configuration; connection is a named IReportConnectionFactory entry.</summary>
 public sealed partial record SavedReportStoreConfig(

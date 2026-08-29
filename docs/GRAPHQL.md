@@ -25,6 +25,10 @@ The path defaults to `/graphql` and can be changed. The mapping supports HTTP GE
 POST queries. It disables mutations, batched requests, form posts, subscriptions, and
 WebSockets. The package does not bundle a GraphQL IDE.
 
+The Workbench adds the separate `GraphQL.Server.Ui.GraphiQL` package and serves its
+browser IDE at `/graphiql` in Development. Keeping the tool in the host avoids adding
+UI middleware to applications that only need the transport.
+
 `MapInteractiveReportGraphQL` returns an `IEndpointConventionBuilder`, so standard
 ASP.NET Core conventions remain available:
 

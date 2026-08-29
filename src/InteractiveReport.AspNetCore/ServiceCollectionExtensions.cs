@@ -54,6 +54,7 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<ConfiguredReportDocumentSynchronizer>(),
             sp.GetRequiredService<ISavedReportStore>()));
         services.AddSingleton<ReportExecutor>();
+        services.AddSingleton<IReportAccessService, ReportAccessService>();
         services.TryAddSingleton<IContextParameterResolver, ClaimContextParameterResolver>();
 
         services.AddSingleton<ISavedReportStore>(sp => new SqlSavedReportStore(

@@ -18,6 +18,18 @@
         header a:hover { color: #fff; text-decoration: underline; }
         #identity { background: rgba(255,255,255,.12); border-radius: 1em; padding: .15rem .7rem; font-size: .75rem; }
         main { max-width: 72rem; margin: 1.25rem auto; padding: 0 1rem; }
+        .workbench-links {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+            gap: .65rem; margin: 0 0 1rem;
+        }
+        .workbench-links a {
+            display: flex; flex-direction: column; gap: .2rem; min-width: 0;
+            padding: .7rem .8rem; border: 1px solid #cdd6df; border-radius: .4rem;
+            background: #fff; color: #174e78; text-decoration: none;
+        }
+        .workbench-links a:hover { border-color: #6794b8; background: #f7fbff; }
+        .workbench-links strong { font-size: .82rem; }
+        .workbench-links small { color: #5c6975; font-size: .7rem; line-height: 1.3; }
         .build-warning {
             max-width: 44rem; margin: 3rem auto; padding: 1rem 1.25rem;
             background: #fff8e1; border: 1px solid #e3c86d; border-radius: .4rem;
@@ -32,12 +44,46 @@
         <h1>InteractiveReport Workbench</h1>
         <div class="links">
             <span id="identity"></span>
-            <a href="/api/reports/orders/view">Packaged page</a>
-            <a href="/admin.html">Saved-report admin</a>
+            <a href="#workbench-links">Tools &amp; endpoints</a>
         </div>
     </header>
 
     <main>
+        <nav id="workbench-links" class="workbench-links" aria-label="Workbench tools and endpoints">
+            <a href="/api/reports/orders/view">
+                <strong>Packaged viewer</strong>
+                <small>Standalone report page shipped by the server package</small>
+            </a>
+            <a href="/admin.html">
+                <strong>Host administration</strong>
+                <small>Workbench page hosting the saved-report administration element</small>
+            </a>
+            <a href="/api/reports/admin">
+                <strong>Packaged administration</strong>
+                <small>Standalone administration page shipped by the server package</small>
+            </a>
+            <a href="/swagger">
+                <strong>Swagger UI</strong>
+                <small>Browse and execute the documented REST API</small>
+            </a>
+            <a href="/swagger/v1/swagger.json">
+                <strong>OpenAPI document</strong>
+                <small>Raw generated OpenAPI JSON</small>
+            </a>
+            <a href="/graphiql">
+                <strong>GraphiQL</strong>
+                <small>Explore the schema and execute saved-report queries</small>
+            </a>
+            <a href="/api/reports/whoami">
+                <strong>Who am I?</strong>
+                <small>Identity and authorization bootstrap diagnostics</small>
+            </a>
+            <a href="/api/reports/orders/schema">
+                <strong>Orders schema</strong>
+                <small>Raw schema, capabilities, features, and limits JSON</small>
+            </a>
+        </nav>
+
         <interactive-report report="orders" api-base="/api/reports">
             <p class="build-warning">
                 You're seeing this message because you forgot to run

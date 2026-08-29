@@ -83,7 +83,7 @@ public sealed class InteractiveReportUserProviderHttpTests
         host.State.Users =
         [
             new InteractiveReportUser("First", "same-id"),
-            new InteractiveReportUser("Second", "SAME-ID"),
+            new InteractiveReportUser("Second", " same-id "),
         ];
 
         using var response = await host.Client.SendAsync(Request("configured-admin"));

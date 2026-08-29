@@ -20,7 +20,8 @@ public sealed class SavedReportAccessPolicyTests
     [Theory]
     [InlineData(false, null, false, (int)SavedReportAccess.Hidden)]
     [InlineData(false, "other", false, (int)SavedReportAccess.Hidden)]
-    [InlineData(false, "OWNER", false, (int)SavedReportAccess.Allowed)]
+    [InlineData(false, "OWNER", false, (int)SavedReportAccess.Hidden)]
+    [InlineData(false, "owner", false, (int)SavedReportAccess.Allowed)]
     [InlineData(true, "owner", false, (int)SavedReportAccess.Allowed)]
     [InlineData(true, "other", true, (int)SavedReportAccess.Allowed)]
     public void Modify_encodes_ownership_and_global_matrix(

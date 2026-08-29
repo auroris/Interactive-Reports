@@ -99,8 +99,8 @@ public sealed class ReportDefinition
     public List<string>? Features { get; set; }
 
     /// <summary>
-    /// Hard export cap and upper bound for numeric page-size configuration. The
-    /// explicit All page choice is deliberately unbounded.
+    /// Hard row cap for unpaged grid/group queries and exports, and an upper bound
+    /// for numeric page-size configuration. Zero or a negative value means unlimited.
     /// </summary>
     public int MaxRows { get; set; } = 100_000;
 

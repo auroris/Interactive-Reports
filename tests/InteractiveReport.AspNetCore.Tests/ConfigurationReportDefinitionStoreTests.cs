@@ -373,12 +373,45 @@ public sealed class ConfigurationReportDefinitionStoreTests
             })));
         Assert.Contains("users cannot be combined with administratorsOnly", administrators.Message);
 
+        ConfigurationReportDefinitionStore.Validate(Definition(new ReportAuthorization
+        {
+            Users = ["alice", "ALICE"],
+        }));
+
         var duplicates = Assert.Throws<InvalidOperationException>(() =>
             ConfigurationReportDefinitionStore.Validate(Definition(new ReportAuthorization
             {
-                Users = ["alice", " ALICE "],
+                Users = ["alice", " alice "],
             })));
         Assert.Contains("duplicate identity", duplicates.Message);
+
+        var policyWithAnonymous = Assert.Throws<InvalidOperationException>(() =>
+            ConfigurationReportDefinitionStore.Validate(Definition(new ReportAuthorization
+            {
+                AllowAnonymous = true,
+                Policy = "CanQuery",
+            })));
+        Assert.Contains("policy cannot be combined with allowAnonymous", policyWithAnonymous.Message);
+
+        var blankPolicy = Assert.Throws<InvalidOperationException>(() =>
+            ConfigurationReportDefinitionStore.Validate(Definition(new ReportAuthorization
+            {
+                Policy = " ",
+            })));
+        Assert.Contains("policy must be non-empty", blankPolicy.Message);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Nonpositive_max_rows_is_valid_and_does_not_constrain_page_size(int maxRows)
+    {
+        var definition = OrdersDefinition();
+        definition.Name = "orders";
+        definition.MaxRows = maxRows;
+        definition.MaxPageSize = 1000;
+
+        ConfigurationReportDefinitionStore.Validate(definition);
     }
 
     [Fact]

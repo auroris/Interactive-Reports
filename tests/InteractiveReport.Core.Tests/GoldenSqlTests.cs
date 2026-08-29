@@ -95,13 +95,16 @@ public class GoldenSqlTests
     }
 
     [Fact]
-    public void All_rows_omits_limit_and_offset_from_the_grid_query()
+    public void All_rows_omits_limit_and_offset_when_max_rows_is_unlimited()
     {
         var state = Doc(
             source: new StageLayer { Sorts = [new SortRule { Col = "ORDER_ID" }] },
             page: new PageRequest { Index = 7, Size = 0 });
-
-        var (page, _) = Compile(ReportDialect.Sqlite, state);
+        var def = OrdersDefinition(ReportDialect.Sqlite);
+        def.MaxRows = 0;
+        var validated = StateValidator.Validate(def, state, OrdersSchema);
+        var composed = QueryComposer.Compose(def, validated);
+        var page = DialectSupport.GetCompiler(ReportDialect.Sqlite).Compile(composed.Page);
 
         Assert.DoesNotContain("LIMIT", page.Sql, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("OFFSET", page.Sql, StringComparison.OrdinalIgnoreCase);
@@ -535,9 +538,10 @@ public class GoldenSqlTests
     }
 
     [Fact]
-    public void All_groups_omits_limit_and_offset_from_the_group_query()
+    public void All_groups_omits_limit_and_offset_when_max_rows_is_unlimited()
     {
         var def = OrdersDefinition(ReportDialect.Sqlite);
+        def.MaxRows = 0;
         var validated = StateValidator.Validate(def, Doc(
             tail: [Group(by: ["REGION"])],
             page: new PageRequest { Index = 7, Size = 0 }), OrdersSchema);

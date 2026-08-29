@@ -89,14 +89,7 @@ public sealed partial class ConfigurationReportDefinitionStore :
             && ReportConnectionRegistry.IsStoreConfigured(_options.CurrentValue.SavedReports))
         {
             await _synchronizer.EnsureSynced(ct);
-            var defaultPrimary = (await _savedReports.ListVisible(snapshot.Name, identity: null, ct: ct))
-                .Where(report => report.IsPrimary
-                    && string.Equals(report.Title, "Default", StringComparison.OrdinalIgnoreCase))
-                // A database-authored report wins if a configured title collision was
-                // introduced outside the normal endpoint uniqueness checks.
-                .OrderBy(report => report.Origin == SavedReportOrigin.User ? 0 : 1)
-                .ThenByDescending(report => report.ModifiedUtc)
-                .FirstOrDefault();
+            var defaultPrimary = await _savedReports.FindPrimaryDefault(snapshot.Name, ct);
             if (defaultPrimary is not null)
             {
                 try
@@ -202,6 +195,13 @@ public sealed partial class ConfigurationReportDefinitionStore :
             throw new InvalidOperationException(
                 $"Report '{def.Name}': this name is shadowed by a built-in endpoint route and would be "
                 + $"unreachable — reserved names are {string.Join(", ", ReservedRouteNames)}.");
+        if (def.Authorization?.Policy is not null
+            && string.IsNullOrWhiteSpace(def.Authorization.Policy))
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': authorization policy must be non-empty when specified.");
+        if (def.Authorization is { AllowAnonymous: true, Policy: not null })
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': authorization policy cannot be combined with allowAnonymous.");
         if (def.Authorization is { AllowAnonymous: true, AdministratorsOnly: true })
             throw new InvalidOperationException(
                 $"Report '{def.Name}': authorization cannot be both allowAnonymous and administratorsOnly.");
@@ -226,7 +226,7 @@ public sealed partial class ConfigurationReportDefinitionStore :
                 throw new InvalidOperationException(
                     $"Report '{def.Name}': authorization users must be non-empty identity values.");
             if (reportAuthorization.Users.Select(user => user.Trim())
-                .Distinct(StringComparer.OrdinalIgnoreCase).Count() != reportAuthorization.Users.Count)
+                .Distinct(StringComparer.Ordinal).Count() != reportAuthorization.Users.Count)
                 throw new InvalidOperationException(
                     $"Report '{def.Name}': authorization users contain duplicate identity values.");
         }
@@ -249,15 +249,12 @@ public sealed partial class ConfigurationReportDefinitionStore :
             throw new InvalidOperationException(
                 $"Report '{def.Name}': connection names beginning with '__ir:' are reserved.");
 
-        if (def.MaxRows is < 1 or int.MaxValue)
-            throw new InvalidOperationException(
-                $"Report '{def.Name}': maxRows must be between 1 and {int.MaxValue - 1}.");
         if (def.MaxPageSize < 1)
             throw new InvalidOperationException($"Report '{def.Name}': maxPageSize must be at least 1.");
         if (def.DefaultPageSize < 1 || def.DefaultPageSize > def.MaxPageSize)
             throw new InvalidOperationException(
                 $"Report '{def.Name}': defaultPageSize must be between 1 and maxPageSize ({def.MaxPageSize}).");
-        if (def.MaxPageSize > def.MaxRows)
+        if (def.MaxRows > 0 && def.MaxPageSize > def.MaxRows)
             throw new InvalidOperationException(
                 $"Report '{def.Name}': maxPageSize ({def.MaxPageSize}) must not exceed maxRows ({def.MaxRows}).");
         if (def.MaxPivotColumns < 1 || def.MaxPivotColumns > ReportExecutor.MaxPivotGroups)

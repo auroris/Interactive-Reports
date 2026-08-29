@@ -52,6 +52,10 @@ public static class QueryComposer
             if (state.Breaks.Count > 0 && state.PageSize < int.MaxValue)
                 page.Limit(state.PageSize + 1);
         }
+        else if (def.MaxRows > 0)
+        {
+            page.Limit(def.MaxRows);
+        }
 
         return new ComposedQueries(page, count, aggregates, breakTotals);
     }
@@ -101,6 +105,8 @@ public static class QueryComposer
         var page = BuildGroupStagePage(core, state, def.GetEffectiveDialect());
         if (!state.PageAll)
             page.ForPage(state.PageIndex, state.PageSize);
+        else if (def.MaxRows > 0)
+            page.Limit(def.MaxRows);
 
         var dimNames = state.View.GroupBy.Select(d => d.Name).ToArray();
         var groups = core.Clone().Select(dimNames).GroupBy(dimNames);
@@ -109,11 +115,12 @@ public static class QueryComposer
         return (page, count);
     }
 
-    /// <summary>Group stage for export: all groups, capped for truncation detection.</summary>
+    /// <summary>Group-stage export, with a sentinel row when a positive cap applies.</summary>
     public static Query ComposeGroupStageExport(ReportDefinition def, ValidatedState state, int maxRows)
     {
         var core = BuildFilteredCore(def, state);
-        return BuildGroupStagePage(core, state, def.GetEffectiveDialect()).Limit(maxRows + 1);
+        return LimitForExport(
+            BuildGroupStagePage(core, state, def.GetEffectiveDialect()), maxRows);
     }
 
     /// <summary>
@@ -325,7 +332,13 @@ public static class QueryComposer
         var q = core.Clone().Select(state.ProjectionColumns.Select(c => c.Name).ToArray());
         foreach (var sort in EffectiveSorts(state))
             ApplySort(q, sort, def.GetEffectiveDialect());
-        return q.Limit(maxRows + 1);
+        return LimitForExport(q, maxRows);
+    }
+
+    private static Query LimitForExport(Query query, int maxRows)
+    {
+        if (maxRows <= 0) return query;
+        return query.Limit(maxRows == int.MaxValue ? int.MaxValue : maxRows + 1);
     }
 
     /// <summary>

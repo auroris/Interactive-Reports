@@ -36,11 +36,12 @@ public class ReportIdentityTests
     }
 
     [Fact]
-    public void Administrator_match_is_case_insensitive_exact()
+    public void Administrator_match_is_ordinal_exact()
     {
         var user = User((ClaimTypes.NameIdentifier, "Steph@Example.com"));
 
-        Assert.True(ReportIdentity.IsAdministrator(user, null, ["steph@example.com"]));
+        Assert.True(ReportIdentity.IsAdministrator(user, null, [" Steph@Example.com "]));
+        Assert.False(ReportIdentity.IsAdministrator(user, null, ["steph@example.com"]));
         Assert.False(ReportIdentity.IsAdministrator(user, null, ["steph"]));
         Assert.False(ReportIdentity.IsAdministrator(user, null, []));
         Assert.False(ReportIdentity.IsAdministrator(null, null, ["steph@example.com"]));

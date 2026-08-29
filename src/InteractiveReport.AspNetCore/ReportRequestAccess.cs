@@ -12,17 +12,177 @@ using Microsoft.Extensions.Options;
 namespace InteractiveReport.AspNetCore;
 
 /// <summary>
-/// Applies report-level authorization and resolves trusted request context before an
-/// endpoint enters the report engine.
+/// One endpoint-facing authorization request. The service resolves the lightweight
+/// authorization envelope, applies the definition gate, hydrates the executable
+/// definition only after that succeeds, and finally evaluates the requested actions.
 /// </summary>
-internal static class ReportRequestAccess
+public sealed record ReportAccessRequest
 {
+    public required string ReportName { get; init; }
+    public required IReadOnlyCollection<InteractiveReportAction> Actions { get; init; }
+    public InteractiveReportAuthorizationResource? Resource { get; init; }
+    public Func<ReportDefinition, CancellationToken, Task<ReportAccessResourcePreparation>>?
+        PrepareResource { get; init; }
+    public Func<InteractiveReportAuthorizationResource, IEnumerable<InteractiveReportAction>>?
+        AdditionalAdministratorActions { get; init; }
+    public bool AdministratorRequired { get; init; }
+    public bool HideDenied { get; init; }
+    public string? DenialDetail { get; init; }
+}
+
+/// <summary>
+/// Deferred endpoint input needed by resource-based authorization. It runs only after
+/// the report-level gate and executable-definition hydration have succeeded.
+/// </summary>
+public sealed record ReportAccessResourcePreparation(
+    InteractiveReportAuthorizationResource? Resource,
+    IResult? Error = null);
+
+/// <summary>The authorized executable definition, or the HTTP result denying access.</summary>
+public sealed record ReportAccessResult(ReportDefinition? Definition, IResult? Error);
+
+/// <summary>
+/// Authorization for a protected Interactive Reports endpoint that does not require a
+/// report definition, such as authorization administration or user-directory lookup.
+/// </summary>
+public sealed record EndpointAccessRequest
+{
+    public required IReadOnlyCollection<InteractiveReportAction> Actions { get; init; }
+    public required InteractiveReportAuthorizationResource Resource { get; init; }
+    public bool AdministratorRequired { get; init; }
+    public bool HideDenied { get; init; }
+    public string? DenialDetail { get; init; }
+}
+
+/// <summary>
+/// Central access boundary for protected Interactive Reports transports. Endpoints make
+/// one authorization call before protected execution, persistence, or provider work.
+/// Host decision code plugs into this boundary through
+/// <c>InteractiveReportBuilder.UseAuthorization</c> or
+/// <c>InteractiveReportBuilder.UseAspNetCoreAuthorization</c>; host-owned endpoints can
+/// resolve this service to apply the same report access contract.
+/// </summary>
+public interface IReportAccessService
+{
+    Task<ReportAccessResult> Authorize(
+        ReportAccessRequest request,
+        HttpContext context,
+        CancellationToken ct = default);
+
+    Task<IResult?> AuthorizeEndpoint(
+        EndpointAccessRequest request,
+        HttpContext context,
+        CancellationToken ct = default);
+
+    IResult? RequireFeature(ReportDefinition definition, string feature);
+
+    Task<bool> MayRequestAdministration(HttpContext context, CancellationToken ct = default);
+
+    Task<IReadOnlyDictionary<string, object?>> ResolveContextParameters(
+        ReportDefinition definition,
+        HttpContext context,
+        CancellationToken ct = default);
+}
+
+internal sealed class ReportAccessService : IReportAccessService
+{
+    public async Task<ReportAccessResult> Authorize(
+        ReportAccessRequest request,
+        HttpContext context,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(context);
+        if (request.Actions.Count == 0)
+            throw new ArgumentException("At least one authorization action is required.", nameof(request));
+
+        var store = context.RequestServices.GetRequiredService<IReportDefinitionStore>();
+        var (definition, resolutionError) = await ResolveDefinition(
+            store, request.ReportName, context, ct);
+        if (resolutionError is not null)
+            return new ReportAccessResult(null, resolutionError);
+        if (definition is null)
+            return new ReportAccessResult(null, Results.NotFound());
+
+        var suppliedResource = request.Resource;
+        if (request.PrepareResource is not null)
+        {
+            var prepared = await request.PrepareResource(definition, ct);
+            if (prepared.Error is not null)
+                return new ReportAccessResult(null, prepared.Error);
+            suppliedResource = prepared.Resource;
+        }
+
+        var resource = suppliedResource is null
+            ? new InteractiveReportAuthorizationResource { ReportName = definition.Name }
+            : suppliedResource with { ReportName = definition.Name };
+        var denied = await AuthorizeOperations(
+            context,
+            request.Actions,
+            resource,
+            request.AdministratorRequired
+                || definition.Authorization?.AdministratorsOnly == true,
+            request.HideDenied || definition.Authorization?.AdministratorsOnly == true,
+            request.DenialDetail,
+            ct);
+        if (denied is not null)
+            return new ReportAccessResult(null, denied);
+
+        if (request.AdditionalAdministratorActions is not null)
+        {
+            var authorized = request.Actions.ToHashSet();
+            while (true)
+            {
+                var next = request.AdditionalAdministratorActions(resource)
+                    .Where(action => !authorized.Contains(action))
+                    .Select(action => (InteractiveReportAction?)action)
+                    .FirstOrDefault();
+                if (!next.HasValue) break;
+
+                denied = await AuthorizeOperations(
+                    context,
+                    [next.Value],
+                    resource,
+                    administratorRequired: true,
+                    hideDenied: request.HideDenied
+                        || definition.Authorization?.AdministratorsOnly == true,
+                    denialDetail: request.DenialDetail,
+                    ct: ct);
+                if (denied is not null)
+                    return new ReportAccessResult(null, denied);
+                authorized.Add(next.Value);
+            }
+        }
+
+        return new ReportAccessResult(definition, null);
+    }
+
+    public Task<IResult?> AuthorizeEndpoint(
+        EndpointAccessRequest request,
+        HttpContext context,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(context);
+        if (request.Actions.Count == 0)
+            throw new ArgumentException("At least one authorization action is required.", nameof(request));
+
+        return AuthorizeOperations(
+            context,
+            request.Actions,
+            request.Resource,
+            request.AdministratorRequired,
+            request.HideDenied,
+            request.DenialDetail,
+            ct);
+    }
+
     /// <summary>
     /// Resolves and authorizes one report definition. Stores that implement the
     /// lightweight authorization interface are gated before the executable definition
     /// is validated, connected, or hydrated from saved-report storage.
     /// </summary>
-    public static async Task<(ReportDefinition? Definition, IResult? Error)> ResolveDefinition(
+    private static async Task<(ReportDefinition? Definition, IResult? Error)> ResolveDefinition(
         IReportDefinitionStore store,
         string name,
         HttpContext context,
@@ -46,8 +206,20 @@ internal static class ReportRequestAccess
             }
 
             if (authorization is null) return (null, null);
-            if (await AuthorizeDefinition(authorization, context) is { } denied)
-                return (null, denied);
+            try
+            {
+                if (await AuthorizeDefinition(authorization, context, ct) is { } denied)
+                    return (null, denied);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                return (null, AuthorizationFailure(
+                    context, authorization.Name, "definition authorization", ex));
+            }
         }
 
         ReportDefinition? definition;
@@ -69,8 +241,20 @@ internal static class ReportRequestAccess
             || !string.Equals(authorization.Name, definition.Name, StringComparison.OrdinalIgnoreCase)
             || !AuthorizationEquivalent(authorization.Authorization, definition.Authorization))
         {
-            if (await AuthorizeDefinition(definition, context) is { } denied)
-                return (null, denied);
+            try
+            {
+                if (await AuthorizeDefinition(definition, context, ct) is { } denied)
+                    return (null, denied);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                return (null, AuthorizationFailure(
+                    context, definition.Name, "definition authorization", ex));
+            }
         }
 
         return (definition, null);
@@ -83,14 +267,17 @@ internal static class ReportRequestAccess
     /// </summary>
     private static async Task<IResult?> AuthorizeDefinition(
         ReportDefinition definition,
-        HttpContext context)
+        HttpContext context,
+        CancellationToken ct)
         => await AuthorizeDefinition(
             new ReportDefinitionAuthorization(definition.Name, definition.Authorization),
-            context);
+            context,
+            ct);
 
     private static async Task<IResult?> AuthorizeDefinition(
         ReportDefinitionAuthorization definition,
-        HttpContext context)
+        HttpContext context,
+        CancellationToken ct)
     {
         var authorization = definition.Authorization;
         var options = context.RequestServices
@@ -100,7 +287,7 @@ internal static class ReportRequestAccess
         {
             if (context.User.Identity?.IsAuthenticated != true)
                 return Results.Unauthorized();
-            var administrator = await AdministratorAccess(context, options, context.RequestAborted);
+            var administrator = await AdministratorAccess(context, options, ct);
             if (administrator.Error is not null) return administrator.Error;
             if (administrator.Configured && !administrator.Granted)
                 return Results.NotFound();
@@ -134,9 +321,9 @@ internal static class ReportRequestAccess
             {
                 databaseAccess = await context.RequestServices
                     .GetRequiredService<IReportAuthorizationStore>()
-                    .GetReportAccess(definition.Name, identity, context.RequestAborted);
+                    .GetReportAccess(definition.Name, identity, ct);
             }
-            catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 throw;
             }
@@ -149,7 +336,7 @@ internal static class ReportRequestAccess
         var restricted = authorization?.Restricted == true || databaseAccess.Restricted;
         var configuredGrant = identity is not null
             && authorization?.Users?.Any(user => string.Equals(
-                user.Trim(), identity, StringComparison.OrdinalIgnoreCase)) == true;
+                user.Trim(), identity, StringComparison.Ordinal)) == true;
         if (restricted && !configuredGrant && !databaseAccess.UserGranted)
             return Results.NotFound();
 
@@ -175,8 +362,7 @@ internal static class ReportRequestAccess
     /// use the configured/database administrator union when nonempty; otherwise at
     /// least one application authorizer must affirmatively grant the operation.
     /// </summary>
-    public static async Task<IResult?> AuthorizeOperations(
-        ReportDefinition definition,
+    private static async Task<IResult?> AuthorizeOperations(
         HttpContext context,
         IReadOnlyCollection<InteractiveReportAction> actions,
         InteractiveReportAuthorizationResource resource,
@@ -185,13 +371,8 @@ internal static class ReportRequestAccess
         string? denialDetail,
         CancellationToken ct)
     {
-        if (actions.Count == 0)
-            throw new ArgumentException("At least one authorization action is required.", nameof(actions));
-
         var options = context.RequestServices
             .GetRequiredService<IOptionsMonitor<InteractiveReportOptions>>().CurrentValue;
-        administratorRequired |= definition.Authorization?.AdministratorsOnly == true;
-
         var authorizers = context.RequestServices
             .GetServices<IInteractiveReportAuthorizer>()
             .ToArray();
@@ -243,7 +424,7 @@ internal static class ReportRequestAccess
                     logger.LogError(
                         ex,
                         "Report {Report}: authorization for {Action} failed (traceId {TraceId})",
-                        definition.Name,
+                        resource.ReportName,
                         action,
                         context.TraceIdentifier);
                     return Results.Problem(
@@ -267,7 +448,7 @@ internal static class ReportRequestAccess
     /// Null when the feature is whitelisted. 403 (not 404) because the caller already
     /// reached an existing, authorized report — only this capability is switched off.
     /// </summary>
-    public static IResult? RequireFeature(ReportDefinition definition, string feature)
+    public IResult? RequireFeature(ReportDefinition definition, string feature)
         => ReportFeatures.IsEnabled(definition, feature)
             ? null
             : Results.Problem(
@@ -280,7 +461,7 @@ internal static class ReportRequestAccess
     /// administrators may ask, and an application authorizer may make action-specific
     /// decisions when neither administrator source is populated.
     /// </summary>
-    public static async Task<bool> MayRequestAdministration(
+    public async Task<bool> MayRequestAdministration(
         HttpContext context,
         CancellationToken ct = default)
     {
@@ -374,7 +555,7 @@ internal static class ReportRequestAccess
             statusCode: StatusCodes.Status403Forbidden);
     }
 
-    public static async Task<IReadOnlyDictionary<string, object?>> ResolveContextParameters(
+    public async Task<IReadOnlyDictionary<string, object?>> ResolveContextParameters(
         ReportDefinition definition,
         HttpContext context,
         CancellationToken ct)

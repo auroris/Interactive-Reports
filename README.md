@@ -74,7 +74,12 @@ consumers need no Node.js and no frontend build.
    fix; saved-storage errors are deferred until that optional subsystem is used. Avoid
    the report names `ui`, `saved`,
    `admin`, and `whoami`, which collide with the endpoint namespace. The packaged
-   pages can be turned off with `InteractiveReport:ViewerPagesEnabled: false`.
+    pages can be turned off with `InteractiveReport:ViewerPagesEnabled: false`.
+
+`MapInteractiveReports` publishes standard ASP.NET Core endpoint summaries, tags,
+request-body types, response types, and problem response metadata. A host can add its
+preferred OpenAPI generator without the Interactive Reports package depending on one.
+The Workbench demonstrates this with Swagger UI at `/swagger` in Development.
 
 The package performs no persistence setup unless you request it. A report-only
 installation does not create `App_Data`, a SQLite file, or database tables. To enable
@@ -222,9 +227,9 @@ The provider can be scoped and receives the authenticated administrator. Its ord
 preserved. Returning `null` or an empty collection, or not registering a provider,
 keeps the Reassign Owner dialog as free-form text. The protected
 `GET {prefix}/admin/users` endpoint invokes the provider only after the caller passes
-the administration gate; it reuses the `ListAllSavedReports` application-authorization
-action. The directory supplies choices, not authority: it does not change `whoami`,
-administrator matching, or operation authorization. The Authorization editor reuses
+the administration gate; it emits the `ListAuthorizationUsers`
+application-authorization action. The directory supplies choices, not authority: it
+does not change `whoami`, administrator matching, or operation authorization. The Authorization editor reuses
 these stable values when it creates real grants.
 
 ### Built-in administrator and report authorization
@@ -259,8 +264,9 @@ base table name only when an operator-managed schema requires another identifier
 ```
 
 `restricted: true` limits the report to explicitly granted canonical identities.
-Configuration users and users added through **Authorization…** are a case-insensitive
-union. The editor may also restrict a report whose configuration leaves `restricted`
+Configuration users and users added through **Authorization…** are an ordinal,
+case-sensitive union because identity-provider subject values are opaque. The editor
+may also restrict a report whose configuration leaves `restricted`
 false; configured users can therefore be staged before the database restriction is
 enabled. A configuration restriction cannot be removed in the editor. Anonymous and
 `administratorsOnly` reports cannot also use named-user restrictions.
@@ -283,7 +289,7 @@ imports it as the administrator's saved report for live testing. The envelope's
 
 ## Application authorization
 
-Interactive Reports describes every requested operation with an action, the ASP.NET
+Interactive Reports describes every protected operation with an action, the ASP.NET
 Core `ClaimsPrincipal`, and current/proposed resource metadata. Create and update
 authorization receives a mutable, typed `InteractiveReportDefinition`, including the
 typed `ReportState` object graph. It makes no assumption
@@ -330,6 +336,12 @@ authorization decision. With neither mechanism configured, they fail closed. `fa
 or `InteractiveReportAuthorizationDeniedException` is an
 expected denial; cancellation remains cancellation, and other exceptions are logged
 and returned as a sanitized 500 response.
+
+All mapped report and security-administration endpoints enter `IReportAccessService`
+once before their protected work. Host-owned endpoints can resolve that service to use
+the same boundary. The opt-in `whoami` bootstrap diagnostic is the deliberate
+exception: it reports the current principal while an operator is still determining
+which exact identity value belongs in configuration, and it grants no authority.
 
 Saved-report decisions are resource-based: public, owner, or administrator may read;
 owner or administrator may update title/state or delete; and the explicit global,
@@ -381,6 +393,8 @@ state; administrators update the source file deliberately. The resolver enforces
 `ReadSavedReport` and `Query`, including ownership, publication, report-definition,
 context-parameter, and application authorization rules. See
 [GraphQL adapter](docs/GRAPHQL.md) for the complete contract and operational notes.
+The Workbench also installs GraphiQL at `/graphiql` in Development so its schema can be
+explored and saved-report queries can be executed in the browser.
 
 To log the exact SQL command text submitted to the configured database, enable Debug
 for the report executor category. Parameter values are never logged:
@@ -536,9 +550,10 @@ the host application's concern.
 
 Page size is configured through **Actions → Pagination**. The standard choices are
 10, 50, 100, 500, 1000, and All; numeric choices above a definition's `maxPageSize`
-are omitted. All is stored as `page.size: 0` and deliberately returns every matching
-grid row or Group By group without applying `maxRows`. CSV export ignores pagination
-and continues to use its independent `maxRows` cap and truncation header.
+are omitted. All is stored as `page.size: 0`. A positive definition `maxRows` is a
+hard response cap for All grid rows, All Group By groups, and CSV export regardless of
+the client request. Set `maxRows` to `0` or a negative number for unlimited results.
+CSV export reports a positive-cap truncation through `X-IR-Truncated`.
 
 Each row in **Actions → Sort** also offers Nulls: Default, First, or Last. First
 and Last are stored on that sort instruction as `nulls: "first"` or `"last"` and

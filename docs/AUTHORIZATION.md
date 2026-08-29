@@ -9,6 +9,11 @@ The mapped server API is the security boundary. The caller may be the packaged w
 component, another application, a scheduled process, a hand-written HTTP client, or
 the optional GraphQL adapter.
 
+Every published data and security-administration endpoint participates in application
+operation authorization. The only exceptions are the opt-in `whoami` bootstrap
+diagnostic and packaged HTML/CSS/JavaScript delivery. Those exceptions expose no report
+data and grant no authority.
+
 Authorization never depends on client UI state, navigation history, or how the request
 was produced. For each requested operation the server asks one question:
 
@@ -189,11 +194,12 @@ grants and the union of configured/database administrators. The application auth
 receives the operation facts so it can add restrictions or supply administrator
 authority only when both built-in administrator sources are empty.
 
-Definition-level authorization is centralized in `ReportRequestAccess`. Configuration
+Authorization is centralized in `IReportAccessService`. Configuration
 stores expose a lightweight name/authorization envelope, allowing authentication,
 policy, administrator, and named-user gates to run before connection resolution and
 saved-default hydration. Saved-report listing and normalized title-collision queries
-occur only after that report-level gate succeeds.
+occur only after that report-level gate succeeds. Definition-free security endpoints
+use the same service before invoking their authorization store or user provider.
 
 ## Action reference
 
@@ -210,7 +216,8 @@ occur only after that report-level gate succeeds.
 | `PublishGlobalReport` | Effective definition changes public status | Emitted for both publishing and unpublishing after base-action mutation. Administrator action. |
 | `PublishPrimaryReport` | Effective definition changes primary status | Emitted for both flagging and unflagging after base-action mutation. Administrator action. |
 | `ChangeSavedReportOwner` | Effective definition changes owner | Administrator action. |
-| `ListAllSavedReports` | Schema/query/export of the built-in `__saved-reports` definition, and its protected user-directory lookup | Administrator action. Its export also emits `Export`. |
+| `ListAllSavedReports` | Schema/query/export of the built-in `__saved-reports` definition | Administrator action. Its export also emits `Export`. |
+| `ListAuthorizationUsers` | Resolve the protected administration user directory | Administrator action. Directory entries are choices, not grants. |
 | `ManageAuthorization` | List or change database administrators, report restrictions, and report-user grants | Administrator action. Configuration grants remain read-only. |
 | `DownloadReportDocument` | Download the canonical admin JSON envelope | Administrator action. |
 | `UploadReportDocument` | Validate and import an admin JSON envelope | Administrator action. A primary upload also emits `PublishPrimaryReport`. |
@@ -254,7 +261,7 @@ reports.UseAuthorization((request, cancellationToken) =>
     var caller = request.User.FindFirstValue(ClaimTypes.NameIdentifier);
     var isOwner = saved is not null
         && caller is not null
-        && string.Equals(saved.Owner, caller, StringComparison.OrdinalIgnoreCase);
+        && string.Equals(saved.Owner, caller, StringComparison.Ordinal);
     var isPublic = saved is { IsGlobal: true } or { IsPrimary: true };
     var isAdministrator = request.User.IsInRole("ReportAdministrators");
 
@@ -271,6 +278,7 @@ reports.UseAuthorization((request, cancellationToken) =>
             or InteractiveReportAction.PublishPrimaryReport
             or InteractiveReportAction.ChangeSavedReportOwner
             or InteractiveReportAction.ListAllSavedReports
+            or InteractiveReportAction.ListAuthorizationUsers
             or InteractiveReportAction.ManageAuthorization
             or InteractiveReportAction.DownloadReportDocument
             or InteractiveReportAction.UploadReportDocument =>
@@ -312,7 +320,7 @@ reports.UseAuthorization(async (request, cancellationToken) =>
 Do not resolve a scoped ACL service while configuring the application and capture it
 in the callback. Resolve it from `request.RequestServices`, as above.
 
-The callback is registered as an operation authorizer for every report. Additional
+The callback is registered as an operation authorizer for every protected operation. Additional
 callbacks can branch on `request.Resource.ReportName` for per-report restrictions and
 compose with the saved-report rule above:
 
@@ -430,7 +438,7 @@ reports.UseAuthorization(async (request, cancellationToken) =>
     var caller = request.User.FindFirstValue(ClaimTypes.NameIdentifier);
     var isOwner = saved is not null
         && caller is not null
-        && string.Equals(saved.Owner, caller, StringComparison.OrdinalIgnoreCase);
+        && string.Equals(saved.Owner, caller, StringComparison.Ordinal);
     var isPublic = saved is { IsGlobal: true } or { IsPrimary: true };
 
     var policyName = request.Action switch
@@ -451,6 +459,7 @@ reports.UseAuthorization(async (request, cancellationToken) =>
             or InteractiveReportAction.PublishPrimaryReport
             or InteractiveReportAction.ChangeSavedReportOwner
             or InteractiveReportAction.ListAllSavedReports
+            or InteractiveReportAction.ListAuthorizationUsers
             or InteractiveReportAction.ManageAuthorization
             or InteractiveReportAction.DownloadReportDocument
             or InteractiveReportAction.UploadReportDocument =>
@@ -491,7 +500,8 @@ native adapter as well only when both the named policy result and a separate nat
 `InteractiveReport:Administrators` supplies source-controlled administrators. Database
 administrators created through the administration center are additive. The canonical
 identity is resolved through the configured `identityClaim`, then NameIdentifier,
-`sub`, and finally `Identity.Name`. Matching is case-insensitive and exact.
+`sub`, and finally `Identity.Name`. Matching is ordinal and case-sensitive; identity
+provider subject values are treated as opaque identifiers.
 
 Operations that require administrator authority use this decision table:
 
@@ -518,8 +528,8 @@ the authorizer should map its `Resource.ReportName` to the application's adminis
 rule. The request carries action and resource facts, not the engine's intermediate
 reason for asking.
 
-The optional administration user-directory endpoint is part of that built-in surface.
-It performs the same administrator check and emits `ListAllSavedReports` before it
+The optional administration user-directory endpoint is part of the security surface.
+It performs the same administrator check and emits `ListAuthorizationUsers` before it
 resolves or invokes `IInteractiveReportUserProvider`. Directory entries are account
 choices only; returning an account does not authorize it. The separate Authorization
 editor emits `ManageAuthorization` when it turns a choice into a database grant.
@@ -603,9 +613,10 @@ The database layer exists only when `InteractiveReport:SavedReports:DataSource` 
 `SavedReports:TablePrefix`; installing the package alone creates no file or table.
 
 `allowAnonymous`, `administratorsOnly`, and named-user restriction are mutually
-exclusive access modes. A policy can stack on a named-user restriction and remains an
-additional requirement. Application authorizers also remain restrictive; a built-in
-grant never bypasses them.
+exclusive access modes. `allowAnonymous` cannot be combined with a policy: it is the
+explicit report-specific opt-out from the default authenticated boundary. A policy can
+stack on a named-user restriction and remains an additional requirement. Application
+authorizers also remain restrictive; a built-in grant never bypasses them.
 
 ## Report-definition policies remain available
 
@@ -649,8 +660,8 @@ depends on that client and the UI never treats a hint as permission.
   `configuredAdministrator` and `databaseAdministrator` flags.
 
 These fields only control presentation. The UI may display a button that a
-resource-specific callback later denies. Every endpoint evaluates the concrete action
-and resource again on the server.
+resource-specific callback later denies. Every protected endpoint evaluates the
+concrete action and resource again on the server.
 
 ## Testing recommendations
 

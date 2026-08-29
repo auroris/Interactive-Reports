@@ -69,10 +69,10 @@ still avoiding the worst dialect divergence (native PIVOT syntax) entirely.
 | Project | Responsibility |
 |---|---|
 | `src/InteractiveReport.Core` | State model, validation, expression parser, query composition (SqlKata), execution, schema discovery, highlight evaluation, in-memory pivot, export. No ASP.NET dependencies. |
-| `src/InteractiveReport.AspNetCore` | Endpoint mapping (`MapInteractiveReports`), config-backed definition store, auth integration, JSON protocol shaping, problem+json errors. `Ui/dist` holds the generated client assets (§14), embedded and served by the same mapping. |
+| `src/InteractiveReport.AspNetCore` | Endpoint mapping (`MapInteractiveReports`), standard OpenAPI metadata and public wire contracts, config-backed definition store, auth integration, JSON protocol shaping, problem+json errors. `Ui/dist` holds the generated client assets (§14), embedded and served by the same mapping. |
 | `src/InteractiveReport.GraphQL` | Optional GraphQL.NET transport over saved reports. Looks up every origin through `ISavedReportStore` and reuses ASP.NET authorization, context resolution, validation, and execution. |
 | `src/client` | Product UI source modules and the three browser-bundle entry points. |
-| `samples/Workbench` | Dev harness: SQLite sample DB. `index.html` and `admin.html` host the packaged report and administration elements. |
+| `samples/Workbench` | Dev harness: SQLite sample DB. `index.html` and `admin.html` host the packaged report and administration elements; Swagger UI and GraphiQL expose the REST and GraphQL developer surfaces. |
 | `tests/InteractiveReport.Core.Tests` | Composer golden tests (state doc → expected SQL, ×4 dialects), expression parser tests, SQLite end-to-end integration tests. |
 | `tests/InteractiveReport.AspNetCore.Tests` | HTTP, saved-report, authorization, configured-document, and GraphQL transport integration tests. |
 
@@ -569,14 +569,16 @@ Mounted by the host: `app.MapInteractiveReports("/api/reports").RequireAuthoriza
 |---|---|
 | `GET  /api/reports/{name}/schema` | Column metadata + default state + capabilities + resolved feature whitelist (§4). |
 | `POST /api/reports/{name}/query` | Body = state document → page of results. |
-| `GET  /api/reports/whoami` | The caller's canonical identity value (only when `whoamiEnabled`). |
+| `GET  /api/reports/whoami` | Bootstrap diagnostic for the caller's canonical identity value (only when `whoamiEnabled`); grants no authority. |
 | `GET  /api/reports/{name}/saved` | Visible reports: primary and global reports + configured read-only alternatives + the caller's own. Configured titles win. |
 | `POST /api/reports/{name}/saved` | Save the posted state under a title (global/primary publication = admin). 403 when `savedReports` is not whitelisted (§4). |
 | `GET/PUT/DELETE /api/reports/saved/{id}` | Load / modify / delete one report document (matrix in §13; configured documents reject mutation). |
 | `GET/POST /api/reports/__saved-reports/{schema,query}` | Administrator listing through the ordinary report pipeline; action cells carry saved-report ids. |
 | `GET  /api/reports/admin/saved/{id}/document` | Administrator: download a canonical `{ title, primary, state }` source-file envelope. |
 | `POST /api/reports/admin/{name}/documents` | Administrator: validate a source-file envelope against the named report and import a private saved copy for testing. |
-| `POST /api/reports/{name}/export` | Same state, same gate, no paging → CSV (UTF-8 BOM; headers are the posted document's display labels, §5), capped at `maxRows` with `X-IR-Truncated` header. Text-sourced cells (labels included) that would trigger spreadsheet formula evaluation — leading `=` `+` `-` `@` tab CR — get the OWASP apostrophe guard by default, since RFC 4180 quoting does not stop Excel from evaluating them; non-text values (negative numbers, dates) are never altered, and `CsvWriter`'s `CsvCellPolicy.Verbatim` opts hosts with non-spreadsheet consumers out. 403 when `download` is not whitelisted (§4). XLSX/HTML later. |
+| `GET  /api/reports/admin/users` | Administrator: invoke the optional host user-directory provider after endpoint authorization. |
+| `/api/reports/admin/authorization/**` | Administrator: list or change database administrator and report-user grants through the centralized endpoint boundary. |
+| `POST /api/reports/{name}/export` | Same state, same gate, no paging → CSV (UTF-8 BOM; headers are the posted document's display labels, §5), capped when `maxRows` is positive with `X-IR-Truncated` header. Text-sourced cells (labels included) that would trigger spreadsheet formula evaluation — leading `=` `+` `-` `@` tab CR — get the OWASP apostrophe guard by default, since RFC 4180 quoting does not stop Excel from evaluating them; non-text values (negative numbers, dates) are never altered, and `CsvWriter`'s `CsvCellPolicy.Verbatim` opts hosts with non-spreadsheet consumers out. 403 when `download` is not whitelisted (§4). XLSX/HTML later. |
 | `GET  /api/reports/ui/{file}` | Packaged UI assets (§14). Anonymous by design; content-hash ETags. |
 
 POST is the primary verb deliberately: state documents outgrow querystrings, and GET puts
@@ -695,9 +697,10 @@ The execution path is split by responsibility rather than view mode:
 - `HighlightEvaluator` consumes database-computed markers. It orders row hits before
   cell hits and, within each scope, applies lower sequences before higher sequences.
   It does not reimplement expression semantics in memory.
-- In the ASP.NET Core adapter, `ReportRequestAccess` owns per-definition authorization and
-  server-trusted context parameters. Query and export share one state-request pipeline so
-  their validation and sanitized error behavior stay aligned.
+- In the ASP.NET Core adapter, `IReportAccessService` owns definition-aware and
+  definition-free endpoint authorization plus server-trusted context parameters. Query
+  and export share one state-request pipeline so their validation and sanitized error
+  behavior stay aligned.
 
 Derived queries run sequentially on one prepared connection per request. This keeps one
 transaction/session context and remains SQLite-friendly; provider-specific parallelism is
@@ -926,11 +929,11 @@ as a parameter.)
   permission is required. The scope ends with `ROLLBACK`. Single-statement paths
   (chart and ordinary export) do not open a consistency scope.
 - Positive `page.size` values are clamped to `maxPageSize` (default 1000). The
-  allow-listed value `0` means **All** and deliberately composes no page limit or
-  offset for grid and Group By queries. CSV export ignores pagination altogether and
-  retains its independent `maxRows` cap and truncation signal.
-- `maxRows` (per definition): hard cap for exports. It does not cap the explicit
-  **All** pagination choice.
+  allow-listed value `0` means **All** and composes no page offset. A positive
+  `maxRows` still limits the resulting grid rows or Group By groups.
+- `maxRows` (per definition): positive values are a hard response cap for **All**
+  grid/group queries and exports, regardless of the client request. Zero and negative
+  values mean unlimited. Export truncation under a positive cap remains explicit.
 - Command timeout per definition (default modest, e.g. 30s); `CancellationToken` flows
   from the HTTP request so abandoned browsers stop occupying the database.
 - Logging: the final `DbCommand.CommandText` for report queries, schema probes, and
@@ -969,8 +972,8 @@ Layered, default-deny:
 (`ReportIdentity`): explicit `identityClaim` config if set, else NameIdentifier → `sub` →
 `Identity.Name`. That value is saved-report ownership and the administrator match.
 `GET /whoami` (opt-in via `whoamiEnabled`, off by default) exists so an operator can see
-the exact value to put in `administrators` — which is a config list, matched
-case-insensitively exact. It also reports whether that list and application operation
+the exact value to put in `administrators` — which is a config list, matched with
+ordinal case-sensitive equality. It also reports whether that list and application operation
 authorization are configured; this is a UI hint, never an authorization decision.
 
 **Storage.** `ISavedReportStore` / `SqlSavedReportStore`: table `IR_SAVED_REPORTS`
@@ -1023,7 +1026,7 @@ Auto-created tables upgrade in place — add the column, backfill keys in code, 
 the index (partial on SQLite/SQL Server/Postgres; a CASE function-based index on
 Oracle, which has no partial indexes) — and pre-existing duplicate user titles fail
 the upgrade with instructions instead of silently keeping the race open. Owner
-visibility filters in memory with the same `OrdinalIgnoreCase` the authorization
+visibility filters in memory with the same ordinal equality the authorization
 matrix uses, so database collation never decides who sees a row.
 
 **Primary and Default.** `IS_PRIMARY` is independent of global/private scope and is
@@ -1059,6 +1062,14 @@ to `IAuthorizationService` as an `InteractiveReportAuthorizationRequirement` plu
 pipeline, not separate security models. Multiple adapters and multiple actions compose
 with AND semantics.
 
+`IReportAccessService` is the single endpoint-facing boundary. Report endpoints use
+its definition-aware path; authorization administration and user-directory endpoints
+use its definition-free path before touching their stores or providers. Application
+code supplies decisions through either adapter above, and host-owned endpoints can
+resolve the service when they need the same contract. The opt-in `whoami` bootstrap
+diagnostic remains outside application-operation authorization because it exists to
+discover the exact identity needed to configure that authorization and grants nothing.
+
 The resource carries the report name and immutable current saved-report metadata.
 Create, update, and document-upload operations also carry the mutable typed definition
 that will be validated and persisted. Authorization evaluates the base mutation first,
@@ -1067,7 +1078,7 @@ can therefore narrow a public proposal to a private save, while any privilege ad
 a later handler still emits its required administrator action. The action vocabulary is
 ViewReport, Query, Export, List/Read/Create/Update/DeleteSavedReport,
 PublishGlobalReport, PublishPrimaryReport, ChangeSavedReportOwner,
-ListAllSavedReports, ManageAuthorization, DownloadReportDocument, and
+ListAllSavedReports, ListAuthorizationUsers, ManageAuthorization, DownloadReportDocument, and
 UploadReportDocument. `false` and the
 dedicated denial exception are ordinary denials. Unexpected exceptions are logged and
 sanitized as 500; request cancellation propagates.
@@ -1374,8 +1385,9 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 - **M16 — Actions pagination** ✅ *(2026-08-07)*: Actions → Pagination owns the
   report document's page limit with APEX choices 10, 50, 100, 500, 1000, and All.
   Numeric values respect `maxPageSize`; All is the explicit `page.size: 0` protocol
-  value and runs grid/Group By without a limit. The footer is navigation-only, and
-  export remains unpaged under its separate `maxRows` contract.
+  value. A positive `maxRows` caps All grid/Group By results, while zero or a negative
+  value leaves them unlimited. The footer is navigation-only, and export remains
+  unpaged under the same positive-cap/unlimited contract.
 - **M17 — Explicit null sorting** ✅ *(2026-08-07)*: every grid/Group By sort rule
   may carry additive `nulls: first|last`; absence retains the dialect default. The
   Sort dialog exposes Default/First/Last, while header quick-sorts remain Default.
@@ -1450,7 +1462,7 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 | Highlight predicates push down as private booleans; pivot stays in C# | Interpret highlight expressions in C# or use native PIVOT | Filters and highlights share one typed predicate implementation; private markers are removed before the response. Pivot still avoids the least-portable SQL surface. |
 | `net8.0` | `net10.0` | Umbraco 13 LTS floor; SDK 8 present; bump is cheap later. |
 | whoami off by default | always on | It's an information endpoint; enabling is a deliberate operator act (samples enable it). |
-| Admin match case-insensitive exact | case-sensitive | Operator-friendly for emails/usernames; GUID-style values don't collide under folding. |
+| Identity and owner matching is ordinal and case-sensitive | case-fold identity values | Identity-provider subjects are opaque; folding can merge distinct principals. |
 | Saved-report ids are text GUIDs | identity/sequence columns | One DDL shape across SQLite/SqlServer/Oracle; no sequence plumbing. |
 | Timestamps as ISO text, flags as 0/1 | native per-dialect types | Uniform semantics and sorting across dialects for an engine-internal table. |
 | Global/primary flags admin-only; content remains owner-managed | all published mutations admin-only | Publication is a curation act, while title/state and deletion remain owner actions. |

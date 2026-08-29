@@ -358,7 +358,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     }
 
     [Fact]
-    public async Task All_bypasses_query_limits_but_export_still_uses_its_independent_cap()
+    public async Task Positive_max_rows_caps_all_queries_and_exports()
     {
         var def = Definition;
         def.MaxRows = 3;
@@ -371,13 +371,50 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         var query = await _executor.Query(def, state, NoParams);
 
         Assert.Equal(10, query.TotalRows);
-        Assert.Equal(10, query.Rows.Count);
+        Assert.Equal(3, query.Rows.Count);
         Assert.Equal(1, query.Page.Index);
         Assert.Equal(0, query.Page.Size);
 
         var export = await _executor.Export(def, state, NoParams);
         Assert.True(export.Truncated);
         Assert.Equal(3, export.Rows.Count);
+    }
+
+    [Fact]
+    public async Task Positive_max_rows_caps_all_group_queries()
+    {
+        var def = Definition;
+        def.MaxRows = 2;
+        def.MaxPageSize = 2;
+        def.DefaultPageSize = 2;
+        var state = Doc(
+            tail: [Group(by: ["STATUS"])],
+            page: new PageRequest { Index = 1, Size = 0 });
+
+        var query = await _executor.Query(def, state, NoParams);
+
+        Assert.True(query.TotalRows > 2);
+        Assert.Equal(2, query.Rows.Count);
+        Assert.Equal(0, query.Page.Size);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public async Task Nonpositive_max_rows_leaves_all_queries_and_exports_unlimited(int maxRows)
+    {
+        var def = Definition;
+        def.MaxRows = maxRows;
+        var state = Doc(
+            source: new StageLayer { Sorts = [new SortRule { Col = "ORDER_ID" }] },
+            page: new PageRequest { Index = 1, Size = 0 });
+
+        var query = await _executor.Query(def, state, NoParams);
+        var export = await _executor.Export(def, state, NoParams);
+
+        Assert.Equal(10, query.Rows.Count);
+        Assert.Equal(10, export.Rows.Count);
+        Assert.False(export.Truncated);
     }
 
     [Fact]

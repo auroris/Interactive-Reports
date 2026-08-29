@@ -252,7 +252,7 @@ public sealed class AuthorizationHttpTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Authorization_table_is_created_beside_the_saved_report_table()
+    public async Task Authorization_endpoint_creates_only_its_own_prefixed_table()
     {
         using var response = await Send(
             HttpMethod.Get,
@@ -267,7 +267,7 @@ public sealed class AuthorizationHttpTests : IAsyncLifetime
         var tables = new List<string>();
         await using var reader = await command.ExecuteReaderAsync();
         while (await reader.ReadAsync()) tables.Add(reader.GetString(0));
-        Assert.Contains("TEST_IR_SAVED_REPORTS", tables);
+        Assert.DoesNotContain("TEST_IR_SAVED_REPORTS", tables);
         Assert.Contains("TEST_IR_REPORT_AUTHORIZATION", tables);
         Assert.DoesNotContain("IR_SAVED_REPORTS", tables);
         Assert.DoesNotContain("IR_REPORT_AUTHORIZATION", tables);

@@ -21,7 +21,21 @@ internal static class SavedReportAccessPolicy
             ? SavedReportAccess.Allowed
             : SavedReportAccess.Hidden;
 
+    public static SavedReportAccess Read(SavedReportMetadata report, string? identity, bool administrator)
+        => administrator || report.IsPrimary || report.IsGlobal || IsOwner(report, identity)
+            ? SavedReportAccess.Allowed
+            : SavedReportAccess.Hidden;
+
+    public static SavedReportAccess Modify(SavedReportMetadata report, string? identity, bool administrator)
+        => administrator || IsOwner(report, identity)
+            ? SavedReportAccess.Allowed
+            : SavedReportAccess.Hidden;
+
     public static bool IsOwner(SavedReport report, string? identity)
         => identity is not null
-           && string.Equals(report.Owner, identity, StringComparison.OrdinalIgnoreCase);
+           && string.Equals(report.Owner, identity, StringComparison.Ordinal);
+
+    public static bool IsOwner(SavedReportMetadata report, string? identity)
+        => identity is not null
+           && string.Equals(report.Owner, identity, StringComparison.Ordinal);
 }

@@ -26,15 +26,15 @@ public static class ReportIdentity
     }
 
     /// <summary>
-    /// Case-insensitive exact match: operator-friendly for emails and usernames, and
-    /// GUID/sub-style values don't collide under case folding in practice.
+    /// Ordinal exact match. Identity-provider subject values are opaque identifiers;
+    /// changing their case can identify a different principal.
     /// </summary>
     public static bool IsAdministrator(ClaimsPrincipal? user, string? identityClaim, IReadOnlyCollection<string> administrators)
     {
         if (administrators.Count == 0) return false;
         var identity = Resolve(user, identityClaim);
         return identity is not null && administrators.Any(candidate => string.Equals(
-            candidate?.Trim(), identity, StringComparison.OrdinalIgnoreCase));
+            candidate?.Trim(), identity, StringComparison.Ordinal));
     }
 
     private static string? NonEmpty(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;

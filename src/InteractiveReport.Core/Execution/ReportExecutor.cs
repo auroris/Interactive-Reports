@@ -96,8 +96,8 @@ public sealed class ReportExecutor
     }
 
     /// <summary>
-    /// Uses the same validated state without paging, capped at MaxRows. An export is
-    /// the server rendering what the user sees, so the ingested document's display
+    /// Uses the same validated state without paging, capped when MaxRows is positive.
+    /// An export is the server rendering what the user sees, so the ingested document's display
     /// labels, stage-layer label overrides, and grid renderers apply here (headers,
     /// sum(…) labels, spread cells, link/image HTML) — the posted document is the
     /// source of truth, since the client's state may never have been saved.
@@ -149,7 +149,8 @@ public sealed class ReportExecutor
         {
             var layer = validated.View.GroupLayer!;
             var query = QueryComposer.ComposeGroupStageExport(definition, validated, definition.MaxRows);
-            var result = await reader.ReadRows(query, definition.MaxRows, ct);
+            var result = await reader.ReadRows(
+                query, definition.MaxRows > 0 ? definition.MaxRows : null, ct);
             return new ExportResult(
                 ApplyStageLabels(ReportResultColumns.ForGroupStage(validated), layer.Labels),
                 ReportRowProjector.Columns(result.Rows, layer.SelectColumns),
@@ -157,7 +158,8 @@ public sealed class ReportExecutor
         }
 
         var grid = QueryComposer.ComposeGridExport(definition, validated, definition.MaxRows);
-        var gridResult = await reader.ReadRows(grid, definition.MaxRows, ct);
+        var gridResult = await reader.ReadRows(
+            grid, definition.MaxRows > 0 ? definition.MaxRows : null, ct);
         return new ExportResult(
             ReportResultColumns.From(validated.SelectColumns),
             GridExportRenderer.Render(validated, gridResult.Rows),
@@ -432,7 +434,7 @@ public sealed class ReportExecutor
         => new() { Index = state.PageIndex, Size = state.PageAll ? 0 : state.PageSize };
 }
 
-/// <summary>Unpaged export payload; Truncated means MaxRows was hit and rows were cut there.</summary>
+/// <summary>Unpaged export payload; Truncated means a positive MaxRows was hit.</summary>
 public sealed record ExportResult(
     IReadOnlyList<ColumnInfo> Columns,
     IReadOnlyList<IReadOnlyDictionary<string, object?>> Rows,

@@ -1,4 +1,6 @@
+using GraphQL.Server.Ui.GraphiQL;
 using InteractiveReport.AspNetCore;
+using InteractiveReport.Core.Model;
 using InteractiveReport.GraphQL;
 using Microsoft.Data.Sqlite;
 using Workbench;
@@ -46,6 +48,17 @@ builder.Services.AddAuthorization(options =>
     options.AddPolicy("WorkbenchAdmins", policy =>
         policy.RequireAssertion(ctx => ctx.User.Identity?.Name == DevAuthHandler.DefaultUser)));
 builder.Services.AddInteractiveReportGraphQL();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(options =>
+{
+    // The reusable packages generate XML documentation. Loading both assemblies here
+    // lets Swagger show their endpoint contracts and nested report-state descriptions.
+    foreach (var assembly in new[] { typeof(EndpointExtensions).Assembly, typeof(ReportState).Assembly })
+    {
+        var xmlPath = Path.Combine(AppContext.BaseDirectory, $"{assembly.GetName().Name}.xml");
+        if (File.Exists(xmlPath)) options.IncludeXmlComments(xmlPath);
+    }
+});
 
 var app = builder.Build();
 
@@ -54,6 +67,20 @@ SampleData.EnsureSeeded(dbPath);
 app.UseDefaultFiles();
 app.UseStaticFiles();
 app.UseAuthentication();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI(options =>
+    {
+        options.DocumentTitle = "Interactive Reports Workbench API";
+        options.DisplayRequestDuration();
+    });
+    app.UseGraphQLGraphiQL("/graphiql", new GraphiQLOptions
+    {
+        GraphQLEndPoint = "/graphql",
+    });
+}
 
 app.MapInteractiveReports("/api/reports");
 app.MapInteractiveReportGraphQL("/graphql");

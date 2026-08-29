@@ -22,7 +22,7 @@ namespace InteractiveReport.AspNetCore.Tests;
 public sealed class InteractiveReportAuthorizationHttpTests
 {
     [Fact]
-    public async Task Every_public_report_operation_has_an_explicit_action()
+    public async Task Every_protected_endpoint_family_has_an_explicit_action()
     {
         var seen = new ConcurrentQueue<InteractiveReportAction>();
         await using var host = await Start((reports, _) =>
@@ -88,13 +88,47 @@ public sealed class InteractiveReportAuthorizationHttpTests
         using var all = await host.Client.SendAsync(Request(
             HttpMethod.Get, "/api/reports/__saved-reports/schema", "action-admin"));
         Assert.Equal(HttpStatusCode.OK, all.StatusCode);
+        using var users = await host.Client.SendAsync(Request(
+            HttpMethod.Get, "/api/reports/admin/users", "action-admin"));
+        Assert.Equal(HttpStatusCode.OK, users.StatusCode);
         using var authorization = await host.Client.SendAsync(Request(
             HttpMethod.Get, "/api/reports/admin/authorization", "action-admin"));
         Assert.Equal(HttpStatusCode.OK, authorization.StatusCode);
+        using var grantAdministrator = await host.Client.SendAsync(Request(
+            HttpMethod.Post,
+            "/api/reports/admin/authorization/administrators",
+            "action-admin",
+            new { identity = "action-admin" }));
+        Assert.Equal(HttpStatusCode.NoContent, grantAdministrator.StatusCode);
+        using var restriction = await host.Client.SendAsync(Request(
+            HttpMethod.Put,
+            "/api/reports/admin/authorization/reports/orders",
+            "action-admin",
+            new { restricted = false }));
+        Assert.Equal(HttpStatusCode.NoContent, restriction.StatusCode);
+        using var grantUser = await host.Client.SendAsync(Request(
+            HttpMethod.Post,
+            "/api/reports/admin/authorization/reports/orders/users",
+            "action-admin",
+            new { identity = "report-user" }));
+        Assert.Equal(HttpStatusCode.BadRequest, grantUser.StatusCode);
+        using var revokeUser = await host.Client.SendAsync(Request(
+            HttpMethod.Delete,
+            "/api/reports/admin/authorization/reports/orders/users",
+            "action-admin",
+            new { identity = "report-user" }));
+        Assert.Equal(HttpStatusCode.BadRequest, revokeUser.StatusCode);
+        using var revokeAdministrator = await host.Client.SendAsync(Request(
+            HttpMethod.Delete,
+            "/api/reports/admin/authorization/administrators",
+            "action-admin",
+            new { identity = "action-admin" }));
+        Assert.Equal(HttpStatusCode.NoContent, revokeAdministrator.StatusCode);
 
         Assert.Equal(
             Enum.GetValues<InteractiveReportAction>().Order(),
             seen.Distinct().Order());
+        Assert.Equal(6, seen.Count(action => action == InteractiveReportAction.ManageAuthorization));
     }
 
     [Fact]
@@ -476,6 +510,25 @@ public sealed class InteractiveReportAuthorizationHttpTests
             new { v = 3 }));
 
         Assert.Equal(expected, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Definition_policy_infrastructure_errors_are_sanitized()
+    {
+        await using var host = await Start((_, services) =>
+            services.PostConfigure<InteractiveReportOptions>(options =>
+                options.Reports["orders"].Authorization = new ReportAuthorization
+                {
+                    Policy = "MissingPolicyInfrastructure",
+                }));
+
+        using var response = await host.Client.SendAsync(Request(
+            HttpMethod.Get, "/api/reports/orders/schema", "policy-user"));
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        var problem = await ReadJson(response);
+        Assert.Equal("Report authorization failed", problem.GetProperty("title").GetString());
+        Assert.DoesNotContain("MissingPolicyInfrastructure", problem.ToString());
     }
 
     private static async Task<RunningHost> Start(

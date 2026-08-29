@@ -1,6 +1,5 @@
 using System.Text.Json;
 using InteractiveReport.Core.Authorization;
-using InteractiveReport.Core.Definitions;
 using InteractiveReport.Core.Model;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
@@ -13,10 +12,9 @@ internal static class AuthorizationEndpoints
 {
     internal static async Task<IResult> List(HttpContext context, CancellationToken ct)
     {
-        var (definition, denied) = await AuthorizeAdministration(
+        var denied = await AuthorizeAdministration(
             context, SavedReportsListingDefinition.Name, ct);
         if (denied is not null) return denied;
-        if (definition is null) return Results.NotFound();
 
         IReadOnlyList<ReportAuthorizationEntry> entries;
         try
@@ -30,7 +28,7 @@ internal static class AuthorizationEndpoints
         catch (Exception ex)
         {
             return EndpointExtensions.ServerError(
-                context, definition.Name, "authorization listing", ex);
+                context, SavedReportsListingDefinition.Name, "authorization listing", ex);
         }
 
         var options = Options(context);
@@ -57,30 +55,27 @@ internal static class AuthorizationEndpoints
         {
             var authorization = pair.Value.Authorization;
             var databaseRestricted = databaseRestrictions.Contains(pair.Key);
-            return new
-            {
-                name = pair.Key,
-                title = pair.Value.Title ?? ColumnModel.Prettify(pair.Key),
-                restricted = authorization?.Restricted == true || databaseRestricted,
-                configuredRestricted = authorization?.Restricted == true,
-                databaseRestricted,
-                canRestrict = authorization?.AllowAnonymous != true
+            return new InteractiveReportAuthorizationReport(
+                Name: pair.Key,
+                Title: pair.Value.Title ?? ColumnModel.Prettify(pair.Key),
+                Restricted: authorization?.Restricted == true || databaseRestricted,
+                ConfiguredRestricted: authorization?.Restricted == true,
+                DatabaseRestricted: databaseRestricted,
+                CanRestrict: authorization?.AllowAnonymous != true
                     && authorization?.AdministratorsOnly != true,
-                configuredUsers = authorization?.Users?.Select(identity => identity.Trim())
+                ConfiguredUsers: authorization?.Users?.Select(identity => identity.Trim())
                     .Order(StringComparer.OrdinalIgnoreCase)
                     .ToArray() ?? [],
-                databaseUsers = databaseUsers.GetValueOrDefault(pair.Key) ?? [],
-            };
-        }).OrderBy(report => report.title, StringComparer.OrdinalIgnoreCase).ToArray();
+                DatabaseUsers: databaseUsers.GetValueOrDefault(pair.Key) ?? []);
+        }).OrderBy(report => report.Title, StringComparer.OrdinalIgnoreCase).ToArray();
 
-        return Results.Json(new
-        {
-            configuredAdministrators = options.Administrators
+        return Results.Json(new InteractiveReportAuthorizationState(
+            ConfiguredAdministrators: options.Administrators
                 .Select(identity => identity.Trim())
-                .Order(StringComparer.OrdinalIgnoreCase),
-            databaseAdministrators,
-            reports,
-        }, IrJson.Options);
+                .Order(StringComparer.OrdinalIgnoreCase)
+                .ToArray(),
+            DatabaseAdministrators: databaseAdministrators,
+            Reports: reports), IrJson.Options);
     }
 
     internal static Task<IResult> GrantAdministrator(HttpContext context, CancellationToken ct)
@@ -108,13 +103,13 @@ internal static class AuthorizationEndpoints
         var configured = FindConfiguredReport(context, name);
         if (configured is null) return Results.NotFound();
         var (canonicalName, report) = configured.Value;
-        var (_, denied) = await AuthorizeAdministration(context, canonicalName, ct);
+        var denied = await AuthorizeAdministration(context, canonicalName, ct);
         if (denied is not null) return denied;
 
-        RestrictionRequest? request;
+        ReportRestrictionRequest? request;
         try
         {
-            request = await JsonSerializer.DeserializeAsync<RestrictionRequest>(
+            request = await JsonSerializer.DeserializeAsync<ReportRestrictionRequest>(
                 context.Request.Body, IrJson.Options, ct);
         }
         catch (JsonException ex)
@@ -176,7 +171,7 @@ internal static class AuthorizationEndpoints
         Func<IReportAuthorizationStore, string, CancellationToken, Task> mutation,
         CancellationToken ct)
     {
-        var (_, denied) = await AuthorizeAdministration(context, resourceReportName, ct);
+        var denied = await AuthorizeAdministration(context, resourceReportName, ct);
         if (denied is not null) return denied;
         var (identity, malformed) = await ReadIdentity(context, ct);
         if (malformed is not null) return malformed;
@@ -206,7 +201,7 @@ internal static class AuthorizationEndpoints
         var configured = FindConfiguredReport(context, name);
         if (configured is null) return Results.NotFound();
         var (canonicalName, report) = configured.Value;
-        var (_, denied) = await AuthorizeAdministration(context, canonicalName, ct);
+        var denied = await AuthorizeAdministration(context, canonicalName, ct);
         if (denied is not null) return denied;
         if (report.Authorization?.AllowAnonymous == true
             || report.Authorization?.AdministratorsOnly == true)
@@ -236,10 +231,10 @@ internal static class AuthorizationEndpoints
         HttpContext context,
         CancellationToken ct)
     {
-        IdentityRequest? request;
+        AuthorizationIdentityRequest? request;
         try
         {
-            request = await JsonSerializer.DeserializeAsync<IdentityRequest>(
+            request = await JsonSerializer.DeserializeAsync<AuthorizationIdentityRequest>(
                 context.Request.Body, IrJson.Options, ct);
         }
         catch (JsonException ex)
@@ -255,27 +250,21 @@ internal static class AuthorizationEndpoints
             : (identity, null);
     }
 
-    private static async Task<(ReportDefinition? Definition, IResult? Error)> AuthorizeAdministration(
+    private static Task<IResult?> AuthorizeAdministration(
         HttpContext context,
         string resourceReportName,
         CancellationToken ct)
-    {
-        var definitions = context.RequestServices.GetRequiredService<IReportDefinitionStore>();
-        var (definition, findError) = await ReportRequestAccess.ResolveDefinition(
-            definitions, SavedReportsListingDefinition.Name, context, ct);
-        if (findError is not null) return (null, findError);
-        if (definition is null) return (null, Results.NotFound());
-        var denied = await ReportRequestAccess.AuthorizeOperations(
-            definition,
-            context,
-            [InteractiveReportAction.ManageAuthorization],
-            new InteractiveReportAuthorizationResource { ReportName = resourceReportName },
-            administratorRequired: true,
-            hideDenied: true,
-            denialDetail: null,
-            ct);
-        return (definition, denied);
-    }
+        => context.RequestServices.GetRequiredService<IReportAccessService>()
+            .AuthorizeEndpoint(new EndpointAccessRequest
+            {
+                Actions = [InteractiveReportAction.ManageAuthorization],
+                Resource = new InteractiveReportAuthorizationResource
+                {
+                    ReportName = resourceReportName,
+                },
+                AdministratorRequired = true,
+                HideDenied = true,
+            }, context, ct);
 
     private static KeyValuePair<string, ReportDefinition>? FindConfiguredReport(
         HttpContext context,
@@ -301,13 +290,4 @@ internal static class AuthorizationEndpoints
             detail: detail,
             statusCode: StatusCodes.Status400BadRequest);
 
-    private sealed class IdentityRequest
-    {
-        public string? Identity { get; set; }
-    }
-
-    private sealed class RestrictionRequest
-    {
-        public bool? Restricted { get; set; }
-    }
 }

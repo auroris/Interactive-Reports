@@ -237,14 +237,16 @@ public abstract class SavedReportStoreCorpus
     }
 
     [SkippableFact]
-    public async Task ListVisible_matches_the_owner_case_insensitively_on_every_dialect()
+    public async Task ListVisible_matches_the_owner_exactly_on_every_dialect()
     {
         // Database equality is collation-dependent; visibility must use the same
-        // OrdinalIgnoreCase semantics as direct-resource authorization.
+        // ordinal semantics as direct-resource authorization.
         await Store.Create(Make("Cased", "Alice@Example.test"));
 
-        var visible = await Store.ListVisible("orders", "alice@example.TEST");
+        var wrongCase = await Store.ListVisible("orders", "alice@example.TEST");
+        var visible = await Store.ListVisible("orders", "Alice@Example.test");
 
+        Assert.Empty(wrongCase);
         Assert.Equal("Cased", Assert.Single(visible).Title);
     }
 

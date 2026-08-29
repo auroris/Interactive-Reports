@@ -22,20 +22,22 @@ public sealed class ReportAuthorizationStoreTests : IDisposable
     }
 
     [Fact]
-    public async Task Administrator_grants_are_idempotent_case_insensitive_and_revocable()
+    public async Task Administrator_grants_are_idempotent_case_sensitive_and_revocable()
     {
         Assert.False((await _store.GetAdministratorAccess("alice")).Configured);
 
         await _store.GrantAdministrator(" Alice ");
-        await _store.GrantAdministrator("ALICE");
+        await _store.GrantAdministrator("Alice");
 
-        var access = await _store.GetAdministratorAccess("alice");
+        var access = await _store.GetAdministratorAccess("Alice");
         Assert.True(access.Configured);
         Assert.True(access.UserGranted);
+        Assert.False((await _store.GetAdministratorAccess("alice")).UserGranted);
         Assert.Single((await _store.ListAll())
             .Where(entry => entry.Kind == ReportAuthorizationEntryKind.Administrator));
 
-        Assert.True(await _store.RevokeAdministrator("aLiCe"));
+        Assert.False(await _store.RevokeAdministrator("ALICE"));
+        Assert.True(await _store.RevokeAdministrator("Alice"));
         Assert.False((await _store.GetAdministratorAccess("alice")).Configured);
     }
 
@@ -45,7 +47,8 @@ public sealed class ReportAuthorizationStoreTests : IDisposable
         await _store.GrantReportUser("Orders", "bob");
         var staged = await _store.GetReportAccess("orders", "BOB");
         Assert.False(staged.Restricted);
-        Assert.True(staged.UserGranted);
+        Assert.False(staged.UserGranted);
+        Assert.True((await _store.GetReportAccess("orders", "bob")).UserGranted);
 
         await _store.SetReportRestricted("ORDERS", true);
         var active = await _store.GetReportAccess("orders", "bob");
@@ -53,7 +56,8 @@ public sealed class ReportAuthorizationStoreTests : IDisposable
         Assert.True(active.UserGranted);
         Assert.False((await _store.GetReportAccess("orders", "carol")).UserGranted);
 
-        Assert.True(await _store.RevokeReportUser("orders", "Bob"));
+        Assert.False(await _store.RevokeReportUser("orders", "Bob"));
+        Assert.True(await _store.RevokeReportUser("orders", "bob"));
         Assert.False((await _store.GetReportAccess("orders", "bob")).UserGranted);
         await _store.SetReportRestricted("orders", false);
         Assert.False((await _store.GetReportAccess("orders", null)).Restricted);

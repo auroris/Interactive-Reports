@@ -42,11 +42,17 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         return rows.SingleOrDefault();
     }
 
+    public async Task<SavedReportMetadata?> GetMetadata(string id, CancellationToken ct = default)
+    {
+        var rows = await SelectMetadata(q => q.Where("ID", id), ct);
+        return rows.SingleOrDefault();
+    }
+
     public async Task<IReadOnlyList<SavedReport>> ListVisible(string reportName, string? identity, CancellationToken ct = default)
     {
         // Ownership filters in memory rather than in SQL: database string equality is
         // collation-dependent (case-sensitive on SQLite and Postgres by default),
-        // while every authorization decision compares identities OrdinalIgnoreCase
+        // while every authorization decision compares identities ordinally
         // (SavedReportAccessPolicy). One report's rows are few; identical semantics
         // beat pushing the OR into the WHERE clause.
         var rows = await Select(
@@ -56,8 +62,39 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         return rows
             .Where(r => r.IsPrimary
                 || r.IsGlobal
-                || (identity is not null && string.Equals(r.Owner, identity, StringComparison.OrdinalIgnoreCase)))
+                || (identity is not null && string.Equals(r.Owner, identity, StringComparison.Ordinal)))
             .ToList();
+    }
+
+    public async Task<IReadOnlyList<SavedReportMetadata>> ListVisibleMetadata(
+        string reportName,
+        string? identity,
+        CancellationToken ct = default)
+    {
+        var rows = await SelectMetadata(
+            q => q.Where("REPORT_NAME", reportName)
+                .OrderByDesc("IS_PRIMARY").OrderByDesc("IS_GLOBAL").OrderBy("TITLE"),
+            ct);
+        return rows
+            .Where(r => r.IsPrimary
+                || r.IsGlobal
+                || (identity is not null && string.Equals(r.Owner, identity, StringComparison.Ordinal)))
+            .ToList();
+    }
+
+    public async Task<SavedReport?> FindPrimaryDefault(
+        string reportName,
+        CancellationToken ct = default)
+    {
+        var rows = await Select(
+            q => q.Where("REPORT_NAME", reportName)
+                .Where("TITLE_KEY", TitleKey("Default"))
+                .Where("IS_PRIMARY", 1),
+            ct);
+        return rows
+            .OrderBy(report => report.Origin == SavedReportOrigin.User ? 0 : 1)
+            .ThenByDescending(report => report.ModifiedUtc)
+            .FirstOrDefault();
     }
 
     public async Task<SavedReport?> FindByTitle(
@@ -212,6 +249,35 @@ public sealed class SqlSavedReportStore : ISavedReportStore
                 ModifiedUtc = DateTime.Parse(reader.GetString(7), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
                 Origin = OriginFrom(reader.GetString(8)),
             });
+        }
+        return result;
+    }
+
+    private async Task<IReadOnlyList<SavedReportMetadata>> SelectMetadata(
+        Func<Query, Query> shape,
+        CancellationToken ct)
+    {
+        var cfg = Validated(_config());
+        var query = shape(new Query(cfg.TableName)
+            .Select("ID", "REPORT_NAME", "TITLE", "OWNER", "IS_GLOBAL", "IS_PRIMARY", "MODIFIED_UTC", "ORIGIN"));
+
+        await using var conn = await OpenConnection(cfg, ct);
+        var compiled = DialectSupport.GetCompiler(cfg.Dialect).Compile(query);
+        await using var cmd = CommandBuilder.Build(conn, compiled, NoParams, TimeoutSeconds, cfg.Dialect);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+
+        var result = new List<SavedReportMetadata>();
+        while (await reader.ReadAsync(ct))
+        {
+            result.Add(new SavedReportMetadata(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                Convert.ToBoolean(reader.GetValue(4), CultureInfo.InvariantCulture),
+                Convert.ToBoolean(reader.GetValue(5), CultureInfo.InvariantCulture),
+                DateTime.Parse(reader.GetString(6), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                OriginFrom(reader.GetString(7))));
         }
         return result;
     }

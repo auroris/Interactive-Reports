@@ -1,7 +1,6 @@
 using System.Text.Json;
 using GraphQL;
 using InteractiveReport.AspNetCore;
-using InteractiveReport.Core.Definitions;
 using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Identity;
 using InteractiveReport.Core.Model;
@@ -17,7 +16,7 @@ internal sealed class InteractiveReportGraphQLExecutor(
     IHttpContextAccessor httpContextAccessor,
     ConfiguredReportDocumentSynchronizer synchronizer,
     ISavedReportStore savedReports,
-    IReportDefinitionStore definitions,
+    IReportAccessService reportAccess,
     ReportExecutor executor,
     IOptionsMonitor<InteractiveReportOptions> options,
     ILogger<InteractiveReportGraphQLExecutor> logger)
@@ -37,38 +36,39 @@ internal sealed class InteractiveReportGraphQLExecutor(
             ?? throw new InvalidOperationException("GraphQL report execution requires an active HTTP request.");
 
         await synchronizer.EnsureSynced(ct);
-        var saved = await savedReports.Get(id, ct);
-        if (saved is null) throw NotFound();
-
-        var (definition, resolutionError) = await ReportRequestAccess.ResolveDefinition(
-            definitions, saved.ReportName, context, ct);
-        if (resolutionError is not null)
-            throw AuthorizationError(resolutionError, context);
-        if (definition is null) throw NotFound();
+        var metadata = await savedReports.GetMetadata(id, ct);
+        if (metadata is null) throw NotFound();
 
         var identity = ReportIdentity.Resolve(context.User, options.CurrentValue.IdentityClaim);
-        var access = SavedReportAccessPolicy.Read(saved, identity, administrator: false);
+        var savedReportAccess = SavedReportAccessPolicy.Read(metadata, identity, administrator: false);
         var resource = new InteractiveReportAuthorizationResource
         {
-            ReportName = saved.ReportName,
+            ReportName = metadata.ReportName,
             SavedReport = new SavedReportAuthorizationResource(
-                saved.Id,
-                saved.Title,
-                saved.Owner,
-                saved.IsGlobal,
-                saved.IsPrimary,
-                saved.Origin),
+                metadata.Id,
+                metadata.Title,
+                metadata.Owner,
+                metadata.IsGlobal,
+                metadata.IsPrimary,
+                metadata.Origin),
         };
-        if (await ReportRequestAccess.AuthorizeOperations(
-                definition,
-                context,
-                [InteractiveReportAction.ReadSavedReport, InteractiveReportAction.Query],
-                resource,
-                administratorRequired: access != SavedReportAccess.Allowed,
-                hideDenied: true,
-                denialDetail: null,
-                ct) is { } denied)
-            throw AuthorizationError(denied, context);
+        var authorization = await reportAccess.Authorize(
+            new ReportAccessRequest
+            {
+                ReportName = metadata.ReportName,
+                Actions = [InteractiveReportAction.ReadSavedReport, InteractiveReportAction.Query],
+                Resource = resource,
+                AdministratorRequired = savedReportAccess != SavedReportAccess.Allowed,
+                HideDenied = true,
+            },
+            context,
+            ct);
+        if (authorization.Error is not null)
+            throw AuthorizationError(authorization.Error, context);
+        var definition = authorization.Definition ?? throw NotFound();
+
+        var saved = await savedReports.Get(id, ct);
+        if (saved is null) throw NotFound();
 
         try
         {
@@ -81,7 +81,7 @@ internal sealed class InteractiveReportGraphQLExecutor(
                 if (pageSize.HasValue) state.Page.Size = pageSize.Value;
             }
 
-            var contextParameters = await ReportRequestAccess.ResolveContextParameters(definition, context, ct);
+            var contextParameters = await reportAccess.ResolveContextParameters(definition, context, ct);
             return await executor.Query(definition, state, contextParameters, ct);
         }
         catch (ReportValidationException ex)

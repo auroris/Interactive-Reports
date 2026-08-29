@@ -27,7 +27,7 @@ internal sealed class InteractiveReportStartupValidator(
             throw new InvalidOperationException(
                 "InteractiveReport:Administrators entries must be non-empty identity values.");
         if (current.Administrators.Select(identity => identity.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase).Count() != current.Administrators.Count)
+            .Distinct(StringComparer.Ordinal).Count() != current.Administrators.Count)
             throw new InvalidOperationException(
                 "InteractiveReport:Administrators contains duplicate identity values.");
         foreach (var (name, configured) in current.Reports)

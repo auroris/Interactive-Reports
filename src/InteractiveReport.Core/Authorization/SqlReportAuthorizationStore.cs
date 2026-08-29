@@ -45,7 +45,7 @@ public sealed class SqlReportAuthorizationStore : IReportAuthorizationStore
         return new DatabaseAdministratorAccess(
             rows.Count != 0,
             identity is not null && rows.Any(row =>
-                string.Equals(row.Identity, identity, StringComparison.OrdinalIgnoreCase)));
+                string.Equals(row.Identity, identity, StringComparison.Ordinal)));
     }
 
     public async Task<bool> HasAdministrators(CancellationToken ct = default)
@@ -55,27 +55,27 @@ public sealed class SqlReportAuthorizationStore : IReportAuthorizationStore
 
     public async Task<bool> IsAdministrator(string identity, CancellationToken ct = default)
         => (await Select(query => query
-            .Where("ID", EntryId(ReportAuthorizationEntryKind.Administrator, null, identity))
-            .Limit(1), ct)).Count != 0;
+                .Where("ID", EntryId(ReportAuthorizationEntryKind.Administrator, null, identity))
+                .Limit(1), ct))
+            .Any(row => string.Equals(row.Identity, identity, StringComparison.Ordinal));
 
     public async Task<DatabaseReportAccess> GetReportAccess(
         string reportName,
         string? identity,
         CancellationToken ct = default)
     {
-        var ids = new[]
+        var ids = new List<string>
         {
             EntryId(ReportAuthorizationEntryKind.ReportRestriction, reportName, null),
-            identity is null
-                ? null
-                : EntryId(ReportAuthorizationEntryKind.ReportUser, reportName, identity),
-        }.Where(id => id is not null).ToArray();
+        };
+        if (identity is not null)
+            ids.Add(EntryId(ReportAuthorizationEntryKind.ReportUser, reportName, identity));
         var rows = await Select(query => query.WhereIn("ID", ids), ct);
         return new DatabaseReportAccess(
             rows.Any(row => row.Kind == ReportAuthorizationEntryKind.ReportRestriction),
             identity is not null && rows.Any(row =>
                 row.Kind == ReportAuthorizationEntryKind.ReportUser
-                && string.Equals(row.Identity, identity, StringComparison.OrdinalIgnoreCase)));
+                && string.Equals(row.Identity, identity, StringComparison.Ordinal)));
     }
 
     public Task GrantAdministrator(string identity, CancellationToken ct = default)
@@ -303,7 +303,7 @@ public sealed class SqlReportAuthorizationStore : IReportAuthorizationStore
     }
 
     private static string ReportKey(string value) => value.Trim().ToUpperInvariant();
-    private static string IdentityKey(string value) => value.Trim().ToUpperInvariant();
+    private static string IdentityKey(string value) => value.Trim();
 
     private static string KindText(ReportAuthorizationEntryKind kind) => kind switch
     {
