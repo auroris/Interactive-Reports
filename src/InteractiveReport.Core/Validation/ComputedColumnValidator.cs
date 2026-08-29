@@ -7,20 +7,42 @@ namespace InteractiveReport.Core.Validation;
 /// <summary>Validates computed-column identity, expression syntax, and inferred result type.</summary>
 internal static partial class ComputedColumnValidator
 {
+    internal sealed class Context
+    {
+        public HashSet<string> SeenIds { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public int RuleCount { get; set; }
+    }
+
     public static List<CompiledRule<DefineColumnEffect>> Validate(
         List<ComputedColumn>? rules,
         IReadOnlyDictionary<string, ColumnModel> baseSchema,
         List<ValidationError> errors,
-        string collectionPath = "computed")
+        string collectionPath = "computed",
+        Context? context = null)
     {
-        var seenIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        context ??= new Context();
+        context.RuleCount += rules?.Count ?? 0;
+        if (context.RuleCount > 20)
+        {
+            errors.Add(new ValidationError(
+                collectionPath,
+                "at most 20 computed columns per report state"));
+            return [];
+        }
+
         return ExpressionRuleCompiler.Compile<ComputedColumn, DefineColumnEffect>(
             rules,
-            maxRules: 20,
+            maxRules: int.MaxValue,
             collectionPath,
             baseSchema,
             ExpressionRequirement.Value,
-            prepareEffect: (rule, index) => PrepareEffect(rule, index, baseSchema, seenIds, errors, collectionPath),
+            prepareEffect: (rule, index) => PrepareEffect(
+                rule,
+                index,
+                baseSchema,
+                context.SeenIds,
+                errors,
+                collectionPath),
             errors);
     }
 

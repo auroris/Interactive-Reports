@@ -50,10 +50,11 @@ public sealed class ReportDefinition
     /// <summary>
     /// Optional session timezone (a region name like "Pacific/Auckland" or an offset
     /// like "+13:00"), pinned when the connection opens on engines that have session
-    /// timezones — Oracle (ALTER SESSION) and Postgres (SET TIME ZONE) — so NOW()
-    /// follows it. Deliberately ignored on SqlServer and Sqlite, whose clock is the
-    /// server's own. Null means the server's setting. Note Oracle pools keep session
-    /// state: definitions sharing a named connection should agree on this value.
+    /// timezones — Oracle (ALTER SESSION) and Postgres (SET TIME ZONE). This affects
+    /// developer SQL and database conversions; portable-expression NOW() is instead
+    /// one request-scoped UTC value. Deliberately ignored on SqlServer and Sqlite.
+    /// Null means the server's setting. Note Oracle pools keep session state:
+    /// definitions sharing a named connection should agree on this value.
     /// </summary>
     public string? TimeZone { get; set; }
 
@@ -189,7 +190,7 @@ public sealed class ReportDefinition
 
 /// <summary>
 /// The definition's edit pencil. The URL template's {COLUMN} placeholders reference
-/// base schema columns; the referenced values are projected as hidden row data and
+/// definition-schema columns; the referenced values are projected as hidden row data and
 /// substituted client-side with URL encoding, so no markup ever crosses the wire.
 /// </summary>
 public sealed class ReportEditLink

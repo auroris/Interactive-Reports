@@ -2,8 +2,9 @@
 // become DOM properties through el(), and URL protocols pass through a small allowlist.
 
 import { el } from "../../core/dom.js";
-import { columnOf, pickable } from "../schema.js";
-import { lookupValue, modeOf, sourceLayer, stageOf } from "../state.js";
+import { columnOf } from "../schema.js";
+import { terminalTableColumns } from "../stage.js";
+import { composedFormats, lookupValue } from "../state.js";
 import { formatValue, hasFraction } from "./format.js";
 
 const LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:", "tel:"]);
@@ -27,25 +28,24 @@ const sourceName = (w, format, property, fallback) => {
     const value = format?.[property];
     if (typeof value !== "string" || !value.trim()) return fallback;
     const requested = value.trim();
-    return pickable(w).find(column => column.name.toLowerCase() === requested.toLowerCase())?.name ?? requested;
+    return terminalTableColumns(w).find(column => column.name.toLowerCase() === requested.toLowerCase())?.name ?? requested;
 };
 
-/// A column's effective format: the terminal stage's own entry first, then the
-/// source layer keyed by the column's formatSource (a metric or cell inherits
-/// its source column's mask and style until the view overrides it) or by the
-/// pass-through name itself.
+/// A column's effective format over the complete selected ancestry. A direct
+/// terminal-table entry wins; synthetic shape outputs otherwise inherit through
+/// formatSource without choosing a shape-specific renderer path.
 export function formatForColumn(w, col) {
-    const mode = modeOf(w.doc);
-    const stage = mode === "groupBy" ? stageOf(w.doc, "group")
-        : mode === "pivot" ? stageOf(w.doc, "pivot")
-        : null;
-    const own = stage ? lookupValue(stage.layer?.formats, col.name) : null;
+    const formats = composedFormats(w.doc);
+    const own = lookupValue(formats.output, col.name)
+        ?? lookupValue(formats.input, col.name);
     if (own) return own;
-    return lookupValue(sourceLayer(w.doc).formats, col.formatSource ?? col.name) ?? null;
+    return lookupValue(formats.input, col.formatSource ?? col.name) ?? null;
 }
 
 function sourceColumn(w, name, fallback) {
-    return columnOf(w, name) ?? (name === fallback.name ? fallback : { name, type: "other" });
+    return terminalTableColumns(w).find(column => column.name.toLowerCase() === String(name).toLowerCase())
+        ?? columnOf(w, name)
+        ?? (name === fallback.name ? fallback : { name, type: "other" });
 }
 
 export function renderTextValue(w, row, col, decimal = false, format = null) {

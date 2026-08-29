@@ -176,16 +176,16 @@ public sealed class FeatureWhitelistHttpTests : IAsyncLifetime
         // valid — the whitelist gates chrome and the two enforced endpoints, not state.
         var state = new
         {
-            v = 3,
-            pipeline = new object[]
+            activeTable = "base",
+            tables = new
             {
-                new
+                @base = new
                 {
-                    shape = new { kind = "source" },
-                    layer = new
+                    @from = "definition",
+                    composables = new object[]
                     {
-                        filters = new[] { new { expr = "ID = 1" } },
-                        breaks = new[] { "LABEL" },
+                        new { kind = "filter", filters = new[] { new { expr = "ID = 1" } } },
+                        new { kind = "break", breaks = new[] { "LABEL" } },
                     },
                 },
             },

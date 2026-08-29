@@ -127,8 +127,12 @@ public sealed class ColumnConfigurationHttpTests : IAsyncLifetime
         // Label-only entries deliver nothing here — the label rides the default
         // report's labels channel instead.
         Assert.False(overrides.TryGetProperty("LABEL", out _));
-        var labels = schema.GetProperty("defaultState").GetProperty("pipeline")[0]
-            .GetProperty("layer").GetProperty("labels");
+        var defaultState = schema.GetProperty("defaultState");
+        var labels = defaultState.GetProperty("tables")
+            .GetProperty(defaultState.GetProperty("activeTable").GetString()!)
+            .GetProperty("composables").EnumerateArray()
+            .Single(c => c.GetProperty("kind").GetString() == "labels")
+            .GetProperty("labels");
         Assert.Equal("Caption", labels.GetProperty("LABEL").GetString());
     }
 
@@ -152,10 +156,17 @@ public sealed class ColumnConfigurationHttpTests : IAsyncLifetime
     {
         var state = new
         {
-            v = 3,
-            pipeline = new object[]
+            activeTable = "base",
+            tables = new
             {
-                new { shape = new { kind = "source" }, layer = new { columns = new[] { "LABEL" } } },
+                @base = new
+                {
+                    @from = "definition",
+                    composables = new object[]
+                    {
+                        new { kind = "select", columns = new[] { "LABEL" } },
+                    },
+                },
             },
         };
         using var response = await _client.PostAsync(
@@ -180,13 +191,16 @@ public sealed class ColumnConfigurationHttpTests : IAsyncLifetime
     {
         var state = new
         {
-            v = 3,
-            pipeline = new object[]
+            activeTable = "base",
+            tables = new
             {
-                new
+                @base = new
                 {
-                    shape = new { kind = "source" },
-                    layer = new { sorts = new[] { new { col = "NOTES" } } },
+                    @from = "definition",
+                    composables = new object[]
+                    {
+                        new { kind = "sort", sorts = new[] { new { col = "NOTES" } } },
+                    },
                 },
             },
         };

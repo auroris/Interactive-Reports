@@ -1,16 +1,14 @@
 // Column presentation dialogs: which columns display and in what order
 // (Select Columns shuttle), what a column's heading says (Rename), and the
 // per-column settings dialog (visibility, alignment, format mask, styling).
-// All three follow the stage context: the source table in grid, the group
-// stage's table under a group tail, the Pivot output's presentation maps
-// under a pivot. Display As (link/image renderers) is a source-table
-// affordance — an aggregate is never a link.
+// All three follow the active table's terminal context. A shape composable does
+// not select a different presentation implementation.
 
 import { el, labeled, sel } from "../../core/dom.js";
 import { openDialog } from "../../core/dialog.js";
 import { featureEnabled, typeOf } from "../schema.js";
 import { stageContext, visibleStageColumnNames } from "../stage.js";
-import { lookupValue, sameColumn, setMapEntry, sourceLayer } from "../state.js";
+import { lookupValue, sameColumn, setMapEntry } from "../state.js";
 import { colorPick, colOptions } from "./parts.js";
 import { masksFor } from "../render/format.js";
 import { renderColumnValue } from "../render/column-renderers.js";
@@ -20,10 +18,7 @@ import { presentationStyle } from "../render/presentation.js";
 export function columnsDialog(w) {
     const ctx = stageContext(w);
     if (!ctx.caps.columns) return;
-    // Group dims always display at T0 — hiding a dim makes rows look duplicated —
-    // so the shuttle offers only the rest and dims are re-pinned in front on apply.
-    const pinned = ctx.mode === "grid" ? [] : (ctx.dims ?? []);
-    const universe = ctx.columns.filter(c => !pinned.some(p => sameColumn(p, c.name)));
+    const universe = ctx.columns;
     const byName = new Map(universe.map(c => [c.name, c]));
     const visible = visibleStageColumnNames(ctx, w);
     const displayedNames = visible.filter(n => byName.has(n));
@@ -65,14 +60,11 @@ export function columnsDialog(w) {
                 el("label", { class: "ir-shuttle-col" }, el("span", { class: "ir-shuttle-head" }, w.t("columns.displayInReport")), shown),
                 el("div", { class: "ir-shuttle-btns" },
                     btn("↑", w.t("columns.moveUp"), () => nudge(-1)),
-                    btn("↓", w.t("columns.moveDown"), () => nudge(1)))),
-            pinned.length
-                ? el("p", { class: "ir-dialog-note" }, w.t("columns.groupAlwaysDisplay"))
-                : null),
+                    btn("↓", w.t("columns.moveDown"), () => nudge(1))))),
         onApply: () => {
             const names = [...shown.options].map(o => o.value);
-            if (!pinned.length && !names.length) throw new Error(w.t("columns.displayAtLeastOne"));
-            return w.apply(d => { ctx.columnsLayer(d).columns = [...pinned, ...names]; });
+            if (!names.length) throw new Error(w.t("columns.displayAtLeastOne"));
+            return w.apply(d => { ctx.columnsLayer(d).columns = names; });
         },
     });
 }
@@ -92,7 +84,6 @@ export function columnSettingsDialog(w, initialCol) {
     const originallyVisible = visibleStageColumnNames(ctx, w);
     const canHide = ctx.caps.visibility && featureEnabled(w, "columns");
     const withDisplayAs = ctx.caps.displayAs;
-    const isPinned = name => ctx.mode !== "grid" && (ctx.dims ?? []).some(d => sameColumn(d, name));
     const formatsOf = d => {
         const layer = ctx.formatsLayer(d);
         return layer.formats ??= {};
@@ -108,8 +99,8 @@ export function columnSettingsDialog(w, initialCol) {
         { value: "image", label: w.t("columns.image") },
     ]);
     displayAsSel.classList.add("ir-display-as");
-    const urlColumnSel = sel(colOptions(w));
-    const textColumnSel = sel(colOptions(w));
+    const urlColumnSel = sel(colOptions(w, { columns: universe }));
+    const textColumnSel = sel(colOptions(w, { columns: universe }));
     const urlColumnField = labeled(w.t("columns.urlColumn"), urlColumnSel);
     const textColumnField = labeled(w.t("columns.linkTextColumn"), textColumnSel);
     urlColumnField.classList.add("ir-url-only");
@@ -217,7 +208,6 @@ export function columnSettingsDialog(w, initialCol) {
     const load = name => {
         const s = settingsFor(name);
         visChk.checked = s.visible !== false;
-        visChk.disabled = isPinned(name);
         displayAsSel.value = s.displayAs ?? "";
         urlColumnSel.value = s.urlColumn;
         textColumnSel.value = s.textColumn;
@@ -271,7 +261,6 @@ export function columnSettingsDialog(w, initialCol) {
             let visibilityChanged = false;
             if (canHide) {
                 for (const [name, s] of staged) {
-                    if (isPinned(name)) continue;
                     const visible = columns.includes(name);
                     if (s.visible && !visible) { columns.push(name); visibilityChanged = true; }
                     else if (!s.visible && visible) { columns = columns.filter(n => n !== name); visibilityChanged = true; }
@@ -308,28 +297,22 @@ export function columnSettingsDialog(w, initialCol) {
     });
 }
 
-/// Column headings only. In grid, a base column writes the source layer's labels
-/// (kept as an explicit map so clearing an inherited default sticks) and a
-/// computed column edits its rule's label. Under a group or pivot, the rename is
-/// view-scoped: it writes the terminal stage's labels map — the grid heading is
-/// untouched — except for that stage's own computed columns, which edit their
-/// rule. The expression name never changes; that is always the real name or id.
+/// Column headings only. A computed column owned by the active editor node keeps
+/// its heading on that rule; every other heading writes the same terminal labels
+/// composable, regardless of the shape that produced the table.
 export function renameDialog(w, col) {
     const ctx = stageContext(w);
     const stageRule = ctx.computeLayer
         ? (ctx.computeLayer(w.doc).computed ?? []).find(c => sameColumn(c.id, col))
         : null;
-    const gridSourceRule = ctx.mode === "grid" ? stageRule : null;
     const column = ctx.columns.find(c => sameColumn(c.name, col));
-    const schemaDefault = stageRule && (ctx.mode === "grid" || !column?.dim)
+    const schemaDefault = stageRule
         ? stageRule.id
         : w.schema?.columns?.find(c => sameColumn(c.name, col))?.label ?? column?.label ?? col;
 
-    const currentOverride = ctx.mode === "grid"
-        ? (gridSourceRule ? gridSourceRule.label ?? "" : lookupValue(sourceLayer(w.doc).labels, col) ?? "")
-        : stageRule
-            ? stageRule.label ?? ""
-            : lookupValue(ctx.labelsLayer(w.doc).labels, col) ?? "";
+    const currentOverride = stageRule
+        ? stageRule.label ?? ""
+        : lookupValue(ctx.labelsLayer(w.doc).labels, col) ?? "";
 
     const input = el("input", {
         class: "ir-input", type: "text",
@@ -351,11 +334,11 @@ export function renameDialog(w, col) {
                 const rule = ctx.computeLayer
                     ? (ctx.computeLayer(d).computed ?? []).find(c => sameColumn(c.id, col))
                     : null;
-                if (rule && (ctx.mode === "grid" || !column?.dim)) {
+                if (rule) {
                     rule.label = label || rule.id;
                     return;
                 }
-                const layer = ctx.mode === "grid" ? sourceLayer(d) : ctx.labelsLayer(d);
+                const layer = ctx.labelsLayer(d);
                 if (!label || label === schemaDefault) {
                     if (layer.labels) setMapEntry(layer.labels, col, undefined);
                 } else {

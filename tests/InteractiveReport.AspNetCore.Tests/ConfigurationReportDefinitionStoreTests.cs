@@ -39,18 +39,26 @@ public sealed class ConfigurationReportDefinitionStoreTests
             Connection = "db",
             Dialect = ReportDialect.Sqlite,
             Sql = "select 1 as ID",
-            // The config-bound default state is a pipeline document.
+            // The config-bound default state is a composable table document.
             DefaultState = new ReportState
             {
                 Search = "configured",
-                Pipeline =
-                [
-                    new PipelineStage
+                ActiveTable = "arbitrary",
+                Tables = new()
+                {
+                    ["arbitrary"] = new ReportTable
                     {
-                        Shape = new StageShape { Kind = "source" },
-                        Layer = new StageLayer { Filters = [new FilterRule { Expr = "ID = 1" }] },
+                        From = "definition",
+                        Composables =
+                        [
+                            new TableComposable
+                            {
+                                Kind = "filter",
+                                Filters = [new FilterRule { Expr = "ID = 1" }],
+                            },
+                        ],
                     },
-                ],
+                },
             },
         };
         var options = new InteractiveReportOptions();
@@ -66,13 +74,13 @@ public sealed class ConfigurationReportDefinitionStoreTests
         Assert.Equal("orders", snapshot.Name);
         Assert.NotSame(configured, snapshot);
         Assert.NotSame(configured.DefaultState, snapshot.DefaultState);
-        Assert.NotSame(configured.DefaultState!.Pipeline, snapshot.DefaultState!.Pipeline);
-        Assert.Equal("source", snapshot.DefaultState.Pipeline![0].Shape!.Kind);
+        Assert.NotSame(configured.DefaultState!.Tables, snapshot.DefaultState!.Tables);
+        Assert.Equal("definition", snapshot.DefaultState.Tables!["arbitrary"].From);
 
         snapshot.DefaultState.Search = "changed";
-        snapshot.DefaultState.Pipeline[0].Layer!.Filters![0].Expr = "ID = 2";
+        snapshot.DefaultState.Tables["arbitrary"].Composables![0].Filters![0].Expr = "ID = 2";
         Assert.Equal("configured", configured.DefaultState.Search);
-        Assert.Equal("ID = 1", configured.DefaultState.Pipeline![0].Layer!.Filters![0].Expr);
+        Assert.Equal("ID = 1", configured.DefaultState.Tables!["arbitrary"].Composables![0].Filters![0].Expr);
     }
 
     [Fact]
@@ -427,13 +435,15 @@ public sealed class ConfigurationReportDefinitionStoreTests
         Assert.False(definition.Authorization.AllowAnonymous);
         Assert.Null(definition.Features);
 
-        var layer = definition.DefaultState!.Pipeline![0].Layer!;
-        Assert.DoesNotContain("ID", layer.Columns!);
+        var table = definition.DefaultState!.Tables![definition.DefaultState.ActiveTable!];
+        var columns = table.Composables!.Single(c => c.Kind == "select").Columns!;
+        var formats = table.Composables!.Single(c => c.Kind == "formats").Formats!;
+        Assert.DoesNotContain("ID", columns);
         Assert.Equal(
             ["toggleGlobal", "togglePrimary", "reassign", "openState", "download", "delete"],
             new[] { "ACTION_PUBLISH", "ACTION_PRIMARY", "ACTION_REASSIGN", "ACTION_STATE", "ACTION_DOWNLOAD", "ACTION_DELETE" }
-                .Select(column => layer.Formats![column].Command));
-        Assert.All(layer.Formats!.Values, format =>
+                .Select(column => formats[column].Command));
+        Assert.All(formats.Values, format =>
         {
             Assert.Equal("action", format.DisplayAs);
             Assert.Equal("ID", format.KeyColumn);
@@ -629,14 +639,22 @@ public sealed class ConfigurationReportDefinitionStoreTests
         sortingDef.Columns = new() { ["NOTES"] = new ReportColumnOverride { Sortable = false } };
         sortingDef.DefaultState = new ReportState
         {
-            Pipeline =
-            [
-                new PipelineStage
+            ActiveTable = "sorting",
+            Tables = new()
+            {
+                ["sorting"] = new ReportTable
                 {
-                    Shape = new StageShape { Kind = "source" },
-                    Layer = new StageLayer { Sorts = [new SortRule { Col = "NOTES" }] },
+                    From = "definition",
+                    Composables =
+                    [
+                        new TableComposable
+                        {
+                            Kind = "sort",
+                            Sorts = [new SortRule { Col = "NOTES" }],
+                        },
+                    ],
                 },
-            ],
+            },
         };
         using var sorting = StoreFor(sortingDef);
         var sortError = await Assert.ThrowsAsync<InvalidOperationException>(
@@ -647,14 +665,18 @@ public sealed class ConfigurationReportDefinitionStoreTests
         breakingDef.Columns = new() { ["NOTES"] = new ReportColumnOverride { Sortable = false } };
         breakingDef.DefaultState = new ReportState
         {
-            Pipeline =
-            [
-                new PipelineStage
+            ActiveTable = "breaking",
+            Tables = new()
+            {
+                ["breaking"] = new ReportTable
                 {
-                    Shape = new StageShape { Kind = "source" },
-                    Layer = new StageLayer { Breaks = ["notes"] },
+                    From = "definition",
+                    Composables =
+                    [
+                        new TableComposable { Kind = "break", Breaks = ["notes"] },
+                    ],
                 },
-            ],
+            },
         };
         using var breaking = StoreFor(breakingDef);
         var breakError = await Assert.ThrowsAsync<InvalidOperationException>(

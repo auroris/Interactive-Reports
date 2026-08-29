@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
+import { sourceLayer } from "../../src/client/report/state.js";
+import { reportState } from "./report-state-fixture.js";
 
 const window = new Window({ url: "https://host.example/dashboard" });
 function Option(text = "", value = "", defaultSelected = false, selected = false) {
@@ -41,7 +43,7 @@ globalThis.fetch = async (url, options = {}) => {
             // only as part of the default report; column metadata stays neutral.
             defaultState: {
                 page: { index: 1, size: 25 },
-                pipeline: [{ shape: { kind: "source" }, layer: { labels: { ID: "Ident" } } }],
+                ...reportState({ labels: { ID: "Ident" } }),
             },
             limits: { defaultPageSize: 25, maxPageSize: 100 },
             columns: [{ name: "ID", label: "ID", type: "number" }],
@@ -175,7 +177,7 @@ test("a host can retrieve the current export without initiating a browser downlo
     assert.ok(request, "the public method uses the ordinary report export endpoint");
     assert.equal(request.method, "POST");
     assert.equal("v" in JSON.parse(request.body), false);
-    assert.equal(JSON.parse(request.body).pipeline[0].shape.kind, "source");
+    assert.equal(JSON.parse(request.body).tables.base.from, "definition");
     assert.equal(document.querySelector('a[download="orders.csv"]'), null,
         "retrieval must not synthesize a browser download anchor");
 
@@ -284,8 +286,7 @@ test("labels resolve client-side: default report seeds them, rename overrides, c
         // serialize the whole happy-dom graph.
         assert.equal(!report.shadowRoot.querySelector(".ir-dialog"), true, "the dialog should close on success");
         const doc = JSON.parse(requests.filter(r => r.url.endsWith("/query")).at(-1).body);
-        // Display labels live on the posted pipeline's source layer.
-        return doc.pipeline?.[0]?.layer ?? {};
+        return sourceLayer(doc);
     };
 
     assert.deepEqual((await rename("Ticket")).labels, { ID: "Ticket" });

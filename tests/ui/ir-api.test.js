@@ -23,7 +23,7 @@ test("coded errors localize their core message and retain untranslated details",
         code: "IR-1201",
         title: "Server title is only a fallback",
         description: "Server description is only a fallback.",
-        details: "pipeline[0]: Unknown column X\npipeline[0]: Bad expression",
+        details: "tables.base.composables[0]: Unknown column X\ntables.base.composables[0]: Bad expression",
         traceId: "00-abc-01",
     }, 400);
     // The correlation reference is appended by each presenter in its own format.
@@ -31,22 +31,22 @@ test("coded errors localize their core message and retain untranslated details",
     assert.deepEqual(errorLines(err, "en"), [
         "Report state failed validation",
         "One or more report settings are invalid.",
-        "pipeline[0]: Unknown column X",
-        "pipeline[0]: Bad expression",
+        "tables.base.composables[0]: Unknown column X",
+        "tables.base.composables[0]: Bad expression",
     ]);
     assert.deepEqual(errorLines(err, "fr-CA"), [
         "Échec de la validation de l’état du rapport",
         "Un ou plusieurs paramètres du rapport ne sont pas valides.",
-        "pipeline[0]: Unknown column X",
-        "pipeline[0]: Bad expression",
+        "tables.base.composables[0]: Unknown column X",
+        "tables.base.composables[0]: Bad expression",
     ]);
     assert.deepEqual(errorLines(new ApiError({}, 502)), ["HTTP 502"]);
     assert.deepEqual(errorLines(new Error("plain failure")), ["plain failure"]);
     assert.deepEqual(errorLines("just text"), ["just text"]);
     assert.equal(errorText(err, null, "en"),
-        "Report state failed validation — One or more report settings are invalid. — pipeline[0]: Unknown column X — pipeline[0]: Bad expression (ref 00-abc-01)");
+        "Report state failed validation — One or more report settings are invalid. — tables.base.composables[0]: Unknown column X — tables.base.composables[0]: Bad expression (ref 00-abc-01)");
     assert.equal(errorText(err, null, "fr-CA"),
-        "Échec de la validation de l’état du rapport — Un ou plusieurs paramètres du rapport ne sont pas valides. — pipeline[0]: Unknown column X — pipeline[0]: Bad expression (réf. 00-abc-01)");
+        "Échec de la validation de l’état du rapport — Un ou plusieurs paramètres du rapport ne sont pas valides. — tables.base.composables[0]: Unknown column X — tables.base.composables[0]: Bad expression (réf. 00-abc-01)");
 
     const future = new ApiError({
         code: "IR-9999",

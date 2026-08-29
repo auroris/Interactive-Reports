@@ -51,6 +51,21 @@ public sealed class ConsistentReadTests : IDisposable
         Sql = "SELECT ORDER_ID, CUSTOMER, AMOUNT FROM ORDERS",
     };
 
+    private static ReportState WithCachedSourceSchema(ReportState document)
+    {
+        // These tests count transactions opened by the active query. A derived
+        // table's null parent cache would intentionally trigger a separate grid
+        // query before that active query, so supply the already-known parent
+        // snapshot while leaving the active table null and eligible for refresh.
+        document.Tables!["source"].Schema =
+        [
+            new ColumnInfo("ORDER_ID", "Order Id", "number", false),
+            new ColumnInfo("CUSTOMER", "Customer", "text", false),
+            new ColumnInfo("AMOUNT", "Amount", "number", false),
+        ];
+        return document;
+    }
+
     [Fact]
     public async Task Grid_count_aggregates_and_rows_share_one_read_transaction()
     {
@@ -70,7 +85,7 @@ public sealed class ConsistentReadTests : IDisposable
     {
         var result = await Executor().Query(
             Definition(),
-            Doc(tail: [Group(["CUSTOMER"])]),
+            WithCachedSourceSchema(Doc(tail: [Group(["CUSTOMER"])])),
             NoParams);
 
         Assert.Equal(2, result.TotalRows);
@@ -82,7 +97,7 @@ public sealed class ConsistentReadTests : IDisposable
     {
         var result = await Executor().Query(
             Definition(),
-            Doc(tail:
+            WithCachedSourceSchema(Doc(tail:
             [
                 ChartStage(shape =>
                 {
@@ -90,7 +105,7 @@ public sealed class ConsistentReadTests : IDisposable
                     shape.Label = "CUSTOMER";
                     shape.Fn = AggregateFn.Count;
                 }),
-            ]),
+            ])),
             NoParams);
 
         Assert.Equal(2, result.TotalRows);
@@ -102,14 +117,14 @@ public sealed class ConsistentReadTests : IDisposable
     {
         var result = await Executor().Query(
             Definition(),
-            Doc(tail:
+            WithCachedSourceSchema(Doc(tail:
             [
                 Pivot(
                     rows: ["ORDER_ID"],
                     cols: ["CUSTOMER"],
                     values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
                     totals: false),
-            ]),
+            ])),
             NoParams);
 
         Assert.NotEmpty(result.Rows);

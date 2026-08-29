@@ -377,7 +377,7 @@ public class LiveDialectTests
                 new ComputedColumn { Id = "c4", Expr = "TO_STRING(ORDER_DATE, 'YYYY-MM')" },
                 // Feb 2026 via month truncation: ids 6, 7, 10.
                 new ComputedColumn { Id = "c5", Expr = "CASE WHEN DATE_TRUNC('MONTH', ORDER_DATE) = TO_DATE('2026-02-01') THEN 1 ELSE 0 END" },
-                // NOW() on the engine clock, exercised through BETWEEN + arithmetic.
+                // One request-scoped UTC NOW(), exercised through BETWEEN + arithmetic.
                 new ComputedColumn { Id = "c6", Expr = "CASE WHEN NOW() BETWEEN TO_DATE('2020-01-01') AND NOW() + 1 THEN 1 ELSE 0 END" },
                 // NULL keeps its Date type through producers and arithmetic: with a
                 // bare NULL, Oracle typed the sum as NUMBER and Postgres either made
@@ -410,10 +410,9 @@ public class LiveDialectTests
     [MemberData(nameof(Dialects))]
     public async Task Definition_timezone_pins_the_session_where_one_exists(ReportDialect dialect)
     {
-        // def.TimeZone pins the session on engines that have session timezones
-        // (Oracle ALTER SESSION, Postgres SET TIME ZONE) so NOW() follows it; on
-        // SQL Server the configured value is deliberately ignored — the query must
-        // simply run as if the setting were absent.
+        // def.TimeZone pins developer SQL sessions on engines that expose session
+        // timezones (Oracle ALTER SESSION, Postgres SET TIME ZONE). Portable NOW()
+        // remains request-scoped UTC. SQL Server deliberately ignores the setting.
         var live = LiveDb.For(dialect);
         var def = live.Definition();
         def.Name = $"live-tz-{dialect}";
@@ -672,7 +671,7 @@ public class LiveDialectTests
                     shape.Fn = AggregateFn.Count;
                 }),
             ]), NoParams));
-        Assert.Contains(ex.Errors, e => e.Path == "pipeline[1].shape" && e.Message.Contains("3 points"));
+        Assert.Contains(ex.Errors, e => e.Path == "tables.chart1.composables[0]" && e.Message.Contains("3 points"));
     }
 
     [SkippableTheory]

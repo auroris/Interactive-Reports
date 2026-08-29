@@ -38,7 +38,13 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
             {
               "title": "Regional View",
               "state": {
-                "pipeline": [ { "shape": { "kind": "source" }, "layer": { "columns": [ "ID", "LABEL" ] } } ]
+                "activeTable": "regional",
+                "tables": {
+                  "regional": {
+                    "from": "definition",
+                    "composables": [ { "kind": "select", "columns": [ "ID", "LABEL" ] } ]
+                  }
+                }
               }
             }
             """);
@@ -142,8 +148,12 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, admin.StatusCode);
         var schema = await ReadJson(admin);
         Assert.Equal("Saved Reports", schema.GetProperty("title").GetString());
-        Assert.Equal("action", schema.GetProperty("defaultState").GetProperty("pipeline")[0]
-            .GetProperty("layer").GetProperty("formats").GetProperty("ACTION_PUBLISH")
+        var state = schema.GetProperty("defaultState");
+        Assert.Equal("action", state.GetProperty("tables")
+            .GetProperty(state.GetProperty("activeTable").GetString()!)
+            .GetProperty("composables").EnumerateArray()
+            .Single(c => c.GetProperty("kind").GetString() == "formats")
+            .GetProperty("formats").GetProperty("ACTION_PUBLISH")
             .GetProperty("displayAs").GetString());
     }
 

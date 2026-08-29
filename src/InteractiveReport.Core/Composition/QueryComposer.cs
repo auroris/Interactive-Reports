@@ -8,8 +8,8 @@ namespace InteractiveReport.Core.Composition;
 /// Turns (definition, validated state) into SqlKata queries: the developer's base SELECT
 /// wrapped as a derived table (the APEX trick) with user operations layered on top.
 /// The page and count queries are cloned from one filtered core so they cannot disagree.
-/// Stage layers extend the same pattern upward: a group stage wraps the filtered core in
-/// GROUP BY, and its layer's computed columns/markers/sorts ride one more wrap above it.
+/// A group composable extends the same pattern upward, and the shared ordinary-operation
+/// plan continues over its output.
 /// Identifiers come exclusively from schema-validated ColumnModel instances; values are
 /// always bindings, never inlined.
 /// </summary>
@@ -48,7 +48,11 @@ public static class QueryComposer
         // their truth values as private markers so every expression function and
         // dialect rule is evaluated by the database, not reimplemented in C#.
         foreach (var rule in state.Rules.Decorations)
-            ExpressionRuleSqlApplicator.ApplyDecoration(page, rule, def.GetEffectiveDialect());
+            ExpressionRuleSqlApplicator.ApplyDecoration(
+                page,
+                rule,
+                def.GetEffectiveDialect(),
+                state.EvaluationUtcNow);
 
         foreach (var sort in effectiveSorts)
             ApplySort(page, sort, def.GetEffectiveDialect());
@@ -71,41 +75,78 @@ public static class QueryComposer
     }
 
     /// <summary>
-    /// The filtered core every derived query clones: base wrap (+ ir_calc second wrap
-    /// when computed columns exist) with filters and search applied.
+    /// The relational input every shape consumes. Each compute/filter composable is
+    /// materialized in document order, so a later operation sees exactly the schema
+    /// produced before it rather than a bucketed compute-before-filter rewrite.
     /// </summary>
     public static Query BuildFilteredCore(ReportDefinition def, ValidatedState state)
     {
         // Alias without AS: Oracle rejects AS in table aliases (ORA-00933); the bare
         // form is valid on every supported dialect.
-        var inner = new Query().FromRaw($"({def.Sql}) {BaseAlias}");
-
-        Query core;
-        if (state.Rules.Definitions.Count > 0)
-        {
-            // Second wrap: no dialect reliably allows referencing a SELECT alias in
-            // WHERE, so computed columns become real columns of ir_calc — after this,
-            // filters, sorts, search, aggregates, breaks, and stage dimensions treat
-            // them uniformly.
-            // Bare, matching the unquoted alias above: a quoted "ir_base" would not
-            // resolve against the case-folded IR_BASE on Oracle (ORA-00904).
-            inner.SelectRaw($"{BaseAlias}.*");
-            foreach (var rule in state.Rules.Definitions)
-                ExpressionRuleSqlApplicator.ApplyDefinition(inner, rule, def.GetEffectiveDialect());
-            core = new Query().From(inner.As(CalcAlias));
-        }
-        else
-        {
-            core = inner;
-        }
-
-        foreach (var rule in state.Rules.RowPredicates)
-            ExpressionRuleSqlApplicator.ApplyRowPredicate(core, rule, def.GetEffectiveDialect());
+        var relation = new Query().FromRaw($"({def.Sql}) {BaseAlias}");
+        var core = ApplyOperations(
+            relation,
+            state.Operations,
+            def.GetEffectiveDialect(),
+            state.EvaluationUtcNow,
+            $"{BaseAlias}.*",
+            CalcAlias,
+            "ir_source_calc");
 
         if (state.Search is not null)
             ApplySearch(core, state);
 
         return core;
+    }
+
+    /// <summary>
+    /// Applies relational operations to an already-addressable relation. Filters can
+    /// remain on the current relation. A compute step selects the current row plus its
+    /// definitions, then materializes that result so every later operation can bind to
+    /// the new columns. This preserves stack order without adding wrappers for ordinary
+    /// filter-only documents.
+    /// </summary>
+    private static Query ApplyOperations(
+        Query relation,
+        IReadOnlyList<ValidTableOperation> operations,
+        ReportDialect dialect,
+        DateTime evaluationUtcNow,
+        string initialStar,
+        string firstComputeAlias,
+        string laterComputeAliasPrefix)
+    {
+        var current = relation;
+        var star = initialStar;
+        var computeIndex = 0;
+        for (var index = 0; index < operations.Count; index++)
+        {
+            var operation = operations[index];
+            if (operation.Definitions.Count > 0)
+            {
+                current.SelectRaw(star);
+                foreach (var rule in operation.Definitions)
+                    ExpressionRuleSqlApplicator.ApplyDefinition(
+                        current,
+                        rule,
+                        dialect,
+                        evaluationUtcNow);
+
+                var alias = computeIndex++ == 0
+                    ? firstComputeAlias
+                    : $"{laterComputeAliasPrefix}_{index}";
+                current = new Query().From(current.As(alias));
+                star = $"{alias}.*";
+            }
+
+            foreach (var rule in operation.Predicates)
+                ExpressionRuleSqlApplicator.ApplyRowPredicate(
+                    current,
+                    rule,
+                    dialect,
+                    evaluationUtcNow);
+        }
+
+        return current;
     }
 
     /// <summary>
@@ -128,7 +169,7 @@ public static class QueryComposer
     {
         var core = BuildFilteredCore(def, state);
         var dialect = def.GetEffectiveDialect();
-        var layer = state.View.GroupLayer!;
+        var layer = state.View.Output!;
         var page = BuildGroupStagePage(core, state, def.GetEffectiveDialect());
         if (!state.PageAll)
         {
@@ -145,8 +186,9 @@ public static class QueryComposer
             MetricValues(state.View),
             layer with { Decorations = [], Sorts = [] },
             dialect,
-            includeDecorations: false,
-            sorts: []);
+            state.EvaluationUtcNow);
+        // Footer and break datasets consume the completed terminal relation, not the
+        // grouped shape beneath its ordinary operations.
         var stageCore = new Query().From(stageTable.As("ir_groups"));
         var count = stageCore.Clone().AsCount();
         var effectiveSorts = GroupStageSorts(layer.Sorts, layer.Breaks, state.View.GroupBy).ToList();
@@ -169,14 +211,14 @@ public static class QueryComposer
     }
 
     /// <summary>
-    /// The complete ordered group-stage table: grouped core, the layer's computed
-    /// columns and highlight markers wrapped above it, layer sorts (explicit sorts
-    /// first, remaining dims ascending so paging stays deterministic).
+    /// The complete ordered group-stage page. The shape produces the grouped relation;
+    /// the shared operation fold transforms it; projection, decoration, and ordering
+    /// are then ordinary terminal-table concerns.
     /// </summary>
     private static Query BuildGroupStagePage(Query core, ValidatedState state, ReportDialect dialect)
     {
         var view = state.View;
-        var layer = view.GroupLayer!;
+        var layer = view.Output!;
         var sorts = GroupStageSorts(layer.Sorts, layer.Breaks, view.GroupBy).ToList();
         var query = BuildGroupStageTable(
             core,
@@ -184,15 +226,21 @@ public static class QueryComposer
             MetricValues(view),
             layer,
             dialect,
-            includeDecorations: true,
-            sorts);
+            state.EvaluationUtcNow);
+        query.Select(layer.ProjectionColumns.Select(column => column.Name).ToArray());
+        foreach (var rule in layer.Decorations)
+            ExpressionRuleSqlApplicator.ApplyDecoration(
+                query,
+                rule,
+                dialect,
+                state.EvaluationUtcNow);
         foreach (var sort in sorts)
             ApplySort(query, sort, dialect);
         return query;
     }
 
     /// <summary>
-    /// Pivot source: the base table grouped over row + column dimensions, ordered rows
+    /// Pivot source: the composed input relation grouped over row + column dimensions, ordered rows
     /// first so groups arrive row-contiguous, capped at maxGroups+1 so the executor can
     /// detect overflow. The Pivot itself happens in memory; native PIVOT syntax never
     /// enters the picture.
@@ -217,7 +265,7 @@ public static class QueryComposer
     }
 
     /// <summary>
-    /// Optional Pivot footer: re-aggregate the filtered base table by the Pivot's
+    /// Optional Pivot footer: re-aggregate the composed input relation by the Pivot's
     /// column dimensions alone. Deriving totals from the source, rather than adding
     /// rendered cells, keeps averages, medians, distinct counts, and null semantics
     /// correct.
@@ -234,55 +282,27 @@ public static class QueryComposer
     }
 
     /// <summary>
-    /// The group stage's table, unordered: grouped core plus — when the layer computes,
-    /// decorates, or needs an alias materialized for a null-placement sort — the
-    /// ir_stage wrap. Computed columns become real columns of ir_stage_calc before any
-    /// marker or sort expression references them, mirroring the ir_base/ir_calc split.
+    /// The group composable's output relation followed by the same ordered operation
+    /// fold used for a definition-backed table.
     /// </summary>
     private static Query BuildGroupStageTable(
         Query core,
         IReadOnlyList<ColumnModel> dims,
         IReadOnlyList<GroupedValue> values,
-        ValidStageLayer layer,
+        ValidTableLayer layer,
         ReportDialect dialect,
-        bool includeDecorations,
-        IReadOnlyList<ValidSort> sorts)
+        DateTime evaluationUtcNow)
     {
         var grouped = BuildGrouped(core, dims, values, dialect);
-        var decorations = includeDecorations ? layer.Decorations : [];
-
-        var dimNames = new HashSet<string>(dims.Select(d => d.Name), StringComparer.OrdinalIgnoreCase);
-        var computedNames = new HashSet<string>(
-            layer.Computed.Select(rule => rule.Effect.Column.Name),
-            StringComparer.OrdinalIgnoreCase);
-
-        // ORDER BY tolerates a bare SELECT alias on every dialect, but not an alias
-        // inside an expression (SQL Server's null-rank CASE) — those sorts need the
-        // alias materialized by a wrap first.
-        var nullsSortOnAlias = sorts.Any(s => s.Nulls is not null && !dimNames.Contains(s.Column.Name));
-        var nullsSortOnComputed = sorts.Any(s => s.Nulls is not null && computedNames.Contains(s.Column.Name));
-
-        if (layer.Computed.Count == 0
-            && layer.RowPredicates.Count == 0
-            && decorations.Count == 0
-            && !nullsSortOnAlias)
-            return grouped;
-
-        var wrapped = new Query().From(grouped.As(StageAlias)).SelectRaw($"{StageAlias}.*");
-        foreach (var rule in layer.Computed)
-            ExpressionRuleSqlApplicator.ApplyDefinition(wrapped, rule, dialect);
-
-        var query = wrapped;
-        if (layer.Computed.Count > 0
-            && (layer.RowPredicates.Count > 0 || decorations.Count > 0 || nullsSortOnComputed))
-            query = new Query().From(wrapped.As(StageCalcAlias)).SelectRaw($"{StageCalcAlias}.*");
-
-        foreach (var rule in layer.RowPredicates)
-            ExpressionRuleSqlApplicator.ApplyRowPredicate(query, rule, dialect);
-
-        foreach (var rule in decorations)
-            ExpressionRuleSqlApplicator.ApplyDecoration(query, rule, dialect);
-        return query;
+        var relation = new Query().From(grouped.As(StageAlias));
+        return ApplyOperations(
+            relation,
+            layer.Operations,
+            dialect,
+            evaluationUtcNow,
+            $"{StageAlias}.*",
+            StageCalcAlias,
+            "ir_group_calc");
     }
 
     /// <summary>
@@ -314,8 +334,10 @@ public static class QueryComposer
     /// <summary>
     /// Chart stage: the whole filtered set collapsed to (label, metric) points — through
     /// the shared grouped shape when an aggregate is set, or raw label/value rows when
-    /// charting one point per row. Capped at maxPoints+1 so the executor can reject
-    /// overflow precisely instead of truncating (a truncated pie lies about proportions).
+    /// charting one point per row. When no downstream row predicate exists, cap the SQL
+    /// source at maxPoints+1 so the executor can reject overflow cheaply. A downstream
+    /// filter must see the complete shaped table; that path streams until maxPoints+1
+    /// surviving rows instead (a truncated pie lies about proportions).
     /// </summary>
     public static Query ComposeChartView(ReportDefinition def, ValidatedState state, int maxPoints)
     {
@@ -350,7 +372,9 @@ public static class QueryComposer
             else q.OrderByDesc(chart.Label.Name);
         }
 
-        return q.Limit(maxPoints + 1);
+        return state.View.Output!.RowPredicates.Count == 0
+            ? q.Limit(maxPoints + 1)
+            : q;
     }
 
     /// <summary>Grid rows for export: display columns plus renderer sources, effective sorts, no paging, capped.</summary>
@@ -471,7 +495,10 @@ public static class QueryComposer
     /// <summary>
     /// Apply one schema-bound sort. Oracle, Postgres, and supported SQLite versions
     /// have native NULLS FIRST/LAST syntax. SQL Server needs a leading null-rank key;
-    /// the actual value key retains the requested direction in both cases.
+    /// the actual value key retains the requested direction in both cases. Text order
+    /// follows the database collation. There is no portable collation name or syntax
+    /// shared by all four providers; use a binary/ordinal report collation when exact
+    /// parity with materialized Pivot/Chart sorting is required.
     /// </summary>
     private static void ApplySort(Query query, ValidSort sort, ReportDialect dialect)
     {

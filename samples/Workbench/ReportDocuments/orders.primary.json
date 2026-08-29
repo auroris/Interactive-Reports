@@ -2,20 +2,22 @@
   "title": "Default",
   "primary": true,
   "state": {
-    "pipeline": [
-      {
-        "shape": { "kind": "source" },
-        "layer": {
-          "columns": [
-            "ORDER_ID", "CUSTOMER", "REGION", "STATUS", "AMOUNT", "ORDER_DATE", "NOTES", "c1"
-          ],
-          "sorts": [
-            { "col": "ORDER_DATE", "dir": "desc" }
-          ],
-          "computed": [
+    "activeTable": "orders",
+    "tables": {
+      "orders": {
+        "from": "definition",
+        "schema": null,
+        "composables": [
+          { "kind": "compute", "computed": [
             { "id": "c1", "label": "With Tax", "expr": "ROUND(AMOUNT * 1.0825, 2)" }
-          ],
-          "formats": {
+          ] },
+          { "kind": "sort", "sorts": [
+            { "col": "ORDER_DATE", "dir": "desc" }
+          ] },
+          { "kind": "select", "columns": [
+            "ORDER_ID", "CUSTOMER", "REGION", "STATUS", "AMOUNT", "ORDER_DATE", "NOTES", "c1"
+          ] },
+          { "kind": "formats", "formats": {
             "ORDER_ID": {
               "displayAs": "link",
               "urlColumn": "ORDER_URL",
@@ -23,9 +25,9 @@
             },
             "AMOUNT": { "mask": "currency:CAD", "classes": [ "amount-column" ] },
             "c1": { "mask": "currency:CAD", "classes": [ "amount-column" ] }
-          }
-        }
+          } }
+        ]
       }
-    ]
+    }
   }
 }

@@ -9,6 +9,19 @@ import { stageOf } from "../state.js";
 import { fnLabel, hasFraction } from "./format.js";
 import { formatForColumn, renderTextValue } from "./column-renderers.js";
 
+export function chartResultColumns(w) {
+    const view = stageOf(w.doc, "chart")?.shape ?? {};
+    const columns = w.lastResult?.columns ?? [];
+    const find = name => columns.find(column =>
+        column.name.toLowerCase() === String(name ?? "").toLowerCase());
+    const label = find(view.label);
+    const metricName = !view.value ? "__count" : view.fn ? "v0" : view.value;
+    const metric = find(metricName);
+    return label && metric ? [label, metric] : null;
+}
+
+export const canRenderChart = w => chartResultColumns(w) !== null;
+
 /// "Sum of Amount by Status" — the chart's human name, shared by the view chip
 /// and the accessible description.
 export function chartSummary(w, view) {
@@ -37,7 +50,12 @@ export function renderChartView(w, container, chartModule) {
         return null;
     }
 
-    const [labelCol, valueCol] = result.columns;
+    const chartColumns = chartResultColumns(w);
+    if (!chartColumns) {
+        container.replaceChildren();
+        return null;
+    }
+    const [labelCol, valueCol] = chartColumns;
     const labelFormat = formatForColumn(w, labelCol);
     const valueFormat = formatForColumn(w, valueCol);
     const labels = result.rows.map(r => {

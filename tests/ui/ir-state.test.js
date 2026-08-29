@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+    activeTableLayer,
+    activeTableSchema,
     activateTail,
     configuredTail,
     expressionReferencesColumn,
+    locatedComposables,
     lookupValue,
     modeOf,
     nextFreeId,
@@ -18,17 +21,51 @@ import {
     stageOf,
     tailOf,
 } from "../../src/client/report/state.js";
-import { visibleStageColumnNames } from "../../src/client/report/stage.js";
+import {
+    shapeInputColumns,
+    stageContext,
+    terminalTableColumns,
+    visibleStageColumnNames,
+} from "../../src/client/report/stage.js";
 
-const src = layer => ({ shape: { kind: "source" }, layer });
 const group = (by, values = [], layer = undefined) =>
     ({ shape: { kind: "group", by, values }, layer });
 const pivot = (rows, cols, values = [], layer = undefined, totals = undefined) =>
     ({ shape: { kind: "pivot", rows, cols, values, ...(totals ? { totals } : {}) }, layer });
 
-test("normalization clones input, guarantees the source stage, and resets only the page index", () => {
+const layerKinds = {
+    computed: ["compute", "computed"],
+    filters: ["filter", "filters"],
+    sorts: ["sort", "sorts"],
+    breaks: ["break", "breaks"],
+    aggregates: ["aggregate", "aggregates"],
+    highlights: ["highlight", "highlights"],
+    columns: ["select", "columns"],
+    labels: ["labels", "labels"],
+    formats: ["formats", "formats"],
+};
+const composables = layer => Object.entries(layer ?? {}).flatMap(([property, value]) => {
+    const spec = layerKinds[property];
+    return spec && value !== undefined ? [{ kind: spec[0], [spec[1]]: value }] : [];
+});
+const tableFor = (stage, from = "source") => ({
+    from,
+    composables: [stage.shape, ...composables(stage.layer)],
+});
+const report = (source = {}, active = null, alternatives = {}) => {
+    const tables = { source: { from: "definition", composables: composables(source) } };
+    for (const [id, stage] of Object.entries(alternatives)) tables[id] = tableFor(stage);
+    let activeTable = "source";
+    if (active) {
+        activeTable = active.shape.kind === "group" ? "groupBy" : active.shape.kind;
+        tables[activeTable] = tableFor(active);
+    }
+    return { activeTable, tables };
+};
+
+test("normalization clones input, guarantees a definition table, and resets only the page index", () => {
     const input = {
-        pipeline: [src({ filters: [{ expr: "AMOUNT > 1" }] })],
+        ...report({ filters: [{ expr: "AMOUNT > 1" }] }),
         page: { index: 9, size: 75 },
     };
     const state = normalizeReportState(input, 25);
@@ -36,33 +73,32 @@ test("normalization clones input, guarantees the source stage, and resets only t
     assert.notEqual(state, input);
     assert.deepEqual(state.page, { index: 1, size: 75 });
     assert.deepEqual(input.page, { index: 9, size: 75 });
-    assert.equal(state.pipeline[0].shape.kind, "source");
+    assert.equal(state.tables.source.from, "definition");
     assert.deepEqual(sourceLayer(state).filters, [{ expr: "AMOUNT > 1" }]);
-    assert.deepEqual(state.shelf, {});
 
     const empty = normalizeReportState(null, 25);
-    assert.equal(empty.pipeline.length, 1);
+    assert.equal(Object.keys(empty.tables).length, 1);
     assert.equal(modeOf(empty), "grid");
 });
 
-test("normalization mirrors server default resolution: pipeline replaces wholesale", () => {
+test("normalization mirrors server default resolution: tables replace wholesale", () => {
     const defaults = {
         search: "open",
-        pipeline: [src({ filters: [{ expr: "STATUS = 'OPEN'" }], sorts: [{ col: "AMOUNT", dir: "desc" }] })],
+        ...report({ filters: [{ expr: "STATUS = 'OPEN'" }], sorts: [{ col: "AMOUNT", dir: "desc" }] }),
     };
     const inherited = normalizeReportState(null, 25, defaults);
     assert.deepEqual(sourceLayer(inherited).sorts, [{ col: "AMOUNT", dir: "desc" }]);
 
-    const cleared = normalizeReportState({ search: "", pipeline: [src({ filters: [], sorts: [] })] }, 25, defaults);
+    const cleared = normalizeReportState({ search: "", ...report({ filters: [], sorts: [] }) }, 25, defaults);
     assert.equal(cleared.search, "");
     assert.deepEqual(sourceLayer(cleared).filters, []);
     assert.deepEqual(sourceLayer(cleared).sorts, []);
 });
 
-test("the mode derives from the tail; switching parks tails on the shelf losslessly", () => {
+test("the mode derives from composables; switching preserves named tables losslessly", () => {
     const state = normalizeReportState({
-        pipeline: [
-            src({}),
+        ...report(
+            {},
             pivot(
                 ["CUSTOMER"],
                 ["STATUS"],
@@ -71,8 +107,7 @@ test("the mode derives from the tail; switching parks tails on the shelf lossles
                     computed: [{ id: "c2", expr: '`m1@["SHIPPED"]` / 2' }],
                     labels: { 'm1@["SHIPPED"]': "Shipped" },
                 },
-                true),
-        ],
+                true)),
     }, 25);
 
     assert.equal(modeOf(state), "pivot");
@@ -80,7 +115,7 @@ test("the mode derives from the tail; switching parks tails on the shelf lossles
 
     activateTail(state, "chart", [{ shape: { kind: "chart", type: "pie", label: "STATUS", fn: "count" } }]);
     assert.equal(modeOf(state), "chart");
-    // The pivot tail survives on the shelf, layers included.
+    // The pivot table remains in the map, layers included.
     const parked = configuredTail(state, "pivot");
     assert.equal(parked.length, 1);
     assert.equal(parked[0].layer.computed[0].id, "c2");
@@ -90,10 +125,10 @@ test("the mode derives from the tail; switching parks tails on the shelf lossles
     assert.equal(modeOf(state), "grid");
     assert.equal(tailOf(state).length, 0);
 
-    // Switching back restores the parked tail and removes it from the shelf.
+    // Switching back only changes activeTable.
     activateTail(state, "pivot");
     assert.equal(modeOf(state), "pivot");
-    assert.equal(state.shelf.pivot, undefined);
+    assert.ok(state.tables.pivot);
     assert.equal(stageOf(state, "pivot").layer.computed[0].id, "c2");
 
     const saved = serializeReportState(state);
@@ -105,30 +140,39 @@ test("the mode derives from the tail; switching parks tails on the shelf lossles
 test("serialization preserves explicit clears and removes working fields", () => {
     const result = serializeReportState({
         search: "",
-        pipeline: [src({ filters: [], columns: [] })],
+        ...report({ filters: [], columns: [] }),
         _transient: true,
         omitted: undefined,
     });
 
     assert.deepEqual(result, {
         search: "",
-        pipeline: [{ shape: { kind: "source" }, layer: { filters: [], columns: [] } }],
+        activeTable: "source",
+        tables: {
+            source: {
+                from: "definition",
+                composables: [
+                    { kind: "filter", filters: [] },
+                    { kind: "select", columns: [] },
+                ],
+            },
+        },
     });
 });
 
 test("source label overrides inherit from defaults and an emptied map survives as an explicit clear", () => {
-    const defaults = { pipeline: [src({ labels: { ORDER_ID: "Order #" } })] };
+    const defaults = report({ labels: { ORDER_ID: "Order #" } });
     const inherited = normalizeReportState(null, 25, defaults);
     assert.deepEqual(sourceLayer(inherited).labels, { ORDER_ID: "Order #" });
 
     delete sourceLayer(inherited).labels.ORDER_ID;
-    assert.deepEqual(serializeReportState(inherited).pipeline[0].layer.labels, {});
+    assert.deepEqual(serializeReportState(inherited).tables.source.composables[0].labels, {});
 });
 
 test("source computed deletion strips the source layer precisely and drops dependent tails whole", () => {
     const state = normalizeReportState({
-        pipeline: [
-            src({
+        ...report(
+            {
                 computed: [
                     { id: "c1", label: "With Tax", expr: "AMOUNT * 1.05" },
                     { id: "c2", label: "Other", expr: "AMOUNT * 2" },
@@ -153,13 +197,12 @@ test("source computed deletion strips the source layer precisely and drops depen
                     CUSTOMER: { displayAs: "link", urlColumn: "c1", textColumn: "CUSTOMER", bold: true },
                     AMOUNT: { mask: "currency:CAD" },
                 },
-            }),
+            },
             pivot(["CUSTOMER"], ["STATUS"], [{ id: "m1", col: "c1", fn: "sum" }]),
-        ],
-        shelf: {
-            groupBy: [group(["REGION"], [{ id: "m1", col: "c1", fn: "sum" }])],
-            chart: [{ shape: { kind: "chart", type: "bar", label: "CUSTOMER", value: "AMOUNT", fn: "sum" } }],
-        },
+            {
+                groupBy: group(["REGION"], [{ id: "m1", col: "c1", fn: "sum" }]),
+                chart: { shape: { kind: "chart", type: "bar", label: "CUSTOMER", value: "AMOUNT", fn: "sum" } },
+            }),
     }, 25);
 
     const dropped = removeSourceComputedColumn(state, "C1");
@@ -181,24 +224,23 @@ test("source computed deletion strips the source layer precisely and drops depen
     // The pivot tail consumed c1 as a metric source: deleted whole (T0 coarse).
     assert.equal(modeOf(state), "grid");
     assert.deepEqual(dropped.sort(), ["groupBy", "pivot"]);
-    assert.equal(state.shelf.groupBy, undefined);
-    // The shelved chart never referenced c1 and survives.
-    assert.equal(state.shelf.chart[0].shape.type, "bar");
+    assert.equal(state.tables.groupBy, undefined);
+    // The independent chart never referenced c1 and survives.
+    assert.equal(state.tables.chart.composables[0].type, "bar");
 });
 
 test("a tail that references the computed column only through a dim also dies whole", () => {
     const grouped = normalizeReportState({
-        pipeline: [src({ computed: [{ id: "c1", expr: "AMOUNT * 2" }] }), group(["c1"])],
+        ...report({ computed: [{ id: "c1", expr: "AMOUNT * 2" }] }, group(["c1"])),
     }, 25);
     const dropped = removeSourceComputedColumn(grouped, "c1");
     assert.equal(modeOf(grouped), "grid");
     assert.deepEqual(dropped, ["groupBy"]);
 
     const charted = normalizeReportState({
-        pipeline: [
-            src({ computed: [{ id: "c1", expr: "AMOUNT * 2" }] }),
-            { shape: { kind: "chart", type: "bar", label: "STATUS", value: "c1", fn: "sum" } },
-        ],
+        ...report(
+            { computed: [{ id: "c1", expr: "AMOUNT * 2" }] },
+            { shape: { kind: "chart", type: "bar", label: "STATUS", value: "c1", fn: "sum" } }),
     }, 25);
     removeSourceComputedColumn(charted, "c1");
     assert.equal(modeOf(charted), "grid");
@@ -206,9 +248,7 @@ test("a tail that references the computed column only through a dim also dies wh
 
 test("stage computed deletion strips only its owning derived layer", () => {
     const state = normalizeReportState({
-        pipeline: [
-            src({}),
-            group(["CUSTOMER", "STATUS"], [{ id: "m1", col: "AMOUNT", fn: "sum" }], {
+        ...report({}, group(["CUSTOMER", "STATUS"], [{ id: "m1", col: "AMOUNT", fn: "sum" }], {
                 computed: [
                     { id: "c2", label: "Share", expr: "m1 / __count" },
                     { id: "c3", label: "Uses c2? No", expr: "m1 * 2" },
@@ -224,8 +264,7 @@ test("stage computed deletion strips only its owning derived layer", () => {
                 columns: ["CUSTOMER", "STATUS", "__count", "m1", "c2", "c3"],
                 labels: { c2: "Share" },
                 formats: { c2: { mask: "percent1" } },
-            }),
-        ],
+            })),
     }, 25);
 
     removeStageComputedColumn(state, stageOf(state, "group"), "C2");
@@ -245,9 +284,7 @@ test("retiring a Pivot metric prunes its generated cell family", () => {
     const shipped = 'm1@["SHIPPED"]';
     const pending = 'm1@["PENDING"]';
     const state = normalizeReportState({
-        pipeline: [
-            src({}),
-            pivot(["CUSTOMER"], ["STATUS"], [{ id: "m1", col: "AMOUNT", fn: "sum" }], {
+        ...report({}, pivot(["CUSTOMER"], ["STATUS"], [{ id: "m1", col: "AMOUNT", fn: "sum" }], {
                 computed: [
                     { id: "c2", expr: '`m1@["SHIPPED"]` / 2' },
                     { id: "c3", expr: "CUSTOMER || '!'" },
@@ -261,8 +298,7 @@ test("retiring a Pivot metric prunes its generated cell family", () => {
                 columns: ["CUSTOMER", shipped, pending, "c2", "c3"],
                 labels: { [shipped]: "Shipped", CUSTOMER: "Customer" },
                 formats: { [pending]: { bold: true }, CUSTOMER: { italic: true } },
-            }),
-        ],
+            })),
     }, 25);
 
     const stage = stageOf(state, "pivot");
@@ -280,10 +316,10 @@ test("retiring a Pivot metric prunes its generated cell family", () => {
 test("the retired schema-snapshot key never enters the working copy", () => {
     // Legacy saved documents and server-stamped defaults may still carry it;
     // the client is liberal about the rest but has no use for this key.
-    const fromDocument = normalizeReportState({ schema: { GONE: "number" }, pipeline: [src({})] }, 25);
+    const fromDocument = normalizeReportState({ schema: { GONE: "number" }, ...report() }, 25);
     assert.equal("schema" in fromDocument, false);
 
-    const fromDefaults = normalizeReportState(null, 25, { schema: { OLD: "text" }, pipeline: [src({})] });
+    const fromDefaults = normalizeReportState(null, 25, { schema: { OLD: "text" }, ...report() });
     assert.equal("schema" in fromDefaults, false);
 });
 
@@ -344,4 +380,208 @@ test("visible stage columns discard stale explicit names and canonicalize casing
         columnsLayer: doc => doc.layer,
     };
     assert.deepEqual(visibleStageColumnNames(ctx, w), ["ORDER_ID"]);
+});
+
+test("terminal edits target one exact active-table composable and preserve repeated foreign nodes", () => {
+    const state = normalizeReportState({
+        activeTable: "decorated",
+        tables: {
+            input: {
+                from: "definition",
+                composables: [{ kind: "filter", filters: [{ expr: "ACTIVE" }] }],
+            },
+            pivoted: {
+                from: "input",
+                composables: [
+                    { kind: "filter", filters: [{ expr: "AMOUNT > 0" }] },
+                    { kind: "pivot", rows: ["CUSTOMER"], cols: ["STATUS"], values: [] },
+                    { kind: "filter", filters: [{ expr: "CUSTOMER IS NOT NULL" }] },
+                ],
+            },
+            decorated: {
+                from: "pivoted",
+                schema: [
+                    { name: "CUSTOMER", label: "Customer", type: "text" },
+                    { name: "m1@[\"OPEN\"]", label: "Open", type: "number" },
+                ],
+                composables: [
+                    { kind: "labels", labels: { CUSTOMER: "Earlier label" } },
+                    { kind: "filter", filters: [{ expr: "CUSTOMER <> 'Internal'" }] },
+                    { kind: "foreign-decoration", payload: { keep: true } },
+                    { kind: "filter", filters: [{ expr: "`m1@[\"OPEN\"]` > 10" }] },
+                    { kind: "labels", labels: { CUSTOMER: "Current label" } },
+                ],
+            },
+        },
+    }, 25);
+
+    const earlierFilter = structuredClone(state.tables.decorated.composables[1]);
+    const foreign = structuredClone(state.tables.decorated.composables[2]);
+    const layer = activeTableLayer(state);
+    assert.deepEqual(layer.filters, [{ expr: "`m1@[\"OPEN\"]` > 10" }]);
+    layer.filters.push({ expr: "CUSTOMER IS NOT NULL" });
+    layer.labels.CUSTOMER = "Edited label";
+    layer.sorts = [{ col: "CUSTOMER", dir: "asc" }];
+
+    assert.deepEqual(state.tables.decorated.composables[1], earlierFilter);
+    assert.deepEqual(state.tables.decorated.composables[2], foreign);
+    assert.deepEqual(state.tables.decorated.composables[3].filters, [
+        { expr: "`m1@[\"OPEN\"]` > 10" },
+        { expr: "CUSTOMER IS NOT NULL" },
+    ]);
+    assert.equal(state.tables.decorated.composables[4].labels.CUSTOMER, "Edited label");
+    assert.deepEqual(state.tables.decorated.composables.at(-1), {
+        kind: "sort", sorts: [{ col: "CUSTOMER", dir: "asc" }],
+    });
+});
+
+test("located composables retain ancestry ownership and expose only the safe active terminal node", () => {
+    const state = normalizeReportState({
+        activeTable: "decorated",
+        tables: {
+            source: {
+                from: "definition",
+                composables: [{ kind: "filter", filters: [{ expr: "SOURCE" }] }],
+            },
+            grouped: {
+                from: "source",
+                composables: [
+                    { kind: "group", by: ["STATUS"], values: [] },
+                    { kind: "compute", computed: [{ id: "c1", expr: "__count / 2" }] },
+                    { kind: "filter", filters: [{ expr: "c1 > 0" }] },
+                    { kind: "break", breaks: ["STATUS"] },
+                    { kind: "aggregate", aggregates: [{ col: "__count", fn: "sum" }] },
+                    { kind: "highlight", highlights: [{ expr: "c1 > 10", color: "red" }] },
+                ],
+            },
+            decorated: {
+                from: "grouped",
+                composables: [
+                    { kind: "filter", filters: [{ expr: "EARLIER" }] },
+                    { kind: "foreign-decoration", payload: { keep: true } },
+                    { kind: "filter", filters: [{ expr: "CURRENT" }] },
+                ],
+            },
+        },
+    }, 25);
+
+    const locations = locatedComposables(state);
+    assert.deepEqual(
+        locations.map(location => [location.tableId, location.composable.kind]),
+        [
+            ["source", "filter"],
+            ["grouped", "group"],
+            ["grouped", "compute"],
+            ["grouped", "filter"],
+            ["grouped", "break"],
+            ["grouped", "aggregate"],
+            ["grouped", "highlight"],
+            ["decorated", "filter"],
+            ["decorated", "foreign-decoration"],
+            ["decorated", "filter"],
+        ]);
+    assert.equal(locations.find(location => location.tableId === "grouped" && location.composable.kind === "compute").inherited, true);
+    assert.equal(locations.find(location => location.tableId === "grouped" && location.composable.kind === "filter").participates, true);
+    assert.ok(locations
+        .filter(location => location.tableId === "grouped" && ["break", "aggregate", "highlight"].includes(location.composable.kind))
+        .every(location => !location.participates));
+    assert.equal(locations.find(location => location.composable?.payload?.keep).authorable, false);
+    assert.deepEqual(
+        locations.filter(location => location.authorable).map(location => location.composable.filters?.[0]?.expr),
+        ["CURRENT"]);
+});
+
+test("the active table schema is the generic terminal universe for every shape", () => {
+    const state = normalizeReportState({
+        activeTable: "decorated",
+        tables: {
+            source: {
+                from: "definition",
+                schema: [{ name: "AMOUNT", label: "Amount", type: "number" }],
+                composables: [{ kind: "labels", labels: { CUSTOMER: "Account", AMOUNT: "Revenue" } }],
+            },
+            pivoted: {
+                from: "source",
+                composables: [
+                    { kind: "pivot", rows: ["CUSTOMER"], cols: ["STATUS"], values: [] },
+                    { kind: "labels", labels: { metric: "Inherited metric" } },
+                ],
+            },
+            decorated: {
+                from: "pivoted",
+                schema: [
+                    { name: "CUSTOMER", label: "Customer", type: "text" },
+                    { name: "cell", label: "Cell", type: "number", formatSource: "AMOUNT" },
+                    { name: "metric", label: "sum(Amount)", type: "number", formatSource: "AMOUNT" },
+                ],
+                composables: [{ kind: "labels", labels: { cell: "Current cell" } }],
+            },
+        },
+    }, 25);
+    const w = {
+        doc: state,
+        schema: { columns: [{ name: "AMOUNT", label: "Amount", type: "number" }] },
+        lastResult: { availableColumns: [{ name: "STALE", label: "Stale", type: "text" }] },
+    };
+
+    assert.deepEqual(activeTableSchema(state).map(column => column.name), ["CUSTOMER", "cell", "metric"]);
+    assert.deepEqual(terminalTableColumns(w).map(column => [column.name, column.label]), [
+        ["CUSTOMER", "Account"],
+        ["cell", "Current cell"],
+        ["metric", "Inherited metric"],
+    ]);
+    const ctx = stageContext(w);
+    assert.equal(ctx.mode, "pivot");
+    assert.deepEqual(ctx.columns.map(column => column.name), ["CUSTOMER", "cell", "metric"]);
+    assert.equal(ctx.caps.visibility, true);
+    assert.equal(ctx.caps.displayAs, true);
+    assert.equal(ctx.caps.filter, true);
+    assert.equal(ctx.caps.highlight, true);
+    assert.equal(ctx.caps.sort, true);
+});
+
+test("shape dialogs use the from-table schema rather than the shaped terminal schema", () => {
+    const state = normalizeReportState({
+        activeTable: "grouped",
+        tables: {
+            input: {
+                from: "definition",
+                schema: [
+                    { name: "CUSTOMER", label: "Customer", type: "text" },
+                    { name: "AMOUNT", label: "Amount", type: "number" },
+                ],
+                composables: [],
+            },
+            grouped: {
+                from: "input",
+                schema: [
+                    { name: "CUSTOMER", label: "Customer", type: "text" },
+                    { name: "__count", label: "Count", type: "number" },
+                ],
+                composables: [{ kind: "group", by: ["CUSTOMER"], values: [] }],
+            },
+        },
+    }, 25);
+    const w = { doc: state, schema: { columns: [] } };
+    const configured = configuredTail(state, "groupBy")[0];
+
+    assert.deepEqual(shapeInputColumns(w, configured).map(column => column.name), ["CUSTOMER", "AMOUNT"]);
+    assert.deepEqual(terminalTableColumns(w).map(column => column.name), ["CUSTOMER", "__count"]);
+});
+
+test("editing a configured shape preserves repeated terminal composables", () => {
+    const state = normalizeReportState({
+        ...report({}, pivot(["CUSTOMER"], ["STATUS"])),
+    }, 25);
+    state.tables.pivot.composables.push(
+        { kind: "filter", filters: [{ expr: "CUSTOMER <> 'A'" }] },
+        { kind: "filter", filters: [{ expr: "CUSTOMER <> 'B'" }] });
+    const filters = structuredClone(state.tables.pivot.composables.slice(1));
+    const configured = configuredTail(state, "pivot");
+    configured[0].shape.totals = true;
+
+    activateTail(state, "pivot", configured);
+
+    assert.equal(state.tables.pivot.composables[0].totals, true);
+    assert.deepEqual(state.tables.pivot.composables.slice(1), filters);
 });

@@ -56,10 +56,10 @@ export function featureEnabled(w, feature) {
 }
 
 /// The definition's per-column overrides, delivered on the schema payload keyed
-/// by canonical base-column name (behavior flags only — labels ride the default
+/// by canonical definition-column name (behavior flags only — labels ride the default
 /// report's labels channel). A missing map or entry means unrestricted, which
 /// also covers computed columns and stage synthetics: their names never appear
-/// in the map because the server filters it to live base schema columns.
+/// in the map because the server filters it to live definition-schema columns.
 export function columnOverride(w, name) {
     return lookupValue(w.schema?.columnOverrides, name) ?? null;
 }

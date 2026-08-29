@@ -14,10 +14,10 @@ consumer of that protocol.
 
 **The developer owns SQL. The client owns state. State is data, never code.**
 
-- Report definitions (base SQL, connection, limits, authorization) live server-side,
+- Report definitions (configured SQL, connection, limits, authorization) live server-side,
   referenced by friendly name. Bare SQL never crosses the network in either direction.
-- The client sends a *report state document* (JSON): filters, sorts, breaks, aggregates,
-  computed columns, highlights, paging, view mode.
+- The client sends a *report state document* (JSON): an unordered map of named table
+  compositions, their ordered operations, paging, and an active table id.
 - Every element of the state document is validated before composition:
   - column names → must exist in the discovered schema (or be declared computed columns);
   - aggregate functions → a closed enum;
@@ -112,7 +112,7 @@ optional interface retain the original full-definition lookup path.
       "sql": "SELECT o.ORDER_ID, o.CUSTOMER, o.AMOUNT, o.ORDER_DATE FROM ORDERS o WHERE o.SALES_REP = @currentUser",
       "columnLabels": { "ORDER_ID": "Order #", "CUSTOMER": "Customer Name" },
       "editLink": {
-        "urlTemplate": "/orders/{ORDER_ID}/edit",  // {COLUMN} = base schema columns
+        "urlTemplate": "/orders/{ORDER_ID}/edit",  // {COLUMN} = definition-schema columns
         "label": "Edit order",                     // pencil aria-label/tooltip; default "Edit"
         "target": "_self"                          // or "_blank" (rendered with rel="noopener")
       },
@@ -142,15 +142,17 @@ optional interface retain the original full-definition lookup path.
   "title": "Default",
   "primary": true,
   "state": {
-    "pipeline": [
-      {
-        "shape": { "kind": "source" },
-        "layer": {
-          "columns": [ "ORDER_ID", "CUSTOMER", "AMOUNT", "ORDER_DATE" ],
-          "sorts": [ { "col": "ORDER_DATE", "dir": "desc", "nulls": "last" } ]
-        }
+    "activeTable": "open-orders",
+    "tables": {
+      "open-orders": {
+        "from": "definition",
+        "schema": null,
+        "composables": [
+          { "kind": "select", "columns": [ "ORDER_ID", "CUSTOMER", "AMOUNT", "ORDER_DATE" ] },
+          { "kind": "sort", "sorts": [ { "col": "ORDER_DATE", "dir": "desc", "nulls": "last" } ] }
+        ]
       }
-    ]
+    }
   }
 }
 ```
@@ -185,13 +187,13 @@ Notes:
   `:APP_USER` pattern from APEX translated to claims, and it is the row-level security story.
 - `columnLabels` maps real column names to friendly display labels for base queries
   whose column names aren't presentable. **Friendly names are client-side
-  presentation**: the server never applies this map to its schema, validation, results,
-  or exports — its entire role is to be handed to the client as the `labels` of the
-  default report the schema endpoint sends down (§5). From there reports own their
-  labels; the client resolves display names; and every column reference crossing the
-  wire — filters, sorts, `labels` keys themselves — uses the real name. Blank or
-  case-colliding entries are config errors; entries naming no actual column are simply
-  unused display data.
+  presentation**: the server never applies this map to discovery, validation, query
+  metadata, or schema caches. It is handed to the client as the `labels` of the default
+  report (§5), and the export path applies the submitted document's effective labels
+  because a file is server-rendered presentation. Every executable column reference
+  crossing the wire — filters, sorts, and `labels` keys themselves — still uses the
+  real name. Blank or case-colliding entries are config errors; entries naming no
+  actual column are simply unused display data.
 - `features` is a whitelist of end-user features (APEX's per-action Actions-menu
   configuration collapsed to a flat token list). Absent means everything;
   present means exactly what is listed. Known tokens (`ReportFeatures`): `search`,
@@ -210,7 +212,7 @@ Notes:
   document, because hiding a dialog is not a data boundary — context params (§12) are.
   Note the JSON config binder reads `[]` as absent; to lock a report down, list the
   one or two features it should keep.
-- Base SQL must not end with `ORDER BY` (breaks subquery wrapping on SQL Server; APEX has
+- Configured report SQL must not end with `ORDER BY` (breaks subquery wrapping on SQL Server; APEX has
   the same rule). Validated at definition load with a clear error by a comment-, string-,
   and quoted-identifier-aware scan for the clause at parenthesis depth 0 — `'order by'`
   as data or documentation never trips it, and comments cannot hide a real clause.
@@ -236,7 +238,7 @@ Notes:
   and projected as hidden row data exactly like renderer source columns, so hiding a
   referenced column never breaks the pencil. The header is visually empty with the
   label as its accessible name; a row whose placeholder value is NULL renders no
-  pencil (`CASE`-null a key in the base SQL to withhold rows, as the actions
+  pencil (`CASE`-null a key in the configured SQL to withhold rows, as the actions
   convention does); the column never appears in pickers, search, sorts, filters, or
   exports, and only grid mode shows it — grouped and pivoted rows have no single
   source row to edit. Template syntax fails fast at load (unmatched/empty/nested
@@ -245,7 +247,7 @@ Notes:
   logged, and surfaced as an `ignored[]` notice on queries) rather than erroring.
   Config keys cannot express column names containing `:` (a configuration-binder
   limitation shared with `columnLabels`).
-- `columns` is the per-column override map (keyed by base column name,
+- `columns` is the per-column override map (keyed by definition column name,
   case-insensitive; unknown names tolerated like `columnLabels`): `label` supersedes
   `columnLabels` — configuring the same column's label in both maps fails fast, and
   `columnLabels` remains supported as the label-only shorthand; `hideLabel` blanks
@@ -256,7 +258,7 @@ Notes:
   `filterable: false` removes its filter controls and expression tokens;
   `helpText` renders as a note at the bottom of the column's header menu (a report
   whose whitelist removes every header-menu feature has no menu to carry it).
-  Computed columns are always exempt — restrictions bind to base columns, so
+  Computed columns are always exempt — restrictions bind to definition columns, so
   `c1 = AMOUNT * 2` stays sortable while `AMOUNT` is not, with no transitive
   analysis to reason about. Enforcement follows the whitelist philosophy: the
   client hides the controls, and the server strips violating sorts, breaks, and
@@ -271,116 +273,150 @@ Notes:
 The single artifact that is simultaneously the request body, the saved report, and the
 shareable view state. It is self-describing and carries no document version number.
 
-**The model: a base table with independent derived tables.** Stage 1 (`source`) is the
-developer's SELECT. The active tail is either `group`, `pivot`, or `chart`; each derives
-directly from the filtered base table. Group By and Pivot are siblings. Neither consumes
-the other. Every table stage carries a **layer** of per-table instructions: column
-selection, labels, formats, computed columns, filters, sorts, and highlights, each bound
-to that stage's own output schema. Source and Group table layers also carry control
-breaks and footer aggregates. A Group By filter therefore acts after aggregation, while
-a Pivot filter acts on the wide materialized Pivot table. Toolbar search remains a
-base-table operation shared by all branches.
+**The model: named table expressions composed over explicit inputs.** The developer's
+configured SQL is the reserved input `definition`. A document contains an unordered
+`tables` map. Every table says `from: "definition"` or names another table, then
+folds its `composables` over that input. `activeTable` selects the expression to
+execute. Map order has no meaning, and identifiers such as `base`, `pivot`, or
+`summary` have no engine meaning. `definition` is the sole reserved input sentinel
+and cannot itself be a key in `tables`; every other nonblank, case-unique table id is
+opaque to the engine.
+
+Composable kinds are data, not subclasses: `compute`, `filter`, `group`, `pivot`,
+`chart`, `sort`, `break`, `aggregate`, `highlight`, `select`, `labels`, and
+`formats`. The validator resolves the selected `from` ancestry and folds those
+declarations into a typed execution plan. A filter before a shape operates on the
+input rows; a filter after Group operates on groups; a filter after Pivot operates on
+the materialized wide table. Search remains document-level input shared by the selected
+ancestry, and `page` applies to the terminal table.
 
 ```json
 {
   "search": "acme",
   "page": { "index": 1, "size": 50 },
-  "pipeline": [
-    {
-      "shape": { "kind": "source" },
-      "layer": {
-        "columns": ["ORDER_ID", "CUSTOMER", "STATUS", "AMOUNT", "ORDER_DATE", "c1"],
-        "labels": { "ORDER_ID": "Ticket #" },
-        "formats": {
-          "CUSTOMER": { "displayAs": "link", "urlColumn": "CUSTOMER_URL" },
-          "AMOUNT": { "mask": "currency:USD", "align": "right" }
-        },
-        "computed": [
+  "activeTable": "by-customer-status",
+  "tables": {
+    "orders": {
+      "from": "definition",
+      "schema": null,
+      "composables": [
+        { "kind": "compute", "computed": [
           { "id": "c1", "enabled": true, "label": "Amount w/ Tax",
             "expr": "ROUND(AMOUNT * 1.0825, 2)" }
-        ],
-        "filters": [
-          { "enabled": true, "expr": "IN_LIST(STATUS, 'SHIPPED', 'PENDING')" },
-          { "enabled": false, "expr": "AMOUNT > 1000" }
-        ],
-        "sorts": [ { "col": "ORDER_DATE", "dir": "desc", "nulls": "last" } ],
-        "highlights": [
-          { "id": "h1", "name": "Large order", "sequence": 10,
-            "enabled": true, "scope": "row",
-            "expr": "c1 > 10000", "style": { "bg": "#fff3cd" } }
-        ],
-        "breaks": [],
-        "aggregates": [ { "col": "AMOUNT", "fn": "sum" } ]
-      }
+        ] },
+        { "kind": "filter", "filters": [
+          { "enabled": true, "expr": "IN_LIST(STATUS, 'SHIPPED', 'PENDING')" }
+        ] }
+      ]
     },
-    {
-      "shape": {
-        "kind": "pivot",
-        "rows": ["CUSTOMER"],
-        "cols": ["STATUS"],
-        "values": [ { "id": "m1", "col": "AMOUNT", "fn": "sum" },
-                    { "id": "m2", "col": "c1", "fn": "avg" } ],
-        "totals": true
-      },
-      "layer": {
-        "computed": [
+    "orders-grid": {
+      "from": "orders",
+      "schema": null,
+      "composables": [
+        { "kind": "select",
+          "columns": ["ORDER_ID", "CUSTOMER", "STATUS", "AMOUNT", "ORDER_DATE", "c1"] },
+        { "kind": "labels", "labels": { "ORDER_ID": "Ticket #" } },
+        { "kind": "formats", "formats": {
+          "CUSTOMER": { "displayAs": "link", "urlColumn": "CUSTOMER_URL" },
+          "AMOUNT": { "mask": "currency:USD", "align": "right" }
+        } }
+      ]
+    },
+    "by-customer-status": {
+      "from": "orders",
+      "schema": null,
+      "composables": [
+        { "kind": "pivot",
+          "rows": ["CUSTOMER"],
+          "cols": ["STATUS"],
+          "values": [
+            { "id": "m1", "col": "AMOUNT", "fn": "sum" },
+            { "id": "m2", "col": "c1", "fn": "avg" }
+          ],
+          "totals": true },
+        { "kind": "compute", "computed": [
           { "id": "c2", "enabled": true, "label": "Shipped Less Pending",
             "expr": "COALESCE(`m1@[\"SHIPPED\"]`, 0) - COALESCE(`m1@[\"PENDING\"]`, 0)" }
-        ],
-        "filters": [ { "enabled": true, "expr": "c2 >= 1000" } ],
-        "sorts": [ { "col": "c2", "dir": "desc" } ],
-        "labels": { "m1@[\"SHIPPED\"]": "Shipped Total" },
-        "formats": { "m2@[\"SHIPPED\"]": { "mask": "decimal2" } }
-      }
-    }
-  ],
-  "shelf": {
-    "groupBy": [
-      {
-        "shape": {
-          "kind": "group",
+        ] },
+        { "kind": "filter", "filters": [ { "enabled": true, "expr": "c2 >= 1000" } ] },
+        { "kind": "sort", "sorts": [ { "col": "c2", "dir": "desc" } ] },
+        { "kind": "labels", "labels": { "m1@[\"SHIPPED\"]": "Shipped Total" } },
+        { "kind": "formats",
+          "formats": { "m2@[\"SHIPPED\"]": { "mask": "decimal2" } } }
+      ]
+    },
+    "customer-summary": {
+      "from": "orders",
+      "schema": null,
+      "composables": [
+        { "kind": "group",
           "by": ["CUSTOMER"],
-          "values": [ { "id": "m1", "col": "AMOUNT", "fn": "sum" } ]
-        },
-        "layer": {
-          "filters": [ { "enabled": true, "expr": "m1 > 1000" } ],
-          "sorts": [ { "col": "m1", "dir": "desc" } ],
-          "breaks": ["CUSTOMER"],
-          "aggregates": [ { "col": "m1", "fn": "sum" } ]
-        }
-      }
-    ],
-    "chart": [ { "shape": { "kind": "chart", "type": "pie",
-                            "label": "CUSTOMER", "value": "AMOUNT", "fn": "sum" },
-                 "layer": {} } ]
+          "values": [ { "id": "m1", "col": "AMOUNT", "fn": "sum" } ] },
+        { "kind": "filter", "filters": [ { "enabled": true, "expr": "m1 > 1000" } ] },
+        { "kind": "sort", "sorts": [ { "col": "m1", "dir": "desc" } ] },
+        { "kind": "break", "breaks": ["CUSTOMER"] },
+        { "kind": "aggregate", "aggregates": [ { "col": "m1", "fn": "sum" } ] }
+      ]
+    },
+    "customer-chart": {
+      "from": "orders",
+      "schema": null,
+      "composables": [
+        { "kind": "chart", "type": "pie",
+          "label": "CUSTOMER", "value": "AMOUNT", "fn": "sum" }
+      ]
+    }
   }
 }
 ```
 
-**Pipeline shapes.** The first stage is always `source`. Exactly four pipelines are
-accepted: `[source]` (grid), `[source, group]` (Group By), `[source, pivot]` (Pivot),
-and `[source, chart]` (chart). Anything else is a precise validation error.
-The client's view mode is *derived from the tail*, not stored: there is no `view`
-field. `page` applies to the terminal table, including Group By and Pivot. Chart runs
-unpaged under its point cap.
+**Ancestry and shapes.** Each selected ancestry must terminate at `definition` and
+must be acyclic. The current execution algebra accepts zero or one shape composable
+(`group`, `pivot`, or `chart`) in that ancestry; unsupported shape chains are
+precise validation errors. The shape can live on any table, including a table named
+`base` whose `from` is `definition`. The name does not make it a base-table
+species. Chart runs unpaged under its point cap.
 
-**Shelf.** `shelf` parks configured alternate tails (one stage after `source`),
-keyed by their derived mode name. The toolbar swaps tails between `pipeline` and
-`shelf`; the server never validates shelf entries — they are inert retained
-configuration, exactly as the old `views` registry was.
+**Structural and rule ceilings.** A submitted document may contain at most 64 tables
+and 512 composables in total. These are server resource bounds, not packaged-UI
+conventions, and include inactive alternatives because one submission may ask the
+server to refresh all of their null schema caches. A selected composition may declare
+at most 20 computed-column rules, 50 filter rules, and 50 highlight rules across its
+stacked composables. Compute and filter keep one budget across the shape boundary;
+highlights are terminal presentation and therefore fold into one terminal budget.
+Disabled rules still occupy their declared slot. Exceeding a ceiling is a precise
+validation error at the document or composable path.
 
-**Schema snapshot (retired 2026-08-28).** Documents no longer carry a
-client-checked schema snapshot. Server-delivered documents are authoritative, and
-saved reports are accepted liberally: the client adopts a document as-is and the
-server judges it on query — hard problems return a validation response (the client
-rolls the failed operation back to its last validated state), soft drift lands in
-`ignored[]`. The client stamps nothing on save and strips a legacy document's
-`schema` key on adoption; the server-side machinery (the state model's snapshot
-member, resolver copy, and default-state stamping) was removed with it — a legacy
-row's `schema` JSON property now falls through as an unknown member on hydration.
+**UI classification and foreign authors.** The packaged UI authors one simple table
+per built-in mode and switches by changing `activeTable`; alternate configurations
+remain ordinary entries in `tables`. It recognizes grid, Group By, Pivot, and Chart
+by composable predicates, never by identifier or map position. If an external document
+has a valid composition that does not map uniquely to one toolbar mode, the UI keeps
+and submits it without choosing an arbitrary “first” table or rewriting its
+composables. Executable input rules from intermediate ancestors remain visible as
+read-only chips; editors mutate only the exact authorable node in the active table's
+terminal segment. The server remains the authority on whether the selected expression
+is executable.
+
+**Per-table schema cache.** Each table may carry `schema`, the complete output schema
+most recently produced for that table before a `select` composable hides columns. It
+is an advisory client cache, not an assertion about the configured SQL. The server
+never uses it to bind expressions, authorize a request, or choose a query plan.
+
+The client sets `schema: null` on a table whose input or composables changed and on
+every descendant that names it in `from`. Changes that can alter data-dependent output,
+such as Pivot cell discovery, invalidate the affected caches the same way. Whenever a
+document is submitted, the server evaluates every table whose cache is null, writes the
+fresh schema into a detached copy, and uses live schemas for validation throughout.
+Query responses return that enriched copy as `document` alongside the requested data;
+the client adopts it as its current document. Save and update validation perform the
+same refresh before persistence. This makes omitted and explicitly null caches work for
+new documents while letting edits refresh only the affected subgraph. A forged or stale
+non-null cache can mislead only the UI that chose to trust it; it cannot change server
+execution or access control.
 
 **Stable synthetic names.** Group metrics are named by their spec-assigned ids
-(`m1`, `m2`, … — a namespace like computed columns' `c1`, unique within the stage,
+(`m1`, `m2`, … — a namespace like computed columns' `c1`, unique within the table,
 never shadowing schema columns); the implicit row count is always `__count`. Pivot
 cell columns are `{metricId}@{JSON array of column-dimension value strings}` — e.g.
 `m1@["SHIPPED"]`, `__count@["SHIPPED","2026"]` — value-derived and therefore stable
@@ -402,29 +438,32 @@ Legacy documents derive the name from `id` and the sequence from list position i
 increments of ten. `CONTAINS`, `STARTS_WITH`, and `ENDS_WITH` are case-insensitive; `IN_LIST`
 provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
 `IS NULL OR col = ''` when empty text should also count.
-- `search` is the toolbar search: OR of `contains` across the source layer's visible
-  text columns. It is a source-layer concern (stage 1 selects which rows exist) and
-  applies identically under every tail.
-- Each layer's `labels` (column name → display label, keyed by that stage's output
-  names) is presentation, never a program: it does not gate execution or validation
-  (unknown keys are unused display data), and query responses keep server-derived
-  labels — the client resolves display names as `stage labels[name] ?? source
-  labels[name (pass-through dims)] ?? synthetic/server label`. The document is the
-  single source of truth for what the user sees, so the one server consumer is
-  **export**: rendering a file is rendering the user's screen, and the posted
-  document's labels apply to its headers and synthetic labels (the active document
-  may never have been saved, so nothing can be looked up server-side). Ingestion
-  resolves source labels once for every path — request `??` effective Default state
-  `??` the definition's `columnLabels` — mirroring the default report the schema
-  endpoint delivers. A computed column still names itself on its own rule. Like
-  every state property, a present map replaces the default wholesale and `{}`
-  explicitly clears it.
-- `formats` (real column name → `{ mask, align, bold, italic, fg, bg, classes[],
-  displayAs, urlColumn, textColumn }`) is the
-  second presentation map, written by the Column Settings dialog and following every
-  labels inheritance rule: wholesale-replace with `{}`
-  as the explicit clear, resolvable from the effective Default state so definitions
-  can ship default formatting. Masks are a closed client-side token vocabulary per
+- `search` is the toolbar search: OR of `contains` across eligible text columns in the
+  selected ancestry's relational input. It chooses rows before a shape composable and
+  therefore applies consistently whether the terminal table is unshaped, grouped,
+  pivoted, or charted.
+- A `labels` composable maps current column names to display labels. It is
+  presentation, never a program: it does not gate execution or validation (unknown
+  keys are unused display data), and query responses keep server-derived labels. The
+  client folds applicable label composables across the selected ancestry. Within a
+  schema segment, later entries win case-insensitively and an explicit `{}` clears
+  earlier entries in that segment. A shape is the schema boundary: input labels remain
+  available to pass-through dimensions and synthetic `formatSource` labels, while
+  post-shape maps fold independently against the shaped names and override them
+  directly. Thus an empty post-shape map clears an ancestor's post-shape override but
+  does not erase the input column's inherited label. The document is the single source
+  of truth for what the user sees, so the one server consumer is **export**: the shared
+  terminal-table renderer applies the posted document's effective labels to grid,
+  Group, Pivot, and Chart headers and synthetic labels. Query results and every schema
+  cache remain structural. An explicit input labels composable supersedes the
+  definition's `columnLabels` defaults; a computed column still supplies its own
+  structural label on its compute rule.
+- A `formats` composable maps current column names to `{ mask, align, bold, italic,
+  fg, bg, classes[], displayAs, urlColumn, textColumn }`. It is written by the Column
+  Settings dialog and follows the same ordered, shape-segmented fold as labels; `{}`
+  clears earlier formats in its segment, while shaped columns may continue to inherit
+  input formats through `formatSource`. The effective Default state can carry formats
+  so definitions can ship default formatting. Masks are a closed client-side token vocabulary per
   column type (`integer`, `decimal1`…`decimal4`, `plain`, `currency:CAD|USD|EUR|GBP|JPY`,
   and `percent0`…`percent2` for numbers; `date`, `datetime`, `datetimeSeconds`, `time`,
   `timeSeconds`, `dateMedium`, `dateLong`, `dateTimeMedium`, and `dateTimeLong` for
@@ -443,39 +482,36 @@ provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
   schema-bound `keyColumn` value. Actions are definition-authored: Column Settings
   never offers them, but preserves them across unrelated restyles. The server
   consumes only renderer source names: it schema-binds them and adds valid
-  dependencies to the grid row projection without adding them to displayed column
+  dependencies to the terminal row projection without adding them to displayed column
   metadata. Unknown dependencies become `ignored[]`. The client constructs DOM nodes
   directly and permits relative/HTTP(S) URLs, plus `mailto:`/`tel:` for links;
-  active-content and embedded-content schemes fall back to text. Grid CSV exports
+  active-content and embedded-content schemes fall back to text. Every terminal-table
+  CSV export
   serialize Display As cells to the same encoded `<a class="ir-cell-link">` /
   `<img class="ir-cell-image">` fragments the browser constructs; action cells export
   their raw label text (a command button has no CSV shape); ordinary cells stay raw
   apart from the CSV formula guard (§6), and hidden renderer sources never become
   exported columns. Highlight styles win over column styles where
   both apply. Text is the base renderer and owns masks; link text composes the base
-  renderer, including the selected text source column's own mask. `displayAs` and its
-  renderer source columns are a **source-layer** affordance only — an aggregate is
-  never a link or image — so Group By/Pivot-layer formats carry masks, alignment, and
-  styling. Metric and cell metadata carry `formatSource`, and the client resolves a
-  column's effective format as `terminal-stage formats[name] ?? source-layer formats
-  [formatSource ?? pass-through name] ?? default` — a metric inherits its source
-  column's currency mask until the view overrides it.
+  renderer, including the selected text source column's own mask. The same format
+  composable binds against whichever table schema exists at its position; it is not
+  dispatched by a grid/group/pivot table type. Metric and cell metadata carry
+  `formatSource`, allowing a synthetic output column to inherit its input column's
+  currency mask until a later formats composable overrides it.
 - A partial request resolves over the effective Default state once: a stored primary
   report titled `Default`, then inline `defaultState`, then the synthetic empty state. `search`
   and `page` resolve property-wise (missing inherits, explicit empty clears);
-  `pipeline` and `shelf` replace the default **wholesale** when present —
-  stage arrays do not merge, matching the existing list semantics.
-- A persisted pipeline is also the view a saved report opens with: its tail is the
-  active mode. Only the pipeline is validated and executed; shelf entries and layer
-  settings a given tail does not consume (e.g. source breaks under a group tail)
-  remain inert until their stage is terminal again.
+  `activeTable` and `tables` replace their defaults when present. Table maps and
+  composable lists do not merge element by element.
+- A persisted document opens with its named `activeTable`. Other map entries remain
+  available compositions; dictionary position does not choose a default or a mode.
 - `GET /{name}/schema` always returns a complete `defaultState`, and it is the one
-  place friendly names leave the server: a definition's `columnLabels` become the
-  default report's source-layer `labels` unless the effective Default state carries
-  its own. When no default is configured the server synthesizes an empty pipeline
-  (`[source]`, empty layer) — which, by the null-columns rule, means every schema
-  column in database order, flavored by the mapping. A client never invents its own
-  notion of "the default report".
+  place friendly names leave the server: a definition's `columnLabels` become a
+  `labels` composable on the default report's definition-input table unless the
+  effective Default state carries its own. When no default is configured the server
+  synthesizes a table whose `from` is `definition`; its empty composition means every
+  schema column in database order, flavored by the mapping. A client never invents
+  its own notion of "the default report".
 
 **Aggregate functions (closed set):** `count sum avg median min max countDistinct`.
 - `sum/avg/median` require number columns; `min/max` allow number/date/text; `count/countDistinct`
@@ -490,58 +526,53 @@ provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
   moves them into the break heading rather than repeating them in detail rows. A paged
   break query reads one private lookahead row: `breakContinues` tells the client to defer
   a subtotal when the final visible group crosses the page boundary. Grand totals render
-  only at the logical end of the report. On a Group layer, these operations consume the
-  completed Group table after its metrics, computed columns, and filters. `BreakTotal.rows`
-  therefore counts Group rows, and aggregates over `__count` can recover the underlying
-  source-row count when needed.
+  only at the logical end of the report. When these composables follow `group`, they
+  consume the completed grouped table after its metrics, computed columns, and filters.
+  `BreakTotal.rows` therefore counts grouped rows, and aggregates over `__count` can
+  recover the corresponding input-row count when needed.
 
 **Computed columns:** ids live in separate namespaces per rule kind (`c1`, `c2`, … for
-computed; `m1`, `m2`, … for group metrics); may not shadow the owning stage's schema
-names; referenced by id anywhere that stage's columns are legal. A source computed
-column is a first-class input to any derived stage (a Group By dimension, a metric
-source, or a chart column). A Group By-layer computed column derives from dimensions,
-`__count`, and metrics. A Pivot-layer computed column derives from row dimensions and
-generated cells. No layer's computed columns may reference each other (no dependency
-ordering, same rule at every stage).
+computed; `m1`, `m2`, … for shape metrics) and may not shadow the schema at the point
+where they are introduced. A later composable can reference an earlier computed output,
+so a value calculated before `group` is a valid dimension, metric source, or chart
+column, while a value calculated after `group` can use dimensions, `__count`, and
+metrics. Rules within one `compute` composable are peers and cannot reference one
+another; dependency order is expressed by stacking another `compute` composable.
 
-**Stages.**
-- `source` — the developer's SELECT wrapped as `ir_base` (+ `ir_calc` when the layer
-  has computed columns), with the layer's filters and the toolbar search applied.
-  Terminal rendering (grid) consumes the full layer: visible columns, sorts, breaks,
-  aggregates, highlights, formats. `displayAs` renderers remain source-only.
-- `group` — `{ "by": [dims...], "values": [{id, col, fn}...] }`, pushed down as GROUP
-  BY over the source core. Output schema (static, derivable without running a query):
-  dims + `__count` + metrics by id + the layer's computed columns. Empty `values` ⇒
-  `__count` alone. The layer's computed columns, filters, sorts, highlights, control
-  breaks, and footer aggregates bind against that schema and push down through
-  derived-table wraps. A filter here is a post-aggregate predicate. Footer and break
-  aggregates run over the completed post-filter Group table. Groups paginate with their
-  own count query when terminal, including the one-row break-continuation lookahead.
-- `pivot` — `{ "rows": [...], "cols": [...], "values": [{id, col, fn}...],
-  "totals": true? }`, derived directly from the filtered base table. A portable grouped
-  query over `rows + cols` feeds the in-memory wide transform; `cols` values become cell
-  columns named `{metricId}@{values…}`. Once those data-dependent columns exist, the
-  Pivot layer is schema-bound and runs computed columns, filters, sorts, highlights,
-  projection, labels/formats, and pagination like any other table. Backticks quote
-  generated cell names in expressions. Optional bottom totals come from a second base
-  query grouped by `cols` alone.
-- `chart` — a renderer, not a table: the existing chart spec fields ride in the shape,
-  its layer stays empty, and chart-owned sorting/validation are unchanged.
+**Shape composables.** A shape changes the schema flowing through the same ordered
+composition. It does not change the class of the owning table, and ordinary composables
+after it use the same validation and execution paths they use anywhere else.
+
+- `group` — `{ "kind": "group", "by": [dims...], "values": [{id, col, fn}...] }`
+  groups the table produced so far. Its output is dimensions + `__count` + metrics by
+  id; an empty `values` list produces `__count` alone. Later compute/filter/sort/select/
+  highlight/break/aggregate/labels/formats composables bind against that output. A
+  later filter is therefore post-aggregate, and later footer or break aggregates
+  consume the completed post-filter grouped table.
+- `pivot` — `{ "kind": "pivot", "rows": [...], "cols": [...], "values":
+  [{id, col, fn}...], "totals": true? }` groups the table produced so far by
+  `rows + cols`, then materializes a wide table in memory. Distinct `cols` values
+  become `{metricId}@{values…}` columns. Once those data-dependent names exist, every
+  later ordinary composable binds to that runtime schema in the shared table path.
+  Backticks quote generated names in expressions. Optional bottom totals re-aggregate
+  the same shaped input by `cols` alone.
+- `chart` — `{ "kind": "chart", ... }` produces the chart's ordinary two-column
+  result table. Later ordinary composables can filter, sort, select, label, format,
+  highlight, break, or aggregate those columns under the same rules. Rendering that
+  result as a chart is a UI choice derived from the presence of this composable.
 
 Caps: `maxPivotColumns` per definition (default 60), a hard 10,000-group Pivot source
 ceiling, and `maxChartPoints` per definition (default 1,000, ceiling 10,000) — all
 surface as precise 400s.
 
-**Chart stage** (APEX-style: one chart per report, single metric):
+**Chart composable** (APEX-style: one chart per selected ancestry, single metric):
 
 ```json
-{ "shape": {
-    "kind": "chart", "type": "bar",
-    "label": "STATUS", "value": "AMOUNT", "fn": "sum",
-    "orientation": "vertical",
-    "sort": { "by": "value", "dir": "desc" },
-    "labelAxisTitle": "Status", "valueAxisTitle": "Total" },
-  "layer": {} }
+{ "kind": "chart", "type": "bar",
+  "label": "STATUS", "value": "AMOUNT", "fn": "sum",
+  "orientation": "vertical",
+  "sort": { "by": "value", "dir": "desc" },
+  "labelAxisTitle": "Status", "valueAxisTitle": "Total" }
 ```
 
 - `type`: `bar | line | area | pie`. `label`: any text/number/date/bool column
@@ -554,11 +585,11 @@ surface as precise 400s.
   date/text), and pie metrics must be non-negative. The schema endpoint advertises
   the stricter function set as `capabilities.chartAggregateFunctions`; negative pie
   data is rejected after query execution with a precise validation error.
-- The chart query runs over the **complete filtered rowset** (computed columns,
-  filters, search — never the visible page). Sorting lives inside the spec
-  (`sort.by: label|value`, value sorts tie-break on the label); source-layer sorts
-  remain configured but inactive while the chart tail is active. `orientation` and
-  the axis titles are presentation carried in state; pie ignores them.
+- The chart query runs over the **complete input rowset** produced by earlier compute,
+  filter, and search operations, never a visible page. Shape sorting lives inside the
+  spec (`sort.by: label|value`, value sorts tie-break on the label); an ordinary sort
+  after the chart composes over its output. `orientation` and the axis titles are
+  presentation carried in state; pie ignores them.
 - The response keeps the generic two-column shape: the label column as itself plus
   the metric (`v0` labeled like `sum(Amount)`, `__count` for bare counts, or the raw
   value column). When those names would collide with the label, the metric gains a
@@ -571,10 +602,11 @@ surface as precise 400s.
 dropped into `ignored[]`. Expressions are typed programs, so an unknown referenced column
 is a precise validation error. Disabled filters/highlights are not parsed or planned,
 which lets an off instruction remain in saved state while its schema is being revised.
-Layered over that, a user edit that breaks a downstream dependency (deleting a
-computed column a group stage consumes) deletes the dependent stages and shelf
-entries outright rather than limping (T0 coarse invalidation). Presentation maps are
-exempt — unknown `labels`/`formats` keys stay dormant by design.
+An edit invalidates the changed table's schema cache and the caches of its descendants;
+it does not delete or reclassify those table expressions. If the resulting composition
+is invalid, the server returns the precise path and the packaged client rolls the edit
+back transactionally. Presentation maps are exempt from column drift errors: unknown
+`labels`/`formats` keys stay dormant by design.
 
 ## 6. HTTP protocol
 
@@ -583,10 +615,10 @@ Mounted by the host: `app.MapInteractiveReports("/api/reports").RequireAuthoriza
 | Endpoint | Purpose |
 |---|---|
 | `GET  /api/reports/{name}/schema` | Column metadata + default state + capabilities + resolved feature whitelist (§4). |
-| `POST /api/reports/{name}/query` | Body = state document → page of results. |
+| `POST /api/reports/{name}/query` | Body = state document → enriched document (null table caches filled) + page of results. |
 | `GET  /api/reports/whoami` | Bootstrap diagnostic for the caller's canonical identity value (only when `whoamiEnabled`); grants no authority. |
 | `GET  /api/reports/{name}/saved` | Visible reports: primary and global reports + configured read-only alternatives + the caller's own. Configured titles win. |
-| `POST /api/reports/{name}/saved` | Save the posted state under a title (global/primary publication = admin). 403 when `savedReports` is not whitelisted (§4). |
+| `POST /api/reports/{name}/saved` | Refresh null table caches, then save the posted state under a title (global/primary publication = admin). 403 when `savedReports` is not whitelisted (§4). |
 | `GET/PUT/DELETE /api/reports/saved/{id}` | Load / modify / delete one report document (matrix in §13; configured documents reject mutation). |
 | `GET/POST /api/reports/__saved-reports/{schema,query}` | Administrator listing through the ordinary report pipeline; action cells carry saved-report ids. |
 | `GET  /api/reports/admin/saved/{id}/document` | Administrator: download a canonical `{ title, primary, state }` source-file envelope. |
@@ -604,8 +636,23 @@ ids, not state-in-URL.
 
 ```json
 {
+  "document": {
+    "activeTable": "orders",
+    "tables": {
+      "orders": {
+        "from": "definition",
+        "schema": [
+          { "name": "AMOUNT", "label": "Amount", "type": "number", "computed": false }
+        ],
+        "composables": []
+      }
+    }
+  },
+  "availableColumns": [
+    { "name": "AMOUNT", "label": "Amount", "type": "number", "computed": false }
+  ],
   "columns": [ { "name": "AMOUNT", "label": "Amount", "type": "number", "computed": false } ],
-  "rows": [ { "ORDER_ID": "9007199254740993", "CUSTOMER": "Acme", "AMOUNT": "1234.50", "ORDER_DATE": "2026-07-30" } ],
+  "rows": [ { "AMOUNT": "1234.50" } ],
   "page": { "index": 1, "size": 50 },
   "totalRows": "1423",
   "aggregates": { "AMOUNT": { "sum": "8842210.75" } },
@@ -617,8 +664,10 @@ ids, not state-in-URL.
 }
 ```
 
-Rows as objects (not positional arrays): negligible size at page granularity, much
-friendlier to consume. Aggregates/break totals are computed over the **whole filtered
+`document` is the submitted state with every null per-table schema cache filled by the
+server. `availableColumns` is the complete terminal schema before `select` hides
+columns; `columns` is the visible projection. Rows are objects (not positional arrays):
+negligible size at page granularity, much friendlier to consume. Aggregates/break totals are computed over the **whole filtered
 set** via the cloned queries — never over the visible page. `breakContinues` describes
 only the last visible break group and is false for unpaged results. It lets the renderer
 withhold an otherwise premature subtotal; the grand total is likewise displayed only
@@ -709,84 +758,74 @@ parameter values, no provider error internals ever reach the client.** Validatio
 failures are the exception: their `details` field contains newline-separated `path: message`
 entries because they reference only what the client already sent. Two
 strictness rules keep foreign input from becoming 500s or silent reinterpretation:
-structural nulls (a null pipeline stage, list element, or required
+structural nulls (a null composable, list element, or required
 identifier/expression property, shapes the protocol serializer never writes) are
 rejected by a pre-validation pass with per-path 400s, and numeric enum tokens
 (`"dir": 99`) are malformed JSON outright, because the serializer only ever emits
 camelCase strings and an integer would deserialize into an undefined member that
 downstream code silently reinterprets.
 
-## 7. Composition pipeline
+## 7. Composition evaluation
 
 ```
 resolve definition (store)                         404 if absent
 → authorize (endpoint gate + per-report policy)    403/401
 → resolve context params (claims/resolver)
-→ ingest document (one pipeline, query + export):
-    discover/fetch cached schema
-    resolve doc over effective Default state (source labels: … ?? columnLabels)
-    validate the active branch:                    400 coded error (precise)
-        source: validate layer against base ∪ source computed (effective schema)
-        group:  derive static output schema (dims + __count + metrics by id
-                + layer computed) and validate its layer against it
-        pivot:  validate rows, cols, and metrics against the effective base schema;
-                retain its layer until the data-dependent wide schema is known
-        chart:  existing chart validation over the effective schema
-    compile enabled expression rules per stage     typed definition/predicate/decoration plans
-→ [export only] apply document display labels      metadata surfaces; names/SQL untouched
-→ build source core:
-    wrap base SQL as subquery (ir_base)
-    [if source computed] second wrap layer:
-        SELECT ir_base.*, <expr> AS c1 FROM (base) ir_base  → AS ir_calc
-        (aliases become filterable/sortable universally — no dialect
-         supports referencing a SELECT alias in WHERE reliably)
-    apply filter predicates and search
-→ [group stage] wrap core as the grouped table:
-    SELECT dims, COUNT(*) AS __rows, fn(col) AS m1 … GROUP BY dims
-    [if group layer computes/filters/decorates/sorts by metric] one more wrap:
-        SELECT ir_stage.*, <expr> AS c2, <markers> FROM (grouped) ir_stage
-    apply group-layer predicates over the derived table
-    order by group-layer sorts (dims, __count, metrics, computed)
-→ [pivot stage] group the filtered base by rows + cols (capped), materialize the
-    wide Pivot schema in memory, then bind and execute the Pivot layer's computed
-    columns, filters, sorts, highlights, projection, and page; optional totals
-    re-aggregate the filtered base by cols alone
-→ derive via Clone() (terminal grid) / group-count query (terminal group):
-    page query   (+ private highlight predicate projections + ForPage)
-    count query  (ClearComponent order → AsCount)
-    aggregates   (ClearComponent order/limit → SELECT fn(col) AS a0…)
-    break totals (… → GROUP BY break cols; COUNT(*) AS __count + a0…)
+→ resolve document over effective Default state
+→ structural validation                             400 coded error (precise paths)
+→ refresh every table whose schema cache is null:
+    resolve that table's explicit from-ancestry to definition
+    fold its ordered composables against live schemas
+    execute data-dependent discovery where required (notably Pivot)
+    write the complete output schema into a detached document copy
+    never consult an existing cache for binding or authorization
+→ resolve activeTable ancestry and fold composables in document order:
+    compute      extend current schema and relation
+    filter       constrain the current relation
+    group/pivot/chart
+                transform the current relation and schema
+    sort/break/aggregate/highlight/select/labels/formats
+                apply through the shared terminal-table path
+→ compile enabled expressions                       typed definition/predicate/decoration plans
+→ build the relation as nested subqueries where ordering requires it:
+    SELECT previous.*, <expr> AS c1 FROM (previous) previous
+    filter the result before the next composable
+    shape when encountered, then continue folding against the shaped schema
+→ derive page/count/aggregate/break queries or run the shared materialized-table
+  processor for data-dependent output
 → compile (dialect compiler) → execute (provider-neutral DbCommand/DbDataReader, CancellationToken)
-→ post-process in C#: projection markers → ordered highlight hits; Pivot transform
-    (cell columns {metricId}@{values…})
 → remove private projections and shape visible rows
-→ shape response
+→ return the enriched document beside data and metadata
 ```
 
 The execution path is split by responsibility rather than view mode:
 
-- `ReportExecutor` is the application-service orchestrator. Its `IngestDocument` is the
-  unified entry for every request carrying a state document — query and export, saved
-  server-side or never saved — pairing cached schema discovery with `StateValidator`;
-  the export path then applies the ingested document's display labels
-  (`ValidatedState.WithDisplayLabels`) before selecting the view path and coordinating
-  composition, execution, and response timing.
+- `ReportExecutor` is the application-service orchestrator. It resolves and validates
+  submitted documents against live schemas, refreshes null per-table caches, and
+  coordinates composition, execution, response timing, and the enriched query document.
+  Export applies input display labels (`ValidatedState.WithDisplayLabels`), then the
+  shared terminal-table renderer folds output labels and formats over grid, Group,
+  Pivot, or Chart rows.
 - `ReportConnectionManager` owns opening connections and applying trusted session policy,
   including timezone configuration.
 - `ReportQueryReader` owns command compilation/execution and maps the engine's stable
   ordinal query layouts into provider-neutral rows.
-- `PivotTableBuilder`, `ReportResultColumns`, and `ReportRowProjector` are database-free response shapers. Pivot
-  mechanics and protocol metadata can evolve without changing connection code.
-- `StateValidator` is the validation facade. Feature validators own effect metadata such
-  as computed-column identity and highlight scope/style. `ExpressionRuleCompiler` is the
+- `PivotTableBuilder`, `MaterializedTableProcessor`, `ReportResultColumns`, and
+  `ReportRowProjector` are database-free response shapers. Shape mechanics and generic
+  terminal-table operations can evolve without changing connection code.
+- `StateValidator` is the validation facade. The composition validator preserves exact
+  table/composable paths and operation order; the generic table-layer validator applies
+  ordinary operations to the schema at their position. Feature validators own effect
+  metadata such as computed-column identity and highlight scope/style.
+  `ExpressionRuleCompiler` is the
   single enabled → metadata → parse/bind → result-contract pipeline for computed columns,
   filters, and highlights. It produces an `ExpressionRulePlan` whose typed effects keep
   definition, row-predicate, and decoration phases explicit.
 - `ExpressionRuleSqlApplicator` translates those typed effects into projection, `WHERE`,
   or private-marker SQL while `QueryComposer` remains responsible for phase ordering.
-- `HighlightEvaluator` consumes database-computed markers. It orders row hits before
-  cell hits and, within each scope, applies lower sequences before higher sequences.
-  It does not reimplement expression semantics in memory.
+- Highlight processing consumes either database-computed markers or the same compiled
+  expression plans in the materialized-table path. It orders row hits before cell hits
+  and, within each scope, applies lower sequences before higher sequences.
 - In the ASP.NET Core adapter, `IReportAccessService` owns definition-aware and
   definition-free endpoint authorization plus server-trusted context parameters. Query
   and export share one state-request pipeline so their validation and sanitized error
@@ -852,6 +891,11 @@ are real conditions and `= 1` would be a boolean/integer type error — so there
 column emits bare. The type checker's view (bool column ≈ condition) and each
 database's view meet at emission, not in the user's face.
 
+Numeric `/` always means fractional numeric division. The SQL emitter promotes its
+numerator with `1.0` before dividing, so providers cannot silently choose integer
+division for integer operands; this matches the decimal evaluation used by Pivot and
+Chart's materialized-table path.
+
 **NULL rules** (explicit, because SQL's are silent):
 - `NULL` is a value of every type; its type comes from context — function arguments,
   concatenation, arithmetic (`AMOUNT + NULL` is a number-typed NULL), CASE branches.
@@ -864,9 +908,10 @@ database's view meet at emission, not in the user's face.
 
 **Dates** (SQL comparison semantics — there are no `BEFORE`/`AFTER`/`BETWEEN()`
 functions; the operators are the vocabulary):
-- `NOW()` is the engine's current timestamp: session-local where the engine has a
-  session timezone (Oracle `LOCALTIMESTAMP`, Postgres `NOW()`), the server's clock
-  where there is no such concept (`GETDATE()`, SQLite `datetime('now','localtime')`).
+- `NOW()` is one UTC `DateTime` captured for the validated request. The emitter binds
+  that value into every SQL statement, and the materialized Pivot/Chart evaluator
+  reuses the same instant. It is not a database clock function and does not vary
+  between query branches in one execution.
 - `TO_DATE(value)` converts canonical ISO `YYYY-MM-DD` text to a date at midnight; a
   Date input is an identity conversion, which keeps expressions portable when one
   provider discovers a column as Date and SQLite discovers it as Text. String
@@ -897,18 +942,19 @@ functions; the operators are the vocabulary):
   `TO_STRING`. Implicit date-to-text rendering follows engine settings (session
   language, `NLS_DATE_FORMAT`, `DateStyle`) — the one place they would leak into
   report output, so the conversion stays explicit.
-- **Timezone is connection configuration, not expression vocabulary.** The language
-  assumes single-timezone, wall-clock data. A definition may set `TimeZone` (a region name
-  or offset, bindable from appsettings): the executor pins the session when it opens
-  the connection — `ALTER SESSION SET TIME_ZONE` on Oracle, `SET TIME ZONE` on
-  Postgres — and `NOW()` then follows it. Unset means the server's own setting, and
-  on engines with no session timezone (SQL Server, SQLite) a configured value is
-  **deliberately ignored** — their clock is the server's/process's, pinned at the OS
-  or service level if at all. Hosts can equally pin via their
-  `IReportConnectionFactory` or connection string (e.g. Npgsql `Timezone=…`). Oracle
-  connection pools keep session state, so definitions sharing a named connection
-  should agree on `TimeZone`. UTC-stored columns and per-user timezones are out of
-  scope — there is deliberately no timezone vocabulary in expressions.
+- **Timezone is connection configuration for developer SQL and database-native
+  conversions, not for portable-expression `NOW()`.** A definition may set `TimeZone`
+  (a region name or offset, bindable from appsettings): the executor pins the session
+  when it opens the connection — `ALTER SESSION SET TIME_ZONE` on Oracle and `SET TIME
+  ZONE` on Postgres. Unset leaves the server setting alone. SQL Server and SQLite have
+  no equivalent session timezone, so they deliberately ignore the option. This policy
+  still governs configured SQL, implicit conversions, and native functions issued by
+  that SQL; expression `NOW()` remains the request's bound UTC instant on every
+  provider. Hosts may also pin sessions through `IReportConnectionFactory` or a
+  connection string. Oracle pools retain session state, so definitions sharing a
+  named connection should agree on `TimeZone`. Per-user timezone vocabulary remains
+  out of scope; local-wall-clock columns need an explicit conversion in developer SQL
+  before comparison with UTC expression values.
 - Date producers emit **typed NULLs** for literal NULL arguments (`CAST(NULL AS
   DATETIME2/DATE/TIMESTAMP)`; TO_STRING has the text equivalent): a bare NULL loses
   the type — Oracle makes `TO_DATE(NULL) + 1` a NUMBER, Postgres an INTERVAL, and
@@ -933,7 +979,7 @@ and emit. The emitter is the only dialect-specific function surface outside oper
 | `ROUND(x,n)` | `ROUND(x,n)` | `ROUND(x,n)` | `ROUND(x,n)` | `ROUND(CAST(x AS NUMERIC), CAST(n AS INT))` |
 | `YEAR(d)` | `YEAR(d)` | `EXTRACT(YEAR FROM d)` | `CAST(strftime('%Y',d) AS INTEGER)` | `EXTRACT(YEAR FROM d)` |
 | `COALESCE` | `COALESCE` | `COALESCE` | `COALESCE` | `COALESCE` |
-| `NOW()` | `GETDATE()` | `LOCALTIMESTAMP` | `datetime('now','localtime')` | `NOW()` |
+| `NOW()` | `?` (bound UTC `DateTime`) | `?` (bound UTC `DateTime`) | `?` (bound UTC `DateTime`) | `?` (bound UTC `DateTime`) |
 | `TO_DATE(x)` (text) | `CAST(x AS DATETIME2)` | `TO_DATE(x,'YYYY-MM-DD')` | `datetime(x)` | `TO_DATE(x,'YYYY-MM-DD')` |
 | `DATE_TRUNC('MONTH',d)` | `CAST(DATEFROMPARTS(YEAR(d),MONTH(d),1) AS DATETIME2)` | `TRUNC(d,'MM')` | `datetime(d,'start of month')` | `DATE_TRUNC('month',d)` |
 | `TO_STRING(d,ƒ)` | `FORMAT(d,ƒ,'en-US')` | `TO_CHAR(d,ƒ)` | `strftime(ƒ,d)` | `TO_CHAR(d,ƒ)` |
@@ -949,6 +995,11 @@ as a parameter.)
 - `CASE`, comparisons, `BETWEEN`, `IS NULL`, and `AND/OR/NOT` emit **identically on
   every dialect** — the portable core; only functions, date arithmetic, and SQLite's
   date-comparand normalization (above) carry dialect idioms.
+- Materialized text comparisons and sorts use ordinal ordering. SQL-backed operations
+  inherit the database column/expression collation, because the four providers do not
+  share a portable collation name or syntax. Exact SQL/materialized ordering parity
+  therefore requires the report database to use a binary/ordinal collation; this is a
+  named portability limit rather than an implicit collation rewrite.
 - Semantics notes: concatenation treats NULL as empty everywhere (CONCAT on
   SqlServer/Sqlite/Postgres; Oracle's `||` natively); `YEAR/MONTH/DAY` accept ISO date
   *text* because SQLite date columns discover as text — emitted natively where the
@@ -1304,10 +1355,10 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   Actions menu (Columns shuttle, Column Settings, Filter, Sort, Control Break, Highlight, Aggregate,
   Compute with token-insert helpers, Group By, Pivot, Chart, Save/Save As/Delete/Reset,
   CSV download); column-header menus (sort/rename/column settings/hide/break/filter — Rename writes a
-  `labels` override for base columns and edits the rule label for computed ones; blank
+  `labels` override for ordinary columns and edits the rule label for computed ones; blank
   restores the schema default). The Column Settings dialog edits one column at a time
-  (edits stage per column, so several columns can be configured in one visit): a
-  Visible checkbox that writes the same `doc.columns` list the shuttle owns
+  (edits are staged per column, so several columns can be configured in one visit): a
+  Visible checkbox that writes the same `select` composable the shuttle owns
   (re-shown columns append to the end — no second source of truth), alignment,
   a display-mode selector (text/link/image) with explicit renderer source columns,
   a per-type format-mask select, bold/italic, text/background colors, validated custom
@@ -1316,8 +1367,8 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   doc's `formats` map (§5), applied by the grid renderer to header alignment,
   cells, and aggregate-row alignment; settings chips with
   APEX-style enable/disable checkboxes for expression rules; removing a computed-column chip also removes
-  its references from columns, rules, formats, and renderer sources — and deletes dependent
-  Group By/Pivot/chart stages and shelf entries outright (T0 coarse invalidation, §5);
+  its references from selection, rules, formats, and renderer sources; changed tables
+  and their descendants receive `schema: null` so the server refreshes their caches;
   break groups with per-column subtotal rows and grand-total rows; row/cell highlights;
   Group By/Pivot rendering; saved-report select
   (Default + Primary/Global/Private groups); `ignored[]` and coded errors surfaced as
@@ -1326,13 +1377,13 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   restore the last server-validated state — so a throwing mutator, an overlapping
   edit, or a failed saved-report load can never strand a half-mutated or
   never-validated document). Menus are
-  **stage-aware**: Columns, Column Settings, Compute, Filter, Highlight, and Sort operate on
-  the *current* terminal table — the source layer in grid, the group stage's derived
-  schema (dims + `__count` + metrics + computed) under a Group By tail, and the
-  runtime wide schema under a Pivot tail. On load the client adopts the delivered document as-is — server
-  documents are authoritative, saved reports are accepted liberally — and the
-  server judges it on query: a validation failure rolls the load back to the last
-  validated state, soft drift arrives as `ignored[]` (§5). The whole
+  **composition-aware**: Columns, Column Settings, Compute, Filter, Highlight, and Sort
+  operate on the active table's cached terminal schema regardless of which shape
+  composable produced it. The client authors a constrained set of compositions for its
+  own toolbar but preserves valid externally authored tables and composables rather than
+  inferring semantics from names or map order. On query it adopts the returned enriched
+  `document`; a validation failure rolls the edit/load back to the last validated state,
+  while soft drift arrives as `ignored[]` (§5). The whole
   surface is gated by the definition's feature whitelist (§4), which arrives resolved
   on the schema payload: menu entries vanish with their headings and separators, the
   search bar / view buttons / Actions button / saved-report select hide when their
@@ -1371,7 +1422,7 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   `enabled` property, which survives saving and export. Breaks and aggregates have no
   enabled protocol state, so their chips edit or remove them without a false toggle.
 - Schema metadata advertises expression functions and aggregate
-  functions by column type. Query results include the effective base+computed schema,
+  functions by column type. Query results include the active table's effective output schema,
   so clients do not duplicate language catalogs or guess computed types.
 - **Styling**: shadow DOM isolates every rule, including the bundled styles for
   popups and dialog windows. Modeless editor windows remain component-owned while the
@@ -1469,10 +1520,10 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   `isReadOnly` summaries; the file primary bit seeds administrator-controlled stored
   metadata. File titles precede database titles, content mutation is server-refused,
   Save As remains available, and the packaged report/admin clients suppress invalid controls.
-- **M13 — Column settings** ✅ *(2026-08-07)*: per-column presentation via the state
-  document's second map, `formats` (§5) — closed-vocabulary format masks, alignment,
+- **M13 — Column settings** ✅ *(2026-08-07; revised 2026-08-29)*: per-column presentation
+  via a `formats` composable (§5) — closed-vocabulary format masks, alignment,
   bold/italic, text/background colors — plus a Column Settings dialog (feature token
-  `columnSettings`) whose Visible checkbox writes the `doc.columns` list itself.
+  `columnSettings`) whose Visible checkbox writes the active table's `select` composable.
   Masks and styling remain client-only; definitions ship default formatting through the effective Default state,
   with no new config surface. Remaining per-column configuration candidates: LOVs,
   help text, per-column sort/filter permissions.
@@ -1503,13 +1554,15 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   names and explicit, validated sequence precedence. Control-break dimensions move into
   headings; a one-row page lookahead defers subtotals for continuing groups, and grand
   totals render only at the report's logical end.
-- **M19 — Pipeline stages** ✅ *(2026-08-10; revised 2026-08-28)*: the state document becomes a literal
-  pipeline of table stages, each with its own layer (§5) — group by and pivot become
-  first-class sibling tables with per-stage columns/labels/formats/computed/filters/
-  sorts/highlights. Pivot derives directly from the base table, materializes its wide
-  schema, and then runs its own layer. Stable metric/cell identity (`m1`,
-  `m1@["…"]`) replaces positional names. Documents and schema metadata carry no
-  protocol version or schema snapshot; the server validates the active document.
+- **M19 — Composable tables** ✅ *(2026-08-10; revised 2026-08-29)*: the state document is
+  an unordered map of opaque table ids. Each table names `definition` or another table
+  in `from` and folds an ordered list of composables (§5). Group, Pivot, and Chart are
+  shape composables inside that list, not table subclasses; selection, labels, formats,
+  computed columns, filters, sorts, highlights, breaks, and aggregates follow shared
+  table paths. Stable metric/cell identity (`m1`, `m1@["…"]`) replaces positional
+  names. Each table may carry a nullable, non-authoritative output-schema cache; the
+  client invalidates affected descendants, and the server refreshes null caches and
+  returns the enriched document with query data.
 - **M20 — Definition edit link + per-column overrides** ✅ *(2026-08-27)*: APEX's
   edit pencil as definition config — `editLink.urlTemplate` with schema-bound
   `{COLUMN}` placeholders, delivered canonical-cased on the schema payload, rendered
@@ -1593,28 +1646,30 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 | Date parts on ISO text convert at emission (Oracle TO_DATE, Postgres CAST) | dialect-aware binding rules | The portable subset's types stay dialect-free; EXTRACT's strictness is an emission detail. Rejecting text outright would break the SQLite date-as-text story the feature exists for. |
 | Dates use SQL comparison operators and BETWEEN | `BEFORE()`/`AFTER()`/`BETWEEN()` functions | No new vocabulary to learn and nothing to mistranslate: `<`/`>=`/BETWEEN already mean the right thing in SQL, and the binder's same-kind rule keeps them typed. `TO_DATE('…')` doubles as the date literal, superseding the planned `DATE '…'`. |
 | Date arithmetic is whole calendar days, integrality established at bind | intervals or fractional days | Whole days cover the reporting cases; "provably integral or rejected" beats each dialect truncating fractions differently and silently. |
-| NOW() is session-local (LOCALTIMESTAMP on Oracle) | UTC everywhere; Oracle SYSDATE | Stored DATE columns are wall time, so UTC would sit an offset away. SYSDATE looks idiomatic but follows the DB host's clock, not the session; LOCALTIMESTAMP honors the session-timezone contract. SQL Server and SQLite have no session timezone — there the server's clock is the only clock. |
+| `NOW()` is one request-scoped UTC binding shared by SQL and materialized evaluation | emit each provider's clock function | One captured instant keeps count/page/aggregate branches and Pivot/Chart evaluation consistent; provider clocks differ in timezone and can advance between statements. |
 | SQLite logical Date = canonical datetime() text, normalized at comparison sites | native-typed dates; compare raw text | SQLite has no date type — producers emit one canonical text form and comparisons wrap stray operands in datetime(), because date-only text sorts before its own midnight timestamp. Physical storage stays text; the type system stays honest. |
 | TO_STRING formats are a closed token set, translated and bound per dialect | pass native masks through | Native masks don't port (strftime ≠ TO_CHAR ≠ .NET) and raw pass-through would hand client text to the SQL layer. A validated vocabulary translates exactly and the mask still rides as a binding. |
-| Timezone pins at the connection (definition `TimeZone`), not in expressions | AT_TZ()/NOW('UTC') vocabulary; UTC everywhere | A report's clock is a property of the data source, not of each expression: the definition's `TimeZone` pins the session at open, and unset means the server's setting. Engines without a session timezone (SQL Server, SQLite) silently ignore the setting rather than erroring — it requests session behavior that simply doesn't exist there, and their clock follows the host either way. Expression-level vocabulary couldn't fix them portably and would hand a timezone decision to every report author. |
+| Definition `TimeZone` pins the database session for developer SQL, not expression `NOW()` | make it alter the portable expression clock | Session timezone still matters to configured SQL, native functions, and database conversions. Portable expressions use the separately captured UTC instant on every provider, so their meaning does not depend on connection state. |
+| Numeric division promotes the SQL numerator with `1.0` | accept provider integer-division rules | Materialized expressions evaluate numbers as decimals; promotion prevents the same expression from truncating only when pushed into SQL. |
+| SQL text ordering follows provider collation; materialized ordering is ordinal | inject a universal collation clause | No collation syntax or collation name spans SQL Server, Oracle, SQLite, and PostgreSQL. Deployments needing exact cross-path order choose a binary/ordinal database collation explicitly. |
 | Bare dates rejected in concatenation | implicit rendering; auto-wrap in TO_STRING | Implicit date-to-text is the one place engine settings (session language, NLS, DateStyle) would leak into output, and it differs per engine. Rejection matches the language's explicit-conversion rule (TO_DATE inbound, TO_STRING outbound); auto-wrapping would pick a format silently. |
-| Friendly names live in the document; the server delivers `columnLabels` as the default report's `labels` and keeps query surfaces neutral | apply labels at discovery/validation so all results carry them | Display naming is presentation: the engine's schema, validation, and query metadata speak real names and neutral labels, so no execution surface depends on captions, and the client renders its own document's names (rebuilding grid/chart synthetics from the view spec it authored). |
+| Friendly names live in the document; the server delivers `columnLabels` as the default report's `labels` and keeps query/cache surfaces neutral | apply labels at discovery/validation so all results carry them | Display naming is presentation: live schemas, per-table caches, validation, and grid/Group/Pivot/Chart query metadata retain structural labels, while the client folds its selected ancestry's labels. No executable surface depends on a caption. |
 | Report `labels` maps are never validated | ignored[]/errors for unknown or blank entries | The server validates what gates execution; labels gate nothing. Unknown keys are unused display data, exactly as resilient as a saved report is entitled to be. (Config-side `columnLabels` still fail fast on blank/case-colliding entries — config mistakes, not state.) |
-| Export applies the posted document's labels (ingest → `WithDisplayLabels`) | neutral export headers; look up the user's saved report server-side | An export is the server rendering the user's screen, and the active document may never have been saved — the posted document is the only source of truth. One ingestion pipeline resolves labels (request ?? defaultState ?? columnLabels, matching the delivered default report); the export path relabels metadata surfaces only, so composition, row keys, and golden SQL are untouched. |
+| Export folds the posted document's input and terminal presentation | neutral export headers; look up the user's saved report server-side | An export is the server rendering the user's screen, and the active document may never have been saved. Input labels rebuild source-derived synthetic captions; the shape-agnostic terminal renderer then applies later labels and formats to grid, Group, Pivot, or Chart. Composition, row keys, and SQL stay untouched. |
 | Schema endpoint synthesizes an empty `defaultState` | nullable `defaultState` | Every client would otherwise invent its own "no default configured" behavior. An empty state already *means* the right thing — all columns, database order — and it is also the delivery vehicle: the definition's mapping rides down as its `labels`. |
 | Feature control is a flat whitelist on the definition | APEX-style per-action objects; per-column attribute model | One `features` array covers the lockdown need with one concept; absent = everything keeps existing configs working. The richer per-column attribute model (alignment, masks, LOVs, per-column permissions) layers on later without reshaping this. |
 | Whitelist is presentation-level except `download` and `savedReports` creation | validate posted state docs against the whitelist | Hiding a dialog is not a data boundary — the query endpoint already accepts any valid document, and context params (§12) are the security story. The two enforced tokens are the ones that egress (unpaged export) or persist (saved-report rows); enforcing at creation only keeps existing saved reports manageable after a config change. |
 | Locked chips: state from an absent feature displays read-only | hide the chips; let them stay editable | The chip strip is the doc made visible — hiding active filters would misrepresent the data shown, and editing them would reopen the very dialogs the whitelist removed. Leaving a locked view for the grid stays possible: it abandons the feature rather than using it. |
-| Column formatting is a second document map (`formats`); only renderer source names reach server projection | apply every mask/style server-side | Masks and styles remain client presentation, while link/image dependencies must be schema-bound before entering SQL. One base text renderer owns scalar masks; link/image compose it, and synthetic metric metadata retains its format source. Grid CSV exports intentionally serialize Display As modes as browser-like encoded HTML; hidden inputs never become columns. |
+| Column formatting is a `formats` composable; only renderer source names reach server projection | apply every mask/style server-side | Masks and styles remain client presentation, while link/image dependencies must be schema-bound before entering SQL. One text renderer owns scalar masks; link/image compose it, and synthetic metric metadata retains its format source. Every terminal-table CSV export intentionally serializes Display As modes as browser-like encoded HTML; hidden inputs never become columns. |
 | Masks are closed per-type tokens (Intl-backed) | freeform mask strings (APEX FML/999G999D99) | Same rule as TO_STRING: a portable vocabulary has stable meaning while `Intl` supplies the user's separators, symbols, and ordering; it cannot smuggle anything. Unknown tokens fall through to default rendering instead of erroring, because a display mask must never break a report. |
 | Int64/UInt64/Decimal travel as invariant JSON strings; all numeric columns use bundled `big.js` | send every numeric database value as a JSON number; maintain separate integer/decimal formatters | JavaScript parses JSON numbers as IEEE-754 doubles. Typed metadata retains numeric behavior, while one arbitrary-precision path handles parsing, comparison, scaling, and rounding without silent digit loss. |
 | Column classes select a definition-owned shadow-root stylesheet | freeform style/CSS in report state; page-level classes | The URL and CSS stay application-controlled; saved reports carry only conservative class tokens and cannot select reserved `ir-*` behavior. Page CSS cannot cross the shadow boundary, while freeform report CSS would be an injection surface. |
-| The dialog's Visible checkbox writes `doc.columns` | a per-column `visible` flag in formats | One source of truth: the shuttle, the header Hide, and the checkbox all edit the same list, so they can never disagree; re-shown columns append to the end, matching how a user thinks about "bring it back". |
+| The dialog's Visible checkbox writes the active table's `select` composable | a per-column `visible` flag in formats | One source of truth: the shuttle, the header Hide, and the checkbox all edit the same list, so they can never disagree; re-shown columns append to the end, matching how a user thinks about "bring it back". |
 | Link/image renderers use explicit source columns | arbitrary HTML or URL/text templates | Column names can be schema-bound and safely projected. Direct DOM construction preserves escaping, and a protocol allowlist blocks active-content URLs without inventing a template language. |
-| Document is a source stage plus one active sibling branch and a shelf | nest per-view layers inside a views registry; keep grid at the doc root | Every table stage carries the same layer bound to its own schema. Group By and Pivot both derive from the base table; the shelf retains inactive branches without making either view depend on the other. |
-| Mode is derived from the pipeline tail | a stored `view` field | A stored mode can disagree with the stages; the tail cannot. Toolbar switching is tail-swapping against the shelf. |
+| Document is an unordered map of named table compositions | mode-specific branch registry | `from` makes dependency explicit, map order carries no meaning, and ordered composables make behavior belong to operations rather than table subclasses. Inactive alternatives remain ordinary map entries. |
+| UI mode is derived from composable predicates | a stored `view` field; table-name or map-position conventions | A stored mode can disagree with the composition. The packaged UI recognizes the subset it authors from shape composables, while preserving valid foreign compositions it cannot classify uniquely. |
 | Metrics carry explicit ids (`m1`); Pivot cells are `{metricId}@{JSON values}` | positional cell names | Positional names silently change meaning when the values list reorders or data shifts. Value-derived names remain stable; backtick quoting lets the expression language address them safely. |
-| Documents carry neither a protocol version nor a schema snapshot | client-side version/snapshot gates | The active structure is self-describing, and the server already validates it against the current discovered schema. Soft drift degrades through `ignored[]`; hard problems return precise validation errors. |
+| Documents carry no protocol version and each table has a nullable advisory schema cache | a root snapshot gate; no client schema knowledge | The structure is self-describing. Null gives the server an exact refresh signal, descendant invalidation keeps edits cheap, and query returns the enriched document. Live schemas remain authoritative for binding and security. |
 | Edit link is a constrained URL template in the definition | explicit source columns only (the M15 renderer rule) | A scoped reversal, not a repeal: M15's rejection targeted templates in *report state* — untrusted documents. The definition author already writes the raw SQL, so the trust boundary is unchanged; the template is URL-only (no HTML), placeholders are schema-bound and URL-encoded at substitution, the result still passes the protocol allowlist, and the template never enters report state — the M15 rule keeps holding for documents. Computing URLs in SQL instead would pollute the discovered schema with a link column every picker shows. |
 | Per-column overrides are a definition map delivered beside the schema (`columnOverrides`) | extend `ColumnInfo`; put flags in the state document | The per-column attribute model M11 anticipated. `ColumnInfo` is shared with query responses (and `availableColumns` overlays schema columns client-side, which would erase flags after the first query), so a parallel map keeps query payloads byte-identical. Labels ride the existing `columnLabels`/default-report channel so precedence has one implementation; sort/filter restrictions follow the whitelist philosophy — client hides controls, server strips violations into `ignored[]` so stale saved reports degrade instead of erroring — and computed columns are exempt to keep the rule predictable without transitive analysis. |
 | Dialect is a property of the connection, derived from the driver | per-report `dialect` as source of truth; derived-with-cross-check | A report's dialect can never legitimately differ from its connection's — the old per-report field only ever produced silently wrong SQL, and an omitted value silently bound as enum 0 (SqlServer). Provider tokens fix it statically; code factories are sniffed from one unopened connection (zero I/O); wrappers declare it where the wrapper is created (`AddConnection` overload). Leftover config keys are superseded, not rejected: the derived value is correct by construction, and removing vestigial config surface beats building rejection machinery for it. |
@@ -1623,13 +1678,13 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 | Packaged pages serve an anonymous shell for any name | 404 unknown names; gate the page like the data | The shell is public package markup with zero data — rendering identically for every name is what makes it disclose nothing, and the element's schema call is the real gate (an auth-gated page could not even tell a signed-out user to sign in). Same rationale as the AllowAnonymous assets. |
 | Source maps stay embedded in the package | strip maps on pack | One hermetic build shape (content-hash ETags stay honest across dev and package), and readable stack traces from the minified bundles during production support are worth ~2 MB in a server-side package. |
 | MIT + full nuget.org metadata at 0.9.0, shared via `Directory.Build.props` | per-project metadata; private-feed-first | One file owns identity/license/Source Link/symbols for all three packages; 0.9.0 signals pre-1.0 while the package soaks in a real host. Dependencies pin 8.0.x so the packages do not drag 10.x `Microsoft.Extensions.*` into Umbraco 13's 8.x graph. |
-| Group By and Pivot each own a post-shape filter layer | force every filter onto the base table | The table displayed to the user is a legitimate input to another table operation. Group By predicates compile over the aggregate table; Pivot predicates bind after its runtime schema is materialized. |
-| Group breaks and footer aggregates consume the completed Group table | re-run them against the source core | Stage ownership stays literal: post-group filters and computed columns determine which Group rows exist and which values are aggregated. `BreakTotal.rows` counts Group rows; summing `__count` gives the corresponding source-row count. The source grid keeps the same aggregate-list-for-footer-and-subtotals contract. |
-| Server documents are authoritative; saved reports adopt liberally (snapshot gate retired) | keep the client-side schema-snapshot match-or-reset (the snapshot row above) | A full reversal of the snapshot row (owner, 2026-08-28): the server already judges every document on query — hard problems return a validation response the client now rolls back transactionally, soft drift degrades through `ignored[]` — so the client-side predictive gate second-guessed the authoritative judge and refused documents over recorded diffs the document might never reference. Saves stamp nothing; adoption strips the legacy `schema` key; the server-side machinery (state-model member, resolver copy, default-state stamping) was removed with it, legacy rows hydrating past the unknown member. |
+| Ordinary composables follow one table path before or after a shape | separate Group/Pivot filter, sort, select, and highlight implementations | The current schema is the only distinction that matters. A hide-column fix, for example, belongs to `select` and therefore fixes unshaped, grouped, pivoted, and charted output together. |
+| Breaks and footer aggregates consume the table produced so far | re-run them against the definition SQL | Composition order stays literal: preceding shape, filter, and compute operations determine which rows and values are aggregated. After Group, `BreakTotal.rows` counts grouped rows and summing `__count` recovers the corresponding input-row count. |
+| Server-enriched documents are authoritative; per-table caches remain advisory | root schema-snapshot match-or-reset; no schema cache | The server judges every composition against live schemas. Null caches are refreshed on submission and returned with query data, while non-null caches never participate in binding or security. Hard problems roll the client back transactionally; soft drift degrades through `ignored[]`. |
 | Explicit `none` / `snapshot` consistency policy; provider owns the mechanism | automatic best-effort transactions; one portable mega-statement | `none` is a valid no-side-effect choice. `snapshot` is either honored or rejected, never silently degraded. Oracle uses `SET TRANSACTION READ ONLY` plus an anonymous PL/SQL multi-`REF CURSOR` batch, Postgres repeatable read, SQLite a read transaction, and SQL Server SNAPSHOT only when the administrator enables it. This keeps one application contract without pretending database mechanisms or operational requirements are identical. |
 | CSV text cells get the apostrophe formula guard by default | rely on RFC 4180 quoting; sanitize only on request | Quoting does not stop Excel from evaluating `=`/`+`/`-`/`@`-leading cells, exported database text can be attacker-authored, and the writer explicitly targets Excel (BOM). Only text-sourced cells are touched — numbers and dates keep full fidelity — and `CsvCellPolicy.Verbatim` remains for non-spreadsheet consumers. |
 | Title uniqueness backed by a user-rows-only unique index | trust the endpoint pre-check; span both origins | The check-then-insert race made the documented guarantee advisory. A code-computed `TITLE_KEY` (trim + invariant casefold) compares identically on every collation; the index covers user rows only because configured documents deliberately shadow user titles and sync must never fail on that. The store translates violations into the pre-check's own 409, and `Put` now treats only provider-classified unique violations as a lost insert race — anything else propagates rather than being reported as applied. |
 | Route-literal report names (`ui`, `saved`, `whoami`, `admin`) fail fast | document the shadowing; namespace system endpoints | Literal-first routing makes such reports silently unreachable or — worse — partially reachable (`saved` answers queries but not schema). Failing configuration names the conflict; moving system endpoints would break every existing consumer for four names nobody should use. |
-| Foreign-input strictness: numeric enums and structural nulls are 400s | accept and reinterpret; let nulls surface as 500s | The protocol serializer only ever writes camelCase enum strings and never writes nulls, so both shapes are provably foreign — rejecting them cannot break a legitimately saved document (liberal acceptance intact). `dir: 99` previously validated as an undefined member and executed as *something*; a null pipeline stage crashed the resolver into a sanitized 500. |
+| Foreign-input strictness: numeric enums and structural nulls are 400s | accept and reinterpret; let nulls surface as 500s | The protocol serializer only ever writes camelCase enum strings and never writes null composables, so both shapes are provably foreign — rejecting them cannot break a legitimately saved document (liberal acceptance intact). `dir: 99` previously validated as an undefined member and executed as *something*; a null composable crashed the resolver into a sanitized 500. |
 | GraphQL rows adopt the REST exact-number contract | exact-number scalars; leave GraphQL.NET's serializer alone | The same report must not have two wire semantics: dynamic row values (`ComplexScalar`) silently rounded Int64/Decimal through doubles in JS clients. Normalizing rows to invariant strings mirrors `IrJson`; `totalRows`/`elapsedMs` stay `Long` scalars because their schema type declares number semantics and their magnitudes fit a double exactly. |
 | Saved rows record the configured definition key as `REPORT_NAME` | persist the route token as requested | Case-insensitive lookup with route-cased persistence scattered one report's rows across spellings on case-sensitive databases (`/orders` vs `/Orders`). The configured key is the identity; alternate casing stays accepted at the boundary and dies there. |

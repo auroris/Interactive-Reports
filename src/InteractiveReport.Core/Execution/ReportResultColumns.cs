@@ -1,5 +1,6 @@
 using System.Text.Json;
 using InteractiveReport.Core.Model;
+using InteractiveReport.Core.Schema;
 using InteractiveReport.Core.Validation;
 
 namespace InteractiveReport.Core.Execution;
@@ -17,28 +18,48 @@ internal static class ReportResultColumns
             .ToList();
 
     /// <summary>
-    /// The terminal group stage's visible columns, in the layer's selection order:
-    /// pass-through dims, __count, metrics by stable id, and layer computed columns.
-    /// Metric labels rebuild from the (possibly relabeled) view metadata so export
-    /// display labels reach the synthetic sum(…) captions.
+    /// The terminal grouped table's visible columns, in selection order. Metadata
+    /// remains structural on query paths; export relabels it after execution.
     /// </summary>
     public static List<ColumnInfo> ForGroupStage(ValidatedState state)
     {
         var view = state.View;
-        var layer = view.GroupLayer!;
+        var layer = view.Output!;
+        return Select(ForGroupTable(state), layer.SelectColumns);
+    }
+
+    /// <summary>The complete Group output schema before a select composable.</summary>
+    public static List<ColumnInfo> ForGroupTable(ValidatedState state)
+    {
+        var view = state.View;
+        var layer = view.Output!;
         var metrics = view.Values.ToDictionary(m => m.Id, StringComparer.OrdinalIgnoreCase);
 
-        var result = new List<ColumnInfo>(layer.SelectColumns.Count);
-        foreach (var column in layer.SelectColumns)
+        var result = new List<ColumnInfo>(layer.Schema.Columns.Count);
+        foreach (var column in layer.Schema.Columns)
         {
+            ColumnInfo info;
             if (metrics.TryGetValue(column.Name, out var metric))
-                result.Add(ForMetric(metric));
+                info = ForMetric(metric);
             else if (string.Equals(column.Name, "__count", StringComparison.OrdinalIgnoreCase))
-                result.Add(new ColumnInfo("__count", "Count", "number", false));
+                info = new ColumnInfo("__count", "Count", "number", false);
             else
-                result.Add(new ColumnInfo(column.Name, column.Label, column.KindName, column.IsComputed));
+                info = new ColumnInfo(column.Name, column.Label, column.KindName, column.IsComputed);
+            result.Add(info);
         }
         return result;
+    }
+
+    /// <summary>Projects metadata by canonical selected-column order.</summary>
+    public static List<ColumnInfo> Select(
+        IReadOnlyList<ColumnInfo> available,
+        IReadOnlyList<ColumnModel> selected)
+    {
+        var lookup = available.ToDictionary(column => column.Name, StringComparer.OrdinalIgnoreCase);
+        return selected
+            .Where(column => lookup.ContainsKey(column.Name))
+            .Select(column => lookup[column.Name])
+            .ToList();
     }
 
     public static ColumnInfo ForMetric(ValidMetric metric)
@@ -58,6 +79,25 @@ internal static class ReportResultColumns
         if (string.Equals(label.Name, metric.Name, StringComparison.OrdinalIgnoreCase))
             metric = metric with { Name = $"{metric.Name}_metric" };
         return [label, metric];
+    }
+
+    /// <summary>
+    /// Complete metadata for a statically-known materialized table. Shape columns
+    /// retain format-source metadata and computed output columns come from the bound
+    /// schema. Presentation labels are deliberately absent: query/cache metadata is
+    /// structural, while export applies labels in its shared renderer.
+    /// </summary>
+    public static List<ColumnInfo> ForMaterializedTable(
+        ReportSchema schema,
+        IReadOnlyList<ColumnInfo> shapeColumns)
+    {
+        var shape = shapeColumns.ToDictionary(column => column.Name, StringComparer.OrdinalIgnoreCase);
+        return schema.Columns.Select(column =>
+        {
+            return shape.TryGetValue(column.Name, out var known)
+                ? known
+                : new ColumnInfo(column.Name, column.Label, column.KindName, column.IsComputed);
+        }).ToList();
     }
 
     public static ColumnInfo ForAggregate(ValidAggregate aggregate, string name)

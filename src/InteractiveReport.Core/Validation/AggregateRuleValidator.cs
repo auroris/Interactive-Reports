@@ -6,17 +6,23 @@ namespace InteractiveReport.Core.Validation;
 /// <summary>Validates aggregate compatibility and removes duplicate column/function pairs.</summary>
 internal static class AggregateRuleValidator
 {
+    internal sealed class Context
+    {
+        public HashSet<string> SeenKeys { get; } = new(StringComparer.OrdinalIgnoreCase);
+    }
+
     public static List<ValidAggregate> Validate(
         List<AggregateRule>? rules,
         string pathPrefix,
         IReadOnlyDictionary<string, ColumnModel> columns,
         List<ValidationError> errors,
-        List<IgnoredItem> ignored)
+        List<IgnoredItem> ignored,
+        Context? context = null)
     {
         var result = new List<ValidAggregate>();
         if (rules is null) return result;
 
-        var seen = new HashSet<(string, AggregateFn)>();
+        context ??= new Context();
         for (var i = 0; i < rules.Count; i++)
         {
             var rule = rules[i];
@@ -36,7 +42,7 @@ internal static class AggregateRuleValidator
                 continue;
             }
 
-            if (seen.Add((column.Name, rule.Fn)))
+            if (context.SeenKeys.Add($"{column.Name}\0{rule.Fn}"))
                 result.Add(new ValidAggregate(column, rule.Fn));
         }
         return result;

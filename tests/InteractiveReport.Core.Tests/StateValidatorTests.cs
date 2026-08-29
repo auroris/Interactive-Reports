@@ -26,7 +26,7 @@ public class StateValidatorTests
             Validate(Doc(source: new StageLayer { Filters = [Filter("NO_SUCH = 1")] })));
 
         Assert.Contains(ex.Errors, error =>
-            error.Path == "pipeline[0].layer.filters[0].expr" && error.Message.Contains("NO_SUCH"));
+            error.Path == "tables.source.composables[0].filters[0].expr" && error.Message.Contains("NO_SUCH"));
     }
 
     [Fact]
@@ -36,7 +36,7 @@ public class StateValidatorTests
             Validate(Doc(source: new StageLayer { Filters = [Filter("CONTAINS(AMOUNT, '12')")] })));
 
         Assert.Contains(ex.Errors, e =>
-            e.Path == "pipeline[0].layer.filters[0].expr" && e.Message.Contains("must be text"));
+            e.Path == "tables.source.composables[0].filters[0].expr" && e.Message.Contains("must be text"));
     }
 
     [Fact]
@@ -64,7 +64,7 @@ public class StateValidatorTests
             Validate(Doc(source: new StageLayer { Filters = [Filter("AMOUNT > 'not-a-number'")] })));
 
         Assert.Contains(ex.Errors, e =>
-            e.Path == "pipeline[0].layer.filters[0].expr" && e.Message.Contains("number and text"));
+            e.Path == "tables.source.composables[0].filters[0].expr" && e.Message.Contains("number and text"));
     }
 
     [Fact]
@@ -118,7 +118,7 @@ public class StateValidatorTests
     }
 
     [Fact]
-    public void Default_sorts_apply_when_state_has_no_pipeline()
+    public void Default_sorts_apply_when_request_has_no_table_document()
     {
         var def = OrdersDefinition(ReportDialect.Sqlite);
         def.DefaultState = Doc(source: new StageLayer
@@ -134,7 +134,7 @@ public class StateValidatorTests
     }
 
     [Fact]
-    public void Request_pipeline_replaces_the_default_pipeline_wholesale()
+    public void Request_table_map_replaces_the_default_table_map_wholesale()
     {
         var def = OrdersDefinition(ReportDialect.Sqlite);
         def.DefaultState = Doc(source: new StageLayer
@@ -143,9 +143,9 @@ public class StateValidatorTests
             Filters = [Filter("AMOUNT > 1000")],
         });
 
-        // A present pipeline replaces the default's stage array entirely: no per-field
+        // A present table map replaces the default's map entirely: no per-field
         // merging, so the default's sorts and filters are gone even though the request's
-        // source layer never mentions them.
+        // definition-input table never mentions them.
         var bare = Validate(Doc(), def);
         Assert.Empty(bare.Sorts);
         Assert.Empty(bare.Rules.RowPredicates);
@@ -307,8 +307,8 @@ public class StateValidatorTests
         var request = Validate(Doc(source: new StageLayer { Labels = new() { ["AMOUNT"] = "Mine" } }), def);
         Assert.Equal("Mine", request.Labels["AMOUNT"]);
 
-        // A request pipeline whose source layer has no labels replaces the default
-        // pipeline wholesale, so resolution falls to the definition's columnLabels.
+        // A request table map whose definition-input table has no labels replaces the
+        // default map wholesale, so resolution falls to the definition's columnLabels.
         Assert.Equal("Configured", Validate(Doc(), def).Labels["AMOUNT"]);
 
         // An explicit empty map is a clear, not an inherit.
@@ -363,7 +363,7 @@ public class StateValidatorTests
             })));
 
         Assert.Contains(ex.Errors, e =>
-            e.Path == "pipeline[0].layer.aggregates[0]" && e.Message.Contains("text column"));
+            e.Path == "tables.source.composables[0].aggregates[0]" && e.Message.Contains("text column"));
     }
 
     [Fact]
@@ -383,7 +383,7 @@ public class StateValidatorTests
     }
 
     [Fact]
-    public void Break_columns_are_forced_into_the_selection()
+    public void Break_columns_are_projected_without_being_forced_visible()
     {
         var result = Validate(Doc(source: new StageLayer
         {
@@ -391,7 +391,8 @@ public class StateValidatorTests
             Breaks = ["REGION", "GHOST"],
         }));
 
-        Assert.Equal(["AMOUNT", "REGION"], result.SelectColumns.Select(c => c.Name));
+        Assert.Equal(["AMOUNT"], result.SelectColumns.Select(c => c.Name));
+        Assert.Equal(["AMOUNT", "REGION"], result.ProjectionColumns.Select(c => c.Name));
         var b = Assert.Single(result.Breaks);
         Assert.Equal("REGION", b.Name);
         Assert.Contains(result.Ignored, i => i.Kind == "break" && i.Detail.Contains("GHOST"));
@@ -465,7 +466,7 @@ public class StateValidatorTests
         var bad = Assert.Throws<ReportValidationException>(() =>
             Validate(Doc(source: new StageLayer { Computed = [new ComputedColumn { Id = "x1", Expr = "1" }] })));
         Assert.Contains(bad.Errors, e =>
-            e.Path == "pipeline[0].layer.computed[0]" && e.Message.Contains("must match c1"));
+            e.Path == "tables.source.composables[0].computed[0]" && e.Message.Contains("must match c1"));
 
         var dupe = Assert.Throws<ReportValidationException>(() =>
             Validate(Doc(source: new StageLayer
@@ -501,7 +502,7 @@ public class StateValidatorTests
                 Computed = [new ComputedColumn { Id = "c1", Expr = "AMOUNT +" }],
             })));
 
-        Assert.Contains(ex.Errors, e => e.Path == "pipeline[0].layer.computed[0].expr");
+        Assert.Contains(ex.Errors, e => e.Path == "tables.source.composables[0].computed[0].expr");
     }
 
     [Fact]
@@ -551,14 +552,14 @@ public class StateValidatorTests
             {
                 Highlights = [new HighlightRule { Id = "h1", Scope = "row", Expr = "AMOUNT + 1", Style = new HighlightStyle { Bg = "red" } }],
             })));
-        Assert.Contains(badCondition.Errors, e => e.Path == "pipeline[0].layer.highlights[0].expr");
+        Assert.Contains(badCondition.Errors, e => e.Path == "tables.source.composables[0].highlights[0].expr");
 
         var noColor = Assert.Throws<ReportValidationException>(() =>
             Validate(Doc(source: new StageLayer
             {
                 Highlights = [new HighlightRule { Id = "h1", Scope = "row", Expr = "AMOUNT > 1" }],
             })));
-        Assert.Contains(noColor.Errors, e => e.Path == "pipeline[0].layer.highlights[0].style");
+        Assert.Contains(noColor.Errors, e => e.Path == "tables.source.composables[0].highlights[0].style");
 
         var duplicateSequence = Assert.Throws<ReportValidationException>(() =>
             Validate(Doc(source: new StageLayer
@@ -569,23 +570,24 @@ public class StateValidatorTests
                     new HighlightRule { Id = "h2", Sequence = 10, Expr = "AMOUNT > 2", Style = new HighlightStyle { Bg = "blue" } },
                 ],
             })));
-        Assert.Contains(duplicateSequence.Errors, e => e.Path == "pipeline[0].layer.highlights[1].sequence");
+        Assert.Contains(duplicateSequence.Errors, e => e.Path == "tables.source.composables[0].highlights[1].sequence");
     }
 
-    // ---- pipeline shape ----
+    // ---- table composition shape ----
 
     [Fact]
-    public void Pipeline_not_starting_with_source_is_a_precise_error()
+    public void Active_table_without_a_definition_ancestry_is_a_precise_error()
     {
         var state = new ReportState
         {
-            Pipeline = [Group(by: ["REGION"])],
+            ActiveTable = "summary",
+            Tables = new() { ["summary"] = Group(by: ["REGION"]) },
         };
 
         var ex = Assert.Throws<ReportValidationException>(() => Validate(state));
 
-        Assert.Contains(ex.Errors, e => e.Path == "pipeline[0].shape.kind"
-            && e.Message.Contains("must be 'source'") && e.Message.Contains("'group'"));
+        Assert.Contains(ex.Errors, e => e.Path == "tables.summary.from"
+            && e.Message.Contains("required"));
     }
 
     [Fact]
@@ -598,12 +600,12 @@ public class StateValidatorTests
                 Pivot(rows: ["CUSTOMER"], cols: ["STATUS"]),
             ])));
 
-        Assert.Contains(ex.Errors, e => e.Path == "pipeline"
-            && e.Message.Contains("unsupported pipeline shape [source, group,pivot]"));
+        Assert.Contains(ex.Errors, e => e.Path == "tables.pivot2.composables[0]"
+            && e.Message.Contains("cannot follow"));
     }
 
     [Fact]
-    public void Chart_after_group_is_an_unsupported_pipeline_shape()
+    public void Chart_after_group_is_an_unsupported_shape_composition()
     {
         var ex = Assert.Throws<ReportValidationException>(() =>
             Validate(Doc(tail:
@@ -617,25 +619,89 @@ public class StateValidatorTests
                 }),
             ])));
 
-        Assert.Contains(ex.Errors, e => e.Path == "pipeline"
-            && e.Message.Contains("unsupported pipeline shape"));
+        Assert.Contains(ex.Errors, e => e.Path == "tables.chart2.composables[0]"
+            && e.Message.Contains("cannot follow"));
     }
 
     [Fact]
-    public void Empty_pipeline_and_null_pipeline_mean_the_bare_source_stage()
+    public void Terminal_composables_on_a_shape_owning_table_apply_to_its_shaped_output()
+    {
+        var state = new ReportState
+        {
+            ActiveTable = "opaque",
+            Tables = new()
+            {
+                ["opaque"] = new ReportTable
+                {
+                    From = "definition",
+                    Composables =
+                    [
+                        // Terminal presentation is declarative for the owning table;
+                        // it is not silently lost merely because an alternate author
+                        // placed it before the shape node.
+                        new TableComposable { Kind = "select", Columns = ["m1"] },
+                        new TableComposable
+                        {
+                            Kind = "group",
+                            By = ["REGION"],
+                            Values = [Metric("m1", "AMOUNT", AggregateFn.Sum)],
+                        },
+                        new TableComposable
+                        {
+                            Kind = "sort",
+                            Sorts = [new SortRule { Col = "m1", Dir = SortDir.Desc }],
+                        },
+                    ],
+                },
+            },
+        };
+
+        var result = Validate(state);
+
+        Assert.Equal(ViewMode.GroupBy, result.View.Mode);
+        Assert.Equal(["m1"], result.View.Output!.SelectColumns.Select(column => column.Name));
+        Assert.Equal("m1", Assert.Single(result.View.Output.Sorts).Column.Name);
+    }
+
+    [Fact]
+    public void Unknown_composables_in_the_active_ancestry_are_not_silently_skipped()
+    {
+        var state = new ReportState
+        {
+            ActiveTable = "child",
+            Tables = new()
+            {
+                ["parent"] = new ReportTable
+                {
+                    From = "definition",
+                    Composables = [new TableComposable { Kind = "teleport" }],
+                },
+                ["child"] = new ReportTable { From = "parent", Composables = [] },
+            },
+        };
+
+        var error = Assert.Throws<ReportValidationException>(() => Validate(state));
+
+        Assert.Contains(error.Errors, item =>
+            item.Path == "tables.parent.composables[0].kind"
+            && item.Message.Contains("teleport", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Missing_and_empty_table_maps_mean_the_bare_definition_table()
     {
         Assert.Equal(ViewMode.Grid, Validate(new ReportState()).View.Mode);
-        Assert.Equal(ViewMode.Grid, Validate(new ReportState { Pipeline = [] }).View.Mode);
+        Assert.Equal(ViewMode.Grid, Validate(new ReportState { Tables = [] }).View.Mode);
     }
 
-    // ---- the shelf is server-inert ----
+    // ---- inactive tables stay out of active execution validation ----
 
     [Fact]
-    public void Shelf_entries_are_never_validated()
+    public void Inactive_tables_do_not_enter_active_execution_validation()
     {
         var result = Validate(Doc(
             source: new StageLayer { Columns = ["CUSTOMER"] },
-            shelf: new()
+            alternatives: new()
             {
                 ["groupBy"] =
                 [
@@ -651,7 +717,10 @@ public class StateValidatorTests
                 ],
                 ["garbage"] =
                 [
-                    new PipelineStage { Shape = new StageShape { Kind = "teleport" } },
+                    new ReportTable
+                    {
+                        Composables = [new TableComposable { Kind = "teleport" }],
+                    },
                 ],
             }));
 
@@ -693,7 +762,7 @@ public class StateValidatorTests
         var ex = Assert.Throws<ReportValidationException>(() =>
             Validate(Doc(tail: [Group(by: ["GHOST"])])));
 
-        Assert.Contains(ex.Errors, e => e.Path == "pipeline[1].shape.by"
+        Assert.Contains(ex.Errors, e => e.Path == "tables.group1.composables[0].by"
             && e.Message.Contains("at least one valid group column"));
     }
 
@@ -707,7 +776,7 @@ public class StateValidatorTests
                 Doc(tail: [Group(by: ["__count"])]),
                 schemaWithCount));
 
-        Assert.Contains(ex.Errors, e => e.Path == "pipeline[1].shape.by"
+        Assert.Contains(ex.Errors, e => e.Path == "tables.group1.composables[0].by"
             && e.Message.Contains("'__count' is reserved"));
     }
 
@@ -717,7 +786,7 @@ public class StateValidatorTests
         var badId = Assert.Throws<ReportValidationException>(() =>
             Validate(Doc(tail: [Group(by: ["REGION"], values: [Metric("v0", "AMOUNT", AggregateFn.Sum)])])));
         Assert.Contains(badId.Errors, e =>
-            e.Path == "pipeline[1].shape.values[0]" && e.Message.Contains("must match m1"));
+            e.Path == "tables.group1.composables[0].values[0]" && e.Message.Contains("must match m1"));
 
         var dupe = Assert.Throws<ReportValidationException>(() =>
             Validate(Doc(tail:
@@ -729,7 +798,7 @@ public class StateValidatorTests
                 ]),
             ])));
         Assert.Contains(dupe.Errors, e =>
-            e.Path == "pipeline[1].shape.values[1]" && e.Message.Contains("duplicate metric id"));
+            e.Path == "tables.group1.composables[0].values[1]" && e.Message.Contains("duplicate metric id"));
 
         var schemaWithM1 = OrdersSchema.Append(Col("M1", typeof(string))).ToList();
         var shadow = Assert.Throws<ReportValidationException>(() =>
@@ -738,12 +807,12 @@ public class StateValidatorTests
                 Doc(tail: [Group(by: ["REGION"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)])]),
                 schemaWithM1));
         Assert.Contains(shadow.Errors, e =>
-            e.Path == "pipeline[1].shape.values[0]" && e.Message.Contains("shadows a schema column"));
+            e.Path == "tables.group1.composables[0].values[0]" && e.Message.Contains("shadows a schema column"));
 
         var incompatible = Assert.Throws<ReportValidationException>(() =>
             Validate(Doc(tail: [Group(by: ["REGION"], values: [Metric("m1", "CUSTOMER", AggregateFn.Sum)])])));
         Assert.Contains(incompatible.Errors, e =>
-            e.Path == "pipeline[1].shape.values[0]" && e.Message.Contains("not valid for text column 'CUSTOMER'"));
+            e.Path == "tables.group1.composables[0].values[0]" && e.Message.Contains("not valid for text column 'CUSTOMER'"));
     }
 
     [Fact]
@@ -788,7 +857,7 @@ public class StateValidatorTests
                 }),
         ]));
 
-        var layer = result.View.GroupLayer!;
+        var layer = result.View.Output!;
         Assert.Equal("c2", Assert.Single(layer.Computed).Effect.Column.Name);
         Assert.Equal("m1", Assert.Single(layer.Sorts).Column.Name);
         Assert.Equal("c2", Assert.Single(layer.Decorations).Effect.Column!.Name);
@@ -805,7 +874,7 @@ public class StateValidatorTests
                     }),
             ])));
         Assert.Contains(unknown.Errors, e =>
-            e.Path == "pipeline[1].layer.computed[0].expr" && e.Message.Contains("AMOUNT"));
+            e.Path == "tables.group1.composables[1].computed[0].expr" && e.Message.Contains("AMOUNT"));
     }
 
     [Fact]
@@ -828,7 +897,7 @@ public class StateValidatorTests
                     ],
                 }),
         ]));
-        var layer = result.View.GroupLayer!;
+        var layer = result.View.Output!;
         Assert.Single(layer.RowPredicates);
         Assert.Equal("REGION", Assert.Single(layer.Breaks).Name);
         Assert.Equal(["m1", "c2"], layer.Aggregates.Select(aggregate => aggregate.Column.Name));
@@ -876,7 +945,7 @@ public class StateValidatorTests
             [
                 Pivot(rows: ["CUSTOMER"], cols: ["REMOVED"]),
             ])));
-        Assert.Contains(noCols.Errors, e => e.Path == "pipeline[1].shape.cols"
+        Assert.Contains(noCols.Errors, e => e.Path == "tables.pivot1.composables[0].cols"
             && e.Message.Contains("at least one valid column dimension"));
 
         var overlap = Assert.Throws<ReportValidationException>(() =>
@@ -884,7 +953,7 @@ public class StateValidatorTests
             [
                 Pivot(rows: ["STATUS"], cols: ["STATUS"]),
             ])));
-        Assert.Contains(overlap.Errors, e => e.Path == "pipeline[1].shape.cols"
+        Assert.Contains(overlap.Errors, e => e.Path == "tables.pivot1.composables[0].cols"
             && e.Message.Contains("already a row dimension"));
     }
 
@@ -904,24 +973,25 @@ public class StateValidatorTests
                 Formats = new() { ["m1@[\"SHIPPED\"]"] = new ColumnFormat { Mask = "decimal2" } },
             }),
         ]));
-        var layer = ok.View.PivotLayer!;
-        Assert.Single(layer.Computed!);
-        Assert.Single(layer.Filters!);
-        Assert.Single(layer.Sorts!);
-        Assert.Single(layer.Highlights!);
-        Assert.Equal("Shipped Total", layer.Labels!["m1@[\"SHIPPED\"]"]);
+        var layer = ok.View.DeferredOutput!;
+        Assert.Contains(layer, item => item.Value.Kind == "compute");
+        Assert.Contains(layer, item => item.Value.Kind == "filter");
+        Assert.Contains(layer, item => item.Value.Kind == "sort");
+        Assert.Contains(layer, item => item.Value.Kind == "highlight");
+        Assert.Equal(
+            "Shipped Total",
+            layer.Single(item => item.Value.Kind == "labels").Value.Labels!["m1@[\"SHIPPED\"]"]);
 
-        var tableOnly = Assert.Throws<ReportValidationException>(() =>
-            Validate(Doc(tail:
+        var tableOnly = Validate(Doc(tail:
             [
                 Pivot(rows: ["CUSTOMER"], cols: ["STATUS"], layer: new StageLayer
                 {
                     Breaks = ["CUSTOMER"],
                     Aggregates = [new AggregateRule { Col = "CUSTOMER", Fn = AggregateFn.Count }],
                 }),
-            ])));
-        Assert.Contains(tableOnly.Errors, error => error.Path == "pipeline[1].layer.breaks");
-        Assert.Contains(tableOnly.Errors, error => error.Path == "pipeline[1].layer.aggregates");
+            ]));
+        Assert.Contains(tableOnly.View.DeferredOutput!, item => item.Value.Kind == "break");
+        Assert.Contains(tableOnly.View.DeferredOutput!, item => item.Value.Kind == "aggregate");
     }
 
     [Fact]
@@ -932,7 +1002,7 @@ public class StateValidatorTests
             [
                 Pivot(rows: ["CUSTOMER"], cols: ["STATUS"]),
             ],
-            shelf: new()
+            alternatives: new()
             {
                 ["groupBy"] =
                 [
@@ -946,7 +1016,7 @@ public class StateValidatorTests
             }));
 
         Assert.Equal(ViewMode.Pivot, result.View.Mode);
-        Assert.Null(result.View.GroupLayer);
+        Assert.Null(result.View.Output);
         Assert.Empty(result.View.Values);
     }
 
@@ -973,7 +1043,7 @@ public class StateValidatorTests
             [
                 Pivot(rows: ["CUSTOMER"], cols: ["STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)]),
             ],
-            shelf: new()
+            alternatives: new()
             {
                 ["chart"] =
                 [
@@ -1075,7 +1145,7 @@ public class StateValidatorTests
                 }),
             ])));
 
-        Assert.Contains(ex.Errors, e => e.Path == "pipeline[1].shape.value" && e.Message.Contains("numeric"));
+        Assert.Contains(ex.Errors, e => e.Path == "tables.chart1.composables[0].value" && e.Message.Contains("numeric"));
     }
 
     [Fact]
@@ -1092,7 +1162,7 @@ public class StateValidatorTests
                 }),
             ])));
 
-        Assert.Contains(ex.Errors, e => e.Path == "pipeline[1].shape.value" && e.Message.Contains("number"));
+        Assert.Contains(ex.Errors, e => e.Path == "tables.chart1.composables[0].value" && e.Message.Contains("number"));
     }
 
     [Fact]
@@ -1108,7 +1178,7 @@ public class StateValidatorTests
                     shape.Fn = AggregateFn.Sum;
                 }),
             ])));
-        Assert.Contains(sum.Errors, e => e.Path == "pipeline[1].shape.value" && e.Message.Contains("'sum'"));
+        Assert.Contains(sum.Errors, e => e.Path == "tables.chart1.composables[0].value" && e.Message.Contains("'sum'"));
 
         var distinct = Assert.Throws<ReportValidationException>(() =>
             Validate(Doc(tail:
@@ -1120,7 +1190,7 @@ public class StateValidatorTests
                     shape.Fn = AggregateFn.CountDistinct;
                 }),
             ])));
-        Assert.Contains(distinct.Errors, e => e.Path == "pipeline[1].shape.value");
+        Assert.Contains(distinct.Errors, e => e.Path == "tables.chart1.composables[0].value");
 
         var bare = Assert.Throws<ReportValidationException>(() =>
             Validate(Doc(tail:
@@ -1131,7 +1201,7 @@ public class StateValidatorTests
                     shape.Label = "STATUS";
                 }),
             ])));
-        Assert.Contains(bare.Errors, e => e.Path == "pipeline[1].shape.value");
+        Assert.Contains(bare.Errors, e => e.Path == "tables.chart1.composables[0].value");
     }
 
     [Fact]
@@ -1147,7 +1217,7 @@ public class StateValidatorTests
                     shape.Fn = AggregateFn.Count;
                 }),
             ])));
-        Assert.Contains(badType.Errors, e => e.Path == "pipeline[1].shape.type" && e.Message.Contains("donut"));
+        Assert.Contains(badType.Errors, e => e.Path == "tables.chart1.composables[0].type" && e.Message.Contains("donut"));
 
         var noLabel = Assert.Throws<ReportValidationException>(() =>
             Validate(Doc(tail:
@@ -1158,7 +1228,7 @@ public class StateValidatorTests
                     shape.Fn = AggregateFn.Count;
                 }),
             ])));
-        Assert.Contains(noLabel.Errors, e => e.Path == "pipeline[1].shape.label");
+        Assert.Contains(noLabel.Errors, e => e.Path == "tables.chart1.composables[0].label");
 
         var unknownLabel = Assert.Throws<ReportValidationException>(() =>
             Validate(Doc(tail:
@@ -1170,7 +1240,7 @@ public class StateValidatorTests
                     shape.Fn = AggregateFn.Count;
                 }),
             ])));
-        Assert.Contains(unknownLabel.Errors, e => e.Path == "pipeline[1].shape.label" && e.Message.Contains("GHOST"));
+        Assert.Contains(unknownLabel.Errors, e => e.Path == "tables.chart1.composables[0].label" && e.Message.Contains("GHOST"));
 
         var badOrientation = Assert.Throws<ReportValidationException>(() =>
             Validate(Doc(tail:
@@ -1183,7 +1253,7 @@ public class StateValidatorTests
                     shape.Orientation = "diagonal";
                 }),
             ])));
-        Assert.Contains(badOrientation.Errors, e => e.Path == "pipeline[1].shape.orientation");
+        Assert.Contains(badOrientation.Errors, e => e.Path == "tables.chart1.composables[0].orientation");
 
         var badSort = Assert.Throws<ReportValidationException>(() =>
             Validate(Doc(tail:
@@ -1196,7 +1266,7 @@ public class StateValidatorTests
                     shape.Sort = new ChartSortSpec { By = "hue" };
                 }),
             ])));
-        Assert.Contains(badSort.Errors, e => e.Path == "pipeline[1].shape.sort.by");
+        Assert.Contains(badSort.Errors, e => e.Path == "tables.chart1.composables[0].sort.by");
     }
 
     [Fact]
@@ -1217,7 +1287,7 @@ public class StateValidatorTests
                 ]),
                 schemaWithBlob));
 
-        Assert.Contains(ex.Errors, e => e.Path == "pipeline[1].shape.label" && e.Message.Contains("cannot label"));
+        Assert.Contains(ex.Errors, e => e.Path == "tables.chart1.composables[0].label" && e.Message.Contains("cannot label"));
     }
 
     // ---- definition edit link (hidden template-column projection) ----
@@ -1324,7 +1394,7 @@ public class StateValidatorTests
 
         // Grouping by the column stays allowed — only its ordering is withdrawn.
         Assert.Equal(ViewMode.GroupBy, result.View.Mode);
-        Assert.Empty(result.View.GroupLayer!.Sorts);
+        Assert.Empty(result.View.Output!.Sorts);
         Assert.Contains(result.Ignored, i => i.Kind == "sort" && i.Detail.Contains("REGION"));
     }
 
@@ -1378,6 +1448,40 @@ public class StateValidatorTests
     }
 
     [Fact]
+    public void Computed_column_limit_spans_both_sides_of_a_shape()
+    {
+        var before = Enumerable.Range(1, 11)
+            .Select(index => new ComputedColumn { Id = $"c{index}", Expr = "AMOUNT + 1" })
+            .ToList();
+        var after = Enumerable.Range(12, 10)
+            .Select(index => new ComputedColumn { Id = $"c{index}", Expr = "__count + 1" })
+            .ToList();
+
+        var ex = Assert.Throws<ReportValidationException>(() => Validate(Doc(
+            source: new StageLayer { Computed = before },
+            tail: [Group(["REGION"], layer: new StageLayer { Computed = after })])));
+
+        Assert.Contains(ex.Errors, error =>
+            error.Path.EndsWith(".computed", StringComparison.Ordinal)
+            && error.Message == "at most 20 computed columns per report state");
+    }
+
+    [Fact]
+    public void Filter_rule_limit_spans_both_sides_of_a_shape()
+    {
+        var before = Enumerable.Range(1, 30).Select(_ => Filter("AMOUNT > 0")).ToList();
+        var after = Enumerable.Range(1, 21).Select(_ => Filter("__count > 0")).ToList();
+
+        var ex = Assert.Throws<ReportValidationException>(() => Validate(Doc(
+            source: new StageLayer { Filters = before },
+            tail: [Group(["REGION"], layer: new StageLayer { Filters = after })])));
+
+        Assert.Contains(ex.Errors, error =>
+            error.Path.EndsWith(".filters", StringComparison.Ordinal)
+            && error.Message == "at most 50 filter rules per report state");
+    }
+
+    [Fact]
     public void Malformed_filters_still_error_before_restriction_stripping()
     {
         var ex = Assert.Throws<ReportValidationException>(() =>
@@ -1385,7 +1489,7 @@ public class StateValidatorTests
                 Doc(source: new StageLayer { Filters = [Filter("NO_SUCH = 1")] }),
                 RestrictedDefinition("AMOUNT", filterable: false)));
 
-        Assert.Contains(ex.Errors, e => e.Path == "pipeline[0].layer.filters[0].expr");
+        Assert.Contains(ex.Errors, e => e.Path == "tables.source.composables[0].filters[0].expr");
     }
 
     [Fact]
@@ -1404,25 +1508,101 @@ public class StateValidatorTests
     // ---- structural nulls: precise 400s, never NullReferenceException 500s ----
 
     [Fact]
-    public void Null_pipeline_stages_and_list_elements_are_precise_errors()
+    public void Null_tables_composables_and_list_elements_are_precise_errors()
     {
         var state = new ReportState
         {
-            Pipeline =
-            [
-                new PipelineStage
+            ActiveTable = "source",
+            Tables = new()
+            {
+                ["source"] = new ReportTable
                 {
-                    Shape = new StageShape { Kind = "source" },
-                    Layer = new StageLayer { Sorts = [null!] },
+                    From = "definition",
+                    Composables =
+                    [
+                        new TableComposable { Kind = "sort", Sorts = [null!] },
+                        null!,
+                    ],
                 },
-                null!,
-            ],
+                ["broken"] = null!,
+            },
         };
 
         var ex = Assert.Throws<ReportValidationException>(() => Validate(state));
 
-        Assert.Contains(ex.Errors, e => e.Path == "pipeline[1]" && e.Message.Contains("null"));
-        Assert.Contains(ex.Errors, e => e.Path == "pipeline[0].layer.sorts[0]");
+        Assert.Contains(ex.Errors, e => e.Path == "tables.broken" && e.Message.Contains("null"));
+        Assert.Contains(ex.Errors, e => e.Path == "tables.source.composables[1]" && e.Message.Contains("null"));
+        Assert.Contains(ex.Errors, e => e.Path == "tables.source.composables[0].sorts[0]");
+    }
+
+    [Fact]
+    public void Document_complexity_limits_bound_tables_and_composables()
+    {
+        var tooManyTables = new ReportState
+        {
+            ActiveTable = "t0",
+            Tables = Enumerable.Range(0, 65).ToDictionary(
+                index => $"t{index}",
+                _ => new ReportTable { From = "definition", Composables = [] }),
+        };
+        var tableError = Assert.Throws<ReportValidationException>(() => Validate(tooManyTables));
+        Assert.Contains(tableError.Errors, error =>
+            error.Path == "tables" && error.Message.Contains("at most 64 tables"));
+
+        var tooManyComposables = new ReportState
+        {
+            ActiveTable = "source",
+            Tables = new()
+            {
+                ["source"] = new ReportTable
+                {
+                    From = "definition",
+                    Composables = Enumerable.Range(0, 513)
+                        .Select(_ => new TableComposable { Kind = "select", Columns = [] })
+                        .ToList(),
+                },
+            },
+        };
+        var composableError = Assert.Throws<ReportValidationException>(() => Validate(tooManyComposables));
+        Assert.Contains(composableError.Errors, error =>
+            error.Path == "tables" && error.Message.Contains("at most 512 composables"));
+    }
+
+    [Fact]
+    public void Case_colliding_table_identifiers_are_precise_errors_before_resolution()
+    {
+        var state = new ReportState
+        {
+            ActiveTable = "orders",
+            Tables = new Dictionary<string, ReportTable>
+            {
+                ["orders"] = new() { From = "definition" },
+                ["ORDERS"] = new() { From = "definition" },
+            },
+        };
+
+        var ex = Assert.Throws<ReportValidationException>(() => Validate(state));
+
+        Assert.Contains(ex.Errors, error =>
+            error.Path == "tables.ORDERS" && error.Message.Contains("only by case"));
+    }
+
+    [Fact]
+    public void Definition_is_reserved_as_an_input_not_a_table_identifier()
+    {
+        var state = new ReportState
+        {
+            ActiveTable = "definition",
+            Tables = new()
+            {
+                ["definition"] = new() { From = "definition" },
+            },
+        };
+
+        var ex = Assert.Throws<ReportValidationException>(() => Validate(state));
+
+        Assert.Contains(ex.Errors, error =>
+            error.Path == "tables.definition" && error.Message.Contains("reserved"));
     }
 
     [Fact]
@@ -1440,23 +1620,24 @@ public class StateValidatorTests
 
         var ex = Assert.Throws<ReportValidationException>(() => Validate(state));
 
-        Assert.Contains(ex.Errors, e => e.Path == "pipeline[0].layer.columns[0]");
-        Assert.Contains(ex.Errors, e => e.Path == "pipeline[0].layer.filters[0].expr");
-        Assert.Contains(ex.Errors, e => e.Path == "pipeline[0].layer.sorts[0].col");
-        Assert.Contains(ex.Errors, e => e.Path == "pipeline[0].layer.aggregates[0].col");
-        Assert.Contains(ex.Errors, e => e.Path == "pipeline[1].shape.values[0].id");
-        Assert.Contains(ex.Errors, e => e.Path == "pipeline[1].shape.values[0].col");
+        Assert.Contains(ex.Errors, e => e.Path == "tables.source.composables[3].columns[0]");
+        Assert.Contains(ex.Errors, e => e.Path == "tables.source.composables[0].filters[0].expr");
+        Assert.Contains(ex.Errors, e => e.Path == "tables.source.composables[1].sorts[0].col");
+        Assert.Contains(ex.Errors, e => e.Path == "tables.source.composables[2].aggregates[0].col");
+        Assert.Contains(ex.Errors, e => e.Path == "tables.group1.composables[0].values[0].id");
+        Assert.Contains(ex.Errors, e => e.Path == "tables.group1.composables[0].values[0].col");
     }
 
     [Fact]
-    public void Null_stage_in_the_shelf_is_a_precise_error()
+    public void Null_inactive_table_is_a_precise_error()
     {
-        // Shelf tails are inert configuration, but the resolver still deep-copies
-        // them — a null stage crashed that copy before this gate existed.
+        // Inactive tables do not enter active execution validation, but structural
+        // validation and schema-cache refresh still inspect them. A null table must
+        // fail at this boundary instead of crashing the resolver's deep copy.
         var ex = Assert.Throws<ReportValidationException>(() =>
-            Validate(Doc(shelf: new() { ["chart"] = [null!] })));
+            Validate(Doc(alternatives: new() { ["chart"] = [null!] })));
 
-        Assert.Contains(ex.Errors, e => e.Path == "shelf.chart[0]");
+        Assert.Contains(ex.Errors, e => e.Path == "tables.chart");
     }
 
     [Fact]
@@ -1465,11 +1646,15 @@ public class StateValidatorTests
         // Server-side data, not the caller's document: blaming the request with a
         // 400 would be wrong, so this surfaces as the sanitized config failure.
         var def = OrdersDefinition(ReportDialect.Sqlite);
-        def.DefaultState = new ReportState { Pipeline = [null!] };
+        def.DefaultState = new ReportState
+        {
+            ActiveTable = "broken",
+            Tables = new() { ["broken"] = null! },
+        };
 
         var ex = Assert.Throws<InvalidOperationException>(() => Validate(new ReportState(), def));
 
         Assert.Contains("default state document is structurally invalid", ex.Message);
-        Assert.Contains("pipeline[0]", ex.Message);
+        Assert.Contains("tables.broken", ex.Message);
     }
 }

@@ -55,7 +55,7 @@ internal static class PivotTableBuilder
         {
             throw new ReportValidationException(
                 [new ValidationError(
-                    "pipeline[1].shape.cols",
+                    state.View.ShapeProperty("cols"),
                     $"pivot would produce {columnKeys.Count} column groups (max {maxColumns}) — filter further or choose a lower-cardinality column dimension")]);
         }
 
@@ -187,15 +187,25 @@ internal static class PivotTableBuilder
         if (totals.Count == 0) return rows;
 
         var result = rows.ToList();
+        var visible = new HashSet<string>(
+            columns.Select(column => column.Name),
+            StringComparer.OrdinalIgnoreCase);
+        var dimensionNames = new HashSet<string>(
+            rowDimensions.Select(dimension => dimension.Name),
+            StringComparer.OrdinalIgnoreCase);
+        var firstVisibleDimension = rowDimensions.FirstOrDefault(dimension =>
+            visible.Contains(dimension.Name));
         var functions = TotalFunctionOrder
             .Where(function => totals.Values.Any(byFunction => byFunction.ContainsKey(function)));
         foreach (var function in functions)
         {
             var row = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-            for (var dimensionIndex = 0; dimensionIndex < rowDimensions.Count; dimensionIndex++)
-                row[rowDimensions[dimensionIndex].Name] = dimensionIndex == 0 ? $"{TotalLabel(function)}:" : null;
+            foreach (var dimension in rowDimensions.Where(dimension => visible.Contains(dimension.Name)))
+                row[dimension.Name] = ReferenceEquals(dimension, firstVisibleDimension)
+                    ? $"{TotalLabel(function)}:"
+                    : null;
 
-            foreach (var column in columns.Skip(rowDimensions.Count))
+            foreach (var column in columns.Where(column => !dimensionNames.Contains(column.Name)))
             {
                 if (totals.TryGetValue(column.Name, out var byFunction)
                     && byFunction.TryGetValue(function, out var value))

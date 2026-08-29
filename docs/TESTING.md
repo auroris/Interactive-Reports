@@ -13,7 +13,8 @@ parser/emitter, the shared computed/filter/highlight rule plan (including disabl
 elision), validator rules, SQL-safety corpus, saved-report store, CSV writer, and
 end-to-end engine passes. The ASP.NET suite also starts a real local server over a clean
 file-backed SQLite report database. It obtains the synthetic default report document
-from the schema endpoint, queries and saves that exact document under a random title,
+from the schema endpoint, queries it, adopts the server-enriched document returned
+beside the data, and saves that document under a random title,
 restarts the server, and loads it again. It exercises an explicitly configured SQLite
 connection string first, then points saved-report persistence at a registered report
 database and repeats the restart/load check. A separate HTTP test proves that a
@@ -63,14 +64,20 @@ dotnet test tests/InteractiveReport.Live.Tests
 `IR_TEST_ORDERS`** in each target database and seeds the canonical 10 rows, then runs
 expression filters and highlights/search/explicit null-or-empty conditions/aggregates/breaks/computed columns (including CASE,
 date-part extraction over native and ISO-text dates, and the date vocabulary —
-NOW/TO_DATE/DATE_TRUNC/TO_STRING, whole-day arithmetic, BETWEEN, and session
-timezone pinning via definition TimeZone)/context-param
+NOW/TO_DATE/DATE_TRUNC/TO_STRING, whole-day arithmetic, and BETWEEN), request-scoped
+UTC `NOW()` parity, definition `TimeZone` session pinning for developer SQL and native
+database conversions, context-param
 binding/groupBy/pivot/export against it.
+
+Materialized text comparisons and sorts are ordinal, while SQL-backed operations use
+the target database's configured collation. The live battery checks deterministic cases,
+but exact cross-path text ordering is portable only when the test database uses a
+binary/ordinal collation.
 
 The server-level persistence scenario also runs against every configured live dialect.
 For each database it starts the ASP.NET host over `SELECT * FROM IR_TEST_ORDERS`, obtains
-the application's synthetic `defaultState`, queries and saves that exact document under
-a random title, restarts, and loads it. The first pass proves that the default store is a
+the application's synthetic `defaultState`, queries it, saves the returned document with
+its refreshed table-schema caches under a random title, restarts, and loads it. The first pass proves that the default store is a
 separate local SQLite file and does not create a persistence table in the report
 database. The second pass configures a random saved-report table in the report database
 and repeats the restart/load check. Random live tables are removed after the test.

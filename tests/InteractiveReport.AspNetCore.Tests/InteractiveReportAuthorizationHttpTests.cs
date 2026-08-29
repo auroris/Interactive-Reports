@@ -186,8 +186,9 @@ public sealed class InteractiveReportAuthorizationHttpTests
                     Assert.Equal("orders", definition.ReportName);
                     Assert.True(definition.Public);
                     Assert.True(definition.StateChanged);
-                    var source = Assert.Single(definition.State!.Pipeline!);
-                    Assert.IsType<FilterRule>(Assert.Single(source.Layer!.Filters!));
+                    var table = Assert.Single(definition.State!.Tables!).Value;
+                    var filter = Assert.Single(table.Composables!, c => c.Kind == "filter");
+                    Assert.IsType<FilterRule>(Assert.Single(filter.Filters!));
 
                     definition.Public = false;
                     definition.Title = "Server approved";
@@ -210,12 +211,20 @@ public sealed class InteractiveReportAuthorizationHttpTests
                 {
                     v = 3,
                     unknownClientMember = "not persisted",
-                    pipeline = new[]
+                    activeTable = "orders",
+                    tables = new
                     {
-                        new
+                        orders = new
                         {
-                            shape = new { kind = "source" },
-                            layer = new { filters = new[] { new { expr = "ID = 1" } } },
+                            from = "definition",
+                            composables = new[]
+                            {
+                                new
+                                {
+                                    kind = "filter",
+                                    filters = new[] { new { expr = "ID = 1" } },
+                                },
+                            },
                         },
                     },
                 },
@@ -251,10 +260,17 @@ public sealed class InteractiveReportAuthorizationHttpTests
                     proposedId = request.Resource.Definition!.Id;
                     request.Resource.Definition.State = new ReportState
                     {
-                        Pipeline =
-                        [
-                            new PipelineStage { Shape = new StageShape { Kind = "group", By = ["ORDER_ID"] } },
-                        ],
+                        ActiveTable = "broken",
+                        Tables = new()
+                        {
+                            ["broken"] = new ReportTable
+                            {
+                                Composables =
+                                [
+                                    new TableComposable { Kind = "group", By = ["ORDER_ID"] },
+                                ],
+                            },
+                        },
                     };
                 }
                 return ValueTask.FromResult(true);

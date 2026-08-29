@@ -59,92 +59,108 @@ public sealed class IrJsonTests
     {
         var state = new ReportState
         {
-            Pipeline =
-            [
-                new PipelineStage
+            ActiveTable = "orders",
+            Tables = new()
+            {
+                ["orders"] = new ReportTable
                 {
-                    Shape = new StageShape { Kind = "source" },
-                    Layer = new StageLayer
-                    {
-                        Sorts =
-                        [
-                            new SortRule { Col = "A", Nulls = NullPlacement.First },
-                            new SortRule { Col = "B" },
-                        ],
-                    },
+                    From = "definition",
+                    Composables =
+                    [
+                        new TableComposable
+                        {
+                            Kind = "sort",
+                            Sorts =
+                            [
+                                new SortRule { Col = "A", Nulls = NullPlacement.First },
+                                new SortRule { Col = "B" },
+                            ],
+                        },
+                    ],
                 },
-            ],
+            },
         };
 
         var json = JsonSerializer.Serialize(state, IrJson.Options);
         using var document = JsonDocument.Parse(json);
-        var sorts = document.RootElement.GetProperty("pipeline")[0]
-            .GetProperty("layer").GetProperty("sorts");
+        var sorts = document.RootElement.GetProperty("tables").GetProperty("orders")
+            .GetProperty("composables")[0].GetProperty("sorts");
 
         Assert.Equal("first", sorts[0].GetProperty("nulls").GetString());
         Assert.False(sorts[1].TryGetProperty("nulls", out _));
 
         var roundTrip = JsonSerializer.Deserialize<ReportState>(json, IrJson.Options)!;
-        var layerSorts = roundTrip.Pipeline![0].Layer!.Sorts!;
+        var layerSorts = roundTrip.Tables!["orders"].Composables![0].Sorts!;
         Assert.Equal(NullPlacement.First, layerSorts[0].Nulls);
         Assert.Null(layerSorts[1].Nulls);
     }
 
     [Fact]
-    public void Pipeline_and_shelf_round_trip_with_camel_case_shape_fields()
+    public void Named_tables_and_composables_round_trip_with_camel_case_fields()
     {
         var state = new ReportState
         {
-            Pipeline =
-            [
-                new PipelineStage { Shape = new StageShape { Kind = "source" } },
-                new PipelineStage
+            ActiveTable = "anything",
+            Tables = new()
+            {
+                ["anything"] = new ReportTable
                 {
-                    Shape = new StageShape
-                    {
+                    From = "definition",
+                    Composables =
+                    [
+                        new TableComposable
+                        {
                         Kind = "pivot",
                         Rows = ["CUSTOMER"],
                         Cols = ["STATUS"],
                         Values = [new MetricRule { Id = "m1", Col = "AMOUNT", Fn = AggregateFn.Sum }],
                         Totals = true,
-                    },
+                        },
+                        new TableComposable
+                        {
+                            Kind = "sort",
+                            Sorts = [new SortRule { Col = "CUSTOMER", Dir = SortDir.Desc }],
+                        },
+                    ],
                 },
-            ],
-            Shelf = new()
-            {
-                ["chart"] =
-                [
-                    new PipelineStage
-                    {
-                        Shape = new StageShape
+                ["another"] = new ReportTable
+                {
+                    From = "definition",
+                    Composables =
+                    [
+                        new TableComposable
                         {
                             Kind = "chart", Type = "pie", Label = "STATUS", Fn = AggregateFn.Count,
                         },
-                    },
-                ],
+                    ],
+                },
             },
         };
 
         var json = JsonSerializer.Serialize(state, IrJson.Options);
         using var document = JsonDocument.Parse(json);
         var root = document.RootElement;
-        Assert.Equal("source", root.GetProperty("pipeline")[0].GetProperty("shape").GetProperty("kind").GetString());
-        Assert.Equal("sum", root.GetProperty("pipeline")[1].GetProperty("shape")
-            .GetProperty("values")[0].GetProperty("fn").GetString());          // camelCase enum on the wire
-        Assert.True(root.GetProperty("pipeline")[1].GetProperty("shape").GetProperty("totals").GetBoolean());
-        Assert.Equal("chart", root.GetProperty("shelf").GetProperty("chart")[0]
-            .GetProperty("shape").GetProperty("kind").GetString());           // shelf keys stay verbatim
+        Assert.Equal("anything", root.GetProperty("activeTable").GetString());
+        var pivot = root.GetProperty("tables").GetProperty("anything").GetProperty("composables")[0];
+        Assert.Equal("definition", root.GetProperty("tables").GetProperty("anything").GetProperty("from").GetString());
+        Assert.Equal("pivot", pivot.GetProperty("kind").GetString());
+        Assert.Equal("sum", pivot.GetProperty("values")[0].GetProperty("fn").GetString());
+        Assert.True(pivot.GetProperty("totals").GetBoolean());
+        Assert.Equal("chart", root.GetProperty("tables").GetProperty("another")
+            .GetProperty("composables")[0].GetProperty("kind").GetString());
 
         var roundTrip = JsonSerializer.Deserialize<ReportState>(json, IrJson.Options)!;
-        Assert.Equal(2, roundTrip.Pipeline!.Count);
-        var metric = Assert.Single(roundTrip.Pipeline[1].Shape!.Values!);
+        Assert.Equal(2, roundTrip.Tables!.Count);
+        Assert.Equal("anything", roundTrip.ActiveTable);
+        var pivotComposable = roundTrip.Tables["anything"].Composables![0];
+        var metric = Assert.Single(pivotComposable.Values!);
         Assert.Equal(("m1", "AMOUNT", AggregateFn.Sum), (metric.Id, metric.Col, metric.Fn));
-        Assert.Equal(["CUSTOMER"], roundTrip.Pipeline[1].Shape!.Rows!);
-        Assert.Equal(["STATUS"], roundTrip.Pipeline[1].Shape!.Cols!);
-        Assert.True(roundTrip.Pipeline[1].Shape!.Totals);
-        var shelfChart = Assert.Single(roundTrip.Shelf!["chart"]);
+        Assert.Equal(["CUSTOMER"], pivotComposable.Rows!);
+        Assert.Equal(["STATUS"], pivotComposable.Cols!);
+        Assert.True(pivotComposable.Totals);
+        var shelfChart = Assert.Single(roundTrip.Tables["another"].Composables!);
         Assert.Equal(("chart", "pie", "STATUS", AggregateFn.Count),
-            (shelfChart.Shape!.Kind, shelfChart.Shape.Type, shelfChart.Shape.Label, shelfChart.Shape.Fn));
+            (shelfChart.Kind, shelfChart.Type, shelfChart.Label, shelfChart.Fn));
     }
 
     [Fact]
@@ -157,10 +173,12 @@ public sealed class IrJsonTests
             IrJson.Options)!;
 
         Assert.Equal("open", state.Search);
-        Assert.Equal("source", Assert.Single(state.Pipeline!).Shape!.Kind);
+        Assert.Null(state.Tables);
 
         // Hydration is where the key dies: a re-serialized document is clean.
-        Assert.DoesNotContain("schema", JsonSerializer.Serialize(state, IrJson.Options));
+        var clean = JsonSerializer.Serialize(state, IrJson.Options);
+        Assert.DoesNotContain("schema", clean);
+        Assert.DoesNotContain("pipeline", clean);
     }
 
     [Fact]
@@ -170,10 +188,10 @@ public sealed class IrJsonTests
         // token (dir: 99) is foreign input; accepting it would deserialize an
         // undefined member that downstream code silently reinterprets.
         Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<ReportState>(
-            """{"pipeline":[{"shape":{"kind":"source"},"layer":{"sorts":[{"col":"A","dir":99}]}}]}""",
+            """{"activeTable":"x","tables":{"x":{"from":"definition","composables":[{"kind":"sort","sorts":[{"col":"A","dir":99}]}]}}}""",
             IrJson.Options));
         Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<ReportState>(
-            """{"pipeline":[{"shape":{"kind":"group","by":["A"],"values":[{"id":"m1","col":"A","fn":3}]}}]}""",
+            """{"activeTable":"x","tables":{"x":{"from":"definition","composables":[{"kind":"group","by":["A"],"values":[{"id":"m1","col":"A","fn":3}]}]}}}""",
             IrJson.Options));
     }
 

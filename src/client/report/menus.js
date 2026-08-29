@@ -3,7 +3,7 @@
 // doc mutation; nothing here owns state of its own. Every entry is gated by the
 // definition's feature whitelist and enabled per the current stage's
 // capabilities (stage.js): the same Columns/Compute/Filter/Sort/Highlight
-// surfaces operate on whichever table the pipeline's tail produces.
+// surfaces operate on whichever named table is active.
 
 import { popupMenu } from "../core/menu.js";
 import { anyMutableFeature, columnFilterable, columnHelp, columnSortable, featureEnabled } from "./schema.js";
@@ -17,16 +17,10 @@ import { saveDialog } from "./dialogs/save.js";
 import { canManageCurrentSaved, deleteCurrentSaved, resetWorkingCopy } from "./saved.js";
 import { downloadExport } from "./export.js";
 
-/// Features whose entries live in the header menu per mode; if none of them are
-/// whitelisted the header offers nothing and should not open (nor look clickable).
-export function headerMenuAvailable(w, mode) {
-    const features = mode === "grid"
-        ? ["sort", "rename", "columnSettings", "columns", "controlBreak", "filter"]
-        : mode === "groupBy"
-            ? ["sort", "rename", "columnSettings", "columns", "filter"]
-            : mode === "pivot"
-                ? ["sort", "rename", "columnSettings", "columns", "filter"]
-                : [];
+/// Ordinary table features have the same header surface regardless of which
+/// shape composable precedes them.
+export function headerMenuAvailable(w) {
+    const features = ["sort", "rename", "columnSettings", "columns", "controlBreak", "filter"];
     return features.some(f => featureEnabled(w, f));
 }
 
@@ -88,7 +82,6 @@ export function openActionsMenu(w, anchor) {
 export function openHeaderMenu(w, col, anchor) {
     const ctx = stageContext(w);
     const feature = (name, ...entries) => featureEnabled(w, name) ? entries : [];
-    const isDim = (ctx.dims ?? []).some(d => sameColumn(d, col));
 
     // Sorting follows the current table, including generated Pivot cells.
     const sortable = ctx.caps.sort && columnSortable(w, col);
@@ -104,8 +97,6 @@ export function openHeaderMenu(w, col, anchor) {
             })
         : [];
 
-    if (ctx.mode === "chart") return;
-
     const presentation = [
         ...(ctx.caps.rename ? feature("rename", { label: w.t("menu.rename"), onPick: () => renameDialog(w, col) }) : []),
         ...(ctx.caps.columnSettings
@@ -113,9 +104,9 @@ export function openHeaderMenu(w, col, anchor) {
             : []),
     ];
 
-    // Hiding follows the terminal table's column selection. Row dimensions stay
-    // visible because hiding one makes distinct rows appear duplicated.
-    if (ctx.caps.columns && ctx.caps.visibility && !isDim) {
+    // Hiding is simply a terminal select composable. Dimensions and generated
+    // columns obey the same rule as every other column.
+    if (ctx.caps.columns && ctx.caps.visibility) {
         const visible = visibleStageColumnNames(ctx, w);
         presentation.push(...feature("columns", {
             label: w.t("menu.hideColumn"),

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
+import { reportState } from "./report-state-fixture.js";
 
 const window = new Window({ url: "https://host.example/dashboard" });
 function Option(text = "", value = "", defaultSelected = false, selected = false) {
@@ -32,10 +33,7 @@ const DEFAULT_STATES = {
     chipsy: {
         page: { index: 1, size: 25 },
         search: "acme",
-        pipeline: [{
-            shape: { kind: "source" },
-            layer: { filters: [{ enabled: true, expr: "ID = 1" }] },
-        }],
+        ...reportState({ filters: [{ enabled: true, expr: "ID = 1" }] }),
     },
 };
 
@@ -52,7 +50,7 @@ globalThis.fetch = async (url, options = {}) => {
         return json({
             defaultState: DEFAULT_STATES[report] ?? {
                 page: { index: 1, size: 25 },
-                pipeline: [{ shape: { kind: "source" }, layer: {} }],
+                ...reportState(),
             },
             limits: { defaultPageSize: 25, maxPageSize: 100 },
             columns: [{ name: "ID", label: "ID", type: "number" }],

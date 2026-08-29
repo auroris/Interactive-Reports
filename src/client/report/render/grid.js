@@ -23,9 +23,7 @@ export function renderGrid(w, table) {
     // front of the data columns — every index/colSpan below carries the offset.
     const editLink = activeEditLink(w, mode);
     const cellOffset = editLink ? 1 : 0;
-    const requestedBreaks = mode === "grid" || mode === "groupBy"
-        ? (ctx.columnsLayer(w.doc).breaks ?? [])
-        : [];
+    const requestedBreaks = ctx.columnsLayer(w.doc).breaks ?? [];
     const breaks = requestedBreaks.map(name =>
         result.columns.find(column => column.name.toLowerCase() === name.toLowerCase())?.name ?? name);
     const breakNames = new Set(breaks);
@@ -60,7 +58,7 @@ export function renderGrid(w, table) {
     if (editLink)
         headRow.append(el("th", { class: "ir-th-edit", scope: "col", "aria-label": editLink.label ?? translate(w, "grid.edit") }));
     for (const col of columns) {
-        const interactive = menuAvailable && mode !== "chart";
+        const interactive = menuAvailable;
         const s = sortOrd.get(col.name.toLowerCase());
         // hideLabel: no visible header text, accessible name preserved on the
         // interactive element (menus and dialogs keep showing the real label).
@@ -192,7 +190,7 @@ export function renderGrid(w, table) {
                 col.type === "number" ? "ir-num" : "",
                 col.type === "date" ? "ir-date" : "");
             tr.append(el("td", { class: cls, style: presentationStyle(fmt) },
-                renderColumnValue(w, row, col, decimalCols.has(col.name), fmt, mode === "grid")));
+                renderColumnValue(w, row, col, decimalCols.has(col.name), fmt, true)));
         }
         const rowHits = (hitsByRow.get(r) ?? []).filter(hit => !hit.col);
         const cellHits = (hitsByRow.get(r) ?? []).filter(hit => !!hit.col);

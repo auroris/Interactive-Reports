@@ -1,23 +1,40 @@
 using System.Globalization;
 using System.Net;
 using InteractiveReport.Core.Model;
+using InteractiveReport.Core.Schema;
 using InteractiveReport.Core.Validation;
 
 namespace InteractiveReport.Core.Export;
 
 /// <summary>
-/// Shapes grid export rows like their browser cells. Ordinary columns remain scalar;
-/// link and image columns become encoded HTML fragments matching the client renderer.
-/// Renderer-only source columns never cross into the returned row shape.
+/// Shapes any terminal table's export like its browser cells. The renderer depends on
+/// the terminal schema and ordinary presentation composables, never on the shape that
+/// produced the table. Renderer-only source columns never cross into the returned row
+/// shape.
 /// </summary>
-internal static class GridExportRenderer
+internal static class TableExportRenderer
 {
-    public static List<IReadOnlyDictionary<string, object?>> Render(
-        ValidatedState state,
-        IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)
+    public static RenderedExportTable Render(
+        IReadOnlyList<ColumnInfo> availableColumns,
+        IReadOnlyList<ColumnInfo> columns,
+        IReadOnlyList<IReadOnlyDictionary<string, object?>> rows,
+        ReportSchema schema,
+        IReadOnlyDictionary<string, ColumnFormat> formats,
+        IReadOnlyDictionary<string, string> labels,
+        IReadOnlyDictionary<string, ColumnFormat>? inheritedFormats = null)
     {
-        var decimalColumns = state.SelectColumns
-            .Where(column => column.Kind == ColumnKind.Number
+        inheritedFormats ??= NoFormats;
+        var metadata = availableColumns
+            .Concat(columns)
+            .GroupBy(column => column.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Last(), StringComparer.OrdinalIgnoreCase);
+        var renderedColumns = columns
+            .Select(column => labels.TryGetValue(column.Name, out var label)
+                ? column with { Label = label }
+                : column)
+            .ToList();
+        var decimalColumns = columns
+            .Where(column => Model(schema, column).Kind == ColumnKind.Number
                 && rows.Any(row => row.TryGetValue(column.Name, out var value) && HasFraction(value)))
             .Select(column => column.Name)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -25,26 +42,32 @@ internal static class GridExportRenderer
         var result = new List<IReadOnlyDictionary<string, object?>>(rows.Count);
         foreach (var row in rows)
         {
-            var rendered = new Dictionary<string, object?>(state.SelectColumns.Count, StringComparer.OrdinalIgnoreCase);
-            foreach (var column in state.SelectColumns)
+            var rendered = new Dictionary<string, object?>(columns.Count, StringComparer.OrdinalIgnoreCase);
+            foreach (var column in columns)
             {
                 row.TryGetValue(column.Name, out var value);
-                state.Formats.TryGetValue(column.Name, out var format);
+                var format = EffectiveFormat(column, formats, inheritedFormats);
                 rendered[column.Name] = RenderValue(
-                    state,
+                    schema,
+                    metadata,
+                    formats,
+                    inheritedFormats,
                     row,
-                    column,
+                    Model(schema, column),
                     value,
                     format,
                     decimalColumns.Contains(column.Name));
             }
             result.Add(rendered);
         }
-        return result;
+        return new RenderedExportTable(renderedColumns, result);
     }
 
     private static object? RenderValue(
-        ValidatedState state,
+        ReportSchema schema,
+        IReadOnlyDictionary<string, ColumnInfo> metadata,
+        IReadOnlyDictionary<string, ColumnFormat> formats,
+        IReadOnlyDictionary<string, ColumnFormat> inheritedFormats,
         IReadOnlyDictionary<string, object?> row,
         ColumnModel column,
         object? value,
@@ -60,7 +83,7 @@ internal static class GridExportRenderer
             && !string.Equals(renderer, "image", StringComparison.OrdinalIgnoreCase))
             return value;
 
-        var urlColumn = SourceColumn(state, format!.UrlColumn, column);
+        var urlColumn = SourceColumn(schema, format!.UrlColumn, column);
         row.TryGetValue(urlColumn.Name, out var urlValue);
         var url = RawString(urlValue).Trim();
 
@@ -71,9 +94,12 @@ internal static class GridExportRenderer
             return $"<img class=\"ir-cell-image\" src=\"{WebUtility.HtmlEncode(url)}\" alt=\"\" loading=\"lazy\" decoding=\"async\">";
         }
 
-        var textColumn = SourceColumn(state, format.TextColumn, column);
+        var textColumn = SourceColumn(schema, format.TextColumn, column);
         row.TryGetValue(textColumn.Name, out var textValue);
-        state.Formats.TryGetValue(textColumn.Name, out var textFormat);
+        var textInfo = metadata.TryGetValue(textColumn.Name, out var known)
+            ? known
+            : ToInfo(textColumn);
+        var textFormat = EffectiveFormat(textInfo, formats, inheritedFormats);
         if (textColumn.Name.Equals(column.Name, StringComparison.OrdinalIgnoreCase)) textFormat = format;
         var text = RenderText(
             textValue,
@@ -88,10 +114,49 @@ internal static class GridExportRenderer
         return $"<a class=\"ir-cell-link\" href=\"{WebUtility.HtmlEncode(url)}\">{WebUtility.HtmlEncode(text)}</a>";
     }
 
-    private static ColumnModel SourceColumn(ValidatedState state, string? requested, ColumnModel fallback)
-        => !string.IsNullOrWhiteSpace(requested) && state.Schema.TryGetValue(requested, out var source)
-            ? source
-            : fallback;
+    private static ColumnFormat? EffectiveFormat(
+        ColumnInfo column,
+        IReadOnlyDictionary<string, ColumnFormat> formats,
+        IReadOnlyDictionary<string, ColumnFormat> inheritedFormats)
+    {
+        if (formats.TryGetValue(column.Name, out var format)) return format;
+        var inheritedName = column.FormatSource ?? column.Name;
+        return inheritedFormats.TryGetValue(inheritedName, out format) ? format : null;
+    }
+
+    private static ColumnModel SourceColumn(ReportSchema schema, string? requested, ColumnModel fallback)
+    {
+        if (string.IsNullOrWhiteSpace(requested)) return fallback;
+        if (schema.TryGetValue(requested, out var source)) return source;
+
+        // An inherited source-table renderer can name a column that does not exist in
+        // shaped output. Browser rendering reads that absent row key and falls back to
+        // text; substituting the displayed metric here would turn its numeric value
+        // into a spurious relative URL.
+        return new ColumnModel
+        {
+            Name = requested.Trim(),
+            Label = requested.Trim(),
+            ClrType = typeof(object),
+        };
+    }
+
+    private static ColumnModel Model(ReportSchema schema, ColumnInfo column)
+        => schema.TryGetValue(column.Name, out var model)
+            ? model
+            : new ColumnModel
+            {
+                Name = column.Name,
+                Label = column.Label,
+                ClrType = typeof(object),
+                IsComputed = column.Computed,
+            };
+
+    private static ColumnInfo ToInfo(ColumnModel column)
+        => new(column.Name, column.Label, column.KindName, column.IsComputed);
+
+    private static readonly IReadOnlyDictionary<string, ColumnFormat> NoFormats
+        = new Dictionary<string, ColumnFormat>();
 
     private static bool IsAllowedUrl(string value, bool image)
     {
@@ -273,3 +338,7 @@ internal static class GridExportRenderer
             out date);
     }
 }
+
+internal sealed record RenderedExportTable(
+    IReadOnlyList<ColumnInfo> Columns,
+    IReadOnlyList<IReadOnlyDictionary<string, object?>> Rows);

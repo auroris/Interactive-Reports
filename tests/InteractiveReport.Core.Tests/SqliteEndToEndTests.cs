@@ -2,6 +2,7 @@ using System.Data.Common;
 using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Model;
 using InteractiveReport.Core.Schema;
+using InteractiveReport.Core.Validation;
 using Microsoft.Data.Sqlite;
 using static InteractiveReport.Core.Tests.TestFixtures;
 
@@ -60,6 +61,10 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         }), NoParams);
 
         Assert.Equal("Customer", result.AvailableColumns.Single(c => c.Name == "CUSTOMER").Label);
+        Assert.Equal(
+            "Customer",
+            result.Document!.Tables![result.Document.ActiveTable!].Schema!
+                .Single(column => column.Name == "CUSTOMER").Label);
         Assert.Empty(result.Ignored);
     }
 
@@ -288,6 +293,15 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         ]), NoParams);
 
         Assert.Equal(["Status", "Count", "max(Order #)"], grouped.Columns.Select(c => c.Label));
+
+        var inherited = await _executor.Export(def, Doc(
+            source: new StageLayer { Labels = new() { ["AMOUNT"] = "Revenue" } },
+            tail:
+            [
+                Group(by: ["STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)]),
+            ]), NoParams);
+
+        Assert.Equal(["Status", "Count", "sum(Revenue)"], inherited.Columns.Select(c => c.Label));
     }
 
     [Fact]
@@ -622,6 +636,54 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     }
 
     [Fact]
+    public async Task Relational_composables_execute_in_document_order_on_an_opaque_table_id()
+    {
+        var document = new ReportState
+        {
+            ActiveTable = "anything-the-author-chose",
+            Tables = new()
+            {
+                ["anything-the-author-chose"] = new ReportTable
+                {
+                    From = "definition",
+                    Composables =
+                    [
+                        new TableComposable
+                        {
+                            Kind = "compute",
+                            Computed = [new ComputedColumn { Id = "c1", Expr = "AMOUNT * 2" }],
+                        },
+                        new TableComposable { Kind = "filter", Filters = [Filter("c1 >= 10000")] },
+                        new TableComposable
+                        {
+                            Kind = "compute",
+                            Computed = [new ComputedColumn { Id = "c2", Expr = "c1 + 1" }],
+                        },
+                        new TableComposable { Kind = "filter", Filters = [Filter("c2 < 20000")] },
+                        new TableComposable
+                        {
+                            Kind = "sort",
+                            Sorts = [new SortRule { Col = "c2", Dir = SortDir.Desc }],
+                        },
+                        new TableComposable { Kind = "select", Columns = ["AMOUNT", "c2"] },
+                    ],
+                },
+            },
+        };
+
+        var result = await _executor.Query(Definition, document, NoParams);
+
+        Assert.Equal([9000m, 7500m, 6000m, 5000m],
+            result.Rows.Select(row => Convert.ToDecimal(row["AMOUNT"])));
+        Assert.Equal([18001m, 15001m, 12001m, 10001m],
+            result.Rows.Select(row => Convert.ToDecimal(row["c2"])));
+        Assert.Equal(
+            ["compute", "filter", "compute", "filter"],
+            StateValidator.Validate(Definition, document, await _executor.GetSchema(Definition, NoParams))
+                .Operations.Select(operation => operation.Kind));
+    }
+
+    [Fact]
     public async Task Aggregate_over_computed_column()
     {
         var result = await _executor.Query(Definition, Doc(source: new StageLayer
@@ -893,6 +955,51 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     }
 
     [Fact]
+    public async Task Repeated_highlight_composables_share_identity_sequence_and_marker_names()
+    {
+        static HighlightRule Rule(string id, string expression) => new()
+        {
+            Id = id,
+            Scope = "row",
+            Expr = expression,
+            Style = new HighlightStyle { Bg = "gold" },
+        };
+
+        var document = new ReportState
+        {
+            ActiveTable = "result",
+            Tables = new()
+            {
+                ["result"] = new ReportTable
+                {
+                    From = "definition",
+                    Composables =
+                    [
+                        new TableComposable { Kind = "highlight", Highlights = [Rule("large", "AMOUNT > 10000")] },
+                        new TableComposable { Kind = "highlight", Highlights = [Rule("small", "AMOUNT < 500")] },
+                    ],
+                },
+            },
+        };
+
+        var validated = StateValidator.Validate(
+            Definition,
+            document,
+            await _executor.GetSchema(Definition, NoParams));
+        Assert.Equal([10, 20], validated.Rules.Decorations.Select(rule => rule.Effect.Sequence));
+        Assert.Equal(2, validated.Rules.Decorations
+            .Select(rule => rule.Effect.ProjectionName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count());
+
+        var result = await _executor.Query(Definition, document, NoParams);
+        var large = result.Highlights.Single(hit => hit.Id == "large");
+        var small = result.Highlights.Single(hit => hit.Id == "small");
+        Assert.Equal("Stark Ind", result.Rows[large.Row]["CUSTOMER"]);
+        Assert.Equal("Wayne Ent", result.Rows[small.Row]["CUSTOMER"]);
+    }
+
+    [Fact]
     public async Task Group_stage_returns_grouped_page_with_counts_and_metric_ids()
     {
         var result = await _executor.Query(Definition, Doc(tail:
@@ -920,6 +1027,74 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         Assert.Equal(4, result.TotalRows);
         var row = Assert.Single(result.Rows);
         Assert.Equal("SHIPPED", row["STATUS"]);
+    }
+
+    [Fact]
+    public async Task Hidden_columns_remain_available_and_can_be_restored_on_every_composition()
+    {
+        async Task AssertHideAndRestore(ReportState document, string hidden, string kept)
+        {
+            var table = document.Tables![document.ActiveTable!];
+            table.Composables ??= [];
+            table.Composables.Add(new TableComposable { Kind = "select", Columns = [kept] });
+
+            var hiddenResult = await _executor.Query(Definition, document, NoParams);
+
+            Assert.DoesNotContain(hiddenResult.Columns, column => column.Name == hidden);
+            Assert.Contains(hiddenResult.AvailableColumns, column => column.Name == hidden);
+            Assert.All(hiddenResult.Columns, visible =>
+                Assert.Contains(hiddenResult.AvailableColumns, available => available.Name == visible.Name));
+
+            // Adopt the server-returned document, as the client does. Changing this
+            // table nulls only its cache; the next response refreshes it and restores
+            // the formerly hidden column through the same select composable.
+            var returned = hiddenResult.Document!;
+            var returnedTable = returned.Tables![returned.ActiveTable!];
+            var select = returnedTable.Composables!.Last(item => item.Kind == "select");
+            select.Columns = [hidden, kept];
+            returnedTable.Schema = null;
+
+            var restored = await _executor.Query(Definition, returned, NoParams);
+
+            Assert.Contains(restored.Columns, column => column.Name == hidden);
+            Assert.Contains(restored.AvailableColumns, column => column.Name == hidden);
+        }
+
+        await AssertHideAndRestore(Doc(), hidden: "AMOUNT", kept: "CUSTOMER");
+        await AssertHideAndRestore(
+            Doc(tail:
+            [
+                Group(by: ["STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)]),
+            ]),
+            hidden: "STATUS",
+            kept: "m1");
+        await AssertHideAndRestore(
+            Doc(tail:
+            [
+                ChartStage(shape =>
+                {
+                    shape.Type = "bar";
+                    shape.Label = "STATUS";
+                    shape.Fn = AggregateFn.Count;
+                }),
+            ]),
+            hidden: "STATUS",
+            kept: "__count");
+
+        var pivotDocument = Doc(tail:
+        [
+            Pivot(
+                rows: ["CUSTOMER"],
+                cols: ["STATUS"],
+                values: [Metric("m1", "AMOUNT", AggregateFn.Sum)]),
+        ]);
+        var pivotSchema = await _executor.Query(Definition, pivotDocument, NoParams);
+        var shipped = pivotSchema.AvailableColumns.Single(column =>
+            column.Name == "m1@[\"SHIPPED\"]").Name;
+        await AssertHideAndRestore(
+            pivotSchema.Document!,
+            hidden: "CUSTOMER",
+            kept: shipped);
     }
 
     [Fact]
@@ -1022,8 +1197,70 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     }
 
     [Fact]
+    public async Task Grid_and_group_share_sql_terminal_result_assembly()
+    {
+        static StageLayer TerminalLayer(string valueColumn) => new()
+        {
+            Columns = [valueColumn],
+            Breaks = ["STATUS"],
+            Highlights =
+            [
+                new HighlightRule
+                {
+                    Id = "terminal",
+                    Scope = "row",
+                    Expr = $"{valueColumn} > 0",
+                    Style = new HighlightStyle { Bg = "gold" },
+                },
+            ],
+        };
+
+        async Task AssertTerminal(ReportState document, string valueColumn, long totalRows)
+        {
+            var result = await _executor.Query(Definition, document, NoParams);
+
+            Assert.Equal([valueColumn], result.Columns.Select(column => column.Name));
+            Assert.Contains(result.AvailableColumns, column => column.Name == "STATUS");
+            Assert.Equal((2, 2), (result.Page.Index, result.Page.Size));
+            Assert.Equal(totalRows, result.TotalRows);
+            Assert.Equal(2, result.Rows.Count);
+            Assert.True(result.BreakContinues);
+            Assert.Equal([0, 1], result.Highlights.Select(hit => hit.Row));
+            Assert.All(result.Highlights, hit => Assert.Equal("terminal", hit.Id));
+            Assert.Equal(4, result.BreakTotals.Count);
+            Assert.All(result.Rows, row =>
+            {
+                Assert.Equal(2, row.Count);
+                Assert.Contains(valueColumn, row.Keys);
+                Assert.Contains("STATUS", row.Keys);
+                Assert.DoesNotContain(row.Keys, key =>
+                    key.StartsWith("__ir_highlight_", StringComparison.OrdinalIgnoreCase));
+            });
+        }
+
+        var page = new PageRequest { Index = 2, Size = 2 };
+        await AssertTerminal(
+            Doc(source: TerminalLayer("AMOUNT"), page: page),
+            "AMOUNT",
+            totalRows: 10);
+        await AssertTerminal(
+            Doc(
+                tail:
+                [
+                    Group(
+                        by: ["STATUS", "CUSTOMER"],
+                        values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
+                        layer: TerminalLayer("m1")),
+                ],
+                page: page),
+            "m1",
+            totalRows: 9);
+    }
+
+    [Fact]
     public async Task Pivot_view_builds_the_matrix_in_memory()
     {
+        const string shippedCell = "m1@[\"SHIPPED\"]";
         var state = Doc(tail:
         [
             Pivot(rows: ["CUSTOMER"], cols: ["STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)], totals: true),
@@ -1050,13 +1287,77 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         var export = await _executor.Export(Definition, state, NoParams);
         var exportedTotal = export.Rows[^1];
         Assert.Equal("Sum:", exportedTotal["CUSTOMER"]);
-        Assert.Equal(26000m, Convert.ToDecimal(exportedTotal["m1@[\"SHIPPED\"]"]));
+        Assert.Equal(26000m, Convert.ToDecimal(exportedTotal[shippedCell]));
+
+        var hiddenDimensionExport = await _executor.Export(Definition, Doc(tail:
+        [
+            Pivot(
+                rows: ["CUSTOMER"],
+                cols: ["STATUS"],
+                values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
+                totals: true,
+                layer: new StageLayer { Columns = [shippedCell] }),
+        ]), NoParams);
+        Assert.Equal([shippedCell], hiddenDimensionExport.Columns.Select(column => column.Name));
+        Assert.Equal(26000m, Convert.ToDecimal(hiddenDimensionExport.Rows[^1][shippedCell]));
 
         var averages = await _executor.Query(Definition, Doc(tail:
         [
             Pivot(rows: ["CUSTOMER"], cols: ["STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Avg)], totals: true),
         ]), NoParams);
         Assert.Equal(5200d, Convert.ToDouble(averages.Aggregates["m1@[\"SHIPPED\"]"]["avg"]));
+    }
+
+    [Fact]
+    public async Task Pivot_export_applies_terminal_labels_formats_and_link_renderer()
+    {
+        const string shipped = "m1@[\"SHIPPED\"]";
+        var state = Doc(tail:
+        [
+            Pivot(
+                rows: ["CUSTOMER"],
+                cols: ["STATUS"],
+                values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
+                layer: new StageLayer
+                {
+                    Computed =
+                    [
+                        new ComputedColumn
+                        {
+                            Id = "c2",
+                            Label = "Customer URL",
+                            Expr = "'/customer'",
+                        },
+                    ],
+                    Columns = ["CUSTOMER", shipped],
+                    Labels = new() { [shipped] = "Shipped Revenue" },
+                    Formats = new()
+                    {
+                        [shipped] = new ColumnFormat
+                        {
+                            DisplayAs = "link",
+                            UrlColumn = "c2",
+                            TextColumn = shipped,
+                            Mask = "currency:USD",
+                        },
+                    },
+                }),
+        ]);
+
+        var query = await _executor.Query(Definition, state, NoParams);
+        Assert.Equal(["Customer", "SHIPPED"], query.Columns.Select(column => column.Label));
+        Assert.Equal(
+            "SHIPPED",
+            query.Document!.Tables![state.ActiveTable!].Schema!
+                .Single(column => column.Name == shipped).Label);
+
+        var export = await _executor.Export(Definition, state, NoParams);
+        Assert.Equal(["Customer", "Shipped Revenue"], export.Columns.Select(column => column.Label));
+        var acme = export.Rows.Single(row => Equals(row["CUSTOMER"], "Acme Corp"));
+        Assert.Equal(
+            "<a class=\"ir-cell-link\" href=\"/customer\">$12,000.00</a>",
+            acme[shipped]);
+        Assert.Equal(["CUSTOMER", shipped], acme.Keys);
     }
 
     [Fact]
@@ -1123,9 +1424,36 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         Assert.Equal(12000m, Convert.ToDecimal(acme[shipped]));
         Assert.Equal(12000m, Convert.ToDecimal(acme["c2"]));
         Assert.Equal(["CUSTOMER", shipped, "c2"], acme.Keys);
-        Assert.Equal(["Customer", "Shipped", "Shipped Less Pending"], result.Columns.Select(column => column.Label));
+        // Label composables are client presentation. Query/cache metadata stays on
+        // structural labels; export applies the override.
+        Assert.Equal(["Customer", "SHIPPED", "Shipped Less Pending"], result.Columns.Select(column => column.Label));
         var hit = Assert.Single(result.Highlights);
         Assert.Equal((0, "h1", shipped), (hit.Row, hit.Id, hit.Col));
+    }
+
+    [Fact]
+    public async Task Pivot_uses_the_shared_break_aggregate_and_hidden_projection_path()
+    {
+        const string shipped = "m1@[\"SHIPPED\"]";
+        var result = await _executor.Query(Definition, Doc(tail:
+        [
+            Pivot(
+                rows: ["CUSTOMER"],
+                cols: ["STATUS"],
+                values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
+                layer: new StageLayer
+                {
+                    Columns = [shipped],
+                    Breaks = ["CUSTOMER"],
+                    Aggregates = [new AggregateRule { Col = shipped, Fn = AggregateFn.Sum }],
+                }),
+        ]), NoParams);
+
+        Assert.Equal([shipped], result.Columns.Select(column => column.Name));
+        Assert.Contains(result.Rows, row => row.ContainsKey("CUSTOMER"));
+        Assert.Equal(26000m, Convert.ToDecimal(result.Aggregates[shipped]["sum"]));
+        var acme = result.BreakTotals.Single(total => Equals(total.Key["CUSTOMER"], "Acme Corp"));
+        Assert.Equal(12000m, Convert.ToDecimal(acme.Aggregates[shipped]["sum"]));
     }
 
     [Fact]
@@ -1140,7 +1468,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                 Pivot(rows: ["STATUS"], cols: ["CUSTOMER"]),
             ]), NoParams));
 
-        Assert.Contains(ex.Errors, e => e.Path == "pipeline[1].shape.cols" && e.Message.Contains("max 2"));
+        Assert.Contains(ex.Errors, e => e.Path == "tables.pivot1.composables[0].cols" && e.Message.Contains("max 2"));
     }
 
     [Fact]
@@ -1173,6 +1501,165 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     }
 
     [Fact]
+    public async Task Group_export_applies_terminal_labels_and_image_renderer()
+    {
+        var state = Doc(tail:
+        [
+            Group(
+                by: ["STATUS"],
+                values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
+                layer: new StageLayer
+                {
+                    Computed =
+                    [
+                        new ComputedColumn
+                        {
+                            Id = "c2",
+                            Label = "Status image",
+                            Expr = "'/status.png'",
+                        },
+                    ],
+                    Columns = ["m1"],
+                    Labels = new() { ["m1"] = "Revenue image" },
+                    Formats = new()
+                    {
+                        ["m1"] = new ColumnFormat
+                        {
+                            DisplayAs = "image",
+                            UrlColumn = "c2",
+                        },
+                    },
+                }),
+        ]);
+
+        var query = await _executor.Query(Definition, state, NoParams);
+        Assert.Equal("sum(Amount)", Assert.Single(query.Columns).Label);
+        Assert.Equal(
+            "sum(Amount)",
+            query.Document!.Tables![state.ActiveTable!].Schema!
+                .Single(column => column.Name == "m1").Label);
+
+        var export = await _executor.Export(Definition, state, NoParams);
+        Assert.Equal("Revenue image", Assert.Single(export.Columns).Label);
+        Assert.All(export.Rows, row =>
+        {
+            Assert.Equal(
+                "<img class=\"ir-cell-image\" src=\"/status.png\" alt=\"\" loading=\"lazy\" decoding=\"async\">",
+                row["m1"]);
+            Assert.Equal(["m1"], row.Keys);
+        });
+    }
+
+    [Fact]
+    public async Task Group_export_does_not_make_a_link_from_a_missing_inherited_source()
+    {
+        var state = Doc(
+            source: new StageLayer
+            {
+                Formats = new()
+                {
+                    ["AMOUNT"] = new ColumnFormat
+                    {
+                        DisplayAs = "link",
+                        UrlColumn = "NOTES",
+                        Mask = "currency:USD",
+                    },
+                },
+            },
+            tail:
+            [
+                Group(
+                    by: ["STATUS"],
+                    values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
+                    layer: new StageLayer { Columns = ["m1"] }),
+            ]);
+
+        var export = await _executor.Export(Definition, state, NoParams);
+
+        Assert.Equal("$6,000.00", export.Rows[0]["m1"]);
+        Assert.DoesNotContain("<a", Assert.IsType<string>(export.Rows[0]["m1"]));
+    }
+
+    [Fact]
+    public async Task Group_export_folds_post_shape_presentation_across_table_ancestry()
+    {
+        ReportTable Ancestor() => Group(
+            by: ["STATUS"],
+            values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
+            layer: new StageLayer
+            {
+                Computed = [new ComputedColumn { Id = "c2", Expr = "'/ancestor'" }],
+                Labels = new() { ["m1"] = "Ancestor revenue" },
+                Formats = new()
+                {
+                    ["m1"] = new ColumnFormat
+                    {
+                        DisplayAs = "link",
+                        UrlColumn = "c2",
+                        TextColumn = "m1",
+                        Mask = "currency:USD",
+                    },
+                },
+            });
+
+        var source = new StageLayer
+        {
+            Labels = new() { ["AMOUNT"] = "Input revenue" },
+            Formats = new()
+            {
+                ["AMOUNT"] = new ColumnFormat
+                {
+                    DisplayAs = "link",
+                    UrlColumn = "NOTES",
+                    Mask = "currency:USD",
+                },
+            },
+        };
+        var inheritedState = Doc(
+            source,
+            tail:
+            [
+                Ancestor(),
+                new ReportTable
+                {
+                    Composables = Composables(new StageLayer { Columns = ["m1"] }),
+                },
+            ]);
+        var query = await _executor.Query(Definition, inheritedState, NoParams);
+        Assert.Equal("sum(Amount)", Assert.Single(query.Columns).Label);
+        Assert.Equal(
+            "sum(Amount)",
+            query.Document!.Tables![inheritedState.ActiveTable!].Schema!
+                .Single(column => column.Name == "m1").Label);
+
+        var inherited = await _executor.Export(Definition, inheritedState, NoParams);
+
+        Assert.Equal("Ancestor revenue", Assert.Single(inherited.Columns).Label);
+        Assert.Equal(
+            "<a class=\"ir-cell-link\" href=\"/ancestor\">$6,000.00</a>",
+            inherited.Rows[0]["m1"]);
+
+        var cleared = await _executor.Export(Definition, Doc(
+            source,
+            tail:
+            [
+                Ancestor(),
+                new ReportTable
+                {
+                    Composables = Composables(new StageLayer
+                    {
+                        Columns = ["m1"],
+                        Labels = new(),
+                        Formats = new(),
+                    }),
+                },
+            ]), NoParams);
+
+        Assert.Equal("sum(Input revenue)", Assert.Single(cleared.Columns).Label);
+        Assert.Equal("$6,000.00", cleared.Rows[0]["m1"]);
+    }
+
+    [Fact]
     public async Task Chart_view_aggregates_the_whole_filtered_set()
     {
         var result = await _executor.Query(Definition, Doc(
@@ -1197,6 +1684,60 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         Assert.Equal(["SHIPPED", "PENDING", "CANCELLED"], result.Rows.Select(r => (string)r["STATUS"]!));
         Assert.Equal([26000m, 14800m, 6000m], result.Rows.Select(r => Convert.ToDecimal(r["v0"])));
         Assert.All(result.Rows, r => Assert.Equal(2, r.Count));      // the grouped __count never leaks
+    }
+
+    [Fact]
+    public async Task Chart_output_uses_the_shared_ordinary_composable_processor()
+    {
+        var chart = ChartStage(shape =>
+        {
+            shape.Type = "bar";
+            shape.Label = "STATUS";
+            shape.Value = "AMOUNT";
+            shape.Fn = AggregateFn.Sum;
+        });
+        chart.Composables!.AddRange(
+        [
+            new TableComposable
+            {
+                Kind = "compute",
+                Computed = [new ComputedColumn { Id = "c2", Expr = "v0 / 100" }],
+            },
+            new TableComposable { Kind = "filter", Filters = [Filter("c2 >= 100")] },
+            new TableComposable
+            {
+                Kind = "sort",
+                Sorts = [new SortRule { Col = "c2", Dir = SortDir.Asc }],
+            },
+            new TableComposable { Kind = "break", Breaks = ["STATUS"] },
+            new TableComposable
+            {
+                Kind = "aggregate",
+                Aggregates = [new AggregateRule { Col = "c2", Fn = AggregateFn.Sum }],
+            },
+            new TableComposable
+            {
+                Kind = "highlight",
+                Highlights =
+                [
+                    new HighlightRule
+                    {
+                        Id = "large", Scope = "row", Expr = "c2 > 200",
+                        Style = new HighlightStyle { Bg = "gold" },
+                    },
+                ],
+            },
+            new TableComposable { Kind = "select", Columns = ["c2"] },
+        ]);
+
+        var result = await _executor.Query(Definition, Doc(tail: [chart]), NoParams);
+
+        Assert.Equal(["c2"], result.Columns.Select(column => column.Name));
+        Assert.Equal([148m, 260m], result.Rows.Select(row => Convert.ToDecimal(row["c2"])));
+        Assert.All(result.Rows, row => Assert.Contains("STATUS", row.Keys));
+        Assert.Equal(408m, Convert.ToDecimal(result.Aggregates["c2"]["sum"]));
+        Assert.Equal(2, result.BreakTotals.Count);
+        Assert.Equal((1, "large"), (Assert.Single(result.Highlights).Row, Assert.Single(result.Highlights).Id));
     }
 
     [Fact]
@@ -1305,7 +1846,63 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                 ]), NoParams));
 
         Assert.Contains(ex.Errors, error =>
-            error.Path == "pipeline[1].shape.value" && error.Message.Contains("non-negative", StringComparison.OrdinalIgnoreCase));
+            error.Path == "tables.chart1.composables[0].value" && error.Message.Contains("non-negative", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Pie_validation_uses_full_post_filter_rows_before_select_projection()
+    {
+        var chart = ChartStage(shape =>
+        {
+            shape.Type = "pie";
+            shape.Label = "STATUS";
+            shape.Value = "c1";
+            shape.Fn = AggregateFn.Sum;
+        });
+        chart.Composables!.Add(new TableComposable
+        {
+            Kind = "select",
+            Columns = ["STATUS"],
+        });
+
+        var error = await Assert.ThrowsAsync<ReportValidationException>(() =>
+            _executor.Query(Definition, Doc(
+                source: new StageLayer
+                {
+                    Computed = [new ComputedColumn { Id = "c1", Label = "Loss", Expr = "0 - AMOUNT" }],
+                },
+                tail: [chart]), NoParams));
+
+        Assert.Contains(error.Errors, item =>
+            item.Path == "tables.chart1.composables[0].value"
+            && item.Message.Contains("non-negative", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Pie_validation_runs_after_downstream_filters()
+    {
+        var chart = ChartStage(shape =>
+        {
+            shape.Type = "pie";
+            shape.Label = "STATUS";
+            shape.Value = "c1";
+            shape.Fn = AggregateFn.Sum;
+        });
+        chart.Composables!.Add(new TableComposable
+        {
+            Kind = "filter",
+            Filters = [Filter("v0 >= 0")],
+        });
+
+        var result = await _executor.Query(Definition, Doc(
+            source: new StageLayer
+            {
+                Computed = [new ComputedColumn { Id = "c1", Label = "Loss", Expr = "0 - AMOUNT" }],
+            },
+            tail: [chart]), NoParams);
+
+        Assert.Empty(result.Rows);
+        Assert.Equal(0, result.TotalRows);
     }
 
     [Fact]
@@ -1396,7 +1993,34 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                 }),
             ]), NoParams));                                          // 9 distinct customers > 3
 
-        Assert.Contains(ex.Errors, e => e.Path == "pipeline[1].shape" && e.Message.Contains("3 points"));
+        Assert.Contains(ex.Errors, e => e.Path == "tables.chart1.composables[0]" && e.Message.Contains("3 points"));
+    }
+
+    [Fact]
+    public async Task Downstream_chart_filter_runs_before_the_terminal_point_cap()
+    {
+        var def = Definition;
+        def.MaxChartPoints = 3;
+        var chart = ChartStage(shape =>
+        {
+            shape.Type = "bar";
+            shape.Label = "CUSTOMER";
+            shape.Fn = AggregateFn.Count;
+        });
+        chart.Composables!.Add(new TableComposable
+        {
+            Kind = "filter",
+            // Wayne sorts after the old maxPoints+1 source window, so this also proves
+            // the shaped SQL was not truncated before the downstream predicate ran.
+            Filters = [Filter("CUSTOMER = 'Wayne Ent'")],
+        });
+
+        var result = await _executor.Query(def, Doc(tail: [chart]), NoParams);
+
+        var row = Assert.Single(result.Rows);
+        Assert.Equal("Wayne Ent", row["CUSTOMER"]);
+        Assert.Equal(1L, Convert.ToInt64(row["__count"]));
+        Assert.Equal(1, result.TotalRows);
     }
 
     [Fact]
@@ -1423,20 +2047,48 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     [Fact]
     public async Task Export_chart_view_exports_the_charted_points()
     {
-        var export = await _executor.Export(Definition, Doc(tail:
-        [
-            ChartStage(shape =>
+        var chart = ChartStage(shape =>
+        {
+            shape.Type = "bar";
+            shape.Label = "STATUS";
+            shape.Value = "AMOUNT";
+            shape.Fn = AggregateFn.Sum;
+        });
+        chart.Composables!.AddRange(Composables(new StageLayer
+        {
+            Computed = [new ComputedColumn { Id = "c2", Label = "Chart URL", Expr = "'/chart'" }],
+            Columns = ["STATUS", "v0"],
+            Labels = new() { ["v0"] = "Chart revenue" },
+            Formats = new()
             {
-                shape.Type = "bar";
-                shape.Label = "STATUS";
-                shape.Value = "AMOUNT";
-                shape.Fn = AggregateFn.Sum;
-            }),
-        ]), NoParams);
+                ["v0"] = new ColumnFormat
+                {
+                    DisplayAs = "link",
+                    UrlColumn = "c2",
+                    TextColumn = "v0",
+                    Mask = "currency:USD",
+                },
+            },
+        }));
+        var state = Doc(tail: [chart]);
+
+        var query = await _executor.Query(Definition, state, NoParams);
+        Assert.Equal(["Status", "sum(Amount)"], query.Columns.Select(column => column.Label));
+        Assert.Equal(
+            "sum(Amount)",
+            query.Document!.Tables![state.ActiveTable!].Schema!
+                .Single(column => column.Name == "v0").Label);
+
+        var export = await _executor.Export(Definition, state, NoParams);
 
         Assert.False(export.Truncated);
         Assert.Equal(["STATUS", "v0"], export.Columns.Select(c => c.Name));
+        Assert.Equal(["Status", "Chart revenue"], export.Columns.Select(c => c.Label));
         Assert.Equal(4, export.Rows.Count);
+        Assert.Equal(
+            "<a class=\"ir-cell-link\" href=\"/chart\">$6,000.00</a>",
+            export.Rows[0]["v0"]);
+        Assert.All(export.Rows, row => Assert.Equal(["STATUS", "v0"], row.Keys));
     }
 
     [Fact]
@@ -1459,12 +2111,13 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
 
 public sealed class SqliteE2EFixture : IReportConnectionFactory, IDisposable
 {
-    private const string ConnectionString = "Data Source=ir-e2e;Mode=Memory;Cache=Shared";
+    private readonly string _connectionString =
+        $"Data Source=ir-e2e-{Guid.NewGuid():n};Mode=Memory;Cache=Shared";
     private readonly SqliteConnection _keepAlive;
 
     public SqliteE2EFixture()
     {
-        _keepAlive = new SqliteConnection(ConnectionString);
+        _keepAlive = new SqliteConnection(_connectionString);
         _keepAlive.Open();
 
         using var cmd = _keepAlive.CreateCommand();
@@ -1492,7 +2145,7 @@ public sealed class SqliteE2EFixture : IReportConnectionFactory, IDisposable
         cmd.ExecuteNonQuery();
     }
 
-    public DbConnection CreateConnection(string name) => new SqliteConnection(ConnectionString);
+    public DbConnection CreateConnection(string name) => new SqliteConnection(_connectionString);
 
     public void Dispose() => _keepAlive.Dispose();
 }

@@ -6,27 +6,45 @@ namespace InteractiveReport.Core.Validation;
 /// <summary>Validates highlight identity, scope, target, style, and row condition.</summary>
 internal static class HighlightRuleValidator
 {
+    internal sealed class Context
+    {
+        public HashSet<string> SeenIds { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<int> SeenSequences { get; } = [];
+        public int RuleCount { get; set; }
+    }
+
     public static List<CompiledRule<HighlightEffect>> Validate(
         List<HighlightRule>? rules,
         IReadOnlyDictionary<string, ColumnModel> columns,
         List<ValidationError> errors,
         List<IgnoredItem> ignored,
-        string collectionPath = "highlights")
+        string collectionPath = "highlights",
+        Context? context = null)
     {
-        var seenIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var seenSequences = new HashSet<int>();
+        context ??= new Context();
+        var offset = context.RuleCount;
+        context.RuleCount += rules?.Count ?? 0;
+        if (context.RuleCount > 50)
+        {
+            errors.Add(new ValidationError(
+                collectionPath,
+                "at most 50 highlight rules per report state"));
+            return [];
+        }
+
         return ExpressionRuleCompiler.Compile<HighlightRule, HighlightEffect>(
             rules,
-            maxRules: 50,
+            maxRules: int.MaxValue,
             collectionPath,
             columns,
             ExpressionRequirement.Predicate,
             prepareEffect: (rule, index) => PrepareEffect(
                 rule,
-                index,
+                localIndex: index,
+                globalIndex: offset + index,
                 columns,
-                seenIds,
-                seenSequences,
+                context.SeenIds,
+                context.SeenSequences,
                 errors,
                 ignored,
                 collectionPath),
@@ -35,7 +53,8 @@ internal static class HighlightRuleValidator
 
     private static Func<BoundExpression, HighlightEffect>? PrepareEffect(
         HighlightRule rule,
-        int index,
+        int localIndex,
+        int globalIndex,
         IReadOnlyDictionary<string, ColumnModel> columns,
         HashSet<string> seenIds,
         HashSet<int> seenSequences,
@@ -43,7 +62,7 @@ internal static class HighlightRuleValidator
         List<IgnoredItem> ignored,
         string collectionPath)
     {
-        var path = $"{collectionPath}[{index}]";
+        var path = $"{collectionPath}[{localIndex}]";
         if (string.IsNullOrWhiteSpace(rule.Id))
         {
             errors.Add(new ValidationError(path, "highlight id is required"));
@@ -55,7 +74,7 @@ internal static class HighlightRuleValidator
             return null;
         }
 
-        var sequence = rule.Sequence ?? ((index + 1) * 10);
+        var sequence = rule.Sequence ?? ((globalIndex + 1) * 10);
         if (sequence <= 0)
         {
             errors.Add(new ValidationError($"{path}.sequence", "highlight sequence must be positive"));
@@ -94,7 +113,7 @@ internal static class HighlightRuleValidator
             sequence,
             scope.Value,
             cellColumn,
-            ProjectionName(index, columns));
+            ProjectionName(globalIndex, columns));
     }
 
     private static HighlightScope? ParseScope(

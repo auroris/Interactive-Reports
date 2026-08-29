@@ -5,26 +5,36 @@ namespace InteractiveReport.Core.Validation;
 
 /// <summary>
 /// The typed, schema-checked form of a state document. Only this — never the raw DTO —
-/// reaches the query composer. The flat properties are the source stage's layer; View
-/// carries the validated independent view (group/pivot/chart) including its own layer.
+/// reaches execution. The flat properties describe the definition-side relation and,
+/// when no shape exists, its terminal presentation. View describes an optional shape
+/// composable and the generic ordinary operations over its output.
 /// </summary>
 public sealed class ValidatedState
 {
+    internal ColumnPolicy Policy { get; init; } = ColumnPolicy.Unrestricted;
+
+    /// <summary>
+    /// One UTC instant shared by every SQL statement and materialized expression in
+    /// this validated execution. Portable-expression NOW reads this value.
+    /// </summary>
+    internal DateTime EvaluationUtcNow { get; init; } = DateTime.UtcNow;
+
     public required ReportSchema Schema { get; init; }
+    public required IReadOnlyList<ValidTableOperation> Operations { get; init; }
     public required ExpressionRulePlan Rules { get; init; }
     public string? Search { get; init; }
     public required IReadOnlyList<ValidSort> Sorts { get; init; }
     public required IReadOnlyList<ColumnModel> SelectColumns { get; init; }
 
     /// <summary>
-    /// Grid row projection: displayed columns plus hidden source columns required by
+    /// Unshaped row projection: displayed columns plus hidden source columns required by
     /// link/image renderers. Response and export column metadata use SelectColumns;
     /// export rendering may consume the additional row values.
     /// </summary>
     public required IReadOnlyList<ColumnModel> ProjectionColumns { get; init; }
     public required IReadOnlyDictionary<string, ColumnFormat> Formats { get; init; }
     public required IReadOnlyList<ValidAggregate> Aggregates { get; init; }
-    /// <summary>Control-break columns; always members of SelectColumns so renderers can group.</summary>
+    /// <summary>Control-break columns, projected as hidden row data when not selected.</summary>
     public required IReadOnlyList<ColumnModel> Breaks { get; init; }
     public required ValidView View { get; init; }
     public required int PageIndex { get; init; }
@@ -34,20 +44,20 @@ public sealed class ValidatedState
     public required IReadOnlyList<IgnoredItem> Ignored { get; init; }
 
     /// <summary>
-    /// The document's source-layer display labels (real column name → label), resolved
+    /// The definition-side display labels (real column name → label), resolved
     /// during ingestion: request ?? default state ?? the definition's columnLabels.
     /// Query responses never consume these — the client renders its own labels — but a
     /// server-rendered artifact (export) applies them via WithDisplayLabels. Later
-    /// stages' label overrides ride on the View and apply to export column metadata.
+    /// label composables ride on the shaped output and apply to export metadata.
     /// </summary>
     public required IReadOnlyDictionary<string, string> Labels { get; init; }
 
     /// <summary>
-    /// Returns this state with source Labels applied to every column surface that feeds
+    /// Returns this state with definition-side Labels applied to every column surface that feeds
     /// response metadata, so server-rendered output (CSV headers, synthetic
     /// sum(…) labels, Pivot cells) shows the document's names exactly as the client
-    /// displays them. Column names are untouched — composition and row keys are
-    /// unaffected — and query paths never call this. Stage-layer label overrides are
+    /// displays them. Column names are untouched, composition and row keys are
+    /// unaffected, and query paths never call this. Output label composables are
     /// applied by the export shaper on top of the metadata this produces.
     /// </summary>
     public ValidatedState WithDisplayLabels()
@@ -80,15 +90,15 @@ public sealed class ValidatedState
                     Value = View.Chart.Value is null ? null : Relabel(View.Chart.Value),
                 },
         };
-        if (View.GroupLayer is { } layer)
+        if (View.Output is { } layer)
         {
-            // Dims in the stage layer are pass-through source columns; metric and
-            // computed labels rebuild from the relabeled view metadata downstream.
             view = view with
             {
-                GroupLayer = layer with
+                Output = layer with
                 {
+                    Schema = ReportSchema.Create("display-output", layer.Schema.Columns.Select(Relabel)),
                     SelectColumns = layer.SelectColumns.Select(Relabel).ToList(),
+                    ProjectionColumns = layer.ProjectionColumns.Select(Relabel).ToList(),
                     Aggregates = layer.Aggregates
                         .Select(aggregate => aggregate with { Column = Relabel(aggregate.Column) })
                         .ToList(),
@@ -99,7 +109,10 @@ public sealed class ValidatedState
 
         return new ValidatedState
         {
+            Policy = Policy,
+            EvaluationUtcNow = EvaluationUtcNow,
             Schema = ReportSchema.Create("display", Schema.Columns.Select(Relabel)),
+            Operations = Operations,
             Rules = Rules,
             Search = Search,
             Sorts = Sorts,
@@ -119,10 +132,9 @@ public sealed class ValidatedState
 }
 
 /// <summary>
-/// The validated pipeline tail. Grid is the bare source stage; GroupBy pushes a GROUP BY
-/// down and paginates groups; Pivot uses the same grouped query (row + column dims) and
-/// pivots in memory; Chart collapses the whole filtered set to (label, metric) points.
-/// Values fall back to the implicit __count when empty.
+/// The optional validated shape composable. Group produces grouped rows, Pivot uses the
+/// same grouped source and widens it in memory, and Chart produces label/metric points.
+/// Mode is derived from the composable and is an execution descriptor, never a table type.
 /// </summary>
 public sealed record ValidView(
     ViewMode Mode,
@@ -132,34 +144,43 @@ public sealed record ValidView(
     IReadOnlyList<ValidMetric> Values,
     bool Totals = false,
     ValidChart? Chart = null,
-    ValidStageLayer? GroupLayer = null,
-    StageLayer? PivotLayer = null)
+    ValidTableLayer? Output = null,
+    IReadOnlyList<LocatedTableComposable>? DeferredOutput = null,
+    string? ShapePath = null)
 {
     public static readonly ValidView Grid = new(ViewMode.Grid, [], [], [], []);
+
+    public string ShapeProperty(string property)
+        => $"{ShapePath ?? "tables"}.{property}";
 }
 
 /// <summary>
-/// The validated layer of a group stage, bound to that stage's derived output schema
-/// (dims + __count + metrics + layer computed). Computed and decoration rules push down
-/// through one more SQL wrap; SelectColumns are the visible set when the stage is
-/// terminal. Aggregates and control breaks operate over the completed, post-filter
-/// group table, exactly as their source-layer counterparts operate over the filtered
-/// source table. Labels apply to export metadata only.
+/// Ordinary composables bound to the schema produced at one point in the table fold.
+/// The same value is used whether that schema came directly from the definition or
+/// from a group, pivot, chart, or future shape composable.
 /// </summary>
-public sealed record ValidStageLayer(
-    ReportSchema StageSchema,
+public sealed record ValidTableLayer(
+    ReportSchema Schema,
+    IReadOnlyList<ValidTableOperation> Operations,
     IReadOnlyList<CompiledRule<DefineColumnEffect>> Computed,
     IReadOnlyList<CompiledRule<IncludeRowEffect>> RowPredicates,
     IReadOnlyList<CompiledRule<HighlightEffect>> Decorations,
     IReadOnlyList<ValidSort> Sorts,
     IReadOnlyList<ColumnModel> SelectColumns,
+    IReadOnlyList<ColumnModel> ProjectionColumns,
     IReadOnlyList<ValidAggregate> Aggregates,
     IReadOnlyList<ColumnModel> Breaks,
-    IReadOnlyDictionary<string, string> Labels)
-{
-    public static ValidStageLayer Empty(ReportSchema stageSchema, IReadOnlyList<ColumnModel> selectColumns)
-        => new(stageSchema, [], [], [], [], selectColumns, [], [], new Dictionary<string, string>());
-}
+    IReadOnlyDictionary<string, string> Labels,
+    IReadOnlyDictionary<string, ColumnFormat> Formats);
+
+/// <summary>
+/// One schema-bound relational operation in document order. Only the payload matching
+/// Kind is populated; a data record keeps the fold explicit without an inheritance tree.
+/// </summary>
+public sealed record ValidTableOperation(
+    string Kind,
+    IReadOnlyList<CompiledRule<DefineColumnEffect>> Definitions,
+    IReadOnlyList<CompiledRule<IncludeRowEffect>> Predicates);
 
 public enum ViewMode
 {
@@ -168,6 +189,9 @@ public enum ViewMode
     Pivot,
     Chart,
 }
+
+/// <summary>One validated-plan input retaining its precise document location.</summary>
+public sealed record LocatedTableComposable(TableComposable Value, string Path);
 
 /// <summary>
 /// The validated chart request: one label dimension and one numeric metric. Fn present

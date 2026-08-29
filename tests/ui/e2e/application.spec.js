@@ -4,11 +4,36 @@ import { test, expect } from "@playwright/test";
 
 const queryPath = /\/api\/reports\/[^/]+\/query$/;
 
-// The source layer carries base state; one tail stage is the active view.
-const sourceLayerOf = state => state.pipeline?.[0]?.layer ?? {};
-const stageOf = (state, kind) => (state.pipeline ?? []).find(s => s.shape?.kind === kind)?.shape ?? null;
+const layerFields = {
+    compute: "computed", filter: "filters", sort: "sorts", break: "breaks",
+    aggregate: "aggregates", highlight: "highlights", select: "columns",
+    labels: "labels", formats: "formats",
+};
+const chainOf = state => {
+    const chain = [];
+    const seen = new Set();
+    let id = state.activeTable;
+    while (id && id.toLowerCase() !== "definition" && !seen.has(id.toLowerCase())) {
+        seen.add(id.toLowerCase());
+        const entry = Object.entries(state.tables ?? {})
+            .find(([name]) => name.toLowerCase() === id.toLowerCase());
+        if (!entry) return [];
+        chain.unshift(entry[1]);
+        id = entry[1].from;
+    }
+    return chain;
+};
+const sourceLayerOf = state => Object.fromEntries(
+    (chainOf(state)[0]?.composables ?? [])
+        .filter(item => layerFields[item.kind])
+        .map(item => [layerFields[item.kind], item[layerFields[item.kind]]]));
+const stageOf = (state, kind) => Object.values(state.tables ?? {})
+    .flatMap(table => table.composables ?? [])
+    .find(item => item.kind === kind) ?? null;
 const modeOf = state => {
-    const kinds = (state.pipeline ?? []).slice(1).map(s => s.shape?.kind);
+    const kinds = chainOf(state).flatMap(table => table.composables ?? [])
+        .map(item => item.kind)
+        .filter(kind => ["group", "pivot", "chart"].includes(kind));
     return kinds.includes("chart") ? "chart"
         : kinds.includes("pivot") ? "pivot"
         : kinds.includes("group") ? "groupBy"
@@ -389,9 +414,11 @@ test("applies control breaks and footer aggregates to a Group By table", async (
     const response = await runAndWaitForQuery(page, () =>
         dialog.getByRole("button", { name: "Apply", exact: true }).click());
 
-    const group = response.request().postDataJSON().pipeline.find(stage => stage.shape?.kind === "group");
-    expect(group.layer.breaks).toEqual(["STATUS"]);
-    expect(group.layer.aggregates).toEqual([{ col: "m1", fn: "sum" }]);
+    const groupTable = Object.values(response.request().postDataJSON().tables)
+        .find(table => table.composables.some(item => item.kind === "group"));
+    expect(groupTable.composables.find(item => item.kind === "break").breaks).toEqual(["STATUS"]);
+    expect(groupTable.composables.find(item => item.kind === "aggregate").aggregates)
+        .toEqual([{ col: "m1", fn: "sum" }]);
     await expect(page.locator("tr.ir-break-header")).not.toHaveCount(0);
     await expect(page.locator("tr.ir-grand-total")).toHaveCount(1);
 });
@@ -456,7 +483,7 @@ test("a saved report retains its grid, pivot, and chart configurations with pivo
             dialog.getByRole("button", { name: "Apply", exact: true }).click());
         const configured = pivotResponse.request().postDataJSON();
         expect(modeOf(configured)).toBe("pivot");
-        expect(configured.shelf.chart[0].shape.kind).toBe("chart");
+        expect(stageOf(configured, "chart").kind).toBe("chart");
 
         await clickAction(page, "Save As…");
         const saveDialog = page.getByRole("dialog");
@@ -469,7 +496,8 @@ test("a saved report retains its grid, pivot, and chart configurations with pivo
         savedId = (await saveResponse.json()).id;
         const savedState = saveResponse.request().postDataJSON().state;
         expect(modeOf(savedState)).toBe("pivot");
-        expect(Object.keys(savedState.shelf)).toEqual(["chart"]);
+        expect(stageOf(savedState, "chart").kind).toBe("chart");
+        expect(Object.keys(savedState.tables)).toHaveLength(3);
         // The schema-snapshot key is retired: the server judges documents on
         // query, so saves no longer stamp one.
         expect(savedState.schema).toBeUndefined();
@@ -677,10 +705,15 @@ test("admin uploads a validated report document and downloads its canonical file
                 title,
                 primary: true,
                 state: {
-                    pipeline: [{
-                        shape: { kind: "source" },
-                        layer: { filters: [{ expr: "AMOUNT > 100" }] },
-                    }],
+                    activeTable: "uploaded",
+                    tables: {
+                        uploaded: {
+                            from: "definition",
+                            composables: [
+                                { kind: "filter", filters: [{ expr: "AMOUNT > 100" }] },
+                            ],
+                        },
+                    },
                 },
             })),
         });
@@ -864,7 +897,15 @@ test("a definition edit link and per-column overrides shape the managed report",
     // A stale saved document sorting on the restricted column degrades into
     // ignored[] instead of erroring.
     const stale = await page.request.post("/api/reports/orders-managed/query", {
-        data: { pipeline: [{ shape: { kind: "source" }, layer: { sorts: [{ col: "NOTES" }] } }] },
+        data: {
+            activeTable: "stale",
+            tables: {
+                stale: {
+                    from: "definition",
+                    composables: [{ kind: "sort", sorts: [{ col: "NOTES" }] }],
+                },
+            },
+        },
     });
     expect(stale.ok()).toBe(true);
     const staleResult = await stale.json();

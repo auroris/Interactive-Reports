@@ -5,12 +5,24 @@ using static InteractiveReport.Core.Tests.TestFixtures;
 namespace InteractiveReport.Core.Tests;
 
 /// <summary>
-/// Resolver semantics: search and page resolve property-wise (null inherits,
-/// explicit empty clears); pipeline and shelf replace the default wholesale when
-/// present; everything is deep-copied so validation never mutates a cached default.
+/// Resolver semantics: search and page resolve property-wise; activeTable and the
+/// unordered table map replace their defaults when present. Everything is detached
+/// so validation cannot mutate a cached default or the request.
 /// </summary>
 public sealed class ReportStateResolverTests
 {
+    [Fact]
+    public void Resolution_detaches_page_state_as_well_as_table_state()
+    {
+        var request = new ReportState { Page = new PageRequest { Index = 3, Size = 25 } };
+
+        var resolved = ReportStateResolver.Resolve(null, request);
+
+        Assert.NotSame(request.Page, resolved.Page);
+        Assert.Equal(3, resolved.Page!.Index);
+        Assert.Equal(25, resolved.Page.Size);
+    }
+
     [Fact]
     public void Missing_values_inherit_defaults_as_deep_copies()
     {
@@ -22,25 +34,26 @@ public sealed class ReportStateResolverTests
             },
             search: "open",
             page: new PageRequest { Index = 3, Size = 75 },
-            shelf: new() { ["groupBy"] = [Group(by: ["STATUS"])] });
+            alternatives: new() { ["summary"] = [Group(by: ["STATUS"])] });
 
         var resolved = ReportStateResolver.Resolve(defaults, new ReportState());
 
         Assert.Equal("open", resolved.Search);
         Assert.Equal(3, resolved.Page!.Index);
+        Assert.Equal("source", resolved.ActiveTable);
 
-        var layer = resolved.Pipeline![0].Layer!;
-        Assert.Equal("AMOUNT", Assert.Single(layer.Sorts!).Col);
-        Assert.Equal("Order Total", layer.Labels!["AMOUNT"]);
-        Assert.Equal("STATUS", Assert.Single(resolved.Shelf!["groupBy"][0].Shape!.By!));
+        var source = resolved.Tables!["source"];
+        var sort = Assert.Single(source.Composables!.Where(c => c.Kind == "sort")).Sorts!.Single();
+        var labels = Assert.Single(source.Composables!.Where(c => c.Kind == "labels")).Labels!;
+        Assert.Equal("AMOUNT", sort.Col);
+        Assert.Equal("Order Total", labels["AMOUNT"]);
+        Assert.Equal("STATUS", resolved.Tables["summary"].Composables![0].By!.Single());
 
-        Assert.NotSame(defaults.Pipeline, resolved.Pipeline);
-        Assert.NotSame(defaults.Pipeline![0], resolved.Pipeline[0]);
-        Assert.NotSame(defaults.Pipeline[0].Layer, resolved.Pipeline[0].Layer);
-        Assert.NotSame(defaults.Pipeline[0].Layer!.Sorts, layer.Sorts);
-        Assert.NotSame(defaults.Pipeline[0].Layer!.Labels, layer.Labels);
-        Assert.NotSame(defaults.Shelf, resolved.Shelf);
-        Assert.NotSame(defaults.Shelf!["groupBy"][0], resolved.Shelf["groupBy"][0]);
+        Assert.NotSame(defaults.Tables, resolved.Tables);
+        Assert.NotSame(defaults.Tables!["source"], source);
+        Assert.NotSame(defaults.Tables["source"].Composables, source.Composables);
+        Assert.NotSame(defaults.Tables["source"].Composables![0], source.Composables![0]);
+        Assert.NotSame(defaults.Tables["summary"], resolved.Tables["summary"]);
     }
 
     [Fact]
@@ -50,7 +63,7 @@ public sealed class ReportStateResolverTests
 
         var cleared = ReportStateResolver.Resolve(defaults, new ReportState { Search = "" });
         Assert.Equal("", cleared.Search);
-        Assert.Equal(3, cleared.Page!.Index);   // page still inherits independently
+        Assert.Equal(3, cleared.Page!.Index);
 
         var paged = ReportStateResolver.Resolve(defaults, new ReportState
         {
@@ -61,7 +74,7 @@ public sealed class ReportStateResolverTests
     }
 
     [Fact]
-    public void Present_pipeline_replaces_the_default_wholesale()
+    public void Present_tables_replace_the_default_wholesale()
     {
         var defaults = Doc(
             source: new StageLayer
@@ -72,37 +85,41 @@ public sealed class ReportStateResolverTests
             },
             tail: [Group(by: ["STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)])]);
 
-        // Stage arrays never merge: a request pipeline with a bare source layer drops
-        // the default's filters, sorts, columns, and tail entirely.
         var resolved = ReportStateResolver.Resolve(defaults, Doc());
 
-        var stage = Assert.Single(resolved.Pipeline!);
-        Assert.Equal("source", stage.Shape!.Kind);
-        Assert.Null(stage.Layer);
+        var table = Assert.Single(resolved.Tables!);
+        Assert.Equal("source", table.Key);
+        Assert.Equal("definition", table.Value.From);
+        Assert.Empty(table.Value.Composables!);
 
-        // An explicitly empty pipeline is also a wholesale replacement, not an inherit.
-        var emptied = ReportStateResolver.Resolve(defaults, new ReportState { Pipeline = [] });
-        Assert.Empty(emptied.Pipeline!);
+        var emptied = ReportStateResolver.Resolve(defaults, new ReportState
+        {
+            ActiveTable = "anything",
+            Tables = [],
+        });
+        Assert.Empty(emptied.Tables!);
+        Assert.Equal("anything", emptied.ActiveTable);
     }
 
     [Fact]
-    public void Present_shelf_replaces_wholesale()
+    public void Active_table_and_map_are_independent_explicit_values()
     {
-        var defaults = Doc(
-            shelf: new()
+        var defaults = Doc(tail: [Group(by: ["STATUS"])]);
+        var request = new ReportState
+        {
+            ActiveTable = "arbitrary",
+            Tables = new()
             {
-                ["groupBy"] = [Group(by: ["STATUS"])],
-                ["chart"] = [ChartStage(shape => shape.Type = "pie")],
-            });
+                ["arbitrary"] = Pivot(rows: ["CUSTOMER"], cols: ["REGION"]),
+            },
+        };
+        request.Tables["arbitrary"].From = "definition";
 
-        var resolved = ReportStateResolver.Resolve(defaults, Doc(
-            shelf: new() { ["pivot"] = [Pivot(rows: ["CUSTOMER"], cols: ["REGION"])] }));
+        var resolved = ReportStateResolver.Resolve(defaults, request);
 
-        Assert.Equal(["pivot"], resolved.Shelf!.Keys);
-
-        // An explicitly empty shelf is a wholesale replacement, not an inherit.
-        var clearedShelf = ReportStateResolver.Resolve(defaults, Doc(shelf: new()));
-        Assert.Empty(clearedShelf.Shelf!);
+        Assert.Equal("arbitrary", resolved.ActiveTable);
+        Assert.Equal(["arbitrary"], resolved.Tables!.Keys);
+        Assert.Equal("pivot", resolved.Tables["arbitrary"].Composables![0].Kind);
     }
 
     [Fact]
@@ -137,33 +154,28 @@ public sealed class ReportStateResolverTests
             tail: [Group(by: ["STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)])]);
 
         var resolved = ReportStateResolver.Resolve(null, request);
+        var source = resolved.Tables!["source"];
+        var originalSource = request.Tables!["source"];
+        var format = source.Composables!.Single(c => c.Kind == "formats").Formats!["AMOUNT"];
+        var highlight = source.Composables!.Single(c => c.Kind == "highlight").Highlights![0];
+        var metric = resolved.Tables[resolved.ActiveTable!].Composables![0].Values![0];
 
-        var sourceLayer = resolved.Pipeline![0].Layer!;
-        Assert.NotSame(request.Pipeline![0].Layer, sourceLayer);
-        Assert.NotSame(request.Pipeline[0].Layer!.Computed![0], sourceLayer.Computed![0]);
-        Assert.NotSame(request.Pipeline[0].Layer!.Formats!["AMOUNT"], sourceLayer.Formats!["AMOUNT"]);
-        Assert.NotSame(request.Pipeline[0].Layer!.Formats!["AMOUNT"].Classes, sourceLayer.Formats["AMOUNT"].Classes);
-        Assert.NotSame(request.Pipeline[0].Layer!.Highlights![0], sourceLayer.Highlights![0]);
-        Assert.NotSame(request.Pipeline[1].Shape, resolved.Pipeline[1].Shape);
-        Assert.NotSame(request.Pipeline[1].Shape!.Values![0], resolved.Pipeline[1].Shape!.Values![0]);
+        Assert.NotSame(originalSource, source);
+        Assert.NotSame(originalSource.Composables, source.Composables);
+        Assert.NotSame(originalSource.Composables!.Single(c => c.Kind == "formats").Formats!["AMOUNT"], format);
+        Assert.NotSame(originalSource.Composables!.Single(c => c.Kind == "highlight").Highlights![0], highlight);
+        Assert.NotSame(request.Tables[request.ActiveTable!].Composables![0].Values![0], metric);
 
-        // Field fidelity through the deep copy.
-        Assert.Equal("decimal2", sourceLayer.Formats["AMOUNT"].Mask);
-        Assert.Equal(["amount-column"], sourceLayer.Formats["AMOUNT"].Classes);
-        Assert.Equal("link", sourceLayer.Formats["AMOUNT"].DisplayAs);
-        Assert.Equal("NOTES", sourceLayer.Formats["AMOUNT"].UrlColumn);
-        Assert.Equal("CUSTOMER", sourceLayer.Formats["AMOUNT"].TextColumn);
-        Assert.Equal("open", sourceLayer.Formats["AMOUNT"].Command);
-        Assert.Equal("ORDER_ID", sourceLayer.Formats["AMOUNT"].KeyColumn);
-        Assert.Equal(("h1", "Big", 10), (sourceLayer.Highlights[0].Id, sourceLayer.Highlights[0].Name, sourceLayer.Highlights[0].Sequence));
-        Assert.Equal(("m1", "AMOUNT", AggregateFn.Sum), (
-            resolved.Pipeline[1].Shape!.Values![0].Id,
-            resolved.Pipeline[1].Shape!.Values![0].Col,
-            resolved.Pipeline[1].Shape!.Values![0].Fn));
+        Assert.Equal("decimal2", format.Mask);
+        Assert.Equal(["amount-column"], format.Classes);
+        Assert.Equal(("link", "NOTES", "CUSTOMER", "open", "ORDER_ID"),
+            (format.DisplayAs, format.UrlColumn, format.TextColumn, format.Command, format.KeyColumn));
+        Assert.Equal(("h1", "Big", 10), (highlight.Id, highlight.Name, highlight.Sequence));
+        Assert.Equal(("m1", "AMOUNT", AggregateFn.Sum), (metric.Id, metric.Col, metric.Fn));
     }
 
     [Fact]
-    public void Chart_shapes_survive_the_deep_copy()
+    public void Chart_composable_survives_the_deep_copy()
     {
         var defaults = Doc(tail:
         [
@@ -181,17 +193,15 @@ public sealed class ReportStateResolverTests
         ]);
 
         var resolved = ReportStateResolver.Resolve(defaults, new ReportState());
+        var shape = resolved.Tables![resolved.ActiveTable!].Composables![0];
+        var original = defaults.Tables![defaults.ActiveTable!].Composables![0];
 
-        var shape = resolved.Pipeline![1].Shape!;
-        Assert.NotSame(defaults.Pipeline![1].Shape, shape);
-        Assert.NotSame(defaults.Pipeline[1].Shape!.Sort, shape.Sort);
-        Assert.Equal("bar", shape.Type);
-        Assert.Equal("STATUS", shape.Label);
-        Assert.Equal("AMOUNT", shape.Value);
-        Assert.Equal(AggregateFn.Sum, shape.Fn);
+        Assert.NotSame(original, shape);
+        Assert.NotSame(original.Sort, shape.Sort);
+        Assert.Equal(("chart", "bar", "STATUS", "AMOUNT", AggregateFn.Sum),
+            (shape.Kind, shape.Type, shape.Label, shape.Value, shape.Fn));
         Assert.Equal("horizontal", shape.Orientation);
         Assert.Equal(("value", SortDir.Desc), (shape.Sort!.By, shape.Sort.Dir));
-        Assert.Equal("Status", shape.LabelAxisTitle);
-        Assert.Equal("Total", shape.ValueAxisTitle);
+        Assert.Equal(("Status", "Total"), (shape.LabelAxisTitle, shape.ValueAxisTitle));
     }
 }

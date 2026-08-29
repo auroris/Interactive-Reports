@@ -51,15 +51,37 @@ public sealed class ReportExecutor
 
     /// <summary>
     /// Runs a report document through the same default resolution, schema discovery,
-    /// and validation pipeline used by query and export, without executing its data
-    /// query. Administrative imports use this before persisting an uploaded document.
+    /// and validation pipeline used by query and export. Static table schemas require
+    /// no row query; Pivot alone performs runtime column discovery. Administrative
+    /// imports use this before persisting an uploaded document.
     /// </summary>
     public async Task ValidateDocument(
         ReportDefinition definition,
         ReportState state,
         IReadOnlyDictionary<string, object?> contextParams,
         CancellationToken ct = default)
-        => _ = await IngestDocument(definition, state, contextParams, ct);
+        => _ = await RefreshSchemaCaches(definition, state, contextParams, ct);
+
+    /// <summary>
+    /// Replaces every null per-table schema cache. Grid, Group, and Chart schemas are
+    /// derived from their validated plans without executing rows; only Pivot requires
+    /// live discovery because its generated columns depend on data values. Non-null
+    /// caches are preserved as snapshots and never participate in validation or binding.
+    /// </summary>
+    public async Task<ReportState> RefreshSchemaCaches(
+        ReportDefinition definition,
+        ReportState state,
+        IReadOnlyDictionary<string, object?> contextParams,
+        CancellationToken ct = default)
+    {
+        var evaluationUtcNow = DateTime.UtcNow;
+        return (await RefreshSchemaCachesCore(
+            definition,
+            state,
+            contextParams,
+            evaluationUtcNow,
+            ct)).Document;
+    }
 
     /// <summary>
     /// The unified document-ingestion pipeline: every request that carries a report
@@ -71,10 +93,11 @@ public sealed class ReportExecutor
         ReportDefinition definition,
         ReportState state,
         IReadOnlyDictionary<string, object?> contextParams,
+        DateTime evaluationUtcNow,
         CancellationToken ct)
     {
         var schema = await GetSchema(definition, contextParams, ct);
-        return StateValidator.Validate(definition, state, schema);
+        return StateValidator.Validate(definition, state, schema, evaluationUtcNow);
     }
 
     public async Task<ReportResult> Query(
@@ -83,22 +106,24 @@ public sealed class ReportExecutor
         IReadOnlyDictionary<string, object?> contextParams,
         CancellationToken ct = default)
     {
-        var stopwatch = Stopwatch.StartNew();
-        var validated = await IngestDocument(definition, state, contextParams, ct);
-
-        var result = validated.View.Mode switch
-        {
-            ViewMode.GroupBy => await QueryGroupStage(definition, validated, contextParams, stopwatch, ct),
-            ViewMode.Pivot => await QueryPivot(
+        var evaluationUtcNow = DateTime.UtcNow;
+        var refreshed = await RefreshSchemaCachesCore(
+            definition,
+            state,
+            contextParams,
+            evaluationUtcNow,
+            ct);
+        var active = refreshed.Document.ActiveTable;
+        var result = active is not null && refreshed.Results.TryGetValue(active, out var cached)
+            ? cached
+            : await QueryCore(
                 definition,
-                validated,
+                refreshed.Document,
                 contextParams,
-                stopwatch,
-                ct,
-                maxRows: definition.MaxRows),
-            ViewMode.Chart => await QueryChart(definition, validated, contextParams, stopwatch, ct),
-            _ => await QueryGrid(definition, validated, contextParams, stopwatch, ct),
-        };
+                evaluationUtcNow,
+                ct);
+        result.Document = refreshed.Document;
+
         _logger?.LogInformation(
             "Report {Report} query completed in {ElapsedMs} ms with {RowCount} rows ({TotalRows} total)",
             definition.Name,
@@ -108,10 +133,107 @@ public sealed class ReportExecutor
         return result;
     }
 
+    private async Task<ReportResult> QueryCore(
+        ReportDefinition definition,
+        ReportState state,
+        IReadOnlyDictionary<string, object?> contextParams,
+        DateTime evaluationUtcNow,
+        CancellationToken ct)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        var validated = await IngestDocument(
+            definition,
+            state,
+            contextParams,
+            evaluationUtcNow,
+            ct);
+
+        return validated.View.Mode switch
+        {
+            ViewMode.GroupBy => await QueryGroupStage(definition, validated, contextParams, stopwatch, ct),
+            ViewMode.Pivot => (await QueryPivot(
+                definition,
+                validated,
+                contextParams,
+                stopwatch,
+                ct,
+                maxRows: definition.MaxRows)).Result,
+            ViewMode.Chart => await QueryChart(definition, validated, contextParams, stopwatch, ct),
+            _ => await QueryGrid(definition, validated, contextParams, stopwatch, ct),
+        };
+    }
+
+    private async Task<SchemaRefresh> RefreshSchemaCachesCore(
+        ReportDefinition definition,
+        ReportState state,
+        IReadOnlyDictionary<string, object?> contextParams,
+        DateTime evaluationUtcNow,
+        CancellationToken ct)
+    {
+        var structural = StateStructureValidator.Collect(state);
+        if (structural.Count > 0) throw new ReportValidationException(structural);
+        if (definition.DefaultState is not null
+            && StateStructureValidator.Collect(definition.DefaultState) is { Count: > 0 } defaultErrors)
+            throw new InvalidOperationException(
+                $"Report '{definition.Name}': the default state document is structurally invalid — "
+                + $"{defaultErrors[0].Path}: {defaultErrors[0].Message}.");
+
+        // Return the effective document, not merely the partial request. The client
+        // adopts this value, so inherited default tables and their refreshed caches
+        // must be present in the response.
+        var document = ReportStateResolver.Resolve(definition.DefaultState, state);
+        var results = new Dictionary<string, ReportResult>(StringComparer.OrdinalIgnoreCase);
+        if (document.Tables is not { Count: > 0 })
+            return new SchemaRefresh(document, results);
+
+        foreach (var (tableId, table) in document.Tables)
+        {
+            if (table.Schema is not null) continue;
+            var target = ReportStateResolver.Resolve(null, document);
+            target.ActiveTable = tableId;
+            var validated = await IngestDocument(
+                definition,
+                target,
+                contextParams,
+                evaluationUtcNow,
+                ct);
+            var staticSchema = StaticTableSchema(validated);
+            if (staticSchema is not null)
+            {
+                table.Schema = staticSchema.Select(column => column with { }).ToList();
+                continue;
+            }
+
+            // Pivot is the only shape whose output column names are values read from
+            // the database. Execute it once and reuse the result if it is active.
+            var result = await QueryCore(
+                definition,
+                target,
+                contextParams,
+                evaluationUtcNow,
+                ct);
+            table.Schema = result.AvailableColumns.Select(column => column with { }).ToList();
+            results[tableId] = result;
+        }
+        return new SchemaRefresh(document, results);
+    }
+
+    private static List<ColumnInfo>? StaticTableSchema(ValidatedState state)
+        => state.View.Mode switch
+        {
+            ViewMode.Grid => ReportResultColumns.From(state.Schema),
+            ViewMode.GroupBy => ReportResultColumns.ForGroupTable(state),
+            ViewMode.Chart => ReportResultColumns.ForMaterializedTable(
+                state.View.Output!.Schema,
+                ReportResultColumns.ForChart(state.View.Chart!)),
+            ViewMode.Pivot => null,
+            _ => null,
+        };
+
     /// <summary>
     /// Uses the same validated state without paging, capped when MaxRows is positive.
     /// An export is the server rendering what the user sees, so the ingested document's display
-    /// labels, stage-layer label overrides, and grid renderers apply here (headers,
+    /// labels, output-label overrides, and cell renderers apply here (headers,
     /// sum(…) labels, Pivot cells, link/image HTML) — the posted document is the
     /// source of truth, since the client's state may never have been saved.
     /// </summary>
@@ -121,7 +243,12 @@ public sealed class ReportExecutor
         IReadOnlyDictionary<string, object?> contextParams,
         CancellationToken ct = default)
     {
-        var result = await ExportCore(definition, state, contextParams, ct);
+        var result = await ExportCore(
+            definition,
+            state,
+            contextParams,
+            DateTime.UtcNow,
+            ct);
         _logger?.LogInformation(
             "Report {Report} export completed with {RowCount} rows (truncated: {Truncated})",
             definition.Name,
@@ -134,13 +261,19 @@ public sealed class ReportExecutor
         ReportDefinition definition,
         ReportState state,
         IReadOnlyDictionary<string, object?> contextParams,
+        DateTime evaluationUtcNow,
         CancellationToken ct)
     {
-        var validated = (await IngestDocument(definition, state, contextParams, ct)).WithDisplayLabels();
+        var validated = (await IngestDocument(
+            definition,
+            state,
+            contextParams,
+            evaluationUtcNow,
+            ct)).WithDisplayLabels();
 
         if (validated.View.Mode == ViewMode.Pivot)
         {
-            var pivot = await QueryPivot(
+            var executed = await QueryPivot(
                 definition,
                 validated,
                 contextParams,
@@ -148,14 +281,18 @@ public sealed class ReportExecutor
                 ct,
                 unpaged: true,
                 maxRows: definition.MaxRows);
-            return new ExportResult(
+            var pivot = executed.Result;
+            return RenderExport(
+                validated,
+                pivot.AvailableColumns,
                 pivot.Columns,
                 PivotTableBuilder.RowsForExport(
                     pivot.Columns,
                     pivot.Rows,
                     pivot.Aggregates,
                     validated.View.PivotRows),
-                definition.MaxRows > 0 && pivot.TotalRows > pivot.Rows.Count);
+                definition.MaxRows > 0 && pivot.TotalRows > pivot.Rows.Count,
+                executed.Layer);
         }
 
         if (validated.View.Mode == ViewMode.Chart)
@@ -168,7 +305,12 @@ public sealed class ReportExecutor
                 contextParams,
                 Stopwatch.StartNew(),
                 ct);
-            return new ExportResult(chart.Columns, chart.Rows, Truncated: false);
+            return RenderExport(
+                validated,
+                chart.AvailableColumns,
+                chart.Columns,
+                chart.Rows,
+                truncated: false);
         }
 
         var compiler = DialectSupport.GetCompiler(definition.GetEffectiveDialect());
@@ -177,23 +319,56 @@ public sealed class ReportExecutor
 
         if (validated.View.Mode == ViewMode.GroupBy)
         {
-            var layer = validated.View.GroupLayer!;
+            var layer = validated.View.Output!;
             var query = QueryComposer.ComposeGroupStageExport(definition, validated, definition.MaxRows);
             var result = await reader.ReadRows(
                 query, definition.MaxRows > 0 ? definition.MaxRows : null, ct);
-            return new ExportResult(
-                ApplyStageLabels(ReportResultColumns.ForGroupStage(validated), layer.Labels),
-                ReportRowProjector.Columns(result.Rows, layer.SelectColumns),
+            var available = ReportResultColumns.ForGroupTable(validated);
+            return RenderExport(
+                validated,
+                available,
+                ReportResultColumns.Select(available, layer.SelectColumns),
+                result.Rows,
                 result.Truncated);
         }
 
         var grid = QueryComposer.ComposeGridExport(definition, validated, definition.MaxRows);
         var gridResult = await reader.ReadRows(
             grid, definition.MaxRows > 0 ? definition.MaxRows : null, ct);
-        return new ExportResult(
+        return RenderExport(
+            validated,
+            ReportResultColumns.From(validated.Schema),
             ReportResultColumns.From(validated.SelectColumns),
-            GridExportRenderer.Render(validated, gridResult.Rows),
+            gridResult.Rows,
             gridResult.Truncated);
+    }
+
+    private static ExportResult RenderExport(
+        ValidatedState state,
+        IReadOnlyList<ColumnInfo> availableColumns,
+        IReadOnlyList<ColumnInfo> columns,
+        IReadOnlyList<IReadOnlyDictionary<string, object?>> rows,
+        bool truncated,
+        ValidTableLayer? runtimeLayer = null)
+    {
+        var layer = runtimeLayer ?? state.View.Output;
+        var rendered = layer is null
+            ? TableExportRenderer.Render(
+                availableColumns,
+                columns,
+                rows,
+                state.Schema,
+                state.Formats,
+                state.Labels)
+            : TableExportRenderer.Render(
+                availableColumns,
+                columns,
+                rows,
+                layer.Schema,
+                layer.Formats,
+                layer.Labels,
+                state.Formats);
+        return new ExportResult(rendered.Columns, rendered.Rows, truncated);
     }
 
     private async Task<ReportResult> QueryGrid(
@@ -203,53 +378,26 @@ public sealed class ReportExecutor
         Stopwatch stopwatch,
         CancellationToken ct)
     {
-        var composed = QueryComposer.Compose(definition, state);
-        var compiler = DialectSupport.GetCompiler(definition.GetEffectiveDialect());
-
-        // The configured scope is exact: none leaves these statements independent;
-        // snapshot makes them one provider-specific versioned view or fails loudly.
-        await using var connection = await _connections.Open(definition, ct);
-        await using var scope = await _connections.BeginReadScope(connection, definition, ct);
-        var reader = CreateReader(connection, compiler, definition, contextParams, scope.Transaction);
-
-        var queryRows = await reader.ReadGridQueries(composed, state, ct);
-        var executionRows = queryRows.Rows;
-        var breakContinues = false;
-        if (state.Breaks.Count > 0
-            && !state.PageAll
-            && executionRows.Count > state.PageSize)
-        {
-            var boundary = executionRows[state.PageSize];
-            executionRows.RemoveRange(state.PageSize, executionRows.Count - state.PageSize);
-            breakContinues = executionRows.Count > 0
-                && SameBreakKey(executionRows[^1], boundary, state.Breaks);
-        }
-        await scope.CompleteAsync(ct);
-        var highlights = state.Rules.Decorations.Count > 0
-            ? HighlightEvaluator.Evaluate(state.Rules.Decorations, executionRows)
-            : [];
-        var rows = ReportRowProjector.Columns(executionRows, state.ProjectionColumns);
-
-        stopwatch.Stop();
-        return new ReportResult
-        {
-            AvailableColumns = ReportResultColumns.From(state.Schema),
-            Columns = ReportResultColumns.From(state.SelectColumns),
-            Rows = rows,
-            Page = Page(state),
-            TotalRows = queryRows.TotalRows,
-            Aggregates = queryRows.Aggregates,
-            BreakTotals = queryRows.BreakTotals,
-            BreakContinues = breakContinues,
-            Highlights = highlights,
-            Ignored = state.Ignored,
-            ElapsedMs = stopwatch.ElapsedMilliseconds,
-        };
+        var terminal = new SqlTerminalPlan(
+            state.Breaks,
+            state.Aggregates,
+            state.Rules.Decorations,
+            state.ProjectionColumns,
+            ReportResultColumns.From(state.Schema),
+            ReportResultColumns.From(state.SelectColumns));
+        return await QuerySqlTable(
+            definition,
+            state,
+            QueryComposer.Compose(definition, state),
+            terminal,
+            contextParams,
+            stopwatch,
+            ct);
     }
 
     /// <summary>
-    /// The terminal group stage: paginated groups read by name through the same
-    /// highlight-marker and projection pipeline the grid uses — the stage table's
+    /// A terminal grouped table: paginated groups read by name through the same
+    /// highlight-marker and projection path as an unshaped table. The grouped relation's
     /// stable aliases (dims, __count, metric ids, computed ids) are the row keys.
     /// </summary>
     private async Task<ReportResult> QueryGroupStage(
@@ -259,40 +407,75 @@ public sealed class ReportExecutor
         Stopwatch stopwatch,
         CancellationToken ct)
     {
-        var composed = QueryComposer.ComposeGroupStageQueries(definition, state);
-        var compiler = DialectSupport.GetCompiler(definition.GetEffectiveDialect());
-        var layer = state.View.GroupLayer!;
+        var layer = state.View.Output!;
+        var availableColumns = ReportResultColumns.ForGroupTable(state);
+        var terminal = new SqlTerminalPlan(
+            layer.Breaks,
+            layer.Aggregates,
+            layer.Decorations,
+            layer.ProjectionColumns,
+            availableColumns,
+            ReportResultColumns.Select(availableColumns, layer.SelectColumns));
+        return await QuerySqlTable(
+            definition,
+            state,
+            QueryComposer.ComposeGroupStageQueries(definition, state),
+            terminal,
+            contextParams,
+            stopwatch,
+            ct);
+    }
 
+    /// <summary>
+    /// Executes and assembles any SQL-backed terminal table. The shape, when present,
+    /// has already selected its relation by producing <paramref name="composed"/>;
+    /// break paging, highlights, projection, selection, and response metadata are one
+    /// ordinary-table path from here onward.
+    /// </summary>
+    private async Task<ReportResult> QuerySqlTable(
+        ReportDefinition definition,
+        ValidatedState state,
+        ComposedQueries composed,
+        SqlTerminalPlan terminal,
+        IReadOnlyDictionary<string, object?> contextParams,
+        Stopwatch stopwatch,
+        CancellationToken ct)
+    {
+        var compiler = DialectSupport.GetCompiler(definition.GetEffectiveDialect());
+
+        // The configured scope is exact: none leaves these statements independent;
+        // snapshot makes them one provider-specific versioned view or fails loudly.
         await using var connection = await _connections.Open(definition, ct);
         await using var scope = await _connections.BeginReadScope(connection, definition, ct);
         var reader = CreateReader(connection, compiler, definition, contextParams, scope.Transaction);
         var queryRows = await reader.ReadTableQueries(
             composed,
-            layer.Breaks,
-            layer.Aggregates,
+            terminal.Breaks,
+            terminal.Aggregates,
             ct);
         var executionRows = queryRows.Rows;
         var breakContinues = false;
-        if (layer.Breaks.Count > 0
+        if (terminal.Breaks.Count > 0
             && !state.PageAll
             && executionRows.Count > state.PageSize)
         {
             var boundary = executionRows[state.PageSize];
             executionRows.RemoveRange(state.PageSize, executionRows.Count - state.PageSize);
             breakContinues = executionRows.Count > 0
-                && SameBreakKey(executionRows[^1], boundary, layer.Breaks);
+                && SameBreakKey(executionRows[^1], boundary, terminal.Breaks);
         }
         await scope.CompleteAsync(ct);
-        var highlights = layer.Decorations.Count > 0
-            ? HighlightEvaluator.Evaluate(layer.Decorations, executionRows)
+
+        var highlights = terminal.Decorations.Count > 0
+            ? HighlightEvaluator.Evaluate(terminal.Decorations, executionRows)
             : [];
-        var rows = ReportRowProjector.Columns(executionRows, layer.SelectColumns);
+        var rows = ReportRowProjector.Columns(executionRows, terminal.ProjectionColumns);
 
         stopwatch.Stop();
         return new ReportResult
         {
-            AvailableColumns = ReportResultColumns.From(state.Schema),
-            Columns = ReportResultColumns.ForGroupStage(state),
+            AvailableColumns = terminal.AvailableColumns,
+            Columns = terminal.Columns,
             Rows = rows,
             Page = Page(state),
             TotalRows = queryRows.TotalRows,
@@ -318,52 +501,68 @@ public sealed class ReportExecutor
         CancellationToken ct)
     {
         var chart = state.View.Chart!;
+        var layer = state.View.Output!;
         var maxPoints = definition.MaxChartPoints;
         var query = QueryComposer.ComposeChartView(definition, state, maxPoints);
         var compiler = DialectSupport.GetCompiler(definition.GetEffectiveDialect());
+        var shapeColumns = ReportResultColumns.ForChart(chart);
 
-        List<ChartPoint> rows;
+        List<IReadOnlyDictionary<string, object?>> rows;
         await using (var connection = await _connections.Open(definition, ct))
         {
             var reader = CreateReader(connection, compiler, definition, contextParams);
             var metricOrdinal = chart.Fn is null || chart.Value is null ? 1 : 2;
-            rows = await reader.ReadChartPoints(query, metricOrdinal, ct);
+            rows = await reader.ReadChartRows(
+                query,
+                metricOrdinal,
+                shapeColumns,
+                layer,
+                state.EvaluationUtcNow,
+                maxPoints,
+                ct);
         }
 
         if (rows.Count > maxPoints)
         {
             throw new ReportValidationException(
                 [new ValidationError(
-                    "pipeline[1].shape",
+                    state.View.ShapePath ?? "tables",
                     $"chart would draw more than {maxPoints} points — filter further or aggregate to fewer categories")]);
         }
 
-        if (chart.Type == ChartType.Pie && rows.Any(point => IsNegative(point.Value)))
+        if (chart.Type == ChartType.Pie
+            && rows.Any(row => row.TryGetValue(shapeColumns[1].Name, out var value)
+                && IsNegative(value)))
         {
             throw new ReportValidationException(
                 [new ValidationError(
-                    "pipeline[1].shape.value",
+                    state.View.ShapeProperty("value"),
                     "pie charts require non-negative values")]);
         }
 
-        var columns = ReportResultColumns.ForChart(chart);
-        var points = new List<IReadOnlyDictionary<string, object?>>(rows.Count);
-        foreach (var row in rows)
-        {
-            var point = new Dictionary<string, object?>(columns.Count, StringComparer.OrdinalIgnoreCase);
-            point[columns[0].Name] = row.Label;
-            point[columns[1].Name] = row.Value;
-            points.Add(point);
-        }
+        // Compute/filter already ran while reading so the point cap and pie invariant
+        // saw the terminal relational table. Finish sort/aggregate/break/highlight and
+        // projection without evaluating those operations a second time.
+        var processed = MaterializedTableProcessor.Apply(
+            shapeColumns,
+            rows,
+            layer with { Operations = [] },
+            state,
+            definition.GetEffectiveDialect(),
+            unpaged: true);
 
         stopwatch.Stop();
         return new ReportResult
         {
-            AvailableColumns = ReportResultColumns.From(state.Schema),
-            Columns = columns,
-            Rows = points,
-            Page = new PageRequest { Index = 1, Size = Math.Max(1, points.Count) },
-            TotalRows = points.Count,
+            AvailableColumns = processed.AvailableColumns,
+            Columns = processed.Columns,
+            Rows = processed.Rows,
+            Page = new PageRequest { Index = 1, Size = Math.Max(1, processed.Rows.Count) },
+            TotalRows = processed.TotalRows,
+            Aggregates = processed.Totals,
+            BreakTotals = processed.BreakTotals,
+            BreakContinues = processed.BreakContinues,
+            Highlights = processed.Highlights,
             Ignored = state.Ignored,
             ElapsedMs = stopwatch.ElapsedMilliseconds,
         };
@@ -378,7 +577,7 @@ public sealed class ReportExecutor
         IReadOnlyList<ColumnModel> breaks)
         => breaks.All(column => Equals(left[column.Name], right[column.Name]));
 
-    private async Task<ReportResult> QueryPivot(
+    private async Task<(ReportResult Result, ValidTableLayer Layer)> QueryPivot(
         ReportDefinition definition,
         ValidatedState state,
         IReadOnlyDictionary<string, object?> contextParams,
@@ -400,14 +599,14 @@ public sealed class ReportExecutor
             {
                 var reader = CreateReader(connection, compiler, definition, contextParams);
                 groups = await ReadPivotSource(reader);
-                EnsurePivotGroupLimit(groups);
+                EnsurePivotGroupLimit(groups, view.ShapePath);
             }
             else
             {
                 await using var scope = await _connections.BeginReadScope(connection, definition, ct);
                 var reader = CreateReader(connection, compiler, definition, contextParams, scope.Transaction);
                 groups = await ReadPivotSource(reader);
-                EnsurePivotGroupLimit(groups);
+                EnsurePivotGroupLimit(groups, view.ShapePath);
                 totalGroups = await reader.ReadPivotGroups(
                     QueryComposer.ComposePivotTotals(definition, state),
                     0,
@@ -430,20 +629,24 @@ public sealed class ReportExecutor
             unpaged,
             maxRows);
         stopwatch.Stop();
-        return new ReportResult
-        {
-            AvailableColumns = ReportResultColumns.From(state.Schema),
-            Columns = processed.Columns,
-            Rows = processed.Rows,
-            Page = unpaged
-                ? new PageRequest { Index = 1, Size = Math.Max(1, processed.Rows.Count) }
-                : Page(state),
-            TotalRows = processed.TotalRows,
-            Aggregates = processed.Totals,
-            Highlights = processed.Highlights,
-            Ignored = processed.Ignored,
-            ElapsedMs = stopwatch.ElapsedMilliseconds,
-        };
+        return (
+            new ReportResult
+            {
+                AvailableColumns = processed.AvailableColumns,
+                Columns = processed.Columns,
+                Rows = processed.Rows,
+                Page = unpaged
+                    ? new PageRequest { Index = 1, Size = Math.Max(1, processed.Rows.Count) }
+                    : Page(state),
+                TotalRows = processed.TotalRows,
+                Aggregates = processed.Totals,
+                BreakTotals = processed.BreakTotals,
+                BreakContinues = processed.BreakContinues,
+                Highlights = processed.Highlights,
+                Ignored = processed.Ignored,
+                ElapsedMs = stopwatch.ElapsedMilliseconds,
+            },
+            processed.Layer);
 
         Task<List<PivotGroup>> ReadPivotSource(ReportQueryReader reader)
             => reader.ReadPivotGroups(
@@ -454,26 +657,15 @@ public sealed class ReportExecutor
                 ct);
     }
 
-    private static void EnsurePivotGroupLimit(IReadOnlyCollection<PivotGroup> groups)
+    private static void EnsurePivotGroupLimit(
+        IReadOnlyCollection<PivotGroup> groups,
+        string? shapePath)
     {
         if (groups.Count <= MaxPivotGroups) return;
         throw new ReportValidationException(
             [new ValidationError(
-                "pipeline[1].shape",
+                shapePath ?? "tables",
                 $"pivot source exceeds {MaxPivotGroups} groups — filter further or choose lower-cardinality dimensions")]);
-    }
-
-    /// <summary>Export-only: stage-layer label overrides win over generated metadata labels.</summary>
-    private static IReadOnlyList<ColumnInfo> ApplyStageLabels(
-        IReadOnlyList<ColumnInfo> columns,
-        IReadOnlyDictionary<string, string>? overrides)
-    {
-        if (overrides is not { Count: > 0 }) return columns;
-        return columns
-            .Select(column => overrides.TryGetValue(column.Name, out var label)
-                ? column with { Label = label }
-                : column)
-            .ToList();
     }
 
     private ReportQueryReader CreateReader(
@@ -493,3 +685,15 @@ public sealed record ExportResult(
     IReadOnlyList<ColumnInfo> Columns,
     IReadOnlyList<IReadOnlyDictionary<string, object?>> Rows,
     bool Truncated);
+
+internal sealed record SchemaRefresh(
+    ReportState Document,
+    IReadOnlyDictionary<string, ReportResult> Results);
+
+internal sealed record SqlTerminalPlan(
+    IReadOnlyList<ColumnModel> Breaks,
+    IReadOnlyList<ValidAggregate> Aggregates,
+    IReadOnlyList<CompiledRule<HighlightEffect>> Decorations,
+    IReadOnlyList<ColumnModel> ProjectionColumns,
+    IReadOnlyList<ColumnInfo> AvailableColumns,
+    IReadOnlyList<ColumnInfo> Columns);

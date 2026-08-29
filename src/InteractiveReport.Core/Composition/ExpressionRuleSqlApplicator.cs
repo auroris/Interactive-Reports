@@ -14,27 +14,36 @@ internal static class ExpressionRuleSqlApplicator
     public static void ApplyDefinition(
         Query query,
         CompiledRule<DefineColumnEffect> rule,
-        ReportDialect dialect)
+        ReportDialect dialect,
+        DateTime evaluationUtcNow)
     {
-        var (sql, bindings) = ExprEmitter.Emit(rule.Expression.Ast, dialect);
+        var (sql, bindings) = ExprEmitter.Emit(rule.Expression.Ast, dialect, evaluationUtcNow);
         query.SelectRaw($"{sql} AS [{rule.Effect.Column.Name}]", bindings.ToArray());
     }
 
     public static void ApplyRowPredicate(
         Query query,
         CompiledRule<IncludeRowEffect> rule,
-        ReportDialect dialect)
+        ReportDialect dialect,
+        DateTime evaluationUtcNow)
     {
-        var (sql, bindings) = ExprEmitter.EmitCondition(rule.Expression.Ast, dialect);
+        var (sql, bindings) = ExprEmitter.EmitCondition(
+            rule.Expression.Ast,
+            dialect,
+            evaluationUtcNow);
         query.WhereRaw(sql, bindings.ToArray());
     }
 
     public static void ApplyDecoration(
         Query query,
         CompiledRule<HighlightEffect> rule,
-        ReportDialect dialect)
+        ReportDialect dialect,
+        DateTime evaluationUtcNow)
     {
-        var (sql, bindings) = ExprEmitter.EmitCondition(rule.Expression.Ast, dialect);
+        var (sql, bindings) = ExprEmitter.EmitCondition(
+            rule.Expression.Ast,
+            dialect,
+            evaluationUtcNow);
         query.SelectRaw(
             $"CASE WHEN {sql} THEN 1 ELSE 0 END AS [{rule.Effect.ProjectionName}]",
             bindings.ToArray());

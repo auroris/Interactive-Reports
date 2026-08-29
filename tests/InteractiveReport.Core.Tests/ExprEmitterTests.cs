@@ -10,6 +10,9 @@ namespace InteractiveReport.Core.Tests;
 /// </summary>
 public class ExprEmitterTests
 {
+    private static readonly DateTime RequestUtcNow =
+        new(2026, 8, 29, 12, 34, 56, DateTimeKind.Utc);
+
     private static readonly IReadOnlyDictionary<string, ColumnModel> Schema =
         OrdersSchema.ToDictionary(c => c.Name, StringComparer.OrdinalIgnoreCase);
 
@@ -17,7 +20,7 @@ public class ExprEmitterTests
     {
         var (ast, error) = ExprParser.Parse(expr, Schema);
         Assert.Null(error);
-        return ExprEmitter.Emit(ast!, dialect);
+        return ExprEmitter.Emit(ast!, dialect, RequestUtcNow);
     }
 
     [Fact]
@@ -92,14 +95,15 @@ public class ExprEmitterTests
     // --- the date vocabulary --------------------------------------------------
 
     [Fact]
-    public void Now_is_the_engines_session_local_clock()
+    public void Now_is_one_request_scoped_utc_binding_on_every_dialect()
     {
-        // LOCALTIMESTAMP, not SYSDATE: SYSDATE is the DB host's clock, and the
-        // contract is session-local wherever the engine has a session timezone.
-        Assert.Equal("GETDATE()", Emit("NOW()", ReportDialect.SqlServer).Sql);
-        Assert.Equal("LOCALTIMESTAMP", Emit("NOW()", ReportDialect.Oracle).Sql);
-        Assert.Equal("NOW()", Emit("NOW()", ReportDialect.Postgres).Sql);
-        Assert.Equal("datetime('now', 'localtime')", Emit("NOW()", ReportDialect.Sqlite).Sql);
+        foreach (var dialect in AllDialects)
+        {
+            var (sql, bindings) = Emit("NOW()", dialect);
+
+            Assert.Equal("?", sql);
+            Assert.Equal([RequestUtcNow], bindings);
+        }
     }
 
     [Fact]
@@ -128,32 +132,32 @@ public class ExprEmitterTests
         // DATE/DATEFROMPARTS on SQL Server, not DATEADD(DATEDIFF(…, 0, …)): the
         // integer epoch is legacy datetime, which ends the valid range at 1753
         // while TO_DATE accepts ISO years back to 0001.
-        Assert.Equal("CAST(CAST(GETDATE() AS DATE) AS DATETIME2)",
+        Assert.Equal("CAST(CAST(? AS DATE) AS DATETIME2)",
             Emit("DATE_TRUNC('DAY', NOW())", ReportDialect.SqlServer).Sql);
-        Assert.Equal("CAST(DATEFROMPARTS(YEAR(GETDATE()), MONTH(GETDATE()), 1) AS DATETIME2)",
+        Assert.Equal("CAST(DATEFROMPARTS(YEAR(?), MONTH(?), 1) AS DATETIME2)",
             Emit("DATE_TRUNC('MONTH', NOW())", ReportDialect.SqlServer).Sql);
-        Assert.Equal("CAST(DATEFROMPARTS(YEAR(GETDATE()), 1, 1) AS DATETIME2)",
+        Assert.Equal("CAST(DATEFROMPARTS(YEAR(?), 1, 1) AS DATETIME2)",
             Emit("DATE_TRUNC('YEAR', NOW())", ReportDialect.SqlServer).Sql);
-        Assert.Equal("TRUNC(LOCALTIMESTAMP, 'DD')", Emit("DATE_TRUNC('DAY', NOW())", ReportDialect.Oracle).Sql);
-        Assert.Equal("TRUNC(LOCALTIMESTAMP, 'MM')", Emit("DATE_TRUNC('MONTH', NOW())", ReportDialect.Oracle).Sql);
-        Assert.Equal("TRUNC(LOCALTIMESTAMP, 'YYYY')", Emit("DATE_TRUNC('YEAR', NOW())", ReportDialect.Oracle).Sql);
-        Assert.Equal("DATE_TRUNC('month', NOW())", Emit("DATE_TRUNC('MONTH', NOW())", ReportDialect.Postgres).Sql);
-        Assert.Equal("datetime(datetime('now', 'localtime'), 'start of month')",
+        Assert.Equal("TRUNC(?, 'DD')", Emit("DATE_TRUNC('DAY', NOW())", ReportDialect.Oracle).Sql);
+        Assert.Equal("TRUNC(?, 'MM')", Emit("DATE_TRUNC('MONTH', NOW())", ReportDialect.Oracle).Sql);
+        Assert.Equal("TRUNC(?, 'YYYY')", Emit("DATE_TRUNC('YEAR', NOW())", ReportDialect.Oracle).Sql);
+        Assert.Equal("DATE_TRUNC('month', ?)", Emit("DATE_TRUNC('MONTH', NOW())", ReportDialect.Postgres).Sql);
+        Assert.Equal("datetime(?, 'start of month')",
             Emit("DATE_TRUNC('MONTH', NOW())", ReportDialect.Sqlite).Sql);
     }
 
     [Fact]
     public void Date_arithmetic_is_whole_days_in_each_idiom()
     {
-        Assert.Equal("DATEADD(DAY, ?, GETDATE())", Emit("NOW() + 30", ReportDialect.SqlServer).Sql);
-        Assert.Equal("DATEADD(DAY, -(?), GETDATE())", Emit("NOW() - 30", ReportDialect.SqlServer).Sql);
-        Assert.Equal("(LOCALTIMESTAMP + ?)", Emit("NOW() + 30", ReportDialect.Oracle).Sql);
-        Assert.Equal("(LOCALTIMESTAMP - ?)", Emit("NOW() - 30", ReportDialect.Oracle).Sql);
-        Assert.Equal("(NOW() + (? * INTERVAL '1 day'))", Emit("NOW() + 30", ReportDialect.Postgres).Sql);
-        Assert.Equal("(NOW() - (? * INTERVAL '1 day'))", Emit("NOW() - 30", ReportDialect.Postgres).Sql);
-        Assert.Equal("datetime(datetime('now', 'localtime'), (?) || ' days')",
+        Assert.Equal("DATEADD(DAY, ?, ?)", Emit("NOW() + 30", ReportDialect.SqlServer).Sql);
+        Assert.Equal("DATEADD(DAY, -(?), ?)", Emit("NOW() - 30", ReportDialect.SqlServer).Sql);
+        Assert.Equal("(? + ?)", Emit("NOW() + 30", ReportDialect.Oracle).Sql);
+        Assert.Equal("(? - ?)", Emit("NOW() - 30", ReportDialect.Oracle).Sql);
+        Assert.Equal("(? + (? * INTERVAL '1 day'))", Emit("NOW() + 30", ReportDialect.Postgres).Sql);
+        Assert.Equal("(? - (? * INTERVAL '1 day'))", Emit("NOW() - 30", ReportDialect.Postgres).Sql);
+        Assert.Equal("datetime(?, (?) || ' days')",
             Emit("NOW() + 30", ReportDialect.Sqlite).Sql);
-        Assert.Equal("datetime(datetime('now', 'localtime'), (-(?)) || ' days')",
+        Assert.Equal("datetime(?, (-(?)) || ' days')",
             Emit("NOW() - 30", ReportDialect.Sqlite).Sql);
 
         // Integer-typed columns are provably whole days.
@@ -180,11 +184,11 @@ public class ExprEmitterTests
 
         // The T separator is quoted where TO_CHAR would read it as a pattern; on
         // SQL Server every separator is quoted so none go culture-dependent.
-        Assert.Equal(["YYYY-MM-DD\"T\"HH24:MI:SS"],
+        Assert.Equal([RequestUtcNow, "YYYY-MM-DD\"T\"HH24:MI:SS"],
             Emit("TO_STRING(NOW(), 'YYYY-MM-DDTHH24:MI:SS')", ReportDialect.Postgres).Bindings);
-        Assert.Equal(["yyyy'-'MM'-'dd'T'HH':'mm':'ss"],
+        Assert.Equal([RequestUtcNow, "yyyy'-'MM'-'dd'T'HH':'mm':'ss"],
             Emit("TO_STRING(NOW(), 'YYYY-MM-DDTHH24:MI:SS')", ReportDialect.SqlServer).Bindings);
-        Assert.Equal(["%Y-%m-%dT%H:%M:%S"],
+        Assert.Equal(["%Y-%m-%dT%H:%M:%S", RequestUtcNow],
             Emit("TO_STRING(NOW(), 'YYYY-MM-DDTHH24:MI:SS')", ReportDialect.Sqlite).Bindings);
     }
 
@@ -214,11 +218,11 @@ public class ExprEmitterTests
         // Date-only text sorts before its own midnight timestamp, so SQLite wraps
         // non-canonical date operands in datetime(); producers emit canonical text
         // already and stay bare. Other dialects compare natively.
-        Assert.Equal("CASE WHEN ([ORDER_DATE] < GETDATE()) THEN ? ELSE ? END",
+        Assert.Equal("CASE WHEN ([ORDER_DATE] < ?) THEN ? ELSE ? END",
             Emit("CASE WHEN ORDER_DATE < NOW() THEN 1 ELSE 0 END", ReportDialect.SqlServer).Sql);
-        Assert.Equal("CASE WHEN ([ORDER_DATE] < LOCALTIMESTAMP) THEN ? ELSE ? END",
+        Assert.Equal("CASE WHEN ([ORDER_DATE] < ?) THEN ? ELSE ? END",
             Emit("CASE WHEN ORDER_DATE < NOW() THEN 1 ELSE 0 END", ReportDialect.Oracle).Sql);
-        Assert.Equal("CASE WHEN (datetime([ORDER_DATE]) < datetime('now', 'localtime')) THEN ? ELSE ? END",
+        Assert.Equal("CASE WHEN (datetime([ORDER_DATE]) < ?) THEN ? ELSE ? END",
             Emit("CASE WHEN ORDER_DATE < NOW() THEN 1 ELSE 0 END", ReportDialect.Sqlite).Sql);
     }
 
@@ -243,7 +247,8 @@ public class ExprEmitterTests
     public void Every_binary_is_parenthesized_and_unary_minus_wraps()
     {
         Assert.Equal("([AMOUNT] + (? * ?))", Emit("AMOUNT + 2 * 3", ReportDialect.Sqlite).Sql);
-        Assert.Equal("((-[AMOUNT]) / ?)", Emit("-AMOUNT / 2", ReportDialect.Sqlite).Sql);
+        foreach (var dialect in AllDialects)
+            Assert.Equal("((1.0 * (-[AMOUNT])) / ?)", Emit("-AMOUNT / 2", dialect).Sql);
     }
 
     [Fact]

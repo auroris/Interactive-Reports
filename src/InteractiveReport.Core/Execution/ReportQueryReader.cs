@@ -1,5 +1,6 @@
 using System.Data.Common;
 using InteractiveReport.Core.Composition;
+using InteractiveReport.Core.Expressions;
 using InteractiveReport.Core.Model;
 using InteractiveReport.Core.Validation;
 using Microsoft.Extensions.Logging;
@@ -24,22 +25,12 @@ internal sealed class ReportQueryReader(
     DbTransaction? transaction = null)
 {
     /// <summary>
-    /// Reads the grid's logical datasets. Oracle snapshot mode sends one anonymous
-    /// PL/SQL block and receives ordered REF CURSORs; every other mode uses the same
-    /// logical contract over ordinary commands.
+    /// Reads the common SQL-backed terminal-table datasets: a count, optional footer
+    /// aggregates, optional break subtotals, and rows. Oracle snapshot mode sends one
+    /// anonymous PL/SQL block and receives ordered REF CURSORs; every other mode uses
+    /// the same logical contract over ordinary commands.
     /// </summary>
-    public async Task<GridQueryRows> ReadGridQueries(
-        ComposedQueries queries,
-        ValidatedState state,
-        CancellationToken ct)
-        => await ReadTableQueries(queries, state.Breaks, state.Aggregates, ct);
-
-    /// <summary>
-    /// Reads the common terminal-table datasets. Both the source grid and Group table
-    /// return a count, optional footer aggregates, optional break subtotals, and rows;
-    /// only the schema-bound break and aggregate lists differ.
-    /// </summary>
-    public async Task<GridQueryRows> ReadTableQueries(
+    public async Task<TableQueryRows> ReadTableQueries(
         ComposedQueries queries,
         IReadOnlyList<ColumnModel> breaks,
         IReadOnlyList<ValidAggregate> aggregates,
@@ -55,7 +46,7 @@ internal sealed class ReportQueryReader(
                 ? []
                 : await ReadBreakTotals(queries.BreakTotals, breaks, aggregates, ct);
             var rows = (await ReadRows(queries.Page, maxRows: null, ct)).Rows;
-            return new GridQueryRows(totalRows, footerValues, breakTotals, rows);
+            return new TableQueryRows(totalRows, footerValues, breakTotals, rows);
         }
 
         var resultSets = new List<Query> { queries.Count };
@@ -84,7 +75,7 @@ internal sealed class ReportQueryReader(
         await RequireNextResult(reader, ct);
         var pageRows = (await MaterializeRows(reader, maxRows: null, ct)).Rows;
         await RequireEnd(reader, ct);
-        return new GridQueryRows(total, aggregateValues, breakValues, pageRows);
+        return new TableQueryRows(total, aggregateValues, breakValues, pageRows);
     }
 
     private async Task<long> ReadCount(Query query, CancellationToken ct)
@@ -101,22 +92,37 @@ internal sealed class ReportQueryReader(
     }
 
     /// <summary>
-    /// Reads the chart's stable ordinal shape without assigning source or synthetic
-    /// column names. Chart result shaping chooses collision-free protocol keys later,
-    /// so a legitimate label named "v0" or "__count" cannot be overwritten.
+    /// Reads the chart's stable ordinal shape into collision-free protocol keys and
+    /// applies downstream relational operations while streaming. Stop after one more
+    /// surviving row than the terminal cap; rejected rows do not consume that budget.
     /// </summary>
-    public async Task<List<ChartPoint>> ReadChartPoints(
+    public async Task<List<IReadOnlyDictionary<string, object?>>> ReadChartRows(
         Query query,
         int metricOrdinal,
+        IReadOnlyList<ColumnInfo> shapeColumns,
+        ValidTableLayer layer,
+        DateTime evaluationUtcNow,
+        int maxPoints,
         CancellationToken ct)
     {
-        var points = new List<ChartPoint>();
+        var evaluator = new ExpressionEvaluator(evaluationUtcNow);
+        var rows = new List<IReadOnlyDictionary<string, object?>>();
         await using var command = Build(query);
         await using var reader = await command.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
-            points.Add(new ChartPoint(ValueAt(reader, 0), ValueAt(reader, metricOrdinal)));
+        {
+            var row = new Dictionary<string, object?>(shapeColumns.Count, StringComparer.OrdinalIgnoreCase)
+            {
+                [shapeColumns[0].Name] = ValueAt(reader, 0),
+                [shapeColumns[1].Name] = ValueAt(reader, metricOrdinal),
+            };
+            if (!MaterializedTableProcessor.ApplyRelationalOperations(row, layer, evaluator)) continue;
 
-        return points;
+            rows.Add(row);
+            if (rows.Count > maxPoints) break;
+        }
+
+        return rows;
     }
 
     /// <summary>Reads a single-row aggregate query whose aliases are a0..aN.</summary>
@@ -307,13 +313,11 @@ internal sealed record QueryRows(
     List<IReadOnlyDictionary<string, object?>> Rows,
     bool Truncated);
 
-internal sealed record GridQueryRows(
+internal sealed record TableQueryRows(
     long TotalRows,
     Dictionary<string, IReadOnlyDictionary<string, object?>> Aggregates,
     List<BreakTotal> BreakTotals,
     List<IReadOnlyDictionary<string, object?>> Rows);
-
-internal sealed record ChartPoint(object? Label, object? Value);
 
 internal sealed record PivotGroup(
     object?[] RowKey,

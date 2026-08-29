@@ -9,9 +9,10 @@ import {
     parseReportNumber,
 } from "../../src/client/report/render/format.js";
 import { renderColumnValue } from "../../src/client/report/render/column-renderers.js";
-import { renderChartView } from "../../src/client/report/render/chart-view.js";
+import { canRenderChart, renderChartView } from "../../src/client/report/render/chart-view.js";
 import { renderGrid } from "../../src/client/report/render/grid.js";
 import { renderPager } from "../../src/client/report/render/pager.js";
+import { reportState, sourceComposableOf } from "./report-state-fixture.js";
 
 const window = new Window({ url: "https://host.example/reports/orders" });
 Object.assign(globalThis, {
@@ -27,8 +28,6 @@ Object.assign(globalThis, {
 });
 
 const digits = value => value.replace(/\D/g, "");
-const src = layer => ({ shape: { kind: "source" }, layer });
-
 test("exact numeric strings format without an IEEE-754 conversion", () => {
     assert.equal(parseReportNumber("9.007199254740993e15").toFixed(0), "9007199254740993");
     assert.equal(formatValue("9007199254740993", "number"), "9007199254740993");
@@ -62,12 +61,12 @@ test("number, date, and boolean presentation follows the report locale", () => {
 test("link text composes the source column's ordinary formatter", () => {
     const w = {
         doc: {
-            pipeline: [src({
+            ...reportState({
                 formats: {
                     CUSTOMER: { displayAs: "link", urlColumn: "URL", textColumn: "AMOUNT" },
                     AMOUNT: { mask: "plain" },
                 },
-            })],
+            }),
         },
         lastResult: {
             availableColumns: [
@@ -87,14 +86,11 @@ test("link text composes the source column's ordinary formatter", () => {
 });
 
 test("computed, group, and pivot values all use the normal mask path", () => {
-    const source = src({ formats: { AMOUNT: { mask: "plain" } } });
+    const source = reportState({ formats: { AMOUNT: { mask: "plain" } } });
     const w = {
-        doc: {
-            pipeline: [
-                source,
-                { shape: { kind: "group", by: ["STATUS"], values: [{ id: "m1", col: "AMOUNT", fn: "sum" }] }, layer: {} },
-            ],
-        },
+        doc: reportState(
+            { formats: { AMOUNT: { mask: "plain" } } },
+            { kind: "group", by: ["STATUS"], values: [{ id: "m1", col: "AMOUNT", fn: "sum" }], layer: {} }),
         lastResult: {
             columns: [
                 { name: "STATUS", label: "Status", type: "text", computed: false },
@@ -117,27 +113,24 @@ test("computed, group, and pivot values all use the normal mask path", () => {
     assert.equal(table.querySelector("tbody tr").children[1].textContent, "9007199254740993.13");
 
     // A group-layer format on the metric id overrides the inherited source mask.
-    w.doc.pipeline[1].layer.formats = { m1: { mask: "integer" } };
+    w.doc.tables.groupBy.composables.push({ kind: "formats", formats: { m1: { mask: "integer" } } });
     renderGrid(w, table);
     assert.equal(table.querySelector("tbody tr").children[1].textContent, "9,007,199,254,740,993");
 
-    w.doc.pipeline = [source];
-    source.layer.formats.c1 = { mask: "plain" };
+    w.doc = source;
+    sourceComposableOf(w.doc, "formats").formats.c1 = { mask: "plain" };
     w.lastResult.columns = [{ name: "c1", label: "Computed", type: "number", computed: true }];
     w.lastResult.rows = [{ c1: "999999999999999999.999" }];
     renderGrid(w, table);
     assert.equal(table.querySelector("tbody tr").children[0].textContent, "1000000000000000000.00");
 
-    w.doc.pipeline = [
-        source,
+    w.doc = reportState(
+        { formats: sourceComposableOf(source, "formats").formats },
         {
-            shape: {
-                kind: "pivot", rows: ["CUSTOMER"], cols: ["STATUS"],
+            kind: "pivot", rows: ["CUSTOMER"], cols: ["STATUS"],
                 values: [{ id: "m1", col: "AMOUNT", fn: "sum" }],
-            },
             layer: {},
-        },
-    ];
+        });
     w.lastResult.columns = [
         { name: "CUSTOMER", label: "Customer", type: "text", computed: false },
         { name: 'm1@["SHIPPED"]', label: "SHIPPED", type: "number", computed: false, formatSource: "AMOUNT" },
@@ -151,12 +144,9 @@ test("computed, group, and pivot values all use the normal mask path", () => {
 
 test("the chart data table retains an exact masked metric", () => {
     const w = {
-        doc: {
-            pipeline: [
-                src({ formats: { AMOUNT: { mask: "plain" } } }),
-                { shape: { kind: "chart", type: "bar", label: "STATUS", value: "AMOUNT", fn: "sum" } },
-            ],
-        },
+        doc: reportState(
+            { formats: { AMOUNT: { mask: "plain" } } },
+            { kind: "chart", type: "bar", label: "STATUS", value: "AMOUNT", fn: "sum" }),
         lastResult: {
             // Chart metrics keep the synthetic v0/__count response names.
             columns: [
@@ -175,9 +165,61 @@ test("the chart data table retains an exact masked metric", () => {
     assert.equal(container.querySelector(".ir-chart-table tbody td:last-child").textContent, "9007199254740993.13");
 });
 
+test("presentation formats compose through intermediate table ancestry", () => {
+    const columns = [{ name: "m1", label: "sum(Amount)", type: "number", formatSource: "AMOUNT" }];
+    const w = {
+        doc: {
+            activeTable: "decorated",
+            tables: {
+                source: {
+                    from: "definition",
+                    composables: [{ kind: "formats", formats: { AMOUNT: { mask: "plain" } } }],
+                },
+                grouped: {
+                    from: "source",
+                    composables: [
+                        { kind: "group", by: ["STATUS"], values: [{ id: "m1", col: "AMOUNT", fn: "sum" }] },
+                        { kind: "formats", formats: { m1: { mask: "integer" } } },
+                    ],
+                },
+                decorated: { from: "grouped", schema: columns, composables: [] },
+            },
+        },
+        lastResult: {
+            availableColumns: columns,
+            columns,
+            rows: [{ m1: "9007199254740993.125" }],
+            aggregates: {}, breakTotals: [], highlights: [],
+        },
+        schema: { columns: [{ name: "AMOUNT", label: "Amount", type: "number" }] },
+    };
+    const table = document.createElement("table");
+
+    renderGrid(w, table);
+
+    assert.equal(table.querySelector("tbody td").textContent, "9,007,199,254,740,993");
+});
+
+test("a chart with a required output column hidden is a valid non-chartable table", () => {
+    const w = {
+        doc: reportState({}, {
+            kind: "chart", type: "bar", label: "STATUS", value: "AMOUNT", fn: "sum",
+        }),
+        lastResult: {
+            columns: [{ name: "v0", label: "sum(Amount)", type: "number" }],
+            rows: [{ v0: 10 }],
+        },
+    };
+    const container = document.createElement("div");
+
+    assert.equal(canRenderChart(w), false);
+    assert.equal(renderChartView(w, container, {}), null);
+    assert.equal(container.childElementCount, 0);
+});
+
 test("pager arithmetic and display preserve an Int64 count", () => {
     const w = {
-        doc: { pipeline: [src({})] },
+        doc: reportState(),
         schema: { limits: { maxPageSize: 500 } },
         lastResult: {
             page: { index: 1, size: 25 },
@@ -197,7 +239,7 @@ test("pager arithmetic and display preserve an Int64 count", () => {
 
 test("an All result is one unpaged range with no next page", () => {
     const w = {
-        doc: { pipeline: [src({})] },
+        doc: reportState(),
         lastResult: {
             page: { index: 1, size: 0 },
             totalRows: "9223372036854775807",
@@ -223,12 +265,12 @@ test("control breaks own their columns and defer subtotal and grand total to log
     ];
     const w = {
         doc: {
-            pipeline: [src({
+            ...reportState({
                 breaks: ["REGION"],
                 sorts: [],
                 highlights: [],
                 formats: {},
-            })],
+            }),
         },
         schema: { columns },
         lastResult: {
@@ -268,7 +310,7 @@ test("higher highlight sequences win within a scope and cell scope wins over row
     ];
     const w = {
         doc: {
-            pipeline: [src({
+            ...reportState({
                 breaks: [],
                 sorts: [],
                 formats: {},
@@ -278,7 +320,7 @@ test("higher highlight sequences win within a scope and cell scope wins over row
                     { id: "cell-low", sequence: 10, style: { bg: "#333333" } },
                     { id: "cell-high", sequence: 20, style: { bg: "#444444" } },
                 ],
-            })],
+            }),
         },
         schema: { columns },
         lastResult: {

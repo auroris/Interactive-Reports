@@ -4,7 +4,7 @@ namespace InteractiveReport.Core.Validation;
 
 /// <summary>
 /// The definition's per-column sort/filter permissions, answered per bound column.
-/// Restrictions attach to base schema columns only — computed columns (and stage
+/// Restrictions attach to definition-schema columns only — computed columns (and stage
 /// synthetics like metrics) are always allowed, so a report stays predictable
 /// without transitive expression analysis. Enforcement is saved-state courtesy,
 /// not a security boundary: violations degrade into ignored[], mirroring how

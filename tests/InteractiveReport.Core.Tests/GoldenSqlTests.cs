@@ -422,7 +422,7 @@ public class GoldenSqlTests
         var compiler = DialectSupport.GetCompiler(ReportDialect.Sqlite);
 
         Assert.Equal(
-            "SELECT \"REGION\", COUNT(*) AS \"__count\", SUM(\"AMOUNT\") AS \"m1\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base GROUP BY \"REGION\" ORDER BY \"REGION\" LIMIT @p0",
+            "SELECT \"REGION\", \"__count\", \"m1\" FROM (SELECT \"REGION\", COUNT(*) AS \"__count\", SUM(\"AMOUNT\") AS \"m1\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base GROUP BY \"REGION\") AS \"ir_stage\" ORDER BY \"REGION\" LIMIT @p0",
             compiler.Compile(page).Sql);
 
         var countSql = compiler.Compile(count).Sql;
@@ -447,7 +447,7 @@ public class GoldenSqlTests
         var (page, _) = QueryComposer.ComposeGroupStage(def, validated);
 
         Assert.Equal(
-            "SELECT \"REGION\", \"STATUS\", COUNT(*) AS \"__count\", SUM(\"AMOUNT\") AS \"m1\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base GROUP BY \"REGION\", \"STATUS\" ORDER BY \"m1\" DESC, \"REGION\", \"STATUS\" LIMIT @p0",
+            "SELECT \"REGION\", \"STATUS\", \"__count\", \"m1\" FROM (SELECT \"REGION\", \"STATUS\", COUNT(*) AS \"__count\", SUM(\"AMOUNT\") AS \"m1\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base GROUP BY \"REGION\", \"STATUS\") AS \"ir_stage\" ORDER BY \"m1\" DESC, \"REGION\", \"STATUS\" LIMIT @p0",
             DialectSupport.GetCompiler(ReportDialect.Sqlite).Compile(page).Sql);
     }
 
@@ -511,7 +511,7 @@ public class GoldenSqlTests
         var (page, _) = QueryComposer.ComposeGroupStage(def, validated);
 
         Assert.Equal(
-            "SELECT ir_stage.*, ROUND((\"m1\" / \"__count\"), @p0) AS \"c2\" FROM (SELECT \"REGION\", COUNT(*) AS \"__count\", SUM(\"AMOUNT\") AS \"m1\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base GROUP BY \"REGION\") AS \"ir_stage\" ORDER BY \"REGION\" LIMIT @p1",
+            "SELECT \"REGION\", \"__count\", \"m1\", \"c2\" FROM (SELECT ir_stage.*, ROUND(((1.0 * \"m1\") / \"__count\"), @p0) AS \"c2\" FROM (SELECT \"REGION\", COUNT(*) AS \"__count\", SUM(\"AMOUNT\") AS \"m1\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base GROUP BY \"REGION\") AS \"ir_stage\") AS \"ir_stage_calc\" ORDER BY \"REGION\" LIMIT @p1",
             DialectSupport.GetCompiler(ReportDialect.Sqlite).Compile(page).Sql);
     }
 
@@ -542,7 +542,7 @@ public class GoldenSqlTests
         var (page, _) = QueryComposer.ComposeGroupStage(def, validated);
 
         Assert.Equal(
-            "SELECT ir_stage_calc.*, CASE WHEN (\"c2\" > @p0) THEN 1 ELSE 0 END AS \"__ir_highlight_0\" FROM (SELECT ir_stage.*, ROUND((\"m1\" / \"__count\"), @p1) AS \"c2\" FROM (SELECT \"REGION\", COUNT(*) AS \"__count\", SUM(\"AMOUNT\") AS \"m1\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base GROUP BY \"REGION\") AS \"ir_stage\") AS \"ir_stage_calc\" ORDER BY \"REGION\" LIMIT @p2",
+            "SELECT \"REGION\", \"__count\", \"m1\", \"c2\", CASE WHEN (\"c2\" > @p0) THEN 1 ELSE 0 END AS \"__ir_highlight_0\" FROM (SELECT ir_stage.*, ROUND(((1.0 * \"m1\") / \"__count\"), @p1) AS \"c2\" FROM (SELECT \"REGION\", COUNT(*) AS \"__count\", SUM(\"AMOUNT\") AS \"m1\" FROM (SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS) ir_base GROUP BY \"REGION\") AS \"ir_stage\") AS \"ir_stage_calc\" ORDER BY \"REGION\" LIMIT @p2",
             DialectSupport.GetCompiler(ReportDialect.Sqlite).Compile(page).Sql);
     }
 

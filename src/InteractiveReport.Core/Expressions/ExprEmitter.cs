@@ -19,8 +19,14 @@ namespace InteractiveReport.Core.Expressions;
 public static class ExprEmitter
 {
     public static (string Sql, IReadOnlyList<object> Bindings) Emit(ExprNode ast, ReportDialect dialect)
+        => Emit(ast, dialect, DateTime.UtcNow);
+
+    public static (string Sql, IReadOnlyList<object> Bindings) Emit(
+        ExprNode ast,
+        ReportDialect dialect,
+        DateTime evaluationUtcNow)
     {
-        var ctx = new EmitContext(dialect);
+        var ctx = new EmitContext(dialect, evaluationUtcNow);
         ctx.Visit(ast);
         return (ctx.Sql, ctx.Bindings);
     }
@@ -33,19 +39,31 @@ public static class ExprEmitter
     public static (string Sql, IReadOnlyList<object> Bindings) EmitCondition(
         ExprNode ast,
         ReportDialect dialect)
+        => EmitCondition(ast, dialect, DateTime.UtcNow);
+
+    public static (string Sql, IReadOnlyList<object> Bindings) EmitCondition(
+        ExprNode ast,
+        ReportDialect dialect,
+        DateTime evaluationUtcNow)
     {
-        var ctx = new EmitContext(dialect);
+        var ctx = new EmitContext(dialect, evaluationUtcNow);
         ctx.VisitCondition(ast);
         return (ctx.Sql, ctx.Bindings);
     }
 }
 
-internal sealed class EmitContext(ReportDialect dialect)
+internal sealed class EmitContext(ReportDialect dialect, DateTime evaluationUtcNow)
 {
     private readonly StringBuilder _sb = new();
     private readonly List<object> _bindings = [];
 
     public ReportDialect Dialect { get; } = dialect;
+    public DateTime EvaluationUtcNow { get; } = evaluationUtcNow.Kind switch
+    {
+        DateTimeKind.Utc => evaluationUtcNow,
+        DateTimeKind.Local => evaluationUtcNow.ToUniversalTime(),
+        _ => DateTime.SpecifyKind(evaluationUtcNow, DateTimeKind.Utc),
+    };
     public string Sql => _sb.ToString();
     public IReadOnlyList<object> Bindings => _bindings;
 
@@ -153,6 +171,20 @@ internal sealed class EmitContext(ReportDialect dialect)
 
     private void Infix(string op, ExprNode left, ExprNode right)
     {
+        if (op == "/")
+        {
+            // INTEGER / INTEGER truncates on SQLite and SQL Server. The portable
+            // expression contract is decimal division, matching the materialized
+            // evaluator, so promote the numerator with a server-owned decimal literal.
+            // 1.0 participates as NUMBER/numeric/decimal/REAL on the four dialects.
+            _sb.Append("((1.0 * ");
+            Visit(left);
+            _sb.Append(") / ");
+            Visit(right);
+            _sb.Append(')');
+            return;
+        }
+
         _sb.Append('(');
         Visit(left);
         _sb.Append(' ').Append(op).Append(' ');

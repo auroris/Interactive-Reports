@@ -415,13 +415,66 @@ public static class EndpointExtensions
         // Resolve against an empty request to get a detached copy — the store's
         // definition (and its DefaultState) must not be mutated by response shaping.
         var state = ReportStateResolver.Resolve(def.DefaultState, new ReportState());
-        if (state.Pipeline is not { Count: > 0 })
-            state.Pipeline = [new PipelineStage { Shape = new StageShape { Kind = "source" } }];
-        var source = state.Pipeline[0];
-        source.Layer ??= new StageLayer();
-        if (source.Layer.Labels is null && def.GetEffectiveColumnLabels() is { } definitionLabels)
-            source.Layer.Labels = new(definitionLabels);
+        if (state.Tables is not { Count: > 0 })
+        {
+            state.ActiveTable = "base";
+            state.Tables = new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["base"] = new ReportTable { From = "definition" },
+            };
+        }
+        var source = DefinitionInputTable(state);
+        if (source is not null && def.GetEffectiveColumnLabels() is { } definitionLabels)
+        {
+            source.Composables ??= [];
+            var shapeIndex = source.Composables.FindIndex(IsShapeComposable);
+            var inputCount = shapeIndex < 0 ? source.Composables.Count : shapeIndex;
+            var labels = source.Composables
+                .Take(inputCount)
+                .FirstOrDefault(composable => IsComposableKind(composable, "labels"));
+            if (labels is null)
+            {
+                labels = new TableComposable { Kind = "labels" };
+                source.Composables.Insert(inputCount, labels);
+            }
+            labels.Labels ??= new(definitionLabels);
+        }
         return state;
+    }
+
+    private static bool IsShapeComposable(TableComposable composable)
+        => IsComposableKind(composable, "group")
+            || IsComposableKind(composable, "pivot")
+            || IsComposableKind(composable, "chart");
+
+    private static bool IsComposableKind(TableComposable composable, string kind)
+        => string.Equals(composable.Kind?.Trim(), kind, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Follow the selected table's explicit ancestry to its definition input. This
+    /// deliberately ignores dictionary enumeration order: a document may contain
+    /// several independent roots and table identifiers carry no semantic role.
+    /// </summary>
+    private static ReportTable? DefinitionInputTable(ReportState state)
+    {
+        if (state.Tables is not { Count: > 0 } tables
+            || string.IsNullOrWhiteSpace(state.ActiveTable))
+            return null;
+
+        var lookup = new Dictionary<string, ReportTable>(tables, StringComparer.OrdinalIgnoreCase);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var current = state.ActiveTable;
+        while (!string.Equals(current, "definition", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!seen.Add(current) || !lookup.TryGetValue(current, out var table))
+                return null;
+            if (string.Equals(table.From, "definition", StringComparison.OrdinalIgnoreCase))
+                return table;
+            if (string.IsNullOrWhiteSpace(table.From))
+                return null;
+            current = table.From;
+        }
+        return null;
     }
 
     private static Task<IResult> PostQuery(string name, HttpContext ctx, CancellationToken ct)

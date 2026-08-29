@@ -6,6 +6,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
+import { reportState } from "./report-state-fixture.js";
 
 const window = new Window({ url: "https://host.example/dashboard" });
 function Option(text = "", value = "", defaultSelected = false, selected = false) {
@@ -38,9 +39,7 @@ globalThis.fetch = async url => {
         return json({
             defaultState: {
                 page: { index: 1, size: 25 },
-                pipeline: [{
-                    shape: { kind: "source" },
-                    layer: {
+                ...reportState({
                         breaks: ["AMOUNT"],
                         formats: {
                             ID: { bg: "blue" },
@@ -58,8 +57,7 @@ globalThis.fetch = async url => {
                                 style: { bg: "green" },
                             },
                         ],
-                    },
-                }],
+                    }),
             },
             limits: { defaultPageSize: 25, maxPageSize: 100 },
             columns: [

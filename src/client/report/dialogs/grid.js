@@ -1,8 +1,5 @@
 // Table-shaping dialogs: pagination, sort order, control breaks, and aggregate
-// rows. Sort follows the stage context — the source table in grid, the group
-// stage under a Group By or Pivot tail. Breaks and aggregates follow the same
-// context, but Pivot and Chart disable them because their table contracts do not
-// expose those operations.
+// rows. Every operation follows the same active terminal-table context.
 
 import { el, labeled, sel } from "../../core/dom.js";
 import { openDialog } from "../../core/dialog.js";
@@ -65,18 +62,12 @@ export function sortDialog(w) {
         } : null;
     }, { addLabel: w.t("sort.add"), max: 6, context: w });
 
-    const note = ctx.mode === "grid"
-        ? w.t("sort.breakFirst")
-        : ctx.mode === "pivot"
-            ? w.t("sort.pivotDims")
-            : w.t("sort.groupDeterministic");
-
     openDialog({
         owner: w,
         title: w.t("sort.title"),
         width: "38rem",
         build: body => body.append(container, list.addButton,
-            el("p", { class: "ir-dialog-note" }, note)),
+            el("p", { class: "ir-dialog-note" }, w.t("sort.breakFirst"))),
         onApply: () => w.apply(d => { layerOf(d).sorts = list.read(); }),
     });
 }

@@ -113,13 +113,10 @@ internal static class ExprFunctionEmitter
     }
 
     public static void EmitNow(EmitContext context, IReadOnlyList<ExprNode> arguments)
-        => context.Append(context.Dialect switch
-        {
-            ReportDialect.SqlServer => "GETDATE()",
-            ReportDialect.Oracle => "LOCALTIMESTAMP",
-            ReportDialect.Postgres => "NOW()",
-            _ => "datetime('now', 'localtime')",
-        });
+        // NOW is a request value, not an engine/session clock. Binding the one UTC
+        // instant carried by the validated plan also keeps repeated occurrences and
+        // separate page/count/aggregate statements coherent with materialized rows.
+        => context.AppendBinding(context.EvaluationUtcNow);
 
     public static void EmitToDate(EmitContext context, IReadOnlyList<ExprNode> arguments)
     {

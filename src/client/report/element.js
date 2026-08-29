@@ -15,6 +15,7 @@ import { featureEnabled } from "./schema.js";
 import {
     activateTail,
     configuredTail,
+    invalidateChangedSchemas,
     modeOf,
     normalizeReportState,
     serializeReportState,
@@ -22,7 +23,7 @@ import {
 import { refreshSavedSelect, sameTitle } from "./saved.js";
 import { renderChips } from "./render/chips.js";
 import { renderGrid } from "./render/grid.js";
-import { renderChartView } from "./render/chart-view.js";
+import { canRenderChart, renderChartView } from "./render/chart-view.js";
 import { renderPager } from "./render/pager.js";
 import { openViewDialog } from "./dialogs/view.js";
 import { retrieveExport } from "./export.js";
@@ -248,11 +249,13 @@ export class InteractiveReportElement extends WidgetElement {
                 method: "POST", body: submitted, signal: ctrl.signal,
             });
             if (ctrl !== this._abort) return;
+            const accepted = result.document ?? submitted;
+            this.doc = structuredClone(accepted);
             this.lastResult = result;
-            // The response validates the exact submitted document. Never clone
-            // the live document here: another asynchronous operation may have
-            // changed it while this request was in flight.
-            this.commitLastGood(submitted);
+            // The returned document is the submitted working copy with null schema
+            // caches replaced by the server. A superseding operation aborts this
+            // request before this point, so it cannot overwrite newer edits.
+            this.commitLastGood(accepted);
             this.clearError();
             renderChips(this, this.els.chips);
             this.renderView();
@@ -274,9 +277,10 @@ export class InteractiveReportElement extends WidgetElement {
     /// other is emptied so stale content cannot flash back on the next switch.
     renderView() {
         const chartMode = modeOf(this.doc) === "chart";
-        this.els.tablewrap.hidden = chartMode;
-        this.els.chartWrap.hidden = !chartMode;
-        if (!chartMode) {
+        const chartRenderable = chartMode && canRenderChart(this);
+        this.els.tablewrap.hidden = chartRenderable;
+        this.els.chartWrap.hidden = !chartRenderable;
+        if (!chartRenderable) {
             this.destroyChart();
             this.els.chartWrap.replaceChildren();
             renderGrid(this, this.els.table);
@@ -318,6 +322,7 @@ export class InteractiveReportElement extends WidgetElement {
         const prev = this.doc;
         const next = structuredClone(this.doc);
         mutate(next);
+        invalidateChangedSchemas(prev, next);
         if (resetPage && next.page) next.page.index = 1;
         const transition = this.beginStateTransition();
         this.doc = next;

@@ -146,13 +146,15 @@ normal state document:
   "title": "Default",
   "primary": true,
   "state": {
-    "pipeline": [
-      {
-        "shape": { "kind": "source" },
-        "layer": {
-          "columns": [ "ORDER_ID", "CUSTOMER", "THUMBNAIL_URL", "AMOUNT" ],
-          "sorts": [ { "col": "AMOUNT", "dir": "desc" } ],
-          "formats": {
+    "activeTable": "orders",
+    "tables": {
+      "orders": {
+        "from": "definition",
+        "schema": null,
+        "composables": [
+          { "kind": "sort", "sorts": [ { "col": "AMOUNT", "dir": "desc" } ] },
+          { "kind": "select", "columns": [ "ORDER_ID", "CUSTOMER", "THUMBNAIL_URL", "AMOUNT" ] },
+          { "kind": "formats", "formats": {
             "CUSTOMER": {
               "displayAs": "link",
               "urlColumn": "CUSTOMER_URL",
@@ -163,13 +165,34 @@ normal state document:
               "urlColumn": "THUMBNAIL_URL"
             },
             "AMOUNT": { "mask": "currency:CAD", "classes": [ "amount-column", "emphasized" ] }
-          }
-        }
+          } }
+        ]
       }
-    ]
+    }
   }
 }
 ```
+
+`tables` is an unordered map of opaque identifiers. A table reads either the
+configured SQL (`"from": "definition"`) or another named table, then applies its
+`composables` in order. Names such as `base`, `group`, or `pivot` have no special
+meaning; Group By, Pivot, and Chart behavior comes from composables of those kinds,
+and ordinary filtering, selection, presentation, break, and aggregate composables use
+the same table path around them. `definition` is the sole reserved input sentinel and
+cannot be a table key; every other nonblank, case-unique id is opaque. The packaged
+client authors a simple subset of these documents, but preserves valid compositions
+produced by other clients.
+
+Each table's optional `schema` is a non-authoritative output-schema cache. New
+documents may omit it or set it to null. The client nulls a changed table's cache and
+the caches of its descendants; on submission the server fills every null cache from
+live execution. Query results include the enriched state as `document` alongside the
+requested rows and metadata, and the client adopts that returned document. The cache
+is never used for expression binding, query planning, or authorization.
+
+The server accepts at most 64 tables and 512 composables per document. Within the
+selected composition, the stacked limits are 20 computed-column rules, 50 filter
+rules, and 50 highlight rules, including rules on either side of a shape boundary.
 
 With saved-report storage configured, all files appear as global saved reports and are synced into the saved-report store
 whenever they change, as rows marked with a configured origin. A file's `primary`
@@ -182,7 +205,7 @@ publish output; the Workbench project shows one way to do that.
 
 Auto-created stores add `IS_PRIMARY` to an existing current-shape table in place and
 create the adjacent `IR_REPORT_AUTHORIZATION` table. `savedReports.tablePrefix` is
-prepended to both base table names. Hosts with
+prepended to both physical storage table names. Hosts with
 `savedReports.autoCreate: false` must manage both tables and add the non-null 0/1
 saved-report column themselves.
 
@@ -242,7 +265,7 @@ these stable values when it creates real grants.
 
 Database authorization is stored in `IR_REPORT_AUTHORIZATION` beside the saved-report
 table. It uses the required saved-report target and optional shared prefix. Change its
-base table name only when an operator-managed schema requires another identifier:
+physical table name only when an operator-managed schema requires another identifier:
 
 ```json
 {
@@ -429,7 +452,7 @@ not apply:
   "code": "IR-1201",
   "description": "One or more report settings are invalid.",
   "title": "Report state failed validation",
-  "details": "pipeline[0].layer.filters[0].expr: unknown column 'OLD_NAME'"
+  "details": "tables.orders.composables[0].filters[0].expr: unknown column 'OLD_NAME'"
 }
 ```
 
@@ -530,7 +553,7 @@ configuration, not report state:
 ```
 
 `editLink` renders a leading pencil column in grid view. Its `{COLUMN}` placeholders
-reference base schema columns; the referenced values travel as hidden row data (like
+reference definition-schema columns; the referenced values travel as hidden row data (like
 renderer source columns), are URL-encoded into the template client-side, and the
 result is an ordinary anchor — middle-click and open-in-new-tab work, `target:
 "_blank"` adds `rel="noopener"`, and a row whose placeholder value is NULL shows no
@@ -573,17 +596,17 @@ cells, so averages, medians, distinct counts, and null handling remain correct. 
 does not synthesize a right-side total column, which may require report-specific rules
 such as excluding cancelled orders.
 
-A saved report retains every configured view. Grid, Group By, Pivot, and Chart can be
-switched without rebuilding their settings; the view selected when the report is saved
-is the one it opens with. Only the selected view is validated and executed. Settings
-belonging to inactive views remain available without producing ignored-setting notices
-or validation failures.
+A saved report retains its complete table map. The packaged UI switches among the
+simple Grid, Group By, Pivot, and Chart compositions it authored by changing
+`activeTable`, without rebuilding their settings; only the selected table ancestry is
+executed. Other valid tables remain in the document even when their composition came
+from another client and does not map to one built-in toolbar mode.
 
 Group By is a complete table layer rather than a display-only summary. Its filters run
 after grouping, and its computed columns, sorts, highlights, control breaks, and footer
 aggregates bind to the Group output (`dimensions + __count + metrics + computed`). The
 same aggregate list supplies the whole-table footer and each control-break subtotal, as
-it does on the base grid. A Group break counts Group rows; aggregating `__count` reports
+it does on an unshaped table. A Group break counts Group rows; aggregating `__count` reports
 the corresponding number of filtered source rows.
 
 Save updates the selected saved report. Save As creates a new report when its name is

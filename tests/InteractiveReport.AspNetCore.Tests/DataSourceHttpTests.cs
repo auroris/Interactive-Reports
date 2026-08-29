@@ -1,5 +1,6 @@
 using System.Data;
 using System.Data.Common;
+using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Net.Http.Json;
 using System.Security.Claims;
@@ -276,6 +277,7 @@ public sealed class DataSourceHttpTests : IAsyncLifetime
     /// <summary>An unrecognizable but fully functional connection wrapper (profiler-style).</summary>
     private sealed class DelegatingConnection(SqliteConnection inner) : DbConnection
     {
+        [AllowNull]
         public override string ConnectionString
         {
             get => inner.ConnectionString;

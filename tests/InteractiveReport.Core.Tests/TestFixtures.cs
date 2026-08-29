@@ -4,6 +4,23 @@ namespace InteractiveReport.Core.Tests;
 
 public static class TestFixtures
 {
+    /// <summary>
+    /// Test-only shorthand for emitting ordinary composables. It deliberately is not
+    /// part of the production report-document model.
+    /// </summary>
+    public sealed class StageLayer
+    {
+        public List<string>? Columns { get; set; }
+        public Dictionary<string, string>? Labels { get; set; }
+        public Dictionary<string, ColumnFormat>? Formats { get; set; }
+        public List<ComputedColumn>? Computed { get; set; }
+        public List<FilterRule>? Filters { get; set; }
+        public List<SortRule>? Sorts { get; set; }
+        public List<HighlightRule>? Highlights { get; set; }
+        public List<string>? Breaks { get; set; }
+        public List<AggregateRule>? Aggregates { get; set; }
+    }
+
     public static readonly IReadOnlyList<ColumnModel> OrdersSchema =
     [
         Col("ORDER_ID", typeof(long)),
@@ -32,41 +49,65 @@ public static class TestFixtures
 
     public static FilterRule Filter(string expression) => new() { Expr = expression };
 
-    // ---- pipeline document construction shorthand ----
+    // ---- composable table document construction shorthand ----
 
-    /// <summary>A report document: source stage with the given layer plus an optional independent view.</summary>
+    /// <summary>A report document: SQL-backed table plus an optional derived table chain.</summary>
     public static ReportState Doc(
         StageLayer? source = null,
-        IEnumerable<PipelineStage>? tail = null,
+        IEnumerable<ReportTable>? tail = null,
         string? search = null,
         PageRequest? page = null,
-        Dictionary<string, List<PipelineStage>>? shelf = null)
+        Dictionary<string, List<ReportTable>>? alternatives = null)
     {
-        var pipeline = new List<PipelineStage>
+        var tables = new Dictionary<string, ReportTable>(StringComparer.OrdinalIgnoreCase)
         {
-            new() { Shape = new StageShape { Kind = "source" }, Layer = source },
+            ["source"] = new() { From = "definition", Composables = Composables(source) },
         };
-        if (tail is not null) pipeline.AddRange(tail);
+        var active = "source";
+        var index = 0;
+        foreach (var table in tail ?? [])
+        {
+            table.From = active;
+            var kind = table.Composables?.FirstOrDefault(composable =>
+                composable.Kind is "group" or "pivot" or "chart")?.Kind ?? "table";
+            active = $"{kind}{++index}";
+            tables[active] = table;
+        }
+        foreach (var (name, configured) in alternatives ?? new())
+        {
+            var parent = "source";
+            for (var configuredIndex = 0; configuredIndex < configured.Count; configuredIndex++)
+            {
+                var table = configured[configuredIndex];
+                var id = configuredIndex == configured.Count - 1 ? name : $"{name}{configuredIndex + 1}";
+                if (table is not null) table.From ??= parent;
+                tables[id] = table!;
+                parent = id;
+            }
+        }
         return new ReportState
         {
             Search = search,
             Page = page,
-            Pipeline = pipeline,
-            Shelf = shelf,
+            ActiveTable = active,
+            Tables = tables,
         };
     }
 
-    public static PipelineStage Group(
+    public static ReportTable Group(
         string[] by,
         MetricRule[]? values = null,
         StageLayer? layer = null)
         => new()
         {
-            Shape = new StageShape { Kind = "group", By = [.. by], Values = values?.ToList() },
-            Layer = layer,
+            Composables =
+            [
+                new TableComposable { Kind = "group", By = [.. by], Values = values?.ToList() },
+                .. Composables(layer),
+            ],
         };
 
-    public static PipelineStage Pivot(
+    public static ReportTable Pivot(
         string[] rows,
         string[] cols,
         MetricRule[]? values = null,
@@ -74,22 +115,41 @@ public static class TestFixtures
         StageLayer? layer = null)
         => new()
         {
-            Shape = new StageShape
-            {
-                Kind = "pivot",
-                Rows = [.. rows],
-                Cols = [.. cols],
-                Values = values?.ToList(),
-                Totals = totals,
-            },
-            Layer = layer,
+            Composables =
+            [
+                new TableComposable
+                {
+                    Kind = "pivot",
+                    Rows = [.. rows],
+                    Cols = [.. cols],
+                    Values = values?.ToList(),
+                    Totals = totals,
+                },
+                .. Composables(layer),
+            ],
         };
 
-    public static PipelineStage ChartStage(Action<StageShape> configure)
+    public static ReportTable ChartStage(Action<TableComposable> configure)
     {
-        var shape = new StageShape { Kind = "chart" };
+        var shape = new TableComposable { Kind = "chart" };
         configure(shape);
-        return new PipelineStage { Shape = shape };
+        return new ReportTable { Composables = [shape] };
+    }
+
+    public static List<TableComposable> Composables(StageLayer? layer)
+    {
+        if (layer is null) return [];
+        var result = new List<TableComposable>();
+        if (layer.Computed is not null) result.Add(new TableComposable { Kind = "compute", Computed = layer.Computed });
+        if (layer.Filters is not null) result.Add(new TableComposable { Kind = "filter", Filters = layer.Filters });
+        if (layer.Sorts is not null) result.Add(new TableComposable { Kind = "sort", Sorts = layer.Sorts });
+        if (layer.Breaks is not null) result.Add(new TableComposable { Kind = "break", Breaks = layer.Breaks });
+        if (layer.Aggregates is not null) result.Add(new TableComposable { Kind = "aggregate", Aggregates = layer.Aggregates });
+        if (layer.Highlights is not null) result.Add(new TableComposable { Kind = "highlight", Highlights = layer.Highlights });
+        if (layer.Columns is not null) result.Add(new TableComposable { Kind = "select", Columns = layer.Columns });
+        if (layer.Labels is not null) result.Add(new TableComposable { Kind = "labels", Labels = layer.Labels });
+        if (layer.Formats is not null) result.Add(new TableComposable { Kind = "formats", Formats = layer.Formats });
+        return result;
     }
 
     public static MetricRule Metric(string id, string col, AggregateFn fn)

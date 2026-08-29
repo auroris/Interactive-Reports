@@ -438,18 +438,49 @@ public sealed partial class ConfigurationReportDefinitionStore :
             def.Columns.Where(e => e.Value?.Sortable == false).Select(e => e.Key),
             StringComparer.OrdinalIgnoreCase);
         if (restricted.Count == 0) return;
-        var source = def.DefaultState?.Pipeline is { Count: > 0 } pipeline
-            && string.Equals((pipeline[0].Shape?.Kind ?? "source").Trim(), "source", StringComparison.OrdinalIgnoreCase)
-                ? pipeline[0].Layer
-                : null;
-        var sorted = source?.Sorts?.FirstOrDefault(s => restricted.Contains(s.Col));
+        var source = DefinitionInputTable(def.DefaultState);
+        var sorted = source?.Composables?
+            .Where(composable => string.Equals(composable.Kind, "sort", StringComparison.OrdinalIgnoreCase))
+            .SelectMany(composable => composable.Sorts ?? [])
+            .FirstOrDefault(sort => restricted.Contains(sort.Col));
         if (sorted is not null)
             throw new InvalidOperationException(
                 $"Report '{def.Name}': defaultState sorts on '{sorted.Col}' but columns['{sorted.Col}'] is not sortable.");
-        var broken = source?.Breaks?.FirstOrDefault(restricted.Contains);
+        var broken = source?.Composables?
+            .Where(composable => string.Equals(composable.Kind, "break", StringComparison.OrdinalIgnoreCase))
+            .SelectMany(composable => composable.Breaks ?? [])
+            .FirstOrDefault(restricted.Contains);
         if (broken is not null)
             throw new InvalidOperationException(
                 $"Report '{def.Name}': defaultState breaks on '{broken}' but columns['{broken}'] is not sortable (control breaks imply sorting).");
+    }
+
+    /// <summary>
+    /// Finds the definition-input table in the active table's ancestry. A table map is
+    /// unordered, so unrelated roots and insertion order must not affect validation.
+    /// </summary>
+    private static ReportTable? DefinitionInputTable(ReportState? state)
+    {
+        if (state?.Tables is not { Count: > 0 } tables
+            || string.IsNullOrWhiteSpace(state.ActiveTable))
+            return null;
+
+        var lookup = new Dictionary<string, ReportTable>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (name, table) in tables)
+            lookup.TryAdd(name, table);
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        string? current = state.ActiveTable;
+        while (!string.IsNullOrWhiteSpace(current)
+            && seen.Add(current)
+            && lookup.TryGetValue(current, out var table))
+        {
+            if (string.Equals(table.From, "definition", StringComparison.OrdinalIgnoreCase))
+                return table;
+            current = table.From;
+        }
+
+        return null;
     }
 
     /// <summary>

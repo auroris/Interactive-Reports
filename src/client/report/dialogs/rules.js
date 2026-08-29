@@ -1,17 +1,17 @@
-// Expression-rule dialogs — the client face of the server's unified expression
-// pipeline: filters (predicate over rows), computed columns (value per row),
+// Expression-rule dialogs — the client face of the server's composable table
+// algebra: filters (predicate over rows), computed columns (value per row),
 // and highlights (predicate driving row/cell styling). Every rule edits the
-// layer of the table currently being displayed: source, Group By, or Pivot.
+// active table's terminal layer, regardless of the shape that precedes it.
 
 import { el, labeled, sel } from "../../core/dom.js";
 import { openDialog } from "../../core/dialog.js";
 import { stageContext } from "../stage.js";
-import { nextFreeId, sourceLayer } from "../state.js";
+import { nextFreeId } from "../state.js";
 import { colorPick, expressionColumnToken, expressionEditor, colOptions } from "./parts.js";
 
 export function filterDialog(w, { editIndex, col } = {}) {
     const ctx = stageContext(w);
-    const layerOf = ctx.filterLayer ?? (d => sourceLayer(d));
+    const layerOf = ctx.filterLayer;
     const existing = editIndex !== undefined ? layerOf(w.doc).filters?.[editIndex] : undefined;
     const condition = expressionEditor(w, {
         initial: existing?.expr ?? (col ? `${expressionColumnToken(col)} = ` : ""),
@@ -42,11 +42,10 @@ export function filterDialog(w, { editIndex, col } = {}) {
 /// be reused between stages.
 function nextComputedId(doc) {
     const ids = new Set();
-    for (const stage of doc.pipeline ?? [])
-        for (const rule of stage.layer?.computed ?? []) ids.add(rule.id.toLowerCase());
-    for (const stages of Object.values(doc.shelf ?? {}))
-        for (const stage of stages ?? [])
-            for (const rule of stage.layer?.computed ?? []) ids.add(rule.id.toLowerCase());
+    for (const table of Object.values(doc.tables ?? {}))
+        for (const composable of table?.composables ?? [])
+            if (composable?.kind === "compute")
+                for (const rule of composable.computed ?? []) ids.add(rule.id.toLowerCase());
     return nextFreeId(ids, "c");
 }
 
@@ -58,10 +57,9 @@ export function computeDialog(w, editIndex) {
         class: "ir-input", type: "text", value: existing?.label ?? "",
         placeholder: w.t("compute.headingPlaceholder"),
     });
-    const grid = ctx.mode === "grid";
     const expression = expressionEditor(w, {
         initial: existing?.expr,
-        placeholder: w.t(grid ? "expression.gridValuePlaceholder" : "expression.groupValuePlaceholder"),
+        placeholder: w.t("expression.gridValuePlaceholder"),
         result: "value",
         // The current stage's input columns (computed cannot reference computed),
         // with display labels on the buttons; inserted tokens are always the real
@@ -75,9 +73,7 @@ export function computeDialog(w, editIndex) {
         width: "36rem",
         build: body => body.append(
             labeled(w.t("columns.heading"), labelInp),
-            expression,
-            grid ? null : el("p", { class: "ir-dialog-note" },
-                w.t("compute.viewNote"))),
+            expression),
         onApply: () => {
             const expr = expression._read();
             const id = existing?.id ?? nextComputedId(w.doc);
@@ -99,7 +95,7 @@ export function computeDialog(w, editIndex) {
 
 export function highlightDialog(w, editIndex) {
     const ctx = stageContext(w);
-    const layerOf = ctx.highlightLayer ?? (d => sourceLayer(d));
+    const layerOf = ctx.highlightLayer;
     const existing = editIndex !== undefined ? layerOf(w.doc).highlights?.[editIndex] : undefined;
     const rules = layerOf(w.doc).highlights ?? [];
     const ids = new Set(rules.map(h => (h.id ?? "").toLowerCase()));
@@ -126,9 +122,7 @@ export function highlightDialog(w, editIndex) {
     targetField.classList.add("ir-cell-only");
     const condition = expressionEditor(w, {
         initial: existing?.expr,
-        placeholder: w.t(ctx.mode === "grid"
-            ? "expression.gridHighlightPlaceholder"
-            : "expression.groupHighlightPlaceholder"),
+        placeholder: w.t("expression.gridHighlightPlaceholder"),
         result: "predicate",
         columns: ctx.columns,
     });

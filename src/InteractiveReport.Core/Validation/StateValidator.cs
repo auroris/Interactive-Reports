@@ -9,8 +9,8 @@ namespace InteractiveReport.Core.Validation;
 /// Policy: elements referencing unknown columns are dropped into ignored[] (saved-report
 /// resilience); structurally wrong requests (bad arity, untypeable values, or expressions
 /// that do not produce the required type) are precise validation errors. The document is
-/// a stage pipeline: the source layer validates against the effective (base + computed)
-/// schema, the tail via <see cref="PipelineValidator"/> against derived stage schemas.
+/// a named table composition: definition-input composables validate against the effective
+/// (base + computed) schema, then the folded result validates against derived schemas.
 /// </summary>
 public static class StateValidator
 {
@@ -21,7 +21,21 @@ public static class StateValidator
         => Validate(def, state, ReportSchema.Create(def.Name, schema));
 
     public static ValidatedState Validate(ReportDefinition def, ReportState state, ReportSchema schema)
+        => Validate(def, state, schema, DateTime.UtcNow);
+
+    internal static ValidatedState Validate(
+        ReportDefinition def,
+        ReportState state,
+        ReportSchema schema,
+        DateTime evaluationUtcNow)
     {
+        evaluationUtcNow = evaluationUtcNow.Kind switch
+        {
+            DateTimeKind.Utc => evaluationUtcNow,
+            DateTimeKind.Local => evaluationUtcNow.ToUniversalTime(),
+            _ => DateTime.SpecifyKind(evaluationUtcNow, DateTimeKind.Utc),
+        };
+
         // Structural nulls crash the resolver's deep copy before any schema check runs,
         // so they gate here. A structurally broken caller document is the caller's 400;
         // a broken default state is server-side data and fails as a configuration error.
@@ -37,78 +51,38 @@ public static class StateValidator
         var errors = new List<ValidationError>();
         var ignored = new List<IgnoredItem>();
         var resolved = ReportStateResolver.Resolve(def.DefaultState, state);
-        var stages = PipelineValidator.Normalize(resolved.Pipeline, errors);
-        var source = stages.Source;
-
-        // Display labels resolve here — one ingestion path for every consumer — but
-        // they are presentation, not a program: never validated against the schema
-        // (unknown keys are unused display data) and never applied to query surfaces.
-        // The definition's labels (columnLabels overlaid with columns[*].label) are
-        // the bottom default layer, mirroring the default report the schema endpoint
-        // delivers.
-        var labels = ResolveLabels(source.Labels ?? def.GetEffectiveColumnLabels());
+        var composition = TableCompositionValidator.Fold(resolved, errors);
         var policy = ColumnPolicy.From(def);
-
-        // Source computed columns validate first against the BASE schema, then join the
-        // effective schema — everything after this line treats them as ordinary columns.
-        var computed = ComputedColumnValidator.Validate(
-            source.Computed,
-            schema.Lookup,
+        var sourcePlan = TableLayerValidator.Validate(
+            composition.Input,
+            def.Name,
+            schema,
+            policy,
             errors,
-            collectionPath: "pipeline[0].layer.computed");
-        var effectiveSchema = schema.Extend(def.Name, computed.Select(rule => rule.Effect.Column));
+            ignored);
+        var view = TableCompositionValidator.ValidateTail(
+            composition,
+            def.Name,
+            sourcePlan.Schema,
+            errors,
+            ignored,
+            policy);
 
-        var filters = ExpressionRuleCompiler.Compile<FilterRule, IncludeRowEffect>(
-            source.Filters,
-            maxRules: 50,
-            collectionPath: "pipeline[0].layer.filters",
-            effectiveSchema.Lookup,
-            ExpressionRequirement.Predicate,
-            prepareEffect: static (_, _) => _ => new IncludeRowEffect(),
-            errors);
-        filters = StripRestrictedFilters(filters, policy, effectiveSchema, ignored);
-        var view = PipelineValidator.ValidateTail(stages, def.Name, effectiveSchema, errors, ignored, policy);
-
-        // A report retains independent settings for every stage. Bind only the settings
-        // the terminal stage consumes; an inactive source configuration must neither
-        // fail nor produce ignored-setting notices while a group or chart tail runs.
         var gridMode = view.Mode == ViewMode.Grid;
-        var inactive = new List<IgnoredItem>();
-        var columns = ValidateColumns(
-            source.Columns,
-            effectiveSchema,
-            gridMode ? ignored : inactive);
-        var sorts = gridMode
-            ? ValidateSorts(source.Sorts, effectiveSchema, ignored, policy)
-            : [];
-        var aggregates = gridMode
-            ? AggregateRuleValidator.Validate(
-                source.Aggregates,
-                "pipeline[0].layer.aggregates",
-                effectiveSchema.Lookup,
-                errors,
-                ignored)
-            : [];
-        var breaks = gridMode
-            ? ValidateBreaks(source.Breaks, effectiveSchema, ignored, policy)
-            : [];
-        var highlights = gridMode
-            ? HighlightRuleValidator.Validate(
-                source.Highlights,
-                effectiveSchema.Lookup,
-                errors,
-                ignored,
-                collectionPath: "pipeline[0].layer.highlights")
-            : [];
+        var columns = sourcePlan.SelectColumns.ToList();
+        var sorts = gridMode ? sourcePlan.Sorts : [];
+        var aggregates = gridMode ? sourcePlan.Aggregates : [];
+        var breaks = gridMode ? sourcePlan.Breaks : [];
+        var highlights = gridMode ? sourcePlan.Decorations : [];
+        var formats = sourcePlan.Formats;
 
-        // Break columns must be selected — renderers group page rows by their values.
-        foreach (var b in breaks)
-        {
-            if (!columns.Any(c => string.Equals(c.Name, b.Name, StringComparison.OrdinalIgnoreCase)))
-                columns.Add(b);
-        }
-
-        var formats = ResolveFormats(source.Formats);
+        // Labels are opaque presentation data. An explicit labels composable, including
+        // an empty map, replaces the definition defaults at the definition-input table.
+        var hasSourceLabels = composition.Input.Any(item =>
+            string.Equals(item.Value.Kind, "labels", StringComparison.OrdinalIgnoreCase));
+        var labels = hasSourceLabels
+            ? sourcePlan.Labels
+            : ResolveLabels(def.GetEffectiveColumnLabels());
 
         // A renderer may read a different row column than the displayed slot. Keep
         // those dependencies out of Columns/result metadata, but bind every identifier
@@ -116,7 +90,7 @@ public static class StateValidator
         // definition's edit link widens the projection the same way: its template
         // columns ride as hidden row data whether or not the view displays them.
         var projectionColumns = gridMode
-            ? ResolveRendererColumns(formats, columns, effectiveSchema, ignored)
+            ? sourcePlan.ProjectionColumns.ToList()
             : columns.ToList();
         if (gridMode && def.EditLink is not null)
             AddEditLinkColumns(def.EditLink, projectionColumns, schema, ignored);
@@ -135,8 +109,11 @@ public static class StateValidator
 
         return new ValidatedState
         {
-            Schema = effectiveSchema,
-            Rules = new ExpressionRulePlan(computed, filters, highlights),
+            Policy = policy,
+            EvaluationUtcNow = evaluationUtcNow,
+            Schema = sourcePlan.Schema,
+            Operations = sourcePlan.Operations,
+            Rules = new ExpressionRulePlan(sourcePlan.Computed, sourcePlan.RowPredicates, highlights),
             Search = search,
             Sorts = sorts,
             SelectColumns = columns,
@@ -206,7 +183,7 @@ public static class StateValidator
     /// reads the bound AST so references resolve to canonical columns (a filter on
     /// a computed column stays, even when the computation reads restricted inputs).
     /// </summary>
-    private static List<CompiledRule<IncludeRowEffect>> StripRestrictedFilters(
+    internal static List<CompiledRule<IncludeRowEffect>> StripRestrictedFilters(
         List<CompiledRule<IncludeRowEffect>> filters,
         ColumnPolicy policy,
         ReportSchema schema,
@@ -234,7 +211,7 @@ public static class StateValidator
     /// <summary>
     /// Appends the edit link's template columns to the grid projection so their values
     /// ride as hidden row data — same mechanics as renderer source columns. Binding is
-    /// against the base schema: the template is definition-authored, and computed ids
+    /// against the definition schema: the template is definition-authored, and computed ids
     /// are document-scoped names the definition cannot know.
     /// </summary>
     private static void AddEditLinkColumns(
@@ -267,7 +244,7 @@ public static class StateValidator
     private static readonly IReadOnlyDictionary<string, ColumnFormat> NoFormats =
         new Dictionary<string, ColumnFormat>();
 
-    private static IReadOnlyDictionary<string, ColumnFormat> ResolveFormats(
+    internal static IReadOnlyDictionary<string, ColumnFormat> ResolveFormats(
         Dictionary<string, ColumnFormat>? formats)
     {
         if (formats is not { Count: > 0 }) return NoFormats;
@@ -281,7 +258,7 @@ public static class StateValidator
         return result;
     }
 
-    private static List<ColumnModel> ResolveRendererColumns(
+    internal static List<ColumnModel> ResolveRendererColumns(
         IReadOnlyDictionary<string, ColumnFormat> formats,
         IReadOnlyList<ColumnModel> displayed,
         ReportSchema schema,

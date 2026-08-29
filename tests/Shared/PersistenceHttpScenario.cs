@@ -156,6 +156,10 @@ internal static class PersistenceHttpScenario
             {
                 var query = await ReadJson(queryResponse);
                 AssertColumns(expectedColumns, query.GetProperty("columns"));
+                // Query responses return the accepted document with nullable table
+                // schema caches filled. A real client adopts this document before a
+                // later save, so the persistence round-trip must compare that form.
+                defaultState = query.GetProperty("document").Clone();
             }
 
             using var saveResponse = await host.Client.PostAsync(

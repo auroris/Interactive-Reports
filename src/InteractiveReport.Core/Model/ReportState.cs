@@ -8,47 +8,56 @@ namespace InteractiveReport.Core.Model;
 /// </summary>
 public sealed class ReportState
 {
-    /// <summary>Toolbar search: OR of case-insensitive contains across the source layer's visible text columns.</summary>
+    /// <summary>Toolbar search: OR of case-insensitive contains across eligible input text columns.</summary>
     public string? Search { get; set; }
 
     public PageRequest? Page { get; set; }
 
     /// <summary>
-    /// The executing pipeline. The first stage is always "source" and may be followed
-    /// by one independent view derived from that source: group, pivot, or chart. The
-    /// client's view mode is derived from the tail, never stored. Null or empty means
-    /// the bare source stage.
+    /// The table rendered by this request. The identifier is document-owned and has no
+    /// execution semantics; "base", "groupBy", and "pivot" are only UI conventions.
     /// </summary>
-    public List<PipelineStage>? Pipeline { get; set; }
+    public string? ActiveTable { get; set; }
 
     /// <summary>
-    /// Parked alternate tails (stage arrays after source), keyed by their derived mode
-    /// name (groupBy, pivot, chart). Never validated or executed — inert retained
-    /// configuration the toolbar swaps into the pipeline.
+    /// Named table compositions. A table whose From is "definition" reads the SQL from
+    /// the report definition. Any other From value names another document table whose
+    /// relational output is composed first. Inactive tables are retained configuration;
+    /// they enter execution validation only when selected or when a null schema cache
+    /// asks the server to derive their output schema.
     /// </summary>
-    public Dictionary<string, List<PipelineStage>>? Shelf { get; set; }
+    public Dictionary<string, ReportTable>? Tables { get; set; }
 }
 
-/// <summary>One pipeline stage: how the input table is reshaped plus the per-table layer.</summary>
-public sealed class PipelineStage
+/// <summary>One named table: an optional input table plus ordered composables.</summary>
+public sealed class ReportTable
 {
-    public StageShape? Shape { get; set; }
-    public StageLayer? Layer { get; set; }
+    /// <summary>"definition" or another table identifier in this document.</summary>
+    public string? From { get; set; }
+
+    /// <summary>
+    /// Non-authoritative cache of the complete output schema most recently produced
+    /// for this table, before a select composable hides columns. The server never uses
+    /// this cache to authorize or bind an expression.
+    /// </summary>
+    public List<ColumnInfo>? Schema { get; set; }
+
+    public List<TableComposable>? Composables { get; set; }
 }
 
 /// <summary>
-/// The reshaping half of a stage. Kind selects which fields apply: "source" uses none,
-/// "group" uses By/Values, "pivot" uses Rows/Cols/Values/Totals, and "chart" uses
-/// the chart fields.
+/// One operation composed onto a table. Kind selects the payload fields. Shape
+/// composables (group, pivot, chart) and ordinary table composables (compute, filter,
+/// sort, select, labels, formats, highlight, break, aggregate) deliberately share one
+/// ordered protocol. The engine interprets Kind; the owning table's name does not.
 /// </summary>
-public sealed class StageShape
+public sealed class TableComposable
 {
-    /// <summary>"source", "group", "pivot", or "chart".</summary>
-    public string Kind { get; set; } = "source";
+    public string Kind { get; set; } = "";
 
     // group
 
-    /// <summary>Group dimensions (schema or computed columns of the previous stage).</summary>
+    /// <summary>Group dimensions from the relation immediately before this composable.</summary>
     public List<string>? By { get; set; }
 
     /// <summary>Aggregate metrics with stable ids. Empty means the implicit __count alone.</summary>
@@ -67,7 +76,7 @@ public sealed class StageShape
     /// <summary>Show correctly re-aggregated total rows below the matrix.</summary>
     public bool? Totals { get; set; }
 
-    // chart (one chart per report — a label dimension and a single numeric metric)
+    // chart shape (a label dimension and a single numeric metric)
 
     /// <summary>"bar", "line", "area", or "pie".</summary>
     public string? Type { get; set; }
@@ -88,12 +97,24 @@ public sealed class StageShape
 
     public string? LabelAxisTitle { get; set; }
     public string? ValueAxisTitle { get; set; }
+
+    // ordinary table composables
+
+    public List<string>? Columns { get; set; }
+    public Dictionary<string, string>? Labels { get; set; }
+    public Dictionary<string, ColumnFormat>? Formats { get; set; }
+    public List<ComputedColumn>? Computed { get; set; }
+    public List<FilterRule>? Filters { get; set; }
+    public List<SortRule>? Sorts { get; set; }
+    public List<HighlightRule>? Highlights { get; set; }
+    public List<string>? Breaks { get; set; }
+    public List<AggregateRule>? Aggregates { get; set; }
 }
 
 /// <summary>
-/// One aggregate metric of a group stage. The id ("m1", "m2", …) is the metric's stable
-/// column name in the stage's output — a namespace like computed columns' c1, unique
-/// within the stage, never shadowing input columns — so reordering the values list can
+/// One aggregate metric of a group composable. The id ("m1", "m2", …) is the metric's
+/// stable output-column name, in a namespace like computed columns' c1. It is unique
+/// within the composable and never shadows input columns, so reordering the values list can
 /// never silently change what downstream references mean.
 /// </summary>
 public sealed class MetricRule
@@ -101,43 +122,6 @@ public sealed class MetricRule
     public string Id { get; set; } = "";
     public string Col { get; set; } = "";
     public AggregateFn Fn { get; set; }
-}
-
-/// <summary>
-/// The per-table layer of a stage, every field bound to that stage's own output schema.
-/// Chart layers stay empty. Absent fields inherit nothing — the layer is data, and an
-/// absent list simply means none.
-/// </summary>
-public sealed class StageLayer
-{
-    /// <summary>Visible columns in display order when this stage is terminal. Null/empty = all output columns.</summary>
-    public List<string>? Columns { get; set; }
-
-    /// <summary>
-    /// Stage-output column name → display label. Presentation, never a program: unknown
-    /// keys are unused display data. The server consumes labels only for export.
-    /// </summary>
-    public Dictionary<string, string>? Labels { get; set; }
-
-    /// <summary>
-    /// Stage-output column name → display formatting. Renderer source columns
-    /// (displayAs/urlColumn/textColumn) are honored on the source layer only.
-    /// </summary>
-    public Dictionary<string, ColumnFormat>? Formats { get; set; }
-
-    public List<ComputedColumn>? Computed { get; set; }
-
-    /// <summary>Row predicates over this stage's table.</summary>
-    public List<FilterRule>? Filters { get; set; }
-
-    public List<SortRule>? Sorts { get; set; }
-    public List<HighlightRule>? Highlights { get; set; }
-
-    /// <summary>Control-break columns (source and Group layers).</summary>
-    public List<string>? Breaks { get; set; }
-
-    /// <summary>Whole-table footer and per-break subtotal aggregates (source and Group layers).</summary>
-    public List<AggregateRule>? Aggregates { get; set; }
 }
 
 /// <summary>
@@ -235,7 +219,7 @@ public sealed class PageRequest
 
 public sealed class ComputedColumn : ExpressionRule
 {
-    /// <summary>Separate namespace from schema columns ("c1", "c2", ...); may not shadow the owning stage's columns.</summary>
+    /// <summary>Separate namespace from input columns ("c1", "c2", ...); may not shadow them.</summary>
     public string Id { get; set; } = "";
     public string? Label { get; set; }
 }
@@ -275,7 +259,7 @@ public sealed class HighlightStyle
     public string? Fg { get; set; }
 }
 
-/// <summary>Chart ordering lives inside the chart stage's shape; table sorts never apply to charts.</summary>
+/// <summary>Default point ordering owned by a chart composable; later sort composables may reorder its output.</summary>
 public sealed class ChartSortSpec
 {
     /// <summary>"label" (default) or "value".</summary>

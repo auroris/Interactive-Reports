@@ -7,11 +7,22 @@ namespace InteractiveReport.Core.Expressions;
 /// <summary>
 /// Evaluates the same typed portable-expression AST used by SQL composition. Pivot
 /// materialization produces a data-dependent schema in memory, so its layer runs here
-/// after the long grouped query has been materialized as a wide table.
+/// after the long grouped query has been materialized as a wide table. Materialized
+/// text comparison and sorting are ordinal. SQL-backed expressions necessarily inherit
+/// the report database's collation because the supported dialects share neither a
+/// collation name nor collation syntax; exact cross-path text parity therefore requires
+/// a binary/ordinal database collation.
 /// </summary>
-internal static class ExpressionEvaluator
+internal sealed class ExpressionEvaluator(DateTime evaluationUtcNow)
 {
-    public static object? Evaluate(
+    private readonly DateTime _evaluationUtcNow = evaluationUtcNow.Kind switch
+    {
+        DateTimeKind.Utc => evaluationUtcNow,
+        DateTimeKind.Local => evaluationUtcNow.ToUniversalTime(),
+        _ => DateTime.SpecifyKind(evaluationUtcNow, DateTimeKind.Utc),
+    };
+
+    public object? Evaluate(
         ExprNode expression,
         IReadOnlyDictionary<string, object?> row)
         => expression switch
@@ -35,10 +46,10 @@ internal static class ExpressionEvaluator
             _ => throw new InvalidOperationException($"Unsupported expression node {expression.GetType().Name}.")
         };
 
-    public static bool IsTrue(ExprNode expression, IReadOnlyDictionary<string, object?> row)
+    public bool IsTrue(ExprNode expression, IReadOnlyDictionary<string, object?> row)
         => Truth(Evaluate(expression, row)) == true;
 
-    private static object? Binary(BinaryOp binary, IReadOnlyDictionary<string, object?> row)
+    private object? Binary(BinaryOp binary, IReadOnlyDictionary<string, object?> row)
     {
         var left = Evaluate(binary.Left, row);
         var right = Evaluate(binary.Right, row);
@@ -58,7 +69,7 @@ internal static class ExpressionEvaluator
         };
     }
 
-    private static object? CompareExpression(
+    private object? CompareExpression(
         Comparison comparison,
         IReadOnlyDictionary<string, object?> row)
     {
@@ -78,7 +89,7 @@ internal static class ExpressionEvaluator
         };
     }
 
-    private static object? BetweenExpression(
+    private object? BetweenExpression(
         Between between,
         IReadOnlyDictionary<string, object?> row)
     {
@@ -90,7 +101,7 @@ internal static class ExpressionEvaluator
             && Compare(value, upper, between.Operand.Kind) <= 0;
     }
 
-    private static object? AddDate(DateAdd expression, IReadOnlyDictionary<string, object?> row)
+    private object? AddDate(DateAdd expression, IReadOnlyDictionary<string, object?> row)
     {
         var date = Evaluate(expression.Date, row);
         var days = Evaluate(expression.Days, row);
@@ -100,7 +111,7 @@ internal static class ExpressionEvaluator
         return Date(date).AddDays((double)signed);
     }
 
-    private static object? Logical(LogicalOp expression, IReadOnlyDictionary<string, object?> row)
+    private object? Logical(LogicalOp expression, IReadOnlyDictionary<string, object?> row)
     {
         var left = Truth(Evaluate(expression.Left, row));
         var right = Truth(Evaluate(expression.Right, row));
@@ -116,7 +127,7 @@ internal static class ExpressionEvaluator
         };
     }
 
-    private static object? Case(CaseWhen expression, IReadOnlyDictionary<string, object?> row)
+    private object? Case(CaseWhen expression, IReadOnlyDictionary<string, object?> row)
     {
         if (expression.Operand is null)
         {
@@ -139,7 +150,7 @@ internal static class ExpressionEvaluator
         return expression.Else is null ? null : Evaluate(expression.Else, row);
     }
 
-    private static object? Function(FuncCall call, IReadOnlyDictionary<string, object?> row)
+    private object? Function(FuncCall call, IReadOnlyDictionary<string, object?> row)
     {
         var values = call.Args.Select(argument => Evaluate(argument, row)).ToArray();
         return call.Name.ToUpperInvariant() switch
@@ -162,7 +173,7 @@ internal static class ExpressionEvaluator
             "YEAR" => values[0] is null ? null : (decimal)Date(values[0]!).Year,
             "MONTH" => values[0] is null ? null : (decimal)Date(values[0]!).Month,
             "DAY" => values[0] is null ? null : (decimal)Date(values[0]!).Day,
-            "NOW" => DateTime.UtcNow,
+            "NOW" => _evaluationUtcNow,
             "TO_DATE" => values[0] is null ? null : Date(values[0]!).Date,
             "DATE_TRUNC" => values[1] is null ? null : TruncateDate((string)values[0]!, Date(values[1]!)),
             "TO_STRING" => values[0] is null ? null : FormatDate(
@@ -239,6 +250,8 @@ internal static class ExpressionEvaluator
         {
             ColumnKind.Number => Decimal(left).CompareTo(Decimal(right)),
             ColumnKind.Date => Date(left).CompareTo(Date(right)),
+            // One culture-independent rule serves comparisons, BETWEEN, IN_LIST,
+            // CASE matching, terminal sorting, and materialized MIN/MAX.
             ColumnKind.Text => string.CompareOrdinal(Text(left), Text(right)),
             ColumnKind.Bool => Convert.ToBoolean(left, CultureInfo.InvariantCulture)
                 .CompareTo(Convert.ToBoolean(right, CultureInfo.InvariantCulture)),
@@ -247,7 +260,7 @@ internal static class ExpressionEvaluator
             _ => string.CompareOrdinal(Text(left), Text(right)),
         };
 
-    private static decimal? Numeric(ExprNode expression, IReadOnlyDictionary<string, object?> row)
+    private decimal? Numeric(ExprNode expression, IReadOnlyDictionary<string, object?> row)
     {
         var value = Evaluate(expression, row);
         return value is null ? null : Decimal(value);

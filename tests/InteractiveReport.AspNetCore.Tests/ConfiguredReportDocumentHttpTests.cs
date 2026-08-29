@@ -36,15 +36,16 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
               "title": "Committed Primary",
               "primary": true,
               "state": {
-                "pipeline": [
-                  {
-                    "shape": { "kind": "source" },
-                    "layer": {
-                      "columns": [ "LABEL" ],
-                      "sorts": [ { "col": "ID", "dir": "desc" } ]
-                    }
+                "activeTable": "base",
+                "tables": {
+                  "base": {
+                    "from": "definition",
+                    "composables": [
+                      { "kind": "select", "columns": [ "LABEL" ] },
+                      { "kind": "sort", "sorts": [ { "col": "ID", "dir": "desc" } ] }
+                    ]
                   }
-                ]
+                }
               }
             }
             """);
@@ -52,15 +53,16 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
             {
               "title": "Regional View",
               "state": {
-                "pipeline": [
-                  {
-                    "shape": { "kind": "source" },
-                    "layer": {
-                      "columns": [ "ID", "LABEL" ],
-                      "filters": [ { "expr": "ID = 1" } ]
-                    }
+                "activeTable": "regional",
+                "tables": {
+                  "regional": {
+                    "from": "definition",
+                    "composables": [
+                      { "kind": "select", "columns": [ "ID", "LABEL" ] },
+                      { "kind": "filter", "filters": [ { "expr": "ID = 1" } ] }
+                    ]
                   }
-                ]
+                }
               }
             }
             """);
@@ -165,8 +167,9 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
         var id = configured.GetProperty("id").GetString()!;
         var loaded = await GetJson($"/api/reports/saved/{id}");
         Assert.True(loaded.GetProperty("summary").GetProperty("isReadOnly").GetBoolean());
-        Assert.Equal("ID = 1", loaded.GetProperty("state").GetProperty("pipeline")[0]
-            .GetProperty("layer").GetProperty("filters")[0].GetProperty("expr").GetString());
+        Assert.Equal("ID = 1", loaded.GetProperty("state").GetProperty("tables")
+            .GetProperty("regional").GetProperty("composables")[1]
+            .GetProperty("filters")[0].GetProperty("expr").GetString());
 
         using var update = await _client.PutAsJsonAsync(
             $"/api/reports/saved/{id}", new { title = "Changed", state = new { v = 3 } });
@@ -222,7 +225,8 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
             {
               "title": {{JsonSerializer.Serialize(hostile)}},
               "state": {
-                "pipeline": [ { "shape": { "kind": "source" }, "layer": {} } ]
+                "activeTable": "base",
+                "tables": { "base": { "from": "definition", "composables": [] } }
               }
             }
             """);
@@ -291,8 +295,9 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
         Assert.Equal("Regional View", document.GetProperty("title").GetString());
         Assert.False(document.GetProperty("primary").GetBoolean());
         Assert.False(document.TryGetProperty("owner", out _));
-        Assert.Equal("ID = 1", document.GetProperty("state").GetProperty("pipeline")[0]
-            .GetProperty("layer").GetProperty("filters")[0].GetProperty("expr").GetString());
+        Assert.Equal("ID = 1", document.GetProperty("state").GetProperty("tables")
+            .GetProperty("regional").GetProperty("composables")[1]
+            .GetProperty("filters")[0].GetProperty("expr").GetString());
     }
 
     [Fact]
@@ -305,13 +310,16 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
                 title = "Broken Candidate",
                 state = new
                 {
-                    v = 3,
-                    pipeline = new object[]
+                    activeTable = "broken",
+                    tables = new
                     {
-                        new
+                        broken = new
                         {
-                            shape = new { kind = "source" },
-                            layer = new { filters = new[] { new { expr = "ID +" } } },
+                            @from = "definition",
+                            composables = new object[]
+                            {
+                                new { kind = "filter", filters = new[] { new { expr = "ID +" } } },
+                            },
                         },
                     },
                 },
@@ -323,7 +331,7 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
         Assert.Equal(
             "One or more report settings are invalid.",
             invalid.GetProperty("description").GetString());
-        Assert.Contains("pipeline", invalid.GetProperty("details").GetString());
+        Assert.Contains("tables.broken", invalid.GetProperty("details").GetString());
         Assert.False(invalid.TryGetProperty("errors", out _));
 
         var title = $"Uploaded {Guid.NewGuid():N}";
@@ -335,16 +343,16 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
                 primary = true,
                 state = new
                 {
-                    v = 3,
-                    pipeline = new object[]
+                    activeTable = "uploaded",
+                    tables = new
                     {
-                        new
+                        uploaded = new
                         {
-                            shape = new { kind = "source" },
-                            layer = new
+                            @from = "definition",
+                            composables = new object[]
                             {
-                                columns = new[] { "ID", "LABEL" },
-                                filters = new[] { new { expr = "ID = 2" } },
+                                new { kind = "select", columns = new[] { "ID", "LABEL" } },
+                                new { kind = "filter", filters = new[] { new { expr = "ID = 2" } } },
                             },
                         },
                     },
@@ -364,8 +372,9 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
         Assert.DoesNotContain("owner", stored.StateJson, StringComparison.OrdinalIgnoreCase);
         var loaded = await GetJson($"/api/reports/saved/{id}");
         Assert.False(loaded.GetProperty("summary").TryGetProperty("owner", out _));
-        Assert.Equal("ID = 2", loaded.GetProperty("state").GetProperty("pipeline")[0]
-            .GetProperty("layer").GetProperty("filters")[0].GetProperty("expr").GetString());
+        Assert.Equal("ID = 2", loaded.GetProperty("state").GetProperty("tables")
+            .GetProperty("uploaded").GetProperty("composables")[1]
+            .GetProperty("filters")[0].GetProperty("expr").GetString());
 
         using var downloadResponse = await _client.GetAsync(
             $"/api/reports/admin/saved/{id}/document");

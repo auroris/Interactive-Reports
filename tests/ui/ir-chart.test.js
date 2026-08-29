@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
+import { reportState } from "./report-state-fixture.js";
 
 const window = new Window({ url: "https://host.example/dashboard" });
 function Option(text = "", value = "", defaultSelected = false, selected = false) {
@@ -28,9 +29,10 @@ const json = value => new Response(JSON.stringify(value), {
     headers: { "Content-Type": "application/json" },
 });
 
-// The view mode derives from the posted pipeline's tail.
 const chartStageOf = state =>
-    (state.pipeline ?? []).find(s => s.shape?.kind === "chart")?.shape ?? null;
+    Object.values(state.tables ?? {})
+        .flatMap(table => table.composables ?? [])
+        .find(composable => composable.kind === "chart") ?? null;
 
 globalThis.fetch = async (url, options = {}) => {
     const request = { url: String(url), method: options.method ?? "GET", body: options.body ?? null };
@@ -40,7 +42,7 @@ globalThis.fetch = async (url, options = {}) => {
         return json({
             defaultState: {
                 page: { index: 1, size: 25 },
-                pipeline: [{ shape: { kind: "source" }, layer: {} }],
+                ...reportState(),
             },
             limits: { defaultPageSize: 25, maxPageSize: 100, maxRows: 1000, maxChartPoints: 1000 },
             columns: [
@@ -135,7 +137,7 @@ test("chart view renders behind the dialog with an accessible data table, and gr
     assert.deepEqual(
         chartStageOf(sent),
         { kind: "chart", type: "pie", label: "STATUS", fn: "count", sort: { by: "label", dir: "asc" } });
-    assert.equal(sent.pipeline.length, 2, "the chart rides as the pipeline's tail stage");
+    assert.equal(Object.keys(sent.tables).length, 2, "the chart is a derived named table");
 
     // The chart region replaces the grid: canvas described for AT + the data table.
     await until(() => root.querySelector(".ir-chart-canvas"), "the chart region to render");
@@ -157,13 +159,13 @@ test("chart view renders behind the dialog with an accessible data table, and gr
     assert.match(root.querySelector(".ir-pager").textContent, /points/);
 
     // Back to grid: the chart region empties and the table returns. The chart
-    // tail parks on the shelf instead of being discarded.
+    // table remains configured instead of being discarded.
     root.querySelector('.ir-viewbtn[data-mode="grid"]').click();
     await until(() => {
         const body = JSON.parse(requests.at(-1).body);
-        return !chartStageOf(body) && body.pipeline?.length === 1;
+        return body.activeTable === "base";
     }, "the grid query");
-    assert.ok(JSON.parse(requests.at(-1).body).shelf?.chart, "the chart tail parks on the shelf");
+    assert.ok(chartStageOf(JSON.parse(requests.at(-1).body)), "the chart table remains in the document");
     await until(() => root.querySelector(".ir-chartwrap").hidden, "the chart region to hide");
     assert.equal(root.querySelector(".ir-chartwrap").children.length, 0, "chart content should be disposed");
     assert.ok(root.querySelector(".ir-table tbody tr"), "grid rows should render again");

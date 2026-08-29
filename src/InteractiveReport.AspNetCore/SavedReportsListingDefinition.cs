@@ -63,33 +63,46 @@ internal static class SavedReportsListingDefinition
         };
         return new ReportState
         {
-            Pipeline =
-            [
-                new PipelineStage
+            ActiveTable = "listing",
+            Tables = new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["listing"] = new ReportTable
                 {
-                    Shape = new StageShape { Kind = "source" },
-                    Layer = new StageLayer
-                    {
-                        // ID stays hidden; the action keyColumn carries it in row data.
-                        Columns =
-                        [
-                            "REPORT_NAME", "TITLE", "OWNER", "SCOPE", "PRIMARY_STATUS", "MODIFIED",
-                            "ACTION_PUBLISH", "ACTION_PRIMARY", "ACTION_REASSIGN", "ACTION_STATE",
-                            "ACTION_DOWNLOAD", "ACTION_DELETE",
-                        ],
-                        Sorts = [new SortRule { Col = "REPORT_NAME" }, new SortRule { Col = "TITLE" }],
-                        Formats = new()
+                    From = "definition",
+                    Composables =
+                    [
+                        new TableComposable
                         {
-                            ["ACTION_PUBLISH"] = Action("toggleGlobal"),
-                            ["ACTION_PRIMARY"] = Action("togglePrimary"),
-                            ["ACTION_REASSIGN"] = Action("reassign"),
-                            ["ACTION_STATE"] = Action("openState"),
-                            ["ACTION_DOWNLOAD"] = Action("download"),
-                            ["ACTION_DELETE"] = Action("delete"),
+                            Kind = "select",
+                            // ID stays hidden; the action keyColumn carries it in row data.
+                            Columns =
+                            [
+                                "REPORT_NAME", "TITLE", "OWNER", "SCOPE", "PRIMARY_STATUS", "MODIFIED",
+                                "ACTION_PUBLISH", "ACTION_PRIMARY", "ACTION_REASSIGN", "ACTION_STATE",
+                                "ACTION_DOWNLOAD", "ACTION_DELETE",
+                            ],
                         },
-                    },
+                        new TableComposable
+                        {
+                            Kind = "sort",
+                            Sorts = [new SortRule { Col = "REPORT_NAME" }, new SortRule { Col = "TITLE" }],
+                        },
+                        new TableComposable
+                        {
+                            Kind = "formats",
+                            Formats = new()
+                            {
+                                ["ACTION_PUBLISH"] = Action("toggleGlobal"),
+                                ["ACTION_PRIMARY"] = Action("togglePrimary"),
+                                ["ACTION_REASSIGN"] = Action("reassign"),
+                                ["ACTION_STATE"] = Action("openState"),
+                                ["ACTION_DOWNLOAD"] = Action("download"),
+                                ["ACTION_DELETE"] = Action("delete"),
+                            },
+                        },
+                    ],
                 },
-            ],
+            },
         };
     }
 

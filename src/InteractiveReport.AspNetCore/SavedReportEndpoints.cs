@@ -658,8 +658,8 @@ internal static class SavedReportEndpoints
                 reportDefinition,
                 ctx,
                 ct);
-            await ctx.RequestServices.GetRequiredService<ReportExecutor>()
-                .ValidateDocument(reportDefinition, candidate.State, contextParams, ct);
+            candidate.State = await ctx.RequestServices.GetRequiredService<ReportExecutor>()
+                .RefreshSchemaCaches(reportDefinition, candidate.State, contextParams, ct);
             return null;
         }
         catch (ReportValidationException ex)

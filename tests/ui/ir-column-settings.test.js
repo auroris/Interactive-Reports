@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
+import { sourceLayer } from "../../src/client/report/state.js";
+import { reportState } from "./report-state-fixture.js";
 
 const window = new Window({ url: "https://host.example/dashboard" });
 function Option(text = "", value = "", defaultSelected = false, selected = false) {
@@ -52,7 +54,7 @@ globalThis.fetch = async (url, options = {}) => {
     if (String(url).endsWith("/schema")) {
         return json({
             defaultState: {
-                pipeline: [{ shape: { kind: "source" }, layer: { columns: ["ID", "NAME"] } }],
+                ...reportState({ columns: ["ID", "NAME"] }),
                 page: { index: 1, size: 25 },
             },
             limits: { defaultPageSize: 25, maxPageSize: 100 },
@@ -66,7 +68,7 @@ globalThis.fetch = async (url, options = {}) => {
     if (String(url).endsWith("/query")) {
         // Honor the posted visible-columns list so renders reflect visibility edits.
         const doc = options.body ? JSON.parse(options.body) : {};
-        const layer = doc.pipeline?.[0]?.layer ?? {};
+        const layer = sourceLayer(doc);
         const visible = layer.columns?.length
             ? ALL_COLUMNS.filter(c => layer.columns.includes(c.name))
             : ALL_COLUMNS.filter(c => ["ID", "NAME"].includes(c.name));
@@ -121,8 +123,7 @@ const applyDialog = async report => {
     await settle(() => !report.shadowRoot.querySelector(".ir-dialog"));
     assert.equal(!report.shadowRoot.querySelector(".ir-dialog"), true, "the dialog should close on success");
     const doc = JSON.parse(requests.filter(r => r.url.endsWith("/query")).at(-1).body);
-    // Grid presentation lives on the posted pipeline's source layer.
-    return doc.pipeline?.[0]?.layer ?? {};
+    return sourceLayer(doc);
 };
 
 test("column settings write doc.formats and the grid renders mask, alignment, and style", async () => {
@@ -301,7 +302,7 @@ test("column settings reject component-reserved CSS classes without leaking stag
     assert.match(dialog.querySelector(".ir-dialog-error").textContent, /invalid or reserved/i);
     assert.equal(!!report.shadowRoot.querySelector(".ir-dialog"), true,
         "invalid class input keeps the dialog open");
-    assert.equal(report.doc.pipeline[0].layer.formats?.ID, undefined,
+    assert.equal(sourceLayer(report.doc).formats?.ID, undefined,
         "an earlier staged column's edit must not survive a later column's failure");
 
     report.remove();

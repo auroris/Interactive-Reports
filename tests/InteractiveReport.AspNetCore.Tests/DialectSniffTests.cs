@@ -1,5 +1,6 @@
 using System.Data;
 using System.Data.Common;
+using System.Diagnostics.CodeAnalysis;
 using InteractiveReport.Core.Model;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
@@ -102,6 +103,7 @@ public sealed class DialectSniffTests
 
     internal sealed class FakeConnection : DbConnection
     {
+        [AllowNull]
         public override string ConnectionString { get; set; } = "";
         public override string Database => "";
         public override string DataSource => "";

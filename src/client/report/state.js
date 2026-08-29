@@ -1,11 +1,7 @@
-// Pure report-state transformations over the pipeline document. Keeping these
-// outside the custom element makes shape guarantees, tail switching, and
-// dependency cleanup independently testable.
-//
-// A document is: { search?, page, pipeline: [stage...], shelf }.
-// pipeline[0] is always the source stage; the tail (later stages) IS the view —
-// [] grid, [group] groupBy, [pivot] pivot, [chart] chart. The shelf holds
-// the parked tails of inactive modes so the toolbar can switch back losslessly.
+// Pure report-state transformations over the composable table document. A
+// document owns an unordered map of named tables. Each table explicitly names
+// its input with `from` and folds its ordered composables over that input. Table
+// names are opaque; the only reserved input is `definition`.
 
 import { resolveLocale, translate } from "../core/localization.js";
 
@@ -18,14 +14,16 @@ export function normalizeReportState(raw, defaultPageSize = 50, defaults = null)
     // the server validates on query, so the client neither checks nor carries it.
     delete state.schema;
     delete state.v;
-    if (!Array.isArray(state.pipeline) || state.pipeline.length === 0)
-        state.pipeline = [{}];
-    const head = state.pipeline[0];
-    head.shape = { ...(head.shape ?? {}), kind: "source" };
-    head.layer ??= {};
-    head.layer.filters ??= [];
-    head.layer.sorts ??= [];
-    if (!state.shelf || typeof state.shelf !== "object" || Array.isArray(state.shelf)) state.shelf = {};
+    if (!state.tables || typeof state.tables !== "object" || Array.isArray(state.tables))
+        state.tables = {};
+    if (Object.keys(state.tables).length === 0) {
+        state.tables.base = { from: "definition", composables: [] };
+        state.activeTable = "base";
+    } else if (!tableEntry(state, state.activeTable) && Object.keys(state.tables).length === 1) {
+        state.activeTable = Object.keys(state.tables)[0];
+    }
+    for (const table of Object.values(state.tables))
+        if (table && !Array.isArray(table.composables)) table.composables = [];
     state.page = { index: 1, size: state.page?.size ?? defaultPageSize };
     return state;
 }
@@ -49,16 +47,264 @@ export function serializeReportState(source) {
     return result;
 }
 
-// --- pipeline access ---------------------------------------------------------
+/// Null cached schemas for changed table definitions and every table delegating
+/// from them. The server replaces null caches on the next document submission.
+export function invalidateChangedSchemas(before, after) {
+    const next = after?.tables ?? {};
+    const changed = new Set();
+    for (const [id, table] of Object.entries(next)) {
+        const old = tableEntry(before, id)?.table;
+        const oldDefinition = old
+            ? JSON.stringify({ from: old.from, composables: old.composables ?? [] })
+            : null;
+        const nextDefinition = JSON.stringify({ from: table?.from, composables: table?.composables ?? [] });
+        if (oldDefinition !== nextDefinition) changed.add(id.toLowerCase());
+    }
+
+    // Search can change a pivot's data-dependent columns. Paging and switching the
+    // active table cannot, so those operations retain every cache.
+    if ((before?.search ?? null) !== (after?.search ?? null))
+        for (const id of Object.keys(next)) changed.add(id.toLowerCase());
+
+    let grew = true;
+    while (grew) {
+        grew = false;
+        for (const [id, table] of Object.entries(next)) {
+            const key = id.toLowerCase();
+            if (!changed.has(key) && changed.has(String(table?.from ?? "").toLowerCase())) {
+                changed.add(key);
+                grew = true;
+            }
+        }
+    }
+
+    for (const [id, table] of Object.entries(next))
+        if (changed.has(id.toLowerCase())) table.schema = null;
+    return after;
+}
+
+// --- table/composable access -------------------------------------------------
+
+const shapeKinds = new Set(["group", "pivot", "chart"]);
+const layerFields = {
+    columns: ["select", "columns"],
+    labels: ["labels", "labels"],
+    formats: ["formats", "formats"],
+    computed: ["compute", "computed"],
+    filters: ["filter", "filters"],
+    sorts: ["sort", "sorts"],
+    highlights: ["highlight", "highlights"],
+    breaks: ["break", "breaks"],
+    aggregates: ["aggregate", "aggregates"],
+};
+const layerKindSet = new Set(Object.values(layerFields).map(([kind]) => kind));
+const inheritedKindSet = new Set(["compute", "filter", "labels", "formats"]);
+
+export const tableEntry = (doc, requested) => {
+    if (!requested || !doc?.tables) return null;
+    const wanted = String(requested).toLowerCase();
+    const matches = Object.entries(doc.tables).filter(([id]) => id.toLowerCase() === wanted);
+    return matches.length === 1 ? { id: matches[0][0], table: matches[0][1] } : null;
+};
+
+export const activeChain = (doc, requested = doc?.activeTable) => {
+    const result = [];
+    const seen = new Set();
+    let entry = tableEntry(doc, requested);
+    while (entry) {
+        const key = entry.id.toLowerCase();
+        if (seen.has(key)) return [];
+        seen.add(key);
+        result.unshift(entry);
+        if (String(entry.table?.from ?? "").toLowerCase() === "definition") break;
+        entry = tableEntry(doc, entry.table?.from);
+    }
+    return result.length && String(result[0].table?.from ?? "").toLowerCase() === "definition"
+        ? result
+        : [];
+};
+
+/// Every composable along the selected table's chain, retaining its exact owner and
+/// array position. `participates` mirrors the server fold: parent tables contribute
+/// relational rules and metadata, while their terminal presentation/control state
+/// remains local to those tables. Consumers use these locations instead of
+/// flattening repeated nodes into a synthetic layer. `authorable` is deliberately
+/// narrower than `owned`: the packaged editors can safely write only the last node
+/// of each kind in the active table's terminal segment. Earlier/repeated/foreign
+/// nodes stay preserved and read-only.
+export const locatedComposables = (doc, requested = doc?.activeTable) => {
+    const chain = activeChain(doc, requested);
+    if (!chain.length) return [];
+    const activeId = chain.at(-1).id.toLowerCase();
+    const rootId = chain[0].id.toLowerCase();
+    let afterShape = false;
+    const result = [];
+
+    for (const entry of chain) {
+        const composables = entry.table?.composables ?? [];
+        const owned = entry.id.toLowerCase() === activeId;
+        let lastShape = -1;
+        if (owned) {
+            for (let index = 0; index < composables.length; index++)
+                if (shapeKinds.has(composables[index]?.kind)) lastShape = index;
+        }
+
+        for (let index = 0; index < composables.length; index++) {
+            const composable = composables[index];
+            const shape = shapeKinds.has(composable?.kind);
+            const participates = shape
+                || (layerKindSet.has(composable?.kind)
+                    && (owned || inheritedKindSet.has(composable.kind)));
+            const terminal = owned && !shape && index > lastShape;
+            const laterSameKind = terminal && composables
+                .slice(index + 1)
+                .some(item => item?.kind === composable?.kind);
+            result.push({
+                tableId: entry.id,
+                table: entry.table,
+                composable,
+                composableIndex: index,
+                owned,
+                inherited: !owned,
+                participates,
+                afterShape,
+                source: entry.id.toLowerCase() === rootId && !afterShape,
+                terminal,
+                authorable: terminal && layerKindSet.has(composable?.kind) && !laterSameKind,
+            });
+            if (shape) afterShape = true;
+        }
+    }
+    return result;
+};
+
+const composedMap = (doc, kind, field) => {
+    const result = { input: undefined, output: undefined };
+    let afterShape = false;
+    for (const entry of activeChain(doc)) {
+        for (const composable of entry.table?.composables ?? []) {
+            if (shapeKinds.has(composable?.kind)) {
+                afterShape = true;
+                continue;
+            }
+            if (composable?.kind !== kind) continue;
+            const values = composable[field];
+            if (!values || typeof values !== "object" || Array.isArray(values)) continue;
+            const side = afterShape ? "output" : "input";
+            result[side] ??= {};
+            if (Object.keys(values).length === 0) {
+                result[side] = {};
+                continue;
+            }
+            for (const [name, value] of Object.entries(values)) {
+                if (!String(name).trim() || value === null || value === undefined) continue;
+                if (kind === "labels") {
+                    if (typeof value !== "string" || !value.trim()) continue;
+                    setMapEntry(result[side], name, value.trim());
+                    continue;
+                }
+                if (typeof value !== "object" || Array.isArray(value)) continue;
+                setMapEntry(result[side], name, value);
+            }
+        }
+    }
+    return result;
+};
+
+/// Effective presentation metadata over the complete selected ancestry, split at
+/// the optional shape boundary. Later entries on either side win case-insensitively
+/// and an explicit empty map clears that side, matching the server's fold.
+export const composedLabels = doc => composedMap(doc, "labels", "labels");
+export const composedFormats = doc => composedMap(doc, "formats", "formats");
+
+const rangeNodes = (table, start, end, kind) => {
+    const composables = table?.composables ?? [];
+    return composables.slice(start, end).filter(item => item?.kind === kind);
+};
+
+const layerAdapter = (table, start = 0, end = table?.composables?.length ?? 0) => {
+    const layer = {};
+    for (const [property, [kind, field]] of Object.entries(layerFields)) {
+        Object.defineProperty(layer, property, {
+            enumerable: true,
+            get() {
+                const nodes = rangeNodes(table, start, end, kind);
+                if (!nodes.length) return undefined;
+                // An editor always owns one exact composable. Earlier repeated
+                // nodes may have been authored by another UI and remain part of
+                // the composition, but are never flattened into a synthetic
+                // value that a later assignment could accidentally write back.
+                return nodes.at(-1)[field];
+            },
+            set(value) {
+                let node = rangeNodes(table, start, end, kind).at(-1);
+                if (!node) {
+                    node = { kind };
+                    table.composables ??= [];
+                    table.composables.splice(end, 0, node);
+                    end++;
+                }
+                node[field] = value;
+            },
+        });
+    }
+    return layer;
+};
+
+/// The active table's terminal ordinary-composable segment. If the active table
+/// owns a shape, terminal operations begin immediately after its last shape. If
+/// it inherits a shape from `from`, every composable it owns is terminal. Reads
+/// and writes target the last exact node of each kind within that segment.
+export function activeTableLayer(doc) {
+    const entry = tableEntry(doc, doc?.activeTable);
+    if (!entry) return {};
+    const composables = entry.table?.composables ?? [];
+    let lastShape = -1;
+    for (let index = 0; index < composables.length; index++)
+        if (shapeKinds.has(composables[index]?.kind)) lastShape = index;
+    return layerAdapter(entry.table, lastShape + 1, composables.length);
+}
+
+/// Server-populated, non-authoritative schema cache for the active table. This
+/// is the client column universe; query validation still happens on the server.
+export function activeTableSchema(doc) {
+    const schema = tableEntry(doc, doc?.activeTable)?.table?.schema;
+    return Array.isArray(schema) ? schema : null;
+}
+
+const stageRecord = (entry, index) => {
+    const shape = entry.table.composables[index];
+    return {
+        shape,
+        layer: layerAdapter(entry.table, index + 1, entry.table.composables.length),
+        _tableId: entry.id,
+        _table: entry.table,
+        _shapeIndex: index,
+    };
+};
+
+const stagesFor = (doc, tableId = doc?.activeTable) => activeChain(doc, tableId).flatMap(entry =>
+    (entry.table?.composables ?? []).flatMap((item, index) =>
+        shapeKinds.has(item?.kind) ? [stageRecord(entry, index)] : []));
+
+const sourceEntry = doc => {
+    const active = activeChain(doc)[0];
+    if (active) return active;
+    const roots = Object.entries(doc?.tables ?? {})
+        .filter(([, table]) => String(table?.from ?? "").toLowerCase() === "definition")
+        .map(([id, table]) => ({ id, table }));
+    return roots.length === 1 ? roots[0] : null;
+};
 
 export function sourceLayer(doc) {
-    const head = doc.pipeline?.[0];
-    if (!head) return {};
-    return head.layer ??= {};
+    const entry = sourceEntry(doc);
+    if (!entry) return {};
+    const firstShape = (entry.table.composables ?? []).findIndex(item => shapeKinds.has(item?.kind));
+    return layerAdapter(entry.table, 0, firstShape < 0 ? entry.table.composables.length : firstShape);
 }
 
 export function stageOf(doc, kind) {
-    return (doc?.pipeline ?? []).find(s => (s.shape?.kind ?? "source") === kind) ?? null;
+    return stagesFor(doc).find(stage => stage.shape?.kind === kind) ?? null;
 }
 
 export function stageLayer(stage) {
@@ -67,46 +313,121 @@ export function stageLayer(stage) {
 }
 
 export function tailOf(doc) {
-    return (doc?.pipeline ?? []).slice(1);
+    return stagesFor(doc);
 }
 
-/// The view mode is derived from the tail, never stored.
+/// The built-in UI mode is a predicate over the active composition. Documents
+/// with several shape composables are preserved without assigning a lossy toolbar
+/// mode; the server remains responsible for deciding whether they are executable.
 export function modeOf(doc) {
-    const kinds = tailOf(doc).map(s => s.shape?.kind);
-    if (kinds.includes("chart")) return "chart";
-    if (kinds.includes("pivot")) return "pivot";
-    if (kinds.includes("group")) return "groupBy";
-    return "grid";
+    const kinds = stagesFor(doc).map(stage => stage.shape?.kind);
+    if (kinds.length === 0) return "grid";
+    if (kinds.length !== 1) return "custom";
+    return kinds[0] === "group" ? "groupBy"
+        : kinds[0] === "pivot" ? "pivot"
+            : kinds[0] === "chart" ? "chart"
+                : "custom";
 }
 
-/// The tail configured for a mode: the live pipeline tail when that mode is
-/// active, else the shelved copy. Null when the mode was never configured.
+const isUiCandidate = (doc, id, mode) => {
+    if (modeOf({ ...doc, activeTable: id }) !== mode) return false;
+    const entry = tableEntry(doc, id);
+    if (!entry) return false;
+    const own = entry.table.composables ?? [];
+    if (mode === "grid")
+        return String(entry.table.from ?? "").toLowerCase() === "definition"
+            && own.every(item => layerKindSet.has(item?.kind));
+    const expected = mode === "groupBy" ? "group" : mode;
+    return own[0]?.kind === expected
+        && own.slice(1).every(item => layerKindSet.has(item?.kind));
+};
+
+const candidatesForMode = (doc, mode) => Object.keys(doc?.tables ?? {})
+    .filter(id => isUiCandidate(doc, id, mode));
+
+const uniqueCandidate = (doc, mode) => {
+    if (isUiCandidate(doc, doc?.activeTable, mode)) return tableEntry(doc, doc.activeTable);
+    const ids = candidatesForMode(doc, mode);
+    return ids.length === 1 ? tableEntry(doc, ids[0]) : null;
+};
+
+const plainLayer = layer => {
+    const result = {};
+    for (const property of Object.keys(layerFields)) {
+        const value = layer?.[property];
+        if (value !== undefined) result[property] = structuredClone(value);
+    }
+    return result;
+};
+
+const plainStage = stage => ({
+    shape: structuredClone(stage.shape),
+    layer: plainLayer(stage.layer),
+    // Working-copy coordinates let a shape editor replace only the exact shape
+    // node it opened. serializeReportState strips them before submission.
+    _tableId: stage._tableId,
+    _shapeIndex: stage._shapeIndex,
+});
+
+/// Return the uniquely identifiable table configured for a built-in mode in
+/// the legacy stage-shaped editor form. Map order is never used to break ties.
 export function configuredTail(doc, mode) {
-    if (modeOf(doc) === mode) {
-        const tail = tailOf(doc);
-        return tail.length ? tail : null;
-    }
-    const shelved = doc?.shelf?.[mode];
-    return Array.isArray(shelved) && shelved.length ? shelved : null;
+    const entry = uniqueCandidate(doc, mode);
+    if (!entry || mode === "grid") return null;
+    const stages = stagesFor(doc, entry.id);
+    return stages.length === 1 ? stages.map(plainStage) : null;
 }
 
-/// Switch the pipeline's tail. The current tail is parked on the shelf under its
-/// derived mode; the new tail comes from the argument (a dialog authored it) or
-/// from the shelf. Shelf entries hold complete stages — shape AND layer — so
-/// switching away and back loses nothing.
-export function activateTail(doc, mode, tail = null) {
-    const current = modeOf(doc);
-    if (current !== "grid" && current !== mode)
-        (doc.shelf ??= {})[current] = tailOf(doc);
+const composablesFromLayer = layer => Object.entries(layerFields).flatMap(([property, [kind, field]]) => {
+    const value = layer?.[property];
+    return value === undefined ? [] : [{ kind, [field]: structuredClone(value) }];
+});
 
-    doc.pipeline = [doc.pipeline[0]];
-    if (mode !== "grid") {
-        const stages = tail ?? doc.shelf?.[mode];
-        if (Array.isArray(stages) && stages.length) {
-            doc.pipeline.push(...structuredClone(stages));
-            if (doc.shelf) delete doc.shelf[mode];
-        }
+const composablesFromTail = tail => (tail ?? []).flatMap(stage => [
+    structuredClone(stage.shape ?? {}),
+    ...composablesFromLayer(stage.layer ?? {}),
+]);
+
+const nextTableId = (doc, prefix) => {
+    const used = new Set(Object.keys(doc.tables ?? {}).map(id => id.toLowerCase()));
+    if (!used.has(prefix.toLowerCase())) return prefix;
+    let suffix = 2;
+    while (used.has(`${prefix}${suffix}`.toLowerCase())) suffix++;
+    return `${prefix}${suffix}`;
+};
+
+/// Activate or author a built-in UI table. Existing tables stay in the map;
+/// switching views changes only activeTable. Editing an existing shape replaces
+/// that exact composable and preserves every ordinary or unfamiliar sibling.
+export function activateTail(doc, mode, tail = null) {
+    doc.tables ??= {};
+    if (mode === "grid") {
+        const grid = uniqueCandidate(doc, "grid") ?? sourceEntry(doc);
+        if (grid) doc.activeTable = grid.id;
+        return doc;
     }
+
+    let entry = uniqueCandidate(doc, mode);
+    if (tail) {
+        const source = uniqueCandidate(doc, "grid") ?? sourceEntry(doc);
+        if (!source) return doc;
+        if (!entry) {
+            const id = nextTableId(doc, mode);
+            doc.tables[id] = { from: source.id, composables: [] };
+            entry = { id, table: doc.tables[id] };
+            entry.table.composables = composablesFromTail(tail);
+        } else {
+            const edited = tail.length === 1 ? tail[0] : null;
+            const index = Number.isInteger(edited?._shapeIndex)
+                && sameColumn(edited?._tableId, entry.id)
+                ? edited._shapeIndex
+                : (entry.table.composables ?? []).findIndex(item => item?.kind === edited?.shape?.kind);
+            if (index >= 0 && shapeKinds.has(entry.table.composables[index]?.kind))
+                entry.table.composables[index] = structuredClone(edited.shape);
+        }
+        entry.table.from = entry.table.from ?? source.id;
+    }
+    if (entry) doc.activeTable = entry.id;
     return doc;
 }
 
@@ -204,12 +525,13 @@ const tailReferencesColumn = (stages, column) => stages.some(stage => {
         || sameColumn(shape.value, column);
 });
 
-/// Delete one SOURCE computed column and everything that depends on it. Within
-/// the source layer, references are stripped precisely (today's behavior); any
-/// pipeline tail or shelved tail that consumes the column — as a dim, a metric
-/// source, or a chart column — is deleted whole (T0 coarse invalidation).
-/// Returns the modes whose configurations were dropped so callers can say so.
+/// Delete one source-table computed column and everything that depends on it.
+/// Within the source table, references are stripped precisely. A descendant
+/// table whose shape consumes the column is removed with its descendants (T0
+/// coarse invalidation). Unrelated roots in an externally-authored document are
+/// untouched. Returns the built-in modes that were dropped so callers can say so.
 export function removeSourceComputedColumn(state, column) {
+    const source = sourceEntry(state);
     const layer = sourceLayer(state);
     const withoutName = values => Array.isArray(values)
         ? values.filter(value => !sameColumn(value, column))
@@ -241,18 +563,46 @@ export function removeSourceComputedColumn(state, column) {
         }
     }
 
-    const dropped = [];
-    const tail = tailOf(state);
-    if (tail.length && tailReferencesColumn(tail, column)) {
-        dropped.push(modeOf(state));
-        state.pipeline = [state.pipeline[0]];
-    }
-    for (const [mode, stages] of Object.entries(state.shelf ?? {})) {
-        if (Array.isArray(stages) && tailReferencesColumn(stages, column)) {
-            dropped.push(mode);
-            delete state.shelf[mode];
+    if (!source) return [];
+
+    const descendants = new Set([source.id.toLowerCase()]);
+    let changed = true;
+    while (changed) {
+        changed = false;
+        for (const [id, table] of Object.entries(state.tables ?? {})) {
+            const key = id.toLowerCase();
+            if (descendants.has(key)) continue;
+            if (descendants.has(String(table?.from ?? "").toLowerCase())) {
+                descendants.add(key);
+                changed = true;
+            }
         }
     }
+
+    const remove = new Set();
+    for (const [id] of Object.entries(state.tables ?? {})) {
+        if (id.toLowerCase() === source.id.toLowerCase() || !descendants.has(id.toLowerCase())) continue;
+        if (tailReferencesColumn(stagesFor(state, id), column)) remove.add(id.toLowerCase());
+    }
+    changed = true;
+    while (changed) {
+        changed = false;
+        for (const [id, table] of Object.entries(state.tables ?? {})) {
+            if (!remove.has(id.toLowerCase()) && remove.has(String(table?.from ?? "").toLowerCase())) {
+                remove.add(id.toLowerCase());
+                changed = true;
+            }
+        }
+    }
+
+    const dropped = [];
+    for (const [id] of Object.entries(state.tables ?? {})) {
+        if (!remove.has(id.toLowerCase())) continue;
+        const mode = modeOf({ ...state, activeTable: id });
+        if (mode !== "custom" && mode !== "grid" && !dropped.includes(mode)) dropped.push(mode);
+        delete state.tables[id];
+    }
+    if (remove.has(String(state.activeTable ?? "").toLowerCase())) state.activeTable = source.id;
     return dropped;
 }
 

@@ -1,232 +1,122 @@
-// The stage context: one object answering "what table is the user looking at,
-// which columns does it have, and which layer does each menu edit". Menus,
-// dialogs, chips, and renderers consume this instead of hard-coding the source
-// layer, so the same Columns/Compute/Sort/Highlight/Settings surfaces operate
-// on whichever table the pipeline's tail produces.
-//
-// Layer routing per mode:
-//   grid    → everything edits the source layer.
-//   groupBy → every table operation edits the group stage's layer.
-//   pivot   → every table operation edits the pivot stage's layer after the
-//             runtime pivot schema has been materialized.
-//   chart   → no table; only source-level features apply.
+// Generic terminal-table context. A table's shape is one composable in its
+// ancestry; it does not choose a separate editor implementation. Every ordinary
+// editor works against the active table's own terminal segment and uses that
+// table's server-populated schema cache as its column universe.
 
 import {
     columnFilterable,
-    columnOf,
     columnSortable,
     featureEnabled,
-    labelOf,
-    pickable,
-    sortableColumns,
-    typeOf,
 } from "./schema.js";
-import { translate } from "../core/localization.js";
-import { fnLabel } from "./render/format.js";
 import {
+    activeTableLayer,
+    activeTableSchema,
+    composedLabels,
     lookupValue,
     modeOf,
-    pivotRowDims,
     sameColumn,
-    sourceLayer,
-    stageLayer,
     stageOf,
+    tableEntry,
 } from "./state.js";
 
 export const stageLabelOf = (layer, name) => lookupValue(layer?.labels, name);
 
-const countColumn = (w, layer) => ({
-    name: "__count",
-    label: stageLabelOf(layer, "__count") ?? fnLabel(w, "count"),
-    type: "number",
-    computed: false,
-    metric: true,
-});
+const copyColumns = columns => (columns ?? []).map(column => ({ ...column }));
 
-/// The group stage's output columns, statically derived from its shape: dims
-/// (source labels unless the layer overrides), __count, metrics by stable id,
-/// and — unless excluded — the layer's computed columns.
-export function groupStageColumns(w, { includeComputed = true } = {}) {
-    const stage = stageOf(w.doc, "group");
-    if (!stage) return [];
-    const shape = stage.shape ?? {};
-    const layer = stage.layer ?? {};
-    const columns = [];
+const replaceLabel = (label, original, replacement) => {
+    if (!original || !replacement) return label;
+    const at = String(label ?? "").toLowerCase().indexOf(String(original).toLowerCase());
+    return at < 0
+        ? label
+        : `${label.slice(0, at)}${replacement}${label.slice(at + String(original).length)}`;
+};
 
-    for (const dim of shape.by ?? []) {
-        const base = columnOf(w, dim);
-        columns.push({
-            name: base?.name ?? dim,
-            label: stageLabelOf(layer, dim) ?? base?.label ?? dim,
-            type: base?.type ?? "other",
-            computed: !!base?.computed,
-            dim: true,
-        });
-    }
-    columns.push(countColumn(w, layer));
-    for (const value of shape.values ?? []) {
-        const minMax = value.fn === "min" || value.fn === "max";
-        columns.push({
-            name: value.id,
-            label: stageLabelOf(layer, value.id)
-                ?? translate(w, "aggregate.ofColumn", {
-                    function: fnLabel(w, value.fn),
-                    column: labelOf(w, value.col),
-                }),
-            type: minMax ? typeOf(w, value.col) : "number",
-            computed: false,
-            metric: true,
-            formatSource: value.fn === "count" || value.fn === "countDistinct" ? null : value.col,
-        });
-    }
-    if (includeComputed) {
-        for (const rule of layer.computed ?? []) {
-            columns.push({
-                name: rule.id,
-                label: rule.label ?? rule.id,
-                type: resultColumnType(w, rule.id) ?? "number",
-                computed: true,
-            });
-        }
-    }
-    return columns;
-}
-
-/// A stage computed column's type is only known after execution; read it off the
-/// last response when available.
-function resultColumnType(w, name) {
-    const requested = String(name).toLowerCase();
-    return w.lastResult?.columns?.find(c => c.name.toLowerCase() === requested)?.type ?? null;
-}
-
-/// The pivot output's columns as last reported: row dims plus stable cell
-/// columns. Data-dependent by nature, so the last response is the universe.
-function pivotColumns(w) {
-    const pivot = stageOf(w.doc, "pivot");
-    const layer = pivot?.layer ?? {};
-    return (w.lastResult?.columns ?? []).map(c => ({
-        name: c.name,
-        label: stageLabelOf(layer, c.name) ?? c.label,
-        type: c.type,
-        computed: !!c.computed,
-        formatSource: c.formatSource ?? null,
-    }));
-}
-
-/// The pivot's row dimensions with display labels (sortable universe).
-function pivotRowColumns(w) {
-    const pivot = stageOf(w.doc, "pivot");
-    const layer = pivot?.layer ?? {};
-    return pivotRowDims(w.doc).map(dim => {
-        const base = columnOf(w, dim);
-        return {
-            name: base?.name ?? dim,
-            label: stageLabelOf(layer, dim) ?? base?.label ?? dim,
-            type: base?.type ?? "other",
-            computed: !!base?.computed,
-            dim: true,
-        };
+/// Complete terminal schema, independent of the current projection. Newer
+/// servers return it in the active table's cache. The response and definition
+/// schema remain compatibility fallbacks while a new document makes its first
+/// round trip or when connected to an older server.
+export function terminalTableColumns(w) {
+    const columns = activeTableSchema(w.doc)
+        ?? w.lastResult?.availableColumns
+        ?? w.lastResult?.columns
+        ?? w.schema?.columns
+        ?? [];
+    const labels = composedLabels(w.doc);
+    return copyColumns(columns).map(column => {
+        const direct = stageLabelOf({ labels: labels.output }, column.name)
+            ?? stageLabelOf({ labels: labels.input }, column.name);
+        if (direct) return { ...column, label: direct };
+        const inherited = stageLabelOf({ labels: labels.input }, column.formatSource);
+        if (!inherited) return column;
+        const original = w.schema?.columns?.find(candidate =>
+            sameColumn(candidate.name, column.formatSource))?.label ?? column.formatSource;
+        return { ...column, label: replaceLabel(column.label, original, inherited) };
     });
 }
 
+/// Schema immediately before a UI-authored shape. Built-in shaped tables put
+/// the shape first, so their `from` table's cache is exact. For a foreign table
+/// with ordinary nodes before the shape, the parent cache is the closest safe
+/// column universe; those intermediate nodes remain preserved but are not
+/// rewritten by the built-in shape editor.
+export function shapeInputColumns(w, stage = null) {
+    const owner = tableEntry(w.doc, stage?._tableId);
+    if (owner) {
+        const parent = tableEntry(w.doc, owner.table?.from);
+        if (Array.isArray(parent?.table?.schema)) return copyColumns(parent.table.schema);
+        if (String(owner.table?.from ?? "").toLowerCase() === "definition")
+            return copyColumns(w.schema?.columns);
+    }
+
+    const roots = Object.entries(w.doc?.tables ?? {})
+        .filter(([, table]) => String(table?.from ?? "").toLowerCase() === "definition");
+    if (roots.length === 1 && Array.isArray(roots[0][1]?.schema))
+        return copyColumns(roots[0][1].schema);
+    return copyColumns(w.schema?.columns);
+}
+
+// Kept as a compatibility export for code that used the old stage helper. Its
+// answer is now the same generic terminal schema, including computed columns.
+export function groupStageColumns(w, { includeComputed = true } = {}) {
+    const columns = terminalTableColumns(w);
+    return includeComputed ? columns : columns.filter(column => !column.computed);
+}
+
+const shapeDimensions = doc => {
+    const group = stageOf(doc, "group")?.shape;
+    if (group) return [...(group.by ?? [])];
+    const pivot = stageOf(doc, "pivot")?.shape;
+    return pivot ? [...(pivot.rows ?? [])] : [];
+};
+
 export function stageContext(w) {
-    const mode = modeOf(w.doc);
-
-    if (mode === "groupBy") {
-        const columns = groupStageColumns(w);
-        const groupLayer = d => stageLayer(stageOf(d, "group"));
-        return {
-            mode,
-            columns,
-            dims: (stageOf(w.doc, "group")?.shape?.by ?? []).slice(),
-            columnsLayer: groupLayer,
-            labelsLayer: groupLayer,
-            formatsLayer: groupLayer,
-            computeLayer: groupLayer,
-            filterLayer: groupLayer,
-            sortLayer: groupLayer,
-            highlightLayer: groupLayer,
-            computeTokens: groupStageColumns(w, { includeComputed: false }),
-            // Dims are pass-through base columns, so definition sort restrictions
-            // reach them; stage synthetics (__count, metrics, computed) never
-            // match an override and stay sortable.
-            sortColumns: columns.filter(c => columnSortable(w, c.name)),
-            filterColumns: columns,
-            caps: caps(w, {
-                columns: true, columnSettings: true, rename: true, compute: true, filter: true,
-                highlight: true, sort: true, visibility: true, displayAs: false,
-                break: true, aggregate: true, pagination: true,
-            }),
-        };
-    }
-
-    if (mode === "pivot") {
-        const pivotLayer = d => stageLayer(stageOf(d, "pivot"));
-        const columns = pivotColumns(w);
-        return {
-            mode,
-            columns,
-            dims: pivotRowDims(w.doc),
-            columnsLayer: pivotLayer,
-            labelsLayer: pivotLayer,
-            formatsLayer: pivotLayer,
-            computeLayer: pivotLayer,
-            filterLayer: pivotLayer,
-            sortLayer: pivotLayer,
-            highlightLayer: pivotLayer,
-            computeTokens: columns.filter(c => !c.computed),
-            sortColumns: columns.filter(c => columnSortable(w, c.name)),
-            filterColumns: columns,
-            caps: caps(w, {
-                columns: true, columnSettings: true, rename: true, compute: true, filter: true,
-                highlight: true, sort: true, visibility: true, displayAs: false,
-                break: false, aggregate: false, pagination: true,
-            }),
-        };
-    }
-
-    if (mode === "chart") {
-        return {
-            mode,
-            columns: [],
-            caps: caps(w, {
-                columns: false, columnSettings: false, rename: false, compute: false, filter: false,
-                highlight: false, sort: false, visibility: false, displayAs: false,
-                break: false, aggregate: false, pagination: false,
-            }),
-        };
-    }
-
-    const source = d => sourceLayer(d);
+    const columns = terminalTableColumns(w);
+    const layerOf = d => activeTableLayer(d);
     return {
-        mode: "grid",
-        columns: pickable(w),
-        columnsLayer: source,
-        labelsLayer: source,
-        formatsLayer: source,
-        computeLayer: source,
-        filterLayer: source,
-        sortLayer: source,
-        highlightLayer: source,
-        computeTokens: pickable(w).filter(c => !c.computed),
-        sortColumns: sortableColumns(w),
-        filterColumns: pickable(w).filter(c => columnFilterable(w, c.name)),
-        caps: caps(w, {
-            columns: true, columnSettings: true, rename: true, compute: true, filter: true,
-            highlight: true, sort: true, visibility: true, displayAs: true,
-            break: true, aggregate: true, pagination: true,
-        }),
+        mode: modeOf(w.doc),
+        columns,
+        dims: shapeDimensions(w.doc),
+        layer: layerOf,
+        columnsLayer: layerOf,
+        labelsLayer: layerOf,
+        formatsLayer: layerOf,
+        computeLayer: layerOf,
+        filterLayer: layerOf,
+        sortLayer: layerOf,
+        highlightLayer: layerOf,
+        computeTokens: columns.filter(column => !column.computed),
+        sortColumns: columns.filter(column => columnSortable(w, column.name)),
+        filterColumns: columns.filter(column => columnFilterable(w, column.name)),
+        caps: caps(w),
     };
 }
 
 /// The terminal table's currently visible, still-valid column names. An explicit
 /// list can outlive a removed column or record a different casing in a saved
-/// report, so every caller gets the same self-healing view — stale names dropped,
-/// survivors resolved to the stage universe's canonical casing — before it edits
-/// visibility.
+/// report, so callers receive canonical surviving names before editing it.
 export function visibleStageColumnNames(ctx, w) {
     const explicit = ctx.columnsLayer?.(w.doc)?.columns;
-    if (explicit?.length) {
+    if (Array.isArray(explicit)) {
         return explicit
             .map(name => ctx.columns.find(column => sameColumn(column.name, name))?.name)
             .filter(name => name !== undefined);
@@ -234,23 +124,22 @@ export function visibleStageColumnNames(ctx, w) {
     return ctx.columns.map(column => column.name);
 }
 
-/// Mode capabilities intersected with the definition's feature whitelist. A menu
-/// entry exists when the feature is whitelisted; it is enabled when the current
-/// stage supports it.
-function caps(w, byMode) {
-    const gate = (feature, supported) => featureEnabled(w, feature) && supported;
+/// Ordinary composables have one capability model. The definition feature
+/// whitelist still decides whether the built-in UI exposes each editor.
+function caps(w) {
+    const gate = feature => featureEnabled(w, feature);
     return {
-        columns: gate("columns", byMode.columns),
-        columnSettings: gate("columnSettings", byMode.columnSettings),
-        rename: gate("rename", byMode.rename),
-        compute: gate("compute", byMode.compute),
-        highlight: gate("highlight", byMode.highlight),
-        sort: gate("sort", byMode.sort),
-        filter: featureEnabled(w, "filter") && !!byMode.filter,
-        break: gate("controlBreak", byMode.break),
-        aggregate: gate("aggregate", byMode.aggregate),
-        pagination: gate("pagination", byMode.pagination),
-        visibility: byMode.visibility,
-        displayAs: byMode.displayAs,
+        columns: gate("columns"),
+        columnSettings: gate("columnSettings"),
+        rename: gate("rename"),
+        compute: gate("compute"),
+        highlight: gate("highlight"),
+        sort: gate("sort"),
+        filter: gate("filter"),
+        break: gate("controlBreak"),
+        aggregate: gate("aggregate"),
+        pagination: gate("pagination"),
+        visibility: true,
+        displayAs: true,
     };
 }

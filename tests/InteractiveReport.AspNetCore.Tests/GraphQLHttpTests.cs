@@ -34,15 +34,16 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
             {
               "title": "File View",
               "state": {
-                "pipeline": [
-                  {
-                    "shape": { "kind": "source" },
-                    "layer": {
-                      "columns": [ "ID", "LABEL" ],
-                      "filters": [ { "expr": "ID = 2" } ]
-                    }
+                "activeTable": "file",
+                "tables": {
+                  "file": {
+                    "from": "definition",
+                    "composables": [
+                      { "kind": "select", "columns": [ "ID", "LABEL" ] },
+                      { "kind": "filter", "filters": [ { "expr": "ID = 2" } ] }
+                    ]
                   }
-                ]
+                }
               }
             }
             """);
@@ -134,16 +135,16 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
                 title = "Alice View",
                 state = new
                 {
-                    v = 3,
-                    pipeline = new[]
+                    activeTable = "mine",
+                    tables = new
                     {
-                        new
+                        mine = new
                         {
-                            shape = new { kind = "source" },
-                            layer = new
+                            @from = "definition",
+                            composables = new object[]
                             {
-                                columns = new[] { "LABEL" },
-                                sorts = new[] { new { col = "ID", dir = "desc" } },
+                                new { kind = "select", columns = new[] { "LABEL" } },
+                                new { kind = "sort", sorts = new[] { new { col = "ID", dir = "desc" } } },
                             },
                         },
                     },

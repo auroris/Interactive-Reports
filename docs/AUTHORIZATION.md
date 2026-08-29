@@ -100,8 +100,10 @@ the same resource separately.
 `Id`, `ReportName`, `Title`, `Public`, `Primary`, `Owner`, `State`, and
 `StateChanged`. `Public` corresponds to the HTTP field `isGlobal`; `Primary`
 corresponds to `isPrimary`. `State` is the typed `ReportState` object graph, including
-typed pipeline stages, layers, filters, computed columns, formats, and other nested
-structures.
+the unordered table map, explicit `from` dependencies, nullable per-table schema
+caches, ordered composables, filters, computed columns, formats, and other nested
+structures. Cached schemas are advisory response data; authorization code must not
+treat them as proof of the configured SQL's shape.
 
 For updates, title, publication flags, and owner are the effective values after the
 client patch has been applied to current metadata. `StateChanged` distinguishes a
@@ -136,9 +138,17 @@ reports.UseAuthorization((request, cancellationToken) =>
 
         // The state is typed. No JsonElement traversal or second deserialization is
         // required.
-        var sourceFilters = definition.State?.Pipeline?
-            .FirstOrDefault()?.Layer?.Filters;
-        if (sourceFilters?.Count > 20)
+        // This policy deliberately counts filters in every declared table,
+        // including inactive alternatives, rather than only activeTable ancestry.
+        var allDeclaredFilters = definition.State?.Tables?.Values
+            .SelectMany(table => table.Composables ?? [])
+            .Where(composable => string.Equals(
+                composable.Kind,
+                "filter",
+                StringComparison.OrdinalIgnoreCase))
+            .SelectMany(composable => composable.Filters ?? [])
+            .ToList();
+        if (allDeclaredFilters?.Count > 20)
             return ValueTask.FromResult(false);
     }
 

@@ -3,11 +3,11 @@
 // is the doc made visible — everything here reads the doc and mutates it
 // through w.apply, never through private render state.
 //
-// Source-layer chips (search, filters, breaks, aggregates, computed, highlights)
-// always display: they are the stage-1 state every view consumes or returns to.
-// The active Group By or Pivot layer's rules chip alongside the base rules,
-// marked as view-scoped. Group also owns breaks and aggregates. The view chip
-// summarizes the tail; its remove returns to the grid (parking the tail on the shelf).
+// Executable ordinary composables are enumerated in composition order across the
+// complete active table ancestry. Inherited and foreign/repeated nodes remain
+// visible but read-only. Only the last node of each kind in the active table's
+// terminal segment is safe for the packaged editors to mutate. The view chip
+// summarizes the active shaped table; its remove activates the grid table.
 //
 // A chip whose owning feature is not whitelisted still renders (the state is
 // real — a default or saved report put it there) but renders locked: no toggle,
@@ -19,11 +19,12 @@ import { featureEnabled, labelOf } from "../schema.js";
 import { fnLabel } from "./format.js";
 import { chartSummary } from "./chart-view.js";
 import {
+    activeTableLayer,
     activateTail,
+    locatedComposables,
     modeOf,
     removeSourceComputedColumn,
     removeStageComputedColumn,
-    sourceLayer,
     stageOf,
     tailOf,
 } from "../state.js";
@@ -34,30 +35,39 @@ import { stageContext } from "../stage.js";
 
 const modeLabel = (w, mode) => w.t(mode === "groupBy" ? "group.label" : `toolbar.${mode}`);
 
-function viewStage(doc) {
-    const mode = modeOf(doc);
-    return mode === "groupBy" ? stageOf(doc, "group")
-        : mode === "pivot" ? stageOf(doc, "pivot")
-        : null;
-}
+const terminalStage = doc => ({
+    shape: tailOf(doc).at(-1)?.shape,
+    layer: activeTableLayer(doc),
+});
 
-function chipToggle(w, kind, index, on) {
+const nodeFields = {
+    filter: "filters",
+    compute: "computed",
+    highlight: "highlights",
+    break: "breaks",
+    aggregate: "aggregates",
+};
+
+const mutableLocation = (doc, location) => locatedComposables(doc).find(candidate =>
+    candidate.authorable
+    && candidate.tableId.toLowerCase() === location?.tableId?.toLowerCase()
+    && candidate.composableIndex === location?.composableIndex
+    && candidate.composable?.kind === location?.composable?.kind) ?? null;
+
+function chipToggle(w, kind, index, on, location) {
     w.applyOrBanner(d => {
-        const list = kind === "filter" ? sourceLayer(d).filters
-            : kind === "computed" ? sourceLayer(d).computed
-            : kind === "highlight" ? sourceLayer(d).highlights
-            : kind === "stageFilter" ? viewStage(d)?.layer?.filters
-            : kind === "stageComputed" ? viewStage(d)?.layer?.computed
-            : kind === "stageHighlight" ? viewStage(d)?.layer?.highlights
-            : null;
+        const found = mutableLocation(d, location);
+        const field = nodeFields[found?.composable?.kind];
+        const list = field ? found.composable[field] : null;
         const item = list?.[index];
         if (item) item.enabled = on;
     });
 }
 
-function chipRemove(w, kind, index) {
+function chipRemove(w, kind, index, location) {
     if (kind === "computed") {
-        const column = sourceLayer(w.doc).computed?.[index]?.id;
+        const found = mutableLocation(w.doc, location);
+        const column = found?.composable?.computed?.[index]?.id;
         if (!column) return;
         w.apply(d => {
             const dropped = removeSourceComputedColumn(d, column);
@@ -73,30 +83,30 @@ function chipRemove(w, kind, index) {
         return;
     }
     if (kind === "stageComputed") {
-        const column = viewStage(w.doc)?.layer?.computed?.[index]?.id;
+        const found = mutableLocation(w.doc, location);
+        const column = found?.composable?.computed?.[index]?.id;
         if (!column) return;
-        w.apply(d => removeStageComputedColumn(d, viewStage(d), column))
+        w.apply(d => removeStageComputedColumn(d, terminalStage(d), column))
             .catch(err => w.showError(err));
         return;
     }
     w.applyOrBanner(d => {
-        const layer = sourceLayer(d);
         switch (kind) {
             case "search": d.search = ""; w.els.search.value = ""; break;
-            case "filter": layer.filters?.splice(index, 1); break;
-            case "break": layer.breaks = (layer.breaks ?? []).filter((_, i) => i !== index); break;
-            case "aggregate": layer.aggregates?.splice(index, 1); break;
-            case "highlight": layer.highlights?.splice(index, 1); break;
-            case "stageFilter": viewStage(d)?.layer?.filters?.splice(index, 1); break;
-            case "stageBreak": viewStage(d).layer.breaks = (viewStage(d).layer.breaks ?? []).filter((_, i) => i !== index); break;
-            case "stageAggregate": viewStage(d)?.layer?.aggregates?.splice(index, 1); break;
-            case "stageHighlight": viewStage(d)?.layer?.highlights?.splice(index, 1); break;
             case "view": activateTail(d, "grid"); break;
+            default: {
+                const found = mutableLocation(d, location);
+                const field = nodeFields[found?.composable?.kind];
+                if (field && Array.isArray(found.composable[field]))
+                    found.composable[field].splice(index, 1);
+                break;
+            }
         }
     });
 }
 
-function chipEdit(w, kind, index) {
+function chipEdit(w, kind, index, location) {
+    if (kind !== "search" && kind !== "view" && !mutableLocation(w.doc, location)) return;
     switch (kind) {
         case "search": w.els.search.focus(); w.els.search.select(); break;
         case "filter": filterDialog(w, { editIndex: index }); break;
@@ -115,8 +125,14 @@ function chipEdit(w, kind, index) {
     }
 }
 
-function chip({ w, kind, index, text, colLabel, off, toggleable = true, removable = true, editable = true, swatch }) {
-    const node = el("span", { class: "ir-chip" + (off ? " ir-chip-off" : ""), dataset: { kind } });
+function chip({ w, kind, index, text, colLabel, off, toggleable = true, removable = true, editable = true, swatch, location }) {
+    const node = el("span", {
+        class: "ir-chip" + (off ? " ir-chip-off" : ""),
+        dataset: {
+            kind,
+            ...(location ? { table: location.tableId, inherited: String(location.inherited) } : {}),
+        },
+    });
     // The setting's full description names the checkbox and remove button, so
     // assistive tech hears WHICH setting each control governs; the titles stay
     // short for pointer tooltips.
@@ -126,14 +142,14 @@ function chip({ w, kind, index, text, colLabel, off, toggleable = true, removabl
             type: "checkbox", class: "ir-chip-check", checked: !off,
             title: w.t(off ? "common.enable" : "common.disable"),
             "aria-label": name,
-            onchange: e => chipToggle(w, kind, index, e.target.checked),
+            onchange: e => chipToggle(w, kind, index, e.target.checked, location),
         }));
     }
     if (swatch) node.append(el("span", { class: "ir-chip-swatch", style: { background: swatch } }));
     const label = editable
         ? el("button", {
             type: "button", class: "ir-chip-label", title: w.t("common.edit"),
-            onclick: () => chipEdit(w, kind, index),
+            onclick: () => chipEdit(w, kind, index, location),
         })
         : el("span", { class: "ir-chip-label ir-chip-static" });
     if (colLabel) label.append(el("b", {}, colLabel), " ");
@@ -142,19 +158,20 @@ function chip({ w, kind, index, text, colLabel, off, toggleable = true, removabl
     if (removable) {
         node.append(el("button", {
             type: "button", class: "ir-chip-x", "aria-label": w.t("chip.remove", { name }), title: w.t("common.remove"),
-            onclick: () => chipRemove(w, kind, index),
+            onclick: () => chipRemove(w, kind, index, location),
         }, icon("close")));
     }
     return node;
 }
 
-const highlightChip = (w, kind, lock) => ({ h, i, sequence }) => chip({
+const highlightChip = (w, kind, lock, location) => ({ h, i, sequence }) => chip({
     w, kind, index: i, off: h.enabled === false,
     // Preview whichever color the rule actually sets; the dialog's default
     // background is the last resort for legacy rules with no style at all.
     swatch: h.style?.bg ?? h.style?.fg ?? "#fff3cd",
     colLabel: h.name ?? h.id ?? w.t("highlight.label"),
     text: `#${sequence} · ${h.expr} ${w.t(h.scope === "cell" ? "highlight.scopeCell" : "highlight.scopeRow", { column: h.col })}`,
+    location,
     ...lock,
 });
 
@@ -179,55 +196,71 @@ function tailSummary(w, mode) {
 
 export function renderChips(w, container) {
     const d = w.doc;
-    const layer = sourceLayer(d);
     const mode = modeOf(d);
     const chips = [];
     const lock = feature => featureEnabled(w, feature)
         ? {}
         : { toggleable: false, removable: false, editable: false };
-    // A source rule remains visible in a derived view, but its dialog would be
-    // editing that derived table. Switch back to the grid to edit it.
-    const sourceRuleLock = feature => ({
-        ...lock(feature),
-        ...(mode !== "grid" ? { editable: false } : {}),
-    });
+    const readOnly = { toggleable: false, removable: false, editable: false };
+    const controls = (location, feature) => location.authorable ? lock(feature) : readOnly;
 
     if (d.search) {
         chips.push(chip({ w, kind: "search", index: 0, toggleable: false, colLabel: w.t("chip.search"), text: `“${d.search}”`, ...lock("search") }));
     }
-    (layer.filters ?? []).forEach((f, i) =>
-        chips.push(chip({ w, kind: "filter", index: i, off: f.enabled === false, colLabel: w.t("filter.label"), text: f.expr, ...sourceRuleLock("filter") })));
-    (layer.breaks ?? []).forEach((b, i) =>
-        chips.push(chip({ w, kind: "break", index: i, toggleable: false, colLabel: w.t("break.label"), text: labelOf(w, b), ...sourceRuleLock("controlBreak") })));
-    (layer.aggregates ?? []).forEach((a, i) =>
-        chips.push(chip({
-            w, kind: "aggregate", index: i, toggleable: false, colLabel: "Σ",
-            text: w.t("aggregate.ofColumn", { function: fnLabel(w, a.fn), column: labelOf(w, a.col) }),
-            ...sourceRuleLock("aggregate"),
-        })));
-    (layer.computed ?? []).forEach((c, i) =>
-        chips.push(chip({ w, kind: "computed", index: i, off: c.enabled === false, colLabel: "ƒ", text: c.label ?? c.id, ...sourceRuleLock("compute") })));
-    bySequence(layer.highlights).forEach(entry =>
-        chips.push(highlightChip(w, "highlight", sourceRuleLock("highlight"))(entry)));
+    const terminalColumns = new Map(stageContext(w).columns
+        .map(column => [column.name.toLowerCase(), column]));
+    const columnLabel = name => terminalColumns.get(String(name).toLowerCase())?.label ?? labelOf(w, name);
 
-    const stage = viewStage(d);
-    if (stage) {
-        const stageColumns = new Map(stageContext(w).columns.map(column => [column.name.toLowerCase(), column]));
-        const stageLabel = name => stageColumns.get(name.toLowerCase())?.label ?? labelOf(w, name);
-        (stage.layer?.filters ?? []).forEach((f, i) =>
-            chips.push(chip({ w, kind: "stageFilter", index: i, off: f.enabled === false, colLabel: w.t("filter.label"), text: f.expr, ...lock("filter") })));
-        (stage.layer?.breaks ?? []).forEach((b, i) =>
-            chips.push(chip({ w, kind: "stageBreak", index: i, toggleable: false, colLabel: w.t("break.label"), text: stageLabel(b), ...lock("controlBreak") })));
-        (stage.layer?.aggregates ?? []).forEach((a, i) =>
-            chips.push(chip({
-                w, kind: "stageAggregate", index: i, toggleable: false, colLabel: "Σ",
-                text: w.t("aggregate.ofColumn", { function: fnLabel(w, a.fn), column: stageLabel(a.col) }),
-                ...lock("aggregate"),
-            })));
-        (stage.layer?.computed ?? []).forEach((c, i) =>
-            chips.push(chip({ w, kind: "stageComputed", index: i, off: c.enabled === false, colLabel: w.t("chip.stageComputed"), text: c.label ?? c.id, ...lock("compute") })));
-        bySequence(stage.layer?.highlights).forEach(entry =>
-            chips.push(highlightChip(w, "stageHighlight", lock("highlight"))(entry)));
+    for (const location of locatedComposables(d)) {
+        if (!location.participates) continue;
+        const node = location.composable ?? {};
+        const stageScoped = !location.source;
+        switch (node.kind) {
+            case "filter":
+                (node.filters ?? []).forEach((rule, index) => chips.push(chip({
+                    w, kind: stageScoped ? "stageFilter" : "filter", index,
+                    off: rule.enabled === false, colLabel: w.t("filter.label"), text: rule.expr,
+                    location, ...controls(location, "filter"),
+                })));
+                break;
+            case "break":
+                (node.breaks ?? []).forEach((column, index) => chips.push(chip({
+                    w, kind: stageScoped ? "stageBreak" : "break", index,
+                    toggleable: false, colLabel: w.t("break.label"), text: columnLabel(column),
+                    location, ...controls(location, "controlBreak"),
+                })));
+                break;
+            case "aggregate":
+                (node.aggregates ?? []).forEach((rule, index) => chips.push(chip({
+                    w, kind: stageScoped ? "stageAggregate" : "aggregate", index,
+                    toggleable: false, colLabel: "Σ",
+                    text: w.t("aggregate.ofColumn", {
+                        function: fnLabel(w, rule.fn),
+                        column: columnLabel(rule.col),
+                    }),
+                    location, ...controls(location, "aggregate"),
+                })));
+                break;
+            case "compute":
+                (node.computed ?? []).forEach((rule, index) => chips.push(chip({
+                    w, kind: stageScoped ? "stageComputed" : "computed", index,
+                    off: rule.enabled === false,
+                    colLabel: stageScoped ? w.t("chip.stageComputed") : "ƒ",
+                    text: rule.label ?? rule.id,
+                    location, ...controls(location, "compute"),
+                })));
+                break;
+            case "highlight": {
+                const kind = stageScoped ? "stageHighlight" : "highlight";
+                bySequence(node.highlights).forEach(entry =>
+                    chips.push(highlightChip(
+                        w,
+                        kind,
+                        controls(location, "highlight"),
+                        location)(entry)));
+                break;
+            }
+        }
     }
 
     if (mode !== "grid" && tailOf(d).length) {

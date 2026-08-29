@@ -3,7 +3,13 @@ namespace InteractiveReport.Core.Model;
 /// <summary>Response shape for a report query.</summary>
 public sealed class ReportResult
 {
-    /// <summary>Every base and enabled computed column available to subsequent UI actions.</summary>
+    /// <summary>
+    /// The submitted report document with every null table-schema cache refreshed by
+    /// the server. Cached schemas remain advisory and are never used for binding.
+    /// </summary>
+    public ReportState? Document { get; set; }
+
+    /// <summary>Every terminal-table column available to subsequent UI actions.</summary>
     public required IReadOnlyList<ColumnInfo> AvailableColumns { get; init; }
 
     public required IReadOnlyList<ColumnInfo> Columns { get; init; }

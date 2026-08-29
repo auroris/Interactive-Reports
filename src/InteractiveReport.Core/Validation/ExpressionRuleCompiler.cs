@@ -56,7 +56,7 @@ internal static class ExpressionRuleCompiler
 
     private static string RuleLabel(string collectionPath)
     {
-        // Paths are stage-qualified ("pipeline[0].layer.filters"); the trailing
+        // Paths are composable-qualified ("tables.base.composables[0].filters"); the trailing
         // segment names the rule collection.
         var segment = collectionPath[(collectionPath.LastIndexOf('.') + 1)..];
         return segment switch

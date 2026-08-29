@@ -6,6 +6,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
+import { sourceLayer } from "../../src/client/report/state.js";
+import { reportState } from "./report-state-fixture.js";
 
 const window = new Window({ url: "https://host.example/dashboard" });
 function Option(text = "", value = "", defaultSelected = false, selected = false) {
@@ -65,7 +67,7 @@ globalThis.fetch = (url, options = {}) => {
         return Promise.resolve(json({
             defaultState: {
                 page: { index: 1, size: 25 },
-                pipeline: [{ shape: { kind: "source" }, layer: {} }],
+                ...reportState(),
             },
             limits: { defaultPageSize: 25, maxPageSize: 100 },
             columns: [{ name: "ID", label: "ID", type: "number" }],
@@ -160,7 +162,7 @@ test("a mutator that throws mid-way leaves the live document untouched", async (
     await assert.rejects(
         report.apply(d => {
             d.search = "partial";
-            (d.pipeline[0].layer.filters ??= []).push({ enabled: true, expr: "ID = 1" });
+            (sourceLayer(d).filters ??= []).push({ enabled: true, expr: "ID = 1" });
             throw new Error("staged validation failed");
         }),
         /staged validation failed/);
@@ -217,7 +219,7 @@ test("saved-report loads are last-request-wins even when GET responses arrive ou
     const state = search => ({
         search,
         page: { index: 1, size: 25 },
-        pipeline: [{ shape: { kind: "source" }, layer: {} }],
+        ...reportState(),
     });
     heldSavedDocuments.find(request => request.id === savedB.id)
         .succeed({ summary: savedB, state: state("B") });
@@ -307,7 +309,7 @@ test("a successful delete stays removed from the local list when its refresh fai
         state: {
             search: "delete",
             page: { index: 1, size: 25 },
-            pipeline: [{ shape: { kind: "source" }, layer: {} }],
+            ...reportState(),
         },
     }]]);
     savedListStatus = 200;
@@ -339,7 +341,7 @@ test("a saved-report load whose query fails restores doc, selection, and search 
     }];
     savedDocuments = new Map([["saved-1", {
         summary: savedReports[0],
-        state: { search: "Acme", page: { index: 1, size: 25 }, pipeline: [{ shape: { kind: "source" }, layer: {} }] },
+        state: { search: "Acme", page: { index: 1, size: 25 }, ...reportState() },
     }]]);
     const report = await mount();
 
@@ -395,7 +397,7 @@ test("a saved report with a stale recorded schema is adopted — the server is t
             schema: { GONE: "number" },   // authored against a schema that moved on
             search: "Acme",
             page: { index: 1, size: 25 },
-            pipeline: [{ shape: { kind: "source" }, layer: {} }],
+            ...reportState(),
         },
     }]]);
     const report = await mount();

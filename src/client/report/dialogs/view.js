@@ -1,8 +1,7 @@
-// Tail-authoring dialogs: Group By, Pivot, and Chart. Each writes the pipeline's
-// tail stages — [group], [pivot], or [chart] — and swaps them in through
-// the shelf so the toolbar can switch back to any configured mode without
-// re-asking, including after a saved-report reload. Editing a spec preserves the
-// existing stages' layers (per-view columns, labels, formats, computed, sorts,
+// Table-authoring dialogs: Group By, Pivot, and Chart. Each authors a named
+// table containing the corresponding shape composable, while view switching
+// changes only activeTable. Editing a spec preserves the table's later
+// composables (per-view columns, labels, formats, computed, sorts,
 // highlights); metrics keep their stable ids across edits when their column and
 // function survive, so per-metric state never silently re-attaches elsewhere.
 
@@ -17,7 +16,8 @@ import {
     sameColumn,
     stageOf,
 } from "../state.js";
-import { pickable, typeOf, chartFnsFor } from "../schema.js";
+import { chartFnsFor } from "../schema.js";
+import { shapeInputColumns } from "../stage.js";
 import {
     aggregateRowList,
     colOptions,
@@ -38,18 +38,18 @@ export function openViewDialog(w, mode) {
 
 // --- Group By / Pivot --------------------------------------------------------
 
-function dimList(w, initial, { addLabel, max }) {
+function dimList(w, initial, { addLabel, max, columns }) {
     const container = el("div", {});
     const list = rowList(container, (initial ?? []).map(c => ({ col: c })), (row, item) => {
-        const colSel = sel(colOptions(w, { none: w.t("common.select") }), item?.col ?? "");
+        const colSel = sel(colOptions(w, { none: w.t("common.select"), columns }), item?.col ?? "");
         row.append(rowField(addLabel, colSel));
         row._read = () => colSel.value || null;
     }, { addLabel, max, context: w });
     return { container, list };
 }
 
-function valueList(w, initial) {
-    return aggregateRowList(w, initial, { addLabel: w.t("common.value") });
+function valueList(w, initial, columns) {
+    return aggregateRowList(w, initial, { addLabel: w.t("common.value"), columns });
 }
 
 /// Assign stable metric ids to the dialog's (col, fn) rows. A row that matches a
@@ -91,8 +91,9 @@ export function groupByDialog(w) {
     const existingTail = configuredTail(w.doc, "groupBy");
     const existingGroup = groupShape(existingTail);
     const shape = existingGroup?.shape ?? {};
-    const dims = dimList(w, shape.by, { addLabel: w.t("group.addColumn"), max: 3 });
-    const values = valueList(w, shape.values);
+    const inputColumns = shapeInputColumns(w, existingGroup);
+    const dims = dimList(w, shape.by, { addLabel: w.t("group.addColumn"), max: 3, columns: inputColumns });
+    const values = valueList(w, shape.values, inputColumns);
 
     openDialog({
         owner: w,
@@ -121,10 +122,11 @@ export function pivotDialog(w) {
     const existingTail = configuredTail(w.doc, "pivot");
     const existingPivot = pivotShape(existingTail);
     const shape = existingPivot?.shape ?? {};
+    const inputColumns = shapeInputColumns(w, existingPivot);
 
-    const rows = dimList(w, shape.rows, { addLabel: w.t("pivot.rowColumn"), max: 2 });
-    const cols = dimList(w, shape.cols, { addLabel: w.t("common.column"), max: 2 });
-    const values = valueList(w, shape.values);
+    const rows = dimList(w, shape.rows, { addLabel: w.t("pivot.rowColumn"), max: 2, columns: inputColumns });
+    const cols = dimList(w, shape.cols, { addLabel: w.t("common.column"), max: 2, columns: inputColumns });
+    const values = valueList(w, shape.values, inputColumns);
     const totalsInp = el("input", { type: "checkbox", checked: shape.totals === true });
 
     openDialog({
@@ -161,8 +163,11 @@ export function pivotDialog(w) {
 
 export function chartDialog(w) {
     const existingTail = configuredTail(w.doc, "chart");
-    const active = existingTail?.find(s => (s.shape?.kind ?? "") === "chart")?.shape;
-    const chartable = pickable(w).filter(c => c.type !== "other");
+    const existingChart = existingTail?.find(s => (s.shape?.kind ?? "") === "chart");
+    const active = existingChart?.shape;
+    const inputColumns = shapeInputColumns(w, existingChart);
+    const chartable = inputColumns.filter(c => c.type !== "other");
+    const inputType = name => inputColumns.find(column => sameColumn(column.name, name))?.type ?? "other";
 
     const typeSel = sel([
         { value: "bar", label: w.t("chart.bar") },
@@ -178,7 +183,7 @@ export function chartDialog(w) {
     labelSel.required = true;
     const valueSel = sel([
         { value: "", label: w.t("chart.rowCount") },
-        ...pickable(w).map(c => ({ value: c.name, label: c.computed ? `ƒ ${c.label}` : c.label })),
+        ...inputColumns.map(c => ({ value: c.name, label: c.computed ? `ƒ ${c.label}` : c.label })),
     ], active?.value ?? "");
 
     // The chart's function select is not fnSelectFor: count-alone is legal (no
@@ -190,7 +195,7 @@ export function chartDialog(w) {
         if (!valueSel.value) {
             options.push({ value: "count", label: fnLabel(w, "count") });
         } else {
-            const type = typeOf(w, valueSel.value);
+            const type = inputType(valueSel.value);
             options.push(...chartFnsFor(w, type).map(f => ({ value: f, label: fnLabel(w, f) })));
             if (type === "number") options.push({ value: "", label: w.t("chart.eachRow") });
         }
