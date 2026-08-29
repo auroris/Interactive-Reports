@@ -19,7 +19,7 @@ internal sealed class InteractiveReportGraphQLExecutor(
     IReportAccessService reportAccess,
     ReportExecutor executor,
     IOptionsMonitor<InteractiveReportOptions> options,
-    ILogger<InteractiveReportGraphQLExecutor> logger)
+    InteractiveReportLogging logging)
 {
     public async Task<ReportResult?> Query(
         string id,
@@ -104,7 +104,7 @@ internal sealed class InteractiveReportGraphQLExecutor(
         }
         catch (Exception ex)
         {
-            logger.LogError(
+            logging.Logger?.LogError(
                 ex,
                 "Saved report {SavedReportId}: GraphQL execution failed (traceId {TraceId})",
                 saved.Id,

@@ -82,7 +82,9 @@ if (app.Environment.IsDevelopment())
     });
 }
 
-app.MapInteractiveReports("/api/reports");
+var interactiveReportLogger = app.Services.GetRequiredService<ILoggerFactory>()
+    .CreateLogger("InteractiveReport");
+app.MapInteractiveReports("/api/reports", interactiveReportLogger);
 app.MapInteractiveReportGraphQL("/graphql");
 
 app.Run();

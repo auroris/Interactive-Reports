@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace InteractiveReport.AspNetCore;
@@ -18,9 +19,28 @@ namespace InteractiveReport.AspNetCore;
 /// </summary>
 internal sealed class InteractiveReportStartupValidator(
     IOptionsMonitor<InteractiveReportOptions> options,
-    ReportConnectionRegistry registry) : IHostedService
+    ReportConnectionRegistry registry,
+    InteractiveReportLogging logging) : IHostedService
 {
     public Task StartAsync(CancellationToken cancellationToken)
+    {
+        logging.Logger?.LogInformation("Interactive Reports startup validation started");
+        try
+        {
+            Validate();
+            logging.Logger?.LogInformation(
+                "Interactive Reports startup validation completed for {ReportCount} reports",
+                options.CurrentValue.Reports.Count);
+            return Task.CompletedTask;
+        }
+        catch (Exception ex)
+        {
+            logging.Logger?.LogCritical(ex, "Interactive Reports startup validation failed");
+            throw;
+        }
+    }
+
+    private void Validate()
     {
         var current = options.CurrentValue;
         if (current.Administrators.Any(string.IsNullOrWhiteSpace))
@@ -48,7 +68,6 @@ internal sealed class InteractiveReportStartupValidator(
                 StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException(
                 "The effective authorization table name must differ from the saved-report table name.");
-        return Task.CompletedTask;
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;

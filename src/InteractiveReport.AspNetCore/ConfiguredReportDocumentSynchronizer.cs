@@ -1,4 +1,5 @@
 using InteractiveReport.Core.SavedReports;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace InteractiveReport.AspNetCore;
@@ -19,6 +20,7 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
     private readonly ISavedReportStore _store;
     private readonly IOptionsMonitor<InteractiveReportOptions> _options;
     private readonly ReportConnectionRegistry _registry;
+    private readonly ILogger? _logger;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private readonly IDisposable? _reloadSubscription;
     private string? _applied;
@@ -27,12 +29,14 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
         ConfiguredReportDocumentStore documents,
         ISavedReportStore store,
         IOptionsMonitor<InteractiveReportOptions> options,
-        ReportConnectionRegistry registry)
+        ReportConnectionRegistry registry,
+        ILogger<ConfiguredReportDocumentSynchronizer>? logger = null)
     {
         _documents = documents;
         _store = store;
         _options = options;
         _registry = registry;
+        _logger = logger;
         _reloadSubscription = options.OnChange(_ => Volatile.Write(ref _applied, null));
     }
 
@@ -45,7 +49,11 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
     /// </summary>
     public async Task EnsureSynced(CancellationToken ct = default)
     {
-        if (Signature() == Volatile.Read(ref _applied)) return;
+        if (Signature() == Volatile.Read(ref _applied))
+        {
+            _logger?.LogDebug("Configured report documents are already synchronized");
+            return;
+        }
 
         await _lock.WaitAsync(ct);
         try
@@ -59,6 +67,8 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
             var desired = documents.Select(document => document.Id).ToHashSet(StringComparer.Ordinal);
             var existing = await _store.ListAll(ct);
             var byId = existing.ToDictionary(row => row.Id, StringComparer.Ordinal);
+            var upserted = 0;
+            var deleted = 0;
 
             foreach (var document in documents)
             {
@@ -78,16 +88,27 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
                     Origin = SavedReportOrigin.Configured,
                 };
                 if (current is null || Differs(current, row))
+                {
                     await _store.Put(row, ct);
+                    upserted++;
+                }
             }
 
             foreach (var orphan in existing)
             {
                 if (orphan.Origin == SavedReportOrigin.Configured && !desired.Contains(orphan.Id))
+                {
                     await _store.Delete(orphan.Id, ct);
+                    deleted++;
+                }
             }
 
             _applied = signature;
+            _logger?.LogInformation(
+                "Synchronized {DocumentCount} configured report documents: {UpsertedCount} upserted, {DeletedCount} deleted",
+                documents.Length,
+                upserted,
+                deleted);
         }
         finally
         {

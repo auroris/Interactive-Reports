@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace InteractiveReport.AspNetCore;
@@ -22,9 +23,11 @@ public static class ServiceCollectionExtensions
     {
         services.Configure<InteractiveReportOptions>(configuration.GetSection(sectionName));
 
-        var builder = new InteractiveReportBuilder(services);
+        var logging = new InteractiveReportLogging();
+        services.AddSingleton(logging);
+        var builder = new InteractiveReportBuilder(services, logging);
 
-        services.AddSingleton<SchemaCache>();
+        services.AddSingleton(sp => new SchemaCache(logging.For<SchemaCache>()));
         services.AddSingleton<ConfiguredReportDocumentStore>();
         services.AddSingleton(sp => new ReportConnectionRegistry(
             builder.Connections,
@@ -46,26 +49,32 @@ public static class ServiceCollectionExtensions
                         options.SavedReports,
                         options.Authorization.TableName));
             },
-            sp.GetRequiredService<IReportConnectionFactory>()));
+            sp.GetRequiredService<IReportConnectionFactory>(),
+            logging.For<SqlReportAuthorizationStore>()));
         services.AddSingleton<IReportDefinitionStore>(sp => new ConfigurationReportDefinitionStore(
             sp.GetRequiredService<IOptionsMonitor<InteractiveReportOptions>>(),
             sp.GetRequiredService<SchemaCache>(),
             sp.GetRequiredService<ReportConnectionRegistry>(),
             sp.GetRequiredService<ConfiguredReportDocumentSynchronizer>(),
             sp.GetRequiredService<ISavedReportStore>()));
-        services.AddSingleton<ReportExecutor>();
+        services.AddSingleton(sp => new ReportExecutor(
+            sp.GetRequiredService<IReportConnectionFactory>(),
+            sp.GetRequiredService<SchemaCache>(),
+            logging.For<ReportExecutor>()));
         services.AddSingleton<IReportAccessService, ReportAccessService>();
         services.TryAddSingleton<IContextParameterResolver, ClaimContextParameterResolver>();
 
         services.AddSingleton<ISavedReportStore>(sp => new SqlSavedReportStore(
             () => sp.GetRequiredService<ReportConnectionRegistry>().ResolveStoreConfig(
                 sp.GetRequiredService<IOptionsMonitor<InteractiveReportOptions>>().CurrentValue.SavedReports),
-            sp.GetRequiredService<IReportConnectionFactory>()));
+            sp.GetRequiredService<IReportConnectionFactory>(),
+            logging.For<SqlSavedReportStore>()));
         services.AddSingleton(sp => new ConfiguredReportDocumentSynchronizer(
             sp.GetRequiredService<ConfiguredReportDocumentStore>(),
             sp.GetRequiredService<ISavedReportStore>(),
             sp.GetRequiredService<IOptionsMonitor<InteractiveReportOptions>>(),
-            sp.GetRequiredService<ReportConnectionRegistry>()));
+            sp.GetRequiredService<ReportConnectionRegistry>(),
+            logging.For<ConfiguredReportDocumentSynchronizer>()));
         services.AddHostedService<InteractiveReportStartupValidator>();
 
         return builder;
@@ -75,6 +84,7 @@ public static class ServiceCollectionExtensions
 public sealed class InteractiveReportBuilder
 {
     private readonly IServiceCollection _services;
+    private readonly InteractiveReportLogging _logging;
 
     internal Dictionary<string, Func<IServiceProvider, DbConnection>> Connections { get; }
         = new(StringComparer.OrdinalIgnoreCase);
@@ -83,7 +93,24 @@ public sealed class InteractiveReportBuilder
     internal Dictionary<string, ReportDialect> ConnectionDialects { get; }
         = new(StringComparer.OrdinalIgnoreCase);
 
-    internal InteractiveReportBuilder(IServiceCollection services) => _services = services;
+    internal InteractiveReportBuilder(
+        IServiceCollection services,
+        InteractiveReportLogging logging)
+    {
+        _services = services;
+        _logging = logging;
+    }
+
+    /// <summary>
+    /// Sends every Interactive Reports log event to one host-owned logger. Omitting
+    /// this and the logger argument on MapInteractiveReports keeps the package silent.
+    /// The host remains responsible for levels, providers, destinations, and scopes.
+    /// </summary>
+    public InteractiveReportBuilder UseLogger(ILogger logger)
+    {
+        _logging.Use(logger);
+        return this;
+    }
 
     /// <summary>
     /// Maps a definition's named connection to a DbConnection factory (returned

@@ -52,13 +52,7 @@ internal static class CommandBuilder
         foreach (var (name, value) in contextParams)
             AddParameter(cmd, name, value, dialect);
 
-        // Logging discipline: SQL text at Debug only, and parameter VALUES never — the
-        // values are user filters and row-security context, i.e. data.
-        // Use the command's final text rather than the compiler result so the log is
-        // exactly what Execute* submits to the provider. Structured logging keeps the
-        // complete multi-line statement available to sinks without interpolating it
-        // unless Debug is enabled.
-        logger?.LogDebug("Executing report SQL:\n{Sql}", cmd.CommandText);
+        Log(cmd, logger);
 
         return cmd;
     }
@@ -129,8 +123,20 @@ internal static class CommandBuilder
         foreach (var (name, value) in inputs)
             AddParameter(cmd, name, value, ReportDialect.Oracle);
 
-        logger?.LogDebug("Executing report SQL:\n{Sql}", cmd.CommandText);
+        Log(cmd, logger);
         return cmd;
+    }
+
+    /// <summary>
+    /// Logs the final SQL text immediately before a caller submits a hand-built
+    /// command. Parameter values are deliberately excluded: they can contain user
+    /// filters, report documents, identities, and row-security context.
+    /// </summary>
+    internal static void Log(DbCommand command, ILogger? logger)
+    {
+        // Use the command's final text so the log matches what Execute* submits to
+        // the provider. With no caller-supplied logger this is a true no-op.
+        logger?.LogDebug("Executing report SQL:\n{Sql}", command.CommandText);
     }
 
     private static void EnableBindByName(DbCommand cmd)

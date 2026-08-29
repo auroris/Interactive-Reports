@@ -6,6 +6,7 @@ using InteractiveReport.Core.Composition;
 using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Model;
 using InteractiveReport.Core.SavedReports;
+using Microsoft.Extensions.Logging;
 using SqlKata;
 
 namespace InteractiveReport.Core.Authorization;
@@ -19,15 +20,25 @@ public sealed class SqlReportAuthorizationStore : IReportAuthorizationStore
 
     private readonly Func<ReportAuthorizationStoreConfig> _config;
     private readonly IReportConnectionFactory _connections;
+    private readonly ILogger<SqlReportAuthorizationStore>? _logger;
     private readonly SemaphoreSlim _createLock = new(1, 1);
     private readonly HashSet<StoreTarget> _createdTargets = [];
 
     public SqlReportAuthorizationStore(
         Func<ReportAuthorizationStoreConfig> config,
         IReportConnectionFactory connections)
+        : this(config, connections, logger: null)
+    {
+    }
+
+    public SqlReportAuthorizationStore(
+        Func<ReportAuthorizationStoreConfig> config,
+        IReportConnectionFactory connections,
+        ILogger<SqlReportAuthorizationStore>? logger)
     {
         _config = config;
         _connections = connections;
+        _logger = logger;
     }
 
     public Task<IReadOnlyList<ReportAuthorizationEntry>> ListAll(CancellationToken ct = default)
@@ -159,7 +170,7 @@ public sealed class SqlReportAuthorizationStore : IReportAuthorizationStore
         await using var connection = await OpenConnection(config, ct);
         var compiled = DialectSupport.GetCompiler(config.Dialect).Compile(query);
         await using var command = CommandBuilder.Build(
-            connection, compiled, NoParams, TimeoutSeconds, config.Dialect);
+            connection, compiled, NoParams, TimeoutSeconds, config.Dialect, _logger);
         await using var reader = await command.ExecuteReaderAsync(ct);
 
         var result = new List<ReportAuthorizationEntry>();
@@ -187,7 +198,7 @@ public sealed class SqlReportAuthorizationStore : IReportAuthorizationStore
         await using var connection = await OpenConnection(config, ct);
         var compiled = DialectSupport.GetCompiler(config.Dialect).Compile(query);
         await using var command = CommandBuilder.Build(
-            connection, compiled, NoParams, TimeoutSeconds, config.Dialect);
+            connection, compiled, NoParams, TimeoutSeconds, config.Dialect, _logger);
         return await command.ExecuteNonQueryAsync(ct);
     }
 
@@ -222,6 +233,7 @@ public sealed class SqlReportAuthorizationStore : IReportAuthorizationStore
             if (_createdTargets.Contains(target)) return;
             await using var command = connection.CreateCommand();
             command.CommandText = CreateTableSql(config);
+            CommandBuilder.Log(command, _logger);
             await command.ExecuteNonQueryAsync(ct);
             _createdTargets.Add(target);
         }

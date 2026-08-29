@@ -3,6 +3,7 @@ using System.Globalization;
 using InteractiveReport.Core.Composition;
 using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Model;
+using Microsoft.Extensions.Logging;
 using SqlKata;
 using SqlKata.Compilers;
 
@@ -21,13 +22,25 @@ public sealed class SqlSavedReportStore : ISavedReportStore
 
     private readonly Func<SavedReportStoreConfig> _config;
     private readonly IReportConnectionFactory _connections;
+    private readonly ILogger<SqlSavedReportStore>? _logger;
     private readonly SemaphoreSlim _createLock = new(1, 1);
     private readonly HashSet<StoreTarget> _createdTargets = [];
 
-    public SqlSavedReportStore(Func<SavedReportStoreConfig> config, IReportConnectionFactory connections)
+    public SqlSavedReportStore(
+        Func<SavedReportStoreConfig> config,
+        IReportConnectionFactory connections)
+        : this(config, connections, logger: null)
+    {
+    }
+
+    public SqlSavedReportStore(
+        Func<SavedReportStoreConfig> config,
+        IReportConnectionFactory connections,
+        ILogger<SqlSavedReportStore>? logger)
     {
         _config = config;
         _connections = connections;
+        _logger = logger;
     }
 
     private static SavedReportStoreConfig Validated(SavedReportStoreConfig cfg)
@@ -231,7 +244,8 @@ public sealed class SqlSavedReportStore : ISavedReportStore
 
         await using var conn = await OpenConnection(cfg, ct);
         var compiled = DialectSupport.GetCompiler(cfg.Dialect).Compile(query);
-        await using var cmd = CommandBuilder.Build(conn, compiled, NoParams, TimeoutSeconds, cfg.Dialect);
+        await using var cmd = CommandBuilder.Build(
+            conn, compiled, NoParams, TimeoutSeconds, cfg.Dialect, _logger);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
 
         var result = new List<SavedReport>();
@@ -263,7 +277,8 @@ public sealed class SqlSavedReportStore : ISavedReportStore
 
         await using var conn = await OpenConnection(cfg, ct);
         var compiled = DialectSupport.GetCompiler(cfg.Dialect).Compile(query);
-        await using var cmd = CommandBuilder.Build(conn, compiled, NoParams, TimeoutSeconds, cfg.Dialect);
+        await using var cmd = CommandBuilder.Build(
+            conn, compiled, NoParams, TimeoutSeconds, cfg.Dialect, _logger);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
 
         var result = new List<SavedReportMetadata>();
@@ -290,7 +305,8 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         var query = buildQuery(cfg);
         await using var conn = await OpenConnection(cfg, ct);
         var compiled = DialectSupport.GetCompiler(cfg.Dialect).Compile(query);
-        await using var cmd = CommandBuilder.Build(conn, compiled, NoParams, TimeoutSeconds, cfg.Dialect);
+        await using var cmd = CommandBuilder.Build(
+            conn, compiled, NoParams, TimeoutSeconds, cfg.Dialect, _logger);
         return await cmd.ExecuteNonQueryAsync(ct);
     }
 
@@ -320,6 +336,7 @@ public sealed class SqlSavedReportStore : ISavedReportStore
             if (_createdTargets.Contains(target)) return;
             await using var cmd = conn.CreateCommand();
             cmd.CommandText = CreateTableSql(cfg);
+            CommandBuilder.Log(cmd, _logger);
             await cmd.ExecuteNonQueryAsync(ct);
             if (cfg.Dialect == ReportDialect.Sqlite)
             {
@@ -329,8 +346,10 @@ public sealed class SqlSavedReportStore : ISavedReportStore
             else
             {
                 cmd.CommandText = AddPrimaryColumnSql(cfg);
+                CommandBuilder.Log(cmd, _logger);
                 await cmd.ExecuteNonQueryAsync(ct);
                 cmd.CommandText = AddTitleKeyColumnSql(cfg);
+                CommandBuilder.Log(cmd, _logger);
                 await cmd.ExecuteNonQueryAsync(ct);
             }
             await BackfillTitleKeys(conn, cfg, ct);
@@ -413,7 +432,7 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         _ => throw new ArgumentOutOfRangeException(nameof(cfg), cfg.Dialect, null),
     };
 
-    private static async Task AddSqliteColumnIfMissing(
+    private async Task AddSqliteColumnIfMissing(
         DbCommand cmd,
         SavedReportStoreConfig cfg,
         string column,
@@ -421,9 +440,11 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         CancellationToken ct)
     {
         cmd.CommandText = $"SELECT COUNT(*) FROM pragma_table_info('{cfg.TableName}') WHERE name = '{column}'";
+        CommandBuilder.Log(cmd, _logger);
         if (Convert.ToInt32(await cmd.ExecuteScalarAsync(ct), CultureInfo.InvariantCulture) == 0)
         {
             cmd.CommandText = $"ALTER TABLE {cfg.TableName} ADD COLUMN {column} {definitionSql}";
+            CommandBuilder.Log(cmd, _logger);
             await cmd.ExecuteNonQueryAsync(ct);
         }
     }
@@ -481,12 +502,13 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     };
 
     /// <summary>Computes TITLE_KEY for rows written before the column existed.</summary>
-    private static async Task BackfillTitleKeys(DbConnection conn, SavedReportStoreConfig cfg, CancellationToken ct)
+    private async Task BackfillTitleKeys(DbConnection conn, SavedReportStoreConfig cfg, CancellationToken ct)
     {
         var compiler = DialectSupport.GetCompiler(cfg.Dialect);
         var pending = new List<(string Id, string Title)>();
         var select = compiler.Compile(new Query(cfg.TableName).Select("ID", "TITLE").WhereNull("TITLE_KEY"));
-        await using (var cmd = CommandBuilder.Build(conn, select, NoParams, TimeoutSeconds, cfg.Dialect))
+        await using (var cmd = CommandBuilder.Build(
+                         conn, select, NoParams, TimeoutSeconds, cfg.Dialect, _logger))
         await using (var reader = await cmd.ExecuteReaderAsync(ct))
         {
             while (await reader.ReadAsync(ct))
@@ -498,7 +520,8 @@ public sealed class SqlSavedReportStore : ISavedReportStore
             var update = compiler.Compile(new Query(cfg.TableName)
                 .Where("ID", id)
                 .AsUpdate(new Dictionary<string, object?> { ["TITLE_KEY"] = TitleKey(title) }));
-            await using var cmd = CommandBuilder.Build(conn, update, NoParams, TimeoutSeconds, cfg.Dialect);
+            await using var cmd = CommandBuilder.Build(
+                conn, update, NoParams, TimeoutSeconds, cfg.Dialect, _logger);
             await cmd.ExecuteNonQueryAsync(ct);
         }
     }
@@ -509,11 +532,12 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     /// checked-in document may shadow an existing user title (the listing dedupes,
     /// configured wins), and synchronization must never fail on that collision.
     /// </summary>
-    private static async Task CreateTitleIndex(DbCommand cmd, SavedReportStoreConfig cfg, CancellationToken ct)
+    private async Task CreateTitleIndex(DbCommand cmd, SavedReportStoreConfig cfg, CancellationToken ct)
     {
         cmd.CommandText = CreateTitleIndexSql(cfg);
         try
         {
+            CommandBuilder.Log(cmd, _logger);
             await cmd.ExecuteNonQueryAsync(ct);
         }
         catch (DbException ex)

@@ -36,8 +36,32 @@ public static class EndpointExtensions
     public static RouteGroupBuilder MapInteractiveReports(
         this IEndpointRouteBuilder endpoints,
         string prefix = "/api/reports")
+        => MapInteractiveReportsCore(endpoints, prefix, logger: null);
+
+    /// <summary>
+    /// Mounts the report endpoints and sends all package logging to the supplied
+    /// host-owned logger. The package does not create or configure logging providers.
+    /// </summary>
+    public static RouteGroupBuilder MapInteractiveReports(
+        this IEndpointRouteBuilder endpoints,
+        string prefix,
+        ILogger logger)
     {
+        ArgumentNullException.ThrowIfNull(logger);
+        return MapInteractiveReportsCore(endpoints, prefix, logger);
+    }
+
+    private static RouteGroupBuilder MapInteractiveReportsCore(
+        IEndpointRouteBuilder endpoints,
+        string prefix,
+        ILogger? logger)
+    {
+        ArgumentNullException.ThrowIfNull(endpoints);
+        if (logger is not null)
+            endpoints.ServiceProvider.GetRequiredService<InteractiveReportLogging>().Use(logger);
+
         var group = endpoints.MapGroup(prefix);
+        group.AddEndpointFilter(InteractiveReportLogging.LogRequest);
         group.AddEndpointFilter(static async (invocation, next) =>
         {
             // Data and identity responses are request-specific. Handlers may replace
@@ -332,7 +356,7 @@ public static class EndpointExtensions
         var unknown = placeholders?.FirstOrDefault(name => !schema.TryGetValue(name, out _));
         if (placeholders is null || unknown is not null)
         {
-            ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("InteractiveReport").LogWarning(
+            Log(ctx)?.LogWarning(
                 "Report {Report}: editLink.urlTemplate {Problem}; the edit column is disabled.",
                 def.Name,
                 placeholders is null ? $"is invalid — {error}" : $"references unknown column '{unknown}'");
@@ -534,8 +558,7 @@ public static class EndpointExtensions
     /// </summary>
     internal static IResult ServerError(HttpContext ctx, string reportName, string operation, Exception ex)
     {
-        var logger = ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("InteractiveReport");
-        logger.LogError(ex, "Report {Report}: {Operation} failed (traceId {TraceId})",
+        Log(ctx)?.LogError(ex, "Report {Report}: {Operation} failed (traceId {TraceId})",
             reportName, operation, ctx.TraceIdentifier);
 
         return Results.Problem(
@@ -546,4 +569,7 @@ public static class EndpointExtensions
 
     private static IReportAccessService Access(HttpContext context)
         => context.RequestServices.GetRequiredService<IReportAccessService>();
+
+    internal static ILogger? Log(HttpContext context)
+        => context.RequestServices.GetRequiredService<InteractiveReportLogging>().Logger;
 }

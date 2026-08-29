@@ -1,5 +1,8 @@
+using System.Data.Common;
+using InteractiveReport.Core.Authorization;
 using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Model;
+using InteractiveReport.Core.SavedReports;
 using InteractiveReport.Core.Schema;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
@@ -42,6 +45,73 @@ public sealed class SqlLoggingTests
         Assert.Empty(informationLogger.Messages);
     }
 
+    [Fact]
+    public async Task Supplied_store_loggers_receive_sql_without_parameter_values()
+    {
+        var connectionString = $"Data Source=logging-{Guid.NewGuid():n};Mode=Memory;Cache=Shared";
+        await using var keepAlive = new SqliteConnection(connectionString);
+        await keepAlive.OpenAsync();
+        var connections = new ConnectionFactory(() => new SqliteConnection(connectionString));
+
+        const string sensitiveTitle = "private-quarterly-plan";
+        const string sensitiveIdentity = "secret-user@example.test";
+
+        var savedLogger = new CapturingLogger<SqlSavedReportStore>(LogLevel.Debug);
+        var savedReports = new SqlSavedReportStore(
+            () => new SavedReportStoreConfig("logging", ReportDialect.Sqlite),
+            connections,
+            savedLogger);
+        await savedReports.Create(new SavedReport
+        {
+            Id = "saved-sensitive",
+            ReportName = "orders",
+            Title = sensitiveTitle,
+            Owner = sensitiveIdentity,
+            StateJson = "{\"private\":true}",
+        });
+
+        Assert.Contains(savedLogger.Messages, message => message.Contains("CREATE TABLE", StringComparison.Ordinal));
+        Assert.Contains(savedLogger.Messages, message => message.Contains("INSERT", StringComparison.OrdinalIgnoreCase));
+        Assert.All(savedLogger.Messages, message =>
+        {
+            Assert.DoesNotContain(sensitiveTitle, message);
+            Assert.DoesNotContain(sensitiveIdentity, message);
+            Assert.DoesNotContain("saved-sensitive", message);
+            Assert.DoesNotContain("private", message);
+        });
+
+        var authorizationLogger = new CapturingLogger<SqlReportAuthorizationStore>(LogLevel.Debug);
+        var authorization = new SqlReportAuthorizationStore(
+            () => new ReportAuthorizationStoreConfig("logging", ReportDialect.Sqlite),
+            connections,
+            authorizationLogger);
+        await authorization.GrantAdministrator(sensitiveIdentity);
+
+        Assert.Contains(
+            authorizationLogger.Messages,
+            message => message.Contains("IR_REPORT_AUTHORIZATION", StringComparison.Ordinal));
+        Assert.All(
+            authorizationLogger.Messages,
+            message => Assert.DoesNotContain(sensitiveIdentity, message));
+    }
+
+    [Fact]
+    public async Task Store_logging_obeys_the_supplied_log_level()
+    {
+        var connectionString = $"Data Source=logging-level-{Guid.NewGuid():n};Mode=Memory;Cache=Shared";
+        await using var keepAlive = new SqliteConnection(connectionString);
+        await keepAlive.OpenAsync();
+        var logger = new CapturingLogger<SqlSavedReportStore>(LogLevel.Information);
+        var store = new SqlSavedReportStore(
+            () => new SavedReportStoreConfig("logging", ReportDialect.Sqlite),
+            new ConnectionFactory(() => new SqliteConnection(connectionString)),
+            logger);
+
+        await store.ListAll();
+
+        Assert.Empty(logger.Messages);
+    }
+
     private sealed class CapturingLogger<T>(LogLevel minimumLevel) : ILogger<T>
     {
         public List<string> Messages { get; } = [];
@@ -59,5 +129,10 @@ public sealed class SqlLoggingTests
         {
             if (IsEnabled(logLevel)) Messages.Add(formatter(state, exception));
         }
+    }
+
+    private sealed class ConnectionFactory(Func<DbConnection> create) : IReportConnectionFactory
+    {
+        public DbConnection CreateConnection(string name) => create();
     }
 }

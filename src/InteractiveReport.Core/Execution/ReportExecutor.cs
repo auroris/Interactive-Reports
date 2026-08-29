@@ -86,13 +86,20 @@ public sealed class ReportExecutor
         var stopwatch = Stopwatch.StartNew();
         var validated = await IngestDocument(definition, state, contextParams, ct);
 
-        return validated.View.Mode switch
+        var result = validated.View.Mode switch
         {
             ViewMode.GroupBy => await QueryGroupStage(definition, validated, contextParams, stopwatch, ct),
             ViewMode.Pivot => await QuerySpread(definition, validated, contextParams, stopwatch, ct),
             ViewMode.Chart => await QueryChart(definition, validated, contextParams, stopwatch, ct),
             _ => await QueryGrid(definition, validated, contextParams, stopwatch, ct),
         };
+        _logger?.LogInformation(
+            "Report {Report} query completed in {ElapsedMs} ms with {RowCount} rows ({TotalRows} total)",
+            definition.Name,
+            result.ElapsedMs,
+            result.Rows.Count,
+            result.TotalRows);
+        return result;
     }
 
     /// <summary>
@@ -107,6 +114,21 @@ public sealed class ReportExecutor
         ReportState state,
         IReadOnlyDictionary<string, object?> contextParams,
         CancellationToken ct = default)
+    {
+        var result = await ExportCore(definition, state, contextParams, ct);
+        _logger?.LogInformation(
+            "Report {Report} export completed with {RowCount} rows (truncated: {Truncated})",
+            definition.Name,
+            result.Rows.Count,
+            result.Truncated);
+        return result;
+    }
+
+    private async Task<ExportResult> ExportCore(
+        ReportDefinition definition,
+        ReportState state,
+        IReadOnlyDictionary<string, object?> contextParams,
+        CancellationToken ct)
     {
         var validated = (await IngestDocument(definition, state, contextParams, ct)).WithDisplayLabels();
 

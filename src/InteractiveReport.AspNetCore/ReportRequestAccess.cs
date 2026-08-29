@@ -96,6 +96,12 @@ internal sealed class ReportAccessService : IReportAccessService
         if (request.Actions.Count == 0)
             throw new ArgumentException("At least one authorization action is required.", nameof(request));
 
+        EndpointExtensions.Log(context)?.LogDebug(
+            "Authorizing report {Report} actions {Actions} (traceId {TraceId})",
+            request.ReportName,
+            string.Join(",", request.Actions),
+            context.TraceIdentifier);
+
         var store = context.RequestServices.GetRequiredService<IReportDefinitionStore>();
         var (definition, resolutionError) = await ResolveDefinition(
             store, request.ReportName, context, ct);
@@ -126,7 +132,14 @@ internal sealed class ReportAccessService : IReportAccessService
             request.DenialDetail,
             ct);
         if (denied is not null)
+        {
+            EndpointExtensions.Log(context)?.LogDebug(
+                "Authorization denied for report {Report} actions {Actions} (traceId {TraceId})",
+                definition.Name,
+                string.Join(",", request.Actions),
+                context.TraceIdentifier);
             return new ReportAccessResult(null, denied);
+        }
 
         if (request.AdditionalAdministratorActions is not null)
         {
@@ -154,6 +167,11 @@ internal sealed class ReportAccessService : IReportAccessService
             }
         }
 
+        EndpointExtensions.Log(context)?.LogDebug(
+            "Authorization granted for report {Report} actions {Actions} (traceId {TraceId})",
+            definition.Name,
+            string.Join(",", request.Actions),
+            context.TraceIdentifier);
         return new ReportAccessResult(definition, null);
     }
 
@@ -419,9 +437,7 @@ internal sealed class ReportAccessService : IReportAccessService
                 }
                 catch (Exception ex)
                 {
-                    var logger = context.RequestServices.GetRequiredService<ILoggerFactory>()
-                        .CreateLogger("InteractiveReport.Authorization");
-                    logger.LogError(
+                    EndpointExtensions.Log(context)?.LogError(
                         ex,
                         "Report {Report}: authorization for {Action} failed (traceId {TraceId})",
                         resource.ReportName,
@@ -525,14 +541,12 @@ internal sealed class ReportAccessService : IReportAccessService
         string operation,
         Exception exception)
     {
-        context.RequestServices.GetRequiredService<ILoggerFactory>()
-            .CreateLogger("InteractiveReport.Authorization")
-            .LogError(
-                exception,
-                "Report {Report}: {Operation} failed (traceId {TraceId})",
-                reportName,
-                operation,
-                context.TraceIdentifier);
+        EndpointExtensions.Log(context)?.LogError(
+            exception,
+            "Report {Report}: {Operation} failed (traceId {TraceId})",
+            reportName,
+            operation,
+            context.TraceIdentifier);
         return Results.Problem(
             title: "Report authorization failed",
             statusCode: StatusCodes.Status500InternalServerError,

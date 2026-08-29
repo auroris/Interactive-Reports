@@ -396,13 +396,31 @@ context-parameter, and application authorization rules. See
 The Workbench also installs GraphiQL at `/graphiql` in Development so its schema can be
 explored and saved-report queries can be executed in the browser.
 
-To log the exact SQL command text submitted to the configured database, enable Debug
-for the report executor category. Parameter values are never logged:
+Interactive Reports uses one optional host-owned logger for its entire mapped request
+pipeline. Supply it when mapping the endpoints:
+
+```csharp
+var reportLogger = app.Services.GetRequiredService<ILoggerFactory>()
+    .CreateLogger("InteractiveReport");
+app.MapInteractiveReports("/api/reports", reportLogger);
+```
+
+An already-created logger may instead be supplied during service registration with
+`.AddInteractiveReports(...).UseLogger(logger)`. If neither location supplies one,
+the package is silent: it creates no provider, console output, file, or other logging
+side effect. `Information` records startup validation, every mapped request and its
+status/duration, report queries and exports, and configured-document synchronization.
+`Debug` adds authorization decisions, schema-cache activity, and exact submitted SQL.
+Errors retain the request trace id. Request bodies and SQL parameter values are never
+logged.
+
+The supplied logger owns filtering and destinations. For the category created above,
+Debug can be enabled with:
 
 ```json
 "Logging": {
   "LogLevel": {
-    "InteractiveReport.Core.Execution.ReportExecutor": "Debug"
+    "InteractiveReport": "Debug"
   }
 }
 ```

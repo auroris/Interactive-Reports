@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using InteractiveReport.Core.Model;
+using Microsoft.Extensions.Logging;
 
 namespace InteractiveReport.Core.Schema;
 
@@ -10,14 +11,27 @@ namespace InteractiveReport.Core.Schema;
 public sealed class SchemaCache
 {
     private readonly ConcurrentDictionary<SchemaCacheKey, Lazy<Task<ReportSchema>>> _cache = new();
+    private readonly ILogger? _logger;
+
+    public SchemaCache() : this(logger: null)
+    {
+    }
+
+    public SchemaCache(ILogger<SchemaCache>? logger) => _logger = logger;
 
     public Task<ReportSchema> GetOrDiscover(
         ReportDefinition definition,
         Func<Task<ReportSchema>> discover)
     {
         var key = SchemaCacheKey.From(definition);
-        var lazy = _cache.GetOrAdd(key, _ => new Lazy<Task<ReportSchema>>(
-            () => WithEviction(key, discover)));
+        var candidate = new Lazy<Task<ReportSchema>>(
+            () => WithEviction(key, discover));
+        var lazy = _cache.GetOrAdd(key, candidate);
+        _logger?.LogDebug(
+            ReferenceEquals(lazy, candidate)
+                ? "Discovering schema for report {Report}"
+                : "Using cached schema for report {Report}",
+            definition.Name);
         return lazy.Value;
     }
 
@@ -33,18 +47,29 @@ public sealed class SchemaCache
         catch
         {
             _cache.TryRemove(key, out _);
+            _logger?.LogDebug("Evicted failed schema discovery for report {Report}", key.ReportName);
             throw;
         }
     }
 
     public void Remove(string reportName)
     {
+        var removed = 0;
         foreach (var key in _cache.Keys.Where(
                      key => string.Equals(key.ReportName, reportName, StringComparison.OrdinalIgnoreCase)))
-            _cache.TryRemove(key, out _);
+            if (_cache.TryRemove(key, out _)) removed++;
+        _logger?.LogDebug(
+            "Removed {SchemaCount} cached schemas for report {Report}",
+            removed,
+            reportName);
     }
 
-    public void Clear() => _cache.Clear();
+    public void Clear()
+    {
+        var count = _cache.Count;
+        _cache.Clear();
+        _logger?.LogDebug("Cleared {SchemaCount} cached report schemas", count);
+    }
 
     private sealed record SchemaCacheKey(
         string ReportName,

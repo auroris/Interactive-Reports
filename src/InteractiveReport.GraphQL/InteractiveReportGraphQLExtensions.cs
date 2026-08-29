@@ -1,6 +1,7 @@
 using GraphQL;
 using GraphQL.Server.Transports.AspNetCore;
 using GraphQL.Types;
+using InteractiveReport.AspNetCore;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -42,6 +43,7 @@ public static class InteractiveReportGraphQLExtensions
         ArgumentNullException.ThrowIfNull(endpoints);
 
         var group = endpoints.MapGroup("");
+        group.AddEndpointFilter(InteractiveReportLogging.LogRequest);
         group.AddEndpointFilter(static async (invocation, next) =>
         {
             invocation.HttpContext.Response.Headers.CacheControl = "no-store";
