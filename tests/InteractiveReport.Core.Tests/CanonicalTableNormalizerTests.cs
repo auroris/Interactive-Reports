@@ -112,7 +112,7 @@ public class CanonicalTableNormalizerTests
         Assert.IsType<CanonicalPivotShape>(result.Shape);
         Assert.Equal(["ir1", "ir2"], result.Computed.Select(value => value.Id));
         Assert.Empty(result.Computed[0].Dependencies);
-        Assert.Equal(["ir1"], result.Computed[1].Dependencies);
+        Assert.Equal(["ir1"], result.Computed[1].Dependencies.ToArray());
         Assert.Single(result.Filters);
         Assert.Equal("Double amount", result.Metadata.Labels["IR2"]);
         Assert.Equal("decimal-2", result.Metadata.Formats["IR2"].Mask);
@@ -450,8 +450,8 @@ public class CanonicalTableNormalizerTests
         classes[0] = "changed";
         format.Mask = "integer";
 
-        Assert.Equal(["REGION"], normalized.Local.Selection!.Columns);
+        Assert.Equal(["REGION"], normalized.Local.Selection!.Columns.ToArray());
         Assert.Equal("decimal-2", normalized.Metadata.Formats["AMOUNT"].Mask);
-        Assert.Equal(["money"], normalized.Metadata.Formats["AMOUNT"].Classes);
+        Assert.Equal(["money"], normalized.Metadata.Formats["AMOUNT"].Classes.ToArray());
     }
 }

@@ -129,10 +129,12 @@ public sealed class CanonicalComposableExecutionTests : IClassFixture<SqliteE2EF
         var exception = await Assert.ThrowsAsync<ReportValidationException>(
             () => _executor.Query(Definition, document, NoParams));
 
-        var aError = Assert.Single(exception.Errors.Where(item =>
-            item.Message.Contains("A_MISSING", StringComparison.Ordinal)));
-        var zError = Assert.Single(exception.Errors.Where(item =>
-            item.Message.Contains("Z_MISSING", StringComparison.Ordinal)));
+        var aError = Assert.Single(
+            exception.Errors,
+            item => item.Message.Contains("A_MISSING", StringComparison.Ordinal));
+        var zError = Assert.Single(
+            exception.Errors,
+            item => item.Message.Contains("Z_MISSING", StringComparison.Ordinal));
         Assert.Equal("tables.result.composables[0].filters[1].expr", aError.Path);
         Assert.Equal("tables.result.composables[0].filters[0].expr", zError.Path);
     }
@@ -168,10 +170,12 @@ public sealed class CanonicalComposableExecutionTests : IClassFixture<SqliteE2EF
         var exception = await Assert.ThrowsAsync<ReportValidationException>(
             () => _executor.Query(Definition, document, NoParams));
 
-        var aError = Assert.Single(exception.Errors.Where(item =>
-            item.Message.Contains("A_MISSING", StringComparison.Ordinal)));
-        var zError = Assert.Single(exception.Errors.Where(item =>
-            item.Message.Contains("Z_MISSING", StringComparison.Ordinal)));
+        var aError = Assert.Single(
+            exception.Errors,
+            item => item.Message.Contains("A_MISSING", StringComparison.Ordinal));
+        var zError = Assert.Single(
+            exception.Errors,
+            item => item.Message.Contains("Z_MISSING", StringComparison.Ordinal));
         Assert.Equal("tables.result.composables[0].highlights[1].expr", aError.Path);
         Assert.Equal("tables.result.composables[0].highlights[0].expr", zError.Path);
     }
@@ -200,8 +204,9 @@ public sealed class CanonicalComposableExecutionTests : IClassFixture<SqliteE2EF
         var exception = await Assert.ThrowsAsync<ReportValidationException>(
             () => _executor.Query(Definition, document, NoParams));
 
-        var budget = Assert.Single(exception.Errors.Where(item =>
-            item.Message == "at most 50 filter rules per report state"));
+        var budget = Assert.Single(
+            exception.Errors,
+            item => item.Message == "at most 50 filter rules per report state");
         Assert.Equal("tables.result.composables[0].filters", budget.Path);
     }
 

@@ -294,7 +294,7 @@ public class CanonicalLocalResultBinderTests
                 "tables.child.composables[2].highlights",
                 "tables.child.composables[9].highlights",
             ],
-            specification.Local.HighlightPopulation.CollectionPaths);
+            specification.Local.HighlightPopulation.CollectionPaths.ToArray());
 
         var context = new LocalResultBindingContext();
         context.Highlights.RuleCount = 49;

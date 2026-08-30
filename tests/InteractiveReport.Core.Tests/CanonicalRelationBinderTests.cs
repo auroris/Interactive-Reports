@@ -82,7 +82,7 @@ public class CanonicalRelationBinderTests
         Assert.Equal(
             ["ir1"],
             Assert.IsType<BoundComputedColumnLineage>(
-                secondCompute.Column.Output.Lineage).InputLogicalIds);
+                secondCompute.Column.Output.Lineage).InputLogicalIds.ToArray());
     }
 
     [Fact]
@@ -181,7 +181,7 @@ public class CanonicalRelationBinderTests
                 "tables.child.composables[2].computed",
                 "tables.child.composables[7].computed",
             ],
-            specification.ComputedPopulation.CollectionPaths);
+            specification.ComputedPopulation.CollectionPaths.ToArray());
 
         var result = Bind(specification, inheritedComputedCount: 19);
 
@@ -256,7 +256,7 @@ public class CanonicalRelationBinderTests
                 "tables.child.composables[3].filters",
                 "tables.child.composables[8].filters",
             ],
-            specification.FilterPopulation.CollectionPaths);
+            specification.FilterPopulation.CollectionPaths.ToArray());
 
         var result = Bind(specification, inheritedFilterCount: 49);
 

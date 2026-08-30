@@ -119,7 +119,7 @@ public sealed class SqlKataRelationLowererTests
         Assert.True(computed.LocalFormat!.Bold);
         Assert.Equal(
             ["AMOUNT"],
-            Assert.IsType<BoundComputedColumnLineage>(computed.Lineage).InputLogicalIds);
+            Assert.IsType<BoundComputedColumnLineage>(computed.Lineage).InputLogicalIds.ToArray());
         Assert.Equal(
             ["search", "metadata", "filter(1)", "compute(ir1)", "source"],
             DebugOperators(search));

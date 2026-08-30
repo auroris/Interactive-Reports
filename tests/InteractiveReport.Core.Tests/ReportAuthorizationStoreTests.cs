@@ -33,8 +33,9 @@ public sealed class ReportAuthorizationStoreTests : IDisposable
         Assert.True(access.Configured);
         Assert.True(access.UserGranted);
         Assert.False((await _store.GetAdministratorAccess("alice")).UserGranted);
-        Assert.Single((await _store.ListAll())
-            .Where(entry => entry.Kind == ReportAuthorizationEntryKind.Administrator));
+        Assert.Single(
+            await _store.ListAll(),
+            entry => entry.Kind == ReportAuthorizationEntryKind.Administrator);
 
         Assert.False(await _store.RevokeAdministrator("ALICE"));
         Assert.True(await _store.RevokeAdministrator("Alice"));

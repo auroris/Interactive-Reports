@@ -43,8 +43,8 @@ public sealed class ReportStateResolverTests
         Assert.Equal("source", resolved.ActiveTable);
 
         var source = resolved.Tables!["source"];
-        var sort = Assert.Single(source.Composables!.Where(c => c.Kind == "sort")).Sorts!.Single();
-        var labels = Assert.Single(source.Composables!.Where(c => c.Kind == "labels")).Labels!;
+        var sort = Assert.Single(source.Composables!, c => c.Kind == "sort").Sorts!.Single();
+        var labels = Assert.Single(source.Composables!, c => c.Kind == "labels").Labels!;
         Assert.Equal("AMOUNT", sort.Col);
         Assert.Equal("Order Total", labels["AMOUNT"]);
         Assert.Equal("STATUS", resolved.Tables["summary"].Composables![0].By!.Single());
