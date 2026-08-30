@@ -14,6 +14,14 @@ query, search, paging, report-attribute changes, CSV export, saved-report persis
 and non-administrator authorization. Saved reports use random names and are removed in
 `finally` blocks, allowing the suite to run against an existing developer Workbench.
 
+The `composition-*.spec.js` files exercise the canonical composable planner across the
+complete browser/server boundary: semantic ordering independent of storage position,
+parent Export versus owner-local results, highlight precedence, Pivot continuations and
+metric provenance, safe format lineage, transactional validation rollback, CSV parity,
+and break totals across page boundaries. `support.js` seeds temporary private saved
+states so adversarial and deep table graphs still load through the public persistence UI;
+each scenario deletes its state in `finally` and remains safe under parallel execution.
+
 ```sh
 npm run test:ui
 ```
