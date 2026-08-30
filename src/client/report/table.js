@@ -142,20 +142,31 @@ const replaceAggregateSource = (label, fn, structuralSource, displaySource) => {
         : `${source.slice(0, at)}${aggregateLabel(fn, displaySource)}${source.slice(at + structural.length)}`;
 };
 
-const applyPivotLabels = (shape, input, output, labels) => {
+const applyPivotLabels = (shape, input, output, labels, computedIds = new Set()) => {
     const metrics = (shape.values ?? []).flatMap(metric => {
         const source = columnFrom(input, metric?.col);
-        const id = String(metric?.id ?? "").trim();
-        return source && id ? [{ metric, source, id }] : [];
+        return source ? [{ metric, source }] : [];
     });
+    if (metrics.length < 2) return output.length
+        ? output
+        : (shape.rows ?? []).map(name => columnFrom(input, name)).filter(Boolean);
+
     for (const column of output) {
-        const match = metrics.find(({ id }) =>
-            String(column.name).toLowerCase().startsWith(`${id.toLowerCase()}@`));
+        if ((shape.rows ?? []).some(name => sameColumn(name, column.name))
+            || computedIds.has(String(column.name).toLowerCase())) continue;
+        const match = metrics.find(({ metric, source }) => {
+            const provenance = source.formatSource ?? source.name;
+            if (column.formatSource && !sameColumn(column.formatSource, provenance)) return false;
+            return String(column.label ?? "").toLowerCase()
+                .includes(aggregateLabel(metric.fn, source.label).toLowerCase());
+        });
         if (!match) continue;
         const display = lookupValue(labels, match.source.name) ?? match.source.label;
-        const label = metrics.length === 1
-            ? column.label
-            : replaceAggregateSource(column.label, match.metric.fn, match.source.label, display);
+        const label = replaceAggregateSource(
+            column.label,
+            match.metric.fn,
+            match.source.label,
+            display);
         setMapEntry(labels, column.name, label);
     }
     return output.length
@@ -204,11 +215,16 @@ function foldedLabels(w) {
                     columns = applyChartLabels(composable, columns, labels);
                     break;
                 case "pivot": {
+                    const computedIds = new Set(composables
+                        .filter(item => kindOf(item) === "compute")
+                        .flatMap(item => item.computed ?? [])
+                        .map(rule => String(rule?.id ?? "").toLowerCase()));
                     columns = applyPivotLabels(
                         composable,
                         columns,
                         index + 1 < shapes.length ? [] : completed,
-                        labels);
+                        labels,
+                        computedIds);
                     break;
                 }
             }

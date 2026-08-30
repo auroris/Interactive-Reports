@@ -288,16 +288,16 @@ const overlayFormatMaps = (inherited, maps) => {
     return effective;
 };
 
-/// Effective formats for the selected table. A `from` edge carries only a
-/// column's safe scalar mask. Alignment, styles, classes, renderers, commands,
-/// and renderer source columns remain owner-local. The active table's direct
-/// entries stay complete; a later boundary reduces them to mask metadata again.
-export const composedFormats = doc => {
+/// Effective formats for the selected table plus the mask-only contract imported
+/// by that table. Keeping those maps distinct prevents an active-table assignment
+/// to a pre-Shape source name from leaking backward into a generated column.
+export const composedFormatContext = doc => {
     const chain = activeChain(doc);
     let inherited = {};
     for (let index = 0; index < chain.length; index++) {
+        const imported = inherited;
         const effective = overlayFormatMaps(inherited, formatMapsOwnedBy(chain[index]));
-        if (index === chain.length - 1) return effective;
+        if (index === chain.length - 1) return { effective, imported };
 
         inherited = {};
         for (const [name, value] of Object.entries(effective)) {
@@ -305,8 +305,14 @@ export const composedFormats = doc => {
             setMapEntry(inherited, name, { mask: value.mask });
         }
     }
-    return inherited;
+    return { effective: inherited, imported: inherited };
 };
+
+/// Effective formats for the selected table. A `from` edge carries only a
+/// column's safe scalar mask. Alignment, styles, classes, renderers, commands,
+/// and renderer source columns remain owner-local. The active table's direct
+/// entries stay complete; a later boundary reduces them to mask metadata again.
+export const composedFormats = doc => composedFormatContext(doc).effective;
 
 const ownRange = (doc, requested) => {
     const entry = tableEntry(doc, requested);
@@ -685,6 +691,12 @@ const mapDeleteWhere = (map, predicate) => {
 
 /// True when an expression contains the column as an identifier, excluding quoted
 /// string contents and longer identifiers (ir1 does not match ir10 or 'ir1').
+const expressionKeywords = new Set([
+    "case", "when", "then", "else", "end", "and", "or", "not", "is", "null", "between",
+]);
+const expressionIdentifierStart = value => /[\p{L}_]/u.test(value);
+const expressionIdentifierPart = value => /[\p{L}\p{Nd}_$#]/u.test(value);
+
 export function expressionReferencesColumn(expression, column) {
     const source = String(expression ?? "");
     const target = String(column ?? "").toLowerCase();
@@ -715,10 +727,17 @@ export function expressionReferencesColumn(expression, column) {
             if (matches(identifier)) return true;
             continue;
         }
-        if (!quoted && /[A-Za-z_]/.test(source[index])) {
+        if (!quoted && expressionIdentifierStart(source[index])) {
             let end = index + 1;
-            while (end < source.length && /[A-Za-z0-9_$#]/.test(source[end])) end++;
-            if (matches(source.slice(index, end))) return true;
+            while (end < source.length && expressionIdentifierPart(source[end])) end++;
+            const identifier = source.slice(index, end);
+            let next = end;
+            while (next < source.length && /\s/u.test(source[next])) next++;
+            // Bare language keywords and call heads are syntax, not column
+            // references. Quoted names above remain columns even before `(`.
+            if (!expressionKeywords.has(identifier.toLowerCase())
+                && source[next] !== "("
+                && matches(identifier)) return true;
             index = end;
             continue;
         }
@@ -807,76 +826,6 @@ const cleanupColumnReferences = (range, column) => {
     return retired;
 };
 
-/// Delete one definition-input computed column and everything that depends on it.
-/// Within the input table, references are stripped precisely. A descendant
-/// table whose shape consumes the column is removed with its descendants (T0
-/// coarse invalidation). Unrelated roots in an externally-authored document are
-/// untouched. Returns the built-in modes that were dropped so callers can say so.
-export function removeInputComputedColumn(state, column) {
-    const source = definitionInputEntry(state);
-    if (!source) return [];
-    const retired = cleanupColumnReferences(
-        ownRange(state, source.id),
-        column);
-
-    const descendants = new Set([source.id.toLowerCase()]);
-    let changed = true;
-    while (changed) {
-        changed = false;
-        for (const [id, table] of Object.entries(state.tables ?? {})) {
-            const key = id.toLowerCase();
-            if (descendants.has(key)) continue;
-            if (descendants.has(token(table?.from))) {
-                descendants.add(key);
-                changed = true;
-            }
-        }
-    }
-
-    const remove = new Set();
-    for (const [id] of Object.entries(state.tables ?? {})) {
-        if (id.toLowerCase() === source.id.toLowerCase() || !descendants.has(id.toLowerCase())) continue;
-        if (retired.some(name => shapesReferenceColumn(shapeLocations(state, id), name)))
-            remove.add(id.toLowerCase());
-    }
-    changed = true;
-    while (changed) {
-        changed = false;
-        for (const [id, table] of Object.entries(state.tables ?? {})) {
-            if (!remove.has(id.toLowerCase()) && remove.has(token(table?.from))) {
-                remove.add(id.toLowerCase());
-                changed = true;
-            }
-        }
-    }
-
-    const dropped = [];
-    for (const [id] of Object.entries(state.tables ?? {})) {
-        if (!remove.has(id.toLowerCase())) continue;
-        const mode = modeOf({ ...state, activeTable: id });
-        if (mode !== "custom" && mode !== "grid" && !dropped.includes(mode)) dropped.push(mode);
-        delete state.tables[id];
-    }
-    if (remove.has(token(state.activeTable))) state.activeTable = source.id;
-    return dropped;
-}
-
-/// Delete one terminal computed column and its references in the exact active
-/// table: filters, sorts, highlights, selection, and presentation maps.
-export function removeTerminalComputedColumn(state, column, tableId = state?.activeTable) {
-    cleanupColumnReferences(
-        ownRange(state, tableId),
-        column);
-    return state;
-}
-
-/// After a Group By / Pivot edit retires metric ids, drop terminal state that
-/// referenced them (the same coarse rule as computed-column removal).
-export function pruneRetiredMetrics(state, tableId, retiredIds) {
-    for (const id of retiredIds) removeTerminalComputedColumn(state, id, tableId);
-    return state;
-}
-
 const schemaColumnNames = table => (table?.schema ?? [])
     .map(column => typeof column === "string" ? column : column?.name)
     .filter(name => typeof name === "string" && name.length > 0);
@@ -885,9 +834,9 @@ const schemaColumnNames = table => (table?.schema ?? [])
 /// descendant. Ordinary descendant rules are pruned exactly. A descendant whose
 /// Shape consumes a retired column is removed with its subtree because its output
 /// contract can no longer be inferred locally.
-const pruneExportedColumns = (state, tableId, columns) => {
+function pruneExportedColumns(state, tableId, columns) {
     const root = tableEntry(state, tableId);
-    if (!root || columns.length === 0) return;
+    if (!root || columns.length === 0) return [];
 
     const retiredByTable = new Map();
     const rootRetired = [];
@@ -910,8 +859,17 @@ const pruneExportedColumns = (state, tableId, columns) => {
             }
             const inherited = retiredByTable.get(parent);
             if (!inherited) continue;
-            if (inherited.some(column => shapesReferenceColumn(ownShapeLocations(state, id), column))) {
+            const shapes = ownShapeLocations(state, id);
+            if (inherited.some(column => shapesReferenceColumn(shapes, column))) {
                 removed.add(key);
+                changed = true;
+                continue;
+            }
+
+            // A Shape which does not consume the retired input is a schema
+            // boundary: that input is already absent from its completed export.
+            if (shapes.length > 0) {
+                retiredByTable.set(key, []);
                 changed = true;
                 continue;
             }
@@ -924,10 +882,44 @@ const pruneExportedColumns = (state, tableId, columns) => {
         }
     }
 
-    for (const [id] of Object.entries(state.tables ?? {}))
-        if (removed.has(id.toLowerCase())) delete state.tables[id];
+    const dropped = [];
+    for (const [id] of Object.entries(state.tables ?? {})) {
+        if (!removed.has(id.toLowerCase())) continue;
+        const mode = modeOf({ ...state, activeTable: id });
+        if (mode !== "custom" && mode !== "grid" && !dropped.includes(mode)) dropped.push(mode);
+        delete state.tables[id];
+    }
     if (removed.has(token(state.activeTable))) state.activeTable = root.id;
-};
+    return dropped;
+}
+
+/// Delete one definition-input computed column and everything exported from it.
+/// Ordinary descendants lose exact references; a descendant Shape which consumes
+/// a retired column is removed with its subtree. Unrelated roots remain untouched.
+export function removeInputComputedColumn(state, column) {
+    const source = definitionInputEntry(state);
+    return source ? pruneExportedColumns(state, source.id, [column]) : [];
+}
+
+/// Delete one computed/public output and propagate its loss through every named
+/// table which imports it. Returns built-in descendant modes removed by coarse
+/// Shape invalidation so UI callers can report the loss.
+export function removeTerminalComputedColumn(state, column, tableId = state?.activeTable) {
+    return pruneExportedColumns(state, tableId, [column]);
+}
+
+/// After a Group/Pivot edit retires metric ids, drop owner and descendant state
+/// which referenced their exported columns.
+export function pruneRetiredMetrics(state, tableId, retiredIds) {
+    pruneExportedColumns(state, tableId, retiredIds);
+    return state;
+}
+
+const authoredComputedIds = table => new Set((table?.composables ?? [])
+    .filter(composable => isKind(composable, "compute"))
+    .flatMap(composable => composable?.computed ?? [])
+    .map(rule => typeof rule?.id === "string" ? rule.id.toLowerCase() : null)
+    .filter(Boolean));
 
 /// Dynamic Pivot cell ids are intentionally opaque. The previous live schema is
 /// therefore the authority for the cells owned by a Pivot: every output other than
@@ -944,16 +936,20 @@ export function pruneRetiredPivotOutputs(
     const nextColumns = replacement?.cols ?? [];
     const columnsChanged = oldColumns.length !== nextColumns.length
         || oldColumns.some((name, index) => !sameColumn(name, nextColumns[index]));
+    const retired = (previous?.rows ?? [])
+        .filter(row => !(replacement?.rows ?? []).some(candidate => sameColumn(candidate, row)));
     if (columnsChanged || retiredMetricIds.length > 0) {
         const table = tableEntry(state, tableId)?.table;
         const rows = previous?.rows ?? [];
+        const computed = authoredComputedIds(table);
         const generated = schemaColumnNames(table)
-            .filter(name => !rows.some(row => sameColumn(row, name)));
-        pruneExportedColumns(state, tableId, generated);
+            .filter(name => !rows.some(row => sameColumn(row, name))
+                && !computed.has(name.toLowerCase()));
+        retired.push(...generated);
     }
-    for (const row of previous?.rows ?? [])
-        if (!(replacement?.rows ?? []).some(candidate => sameColumn(candidate, row)))
-            removeTerminalComputedColumn(state, row, tableId);
+    const unique = retired.filter((name, index) => typeof name === "string"
+        && retired.findIndex(candidate => sameColumn(candidate, name)) === index);
+    pruneExportedColumns(state, tableId, unique);
     return state;
 }
 
@@ -968,9 +964,9 @@ const chartOutputColumns = shape => {
 /// the same label/metric identities. Retire only names which disappear.
 export function pruneRetiredChartOutputs(state, tableId, previous, replacement) {
     const retained = chartOutputColumns(replacement);
-    for (const name of chartOutputColumns(previous))
-        if (!retained.some(candidate => sameColumn(candidate, name)))
-            removeTerminalComputedColumn(state, name, tableId);
+    const retired = chartOutputColumns(previous)
+        .filter(name => !retained.some(candidate => sameColumn(candidate, name)));
+    pruneExportedColumns(state, tableId, retired);
     return state;
 }
 

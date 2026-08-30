@@ -46,6 +46,25 @@ public sealed class DynamicPivotColumnIdentityRegistryTests
     }
 
     [Fact]
+    public void Equivalent_numeric_provider_representations_share_one_identity()
+    {
+        var registry = new DynamicPivotColumnIdentityRegistry([]);
+
+        var numericIds = new[]
+        {
+            registry.Register("matrix", "ir1", [(short)1]),
+            registry.Register("matrix", "ir1", [1]),
+            registry.Register("matrix", "ir1", [1L]),
+            registry.Register("matrix", "ir1", [1m]),
+            registry.Register("matrix", "ir1", [1d]),
+            registry.Register("matrix", "ir1", [1f]),
+        };
+
+        Assert.Single(numericIds.Distinct());
+        Assert.NotEqual(numericIds[0], registry.Register("matrix", "ir1", ["1"]));
+    }
+
+    [Fact]
     public void Owning_table_and_full_typed_key_are_part_of_identity()
     {
         var registry = new DynamicPivotColumnIdentityRegistry([]);

@@ -248,6 +248,54 @@ public sealed class TerminalExecutionBundleBuilderTests
 
     [Theory]
     [MemberData(nameof(DialectCases))]
+    public void Sort_break_and_delivery_deltas_are_confined_to_their_roles(
+        ReportDialect dialect)
+    {
+        var (definition, relation, schema) = Source(dialect);
+        var status = schema.Lookup["STATUS"];
+        var amount = schema.Lookup["AMOUNT"];
+        var aggregate = new ValidAggregate(amount, AggregateFn.Sum);
+        var baseline = Terminal(
+            schema,
+            selected: schema.Columns,
+            projection: schema.Columns,
+            aggregates: [aggregate]);
+
+        var plain = Build(definition, relation, baseline);
+        var sorted = Build(
+            definition,
+            relation,
+            baseline with { Sorts = [new ValidSort(amount, SortDir.Desc)] });
+        AssertQueryNotEqualForDialect(plain.MainRows.Query, sorted.MainRows.Query, dialect);
+        AssertQueryNotEqualForDialect(plain.Export.Query, sorted.Export.Query, dialect);
+        AssertCompiledEqual(Compile(plain.Count, dialect), Compile(sorted.Count, dialect));
+        AssertCompiledEqual(
+            Compile(plain.FooterAggregates!.Query, dialect),
+            Compile(sorted.FooterAggregates!.Query, dialect));
+
+        var broken = Build(
+            definition,
+            relation,
+            baseline with { Breaks = [status] });
+        Assert.NotNull(broken.BreakTotals);
+        AssertQueryNotEqualForDialect(plain.MainRows.Query, broken.MainRows.Query, dialect);
+        AssertQueryNotEqualForDialect(plain.Export.Query, broken.Export.Query, dialect);
+        AssertCompiledEqual(Compile(plain.Count, dialect), Compile(broken.Count, dialect));
+        AssertCompiledEqual(
+            Compile(plain.FooterAggregates.Query, dialect),
+            Compile(broken.FooterAggregates!.Query, dialect));
+
+        var allRows = Build(definition, relation, baseline, pageAll: true);
+        AssertQueryNotEqualForDialect(plain.MainRows.Query, allRows.MainRows.Query, dialect);
+        AssertCompiledEqual(Compile(plain.Count, dialect), Compile(allRows.Count, dialect));
+        AssertCompiledEqual(
+            Compile(plain.FooterAggregates.Query, dialect),
+            Compile(allRows.FooterAggregates!.Query, dialect));
+        AssertCompiledEqual(Compile(plain.Export.Query, dialect), Compile(allRows.Export.Query, dialect));
+    }
+
+    [Theory]
+    [MemberData(nameof(DialectCases))]
     public void Pivot_totals_slot_carries_the_registered_cell_layout(
         ReportDialect dialect)
     {
@@ -460,6 +508,18 @@ public sealed class TerminalExecutionBundleBuilderTests
     {
         var left = Compile(expected);
         var right = Compile(actual);
+        Assert.False(
+            left.Sql == right.Sql && left.Bindings.SequenceEqual(right.Bindings),
+            "Expected the compiled queries to differ.");
+    }
+
+    private static void AssertQueryNotEqualForDialect(
+        Query expected,
+        Query actual,
+        ReportDialect dialect)
+    {
+        var left = Compile(expected, dialect);
+        var right = Compile(actual, dialect);
         Assert.False(
             left.Sql == right.Sql && left.Bindings.SequenceEqual(right.Bindings),
             "Expected the compiled queries to differ.");

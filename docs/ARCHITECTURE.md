@@ -621,14 +621,17 @@ to the Shape's completed schema regardless of their document-array positions.
 - `pivot` — `{ "kind": "pivot", "rows": [...], "cols": [...], "values":
   [{id, col, fn}...], "totals": true? }` groups the relation produced so far by
   `rows + cols`, discovers a bounded set of column keys, and emits a portable wide SQL
-  relation. Distinct `cols` values become `{metricId}@{values…}` columns. Once those
-  data-dependent names exist, every later composable, including a child table, binds to
-  that schema and wraps that SQL normally. Backticks quote generated names in
-  expressions. Optional bottom totals are terminal response data re-aggregated from
-  the same Pivot input by `cols` alone; they are not rows inherited by a child. Until
-  totals are lowered over the completed post-Pivot relation, `totals: true` is rejected
-  with same-table compute/filter or active request search so totals cannot silently
-  describe a different row set.
+  relation. Distinct typed `cols` keys become opaque `irN` cell ids derived from the
+  owning table, metric id, and canonical key. The returned live schema is the authority
+  for those ids; values and captions never become protocol identifiers. Once the
+  data-dependent contract exists, every later composable, including a child table,
+  binds to that schema and wraps that SQL normally. Optional bottom totals are terminal
+  response data re-aggregated from the same Pivot input by `cols` alone; they are not
+  rows inherited by a child. Until totals are lowered over the completed post-Pivot
+  relation, `totals: true` is rejected with same-table compute/filter or active request
+  search so totals cannot silently describe a different row set. It is also rejected
+  when a footer aggregate would claim the same generated-cell/function response key;
+  those two values come from different relations and need distinct semantics.
 - `chart` — `{ "kind": "chart", ... }` produces the chart's ordinary two-column
   result table. Later ordinary composables can filter, sort, select, label, format,
   highlight, break, or aggregate those columns under the same rules. Rendering that

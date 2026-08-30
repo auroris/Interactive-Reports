@@ -477,6 +477,52 @@ test("generated labels resolve through the completed parent table", () => {
     ]);
 });
 
+test("opaque Pivot cells rebuild multi-metric labels from structural provenance", () => {
+    const sumCell = "ir7400000000000000001";
+    const avgCell = "ir7400000000000000002";
+    const definitionColumns = [
+        { name: "CUSTOMER", label: "Customer", type: "text" },
+        { name: "STATUS", label: "Status", type: "text" },
+        { name: "AMOUNT", label: "Amount", type: "number" },
+    ];
+    const state = normalizeReportState({
+        activeTable: "pivoted",
+        tables: {
+            base: {
+                from: "definition",
+                schema: structuredClone(definitionColumns),
+                composables: [{ kind: "labels", labels: { AMOUNT: "Sales" } }],
+            },
+            pivoted: {
+                from: "base",
+                schema: [
+                    { name: "CUSTOMER", label: "Customer", type: "text" },
+                    { name: sumCell, label: "SHIPPED · sum(Amount)", type: "number", formatSource: "AMOUNT" },
+                    { name: avgCell, label: "SHIPPED · avg(Amount)", type: "number", formatSource: "AMOUNT" },
+                ],
+                composables: [{
+                    kind: "pivot",
+                    rows: ["CUSTOMER"],
+                    cols: ["STATUS"],
+                    values: [
+                        { id: "ir1", col: "AMOUNT", fn: "sum" },
+                        { id: "ir2", col: "AMOUNT", fn: "avg" },
+                    ],
+                }],
+            },
+        },
+    }, 25);
+
+    assert.deepEqual(terminalTableColumns({
+        doc: state,
+        schema: { columns: definitionColumns },
+    }).map(column => [column.name, column.label]), [
+        ["CUSTOMER", "Customer"],
+        [sumCell, "SHIPPED · sum(Sales)"],
+        [avgCell, "SHIPPED · avg(Sales)"],
+    ]);
+});
+
 test("a later label override cannot rewrite an already-generated child metric", () => {
     const state = normalizeReportState({
         activeTable: "second",
@@ -896,6 +942,76 @@ test("input computed deletion strips exact input nodes and removes only dependen
     assert.equal(state.activeTable, "base");
 });
 
+test("exported computed deletion cleans ordinary descendants and prunes dependent Shapes", () => {
+    const state = normalizeReportState({
+        activeTable: "leaf",
+        tables: {
+            base: { from: "definition", composables: [] },
+            middle: {
+                from: "base",
+                composables: [{
+                    kind: "compute",
+                    computed: [{ id: "ir1", expr: "AMOUNT * 2" }],
+                }],
+            },
+            decorated: {
+                from: "middle",
+                composables: nodesFor({
+                    computed: [{ id: "ir2", expr: "ir1 + 1" }, { id: "ir3", expr: "AMOUNT + 1" }],
+                    filters: [{ expr: "ir1 > 0" }, { expr: "ir3 > 0" }],
+                    columns: ["AMOUNT", "ir1", "ir2", "ir3"],
+                }),
+            },
+            grouped: {
+                from: "decorated",
+                composables: [{ kind: "group", by: ["ir2"], values: [] }],
+            },
+            leaf: { from: "grouped", composables: [] },
+        },
+    }, 25);
+
+    const dropped = removeTerminalComputedColumn(state, "ir1", "middle");
+
+    assert.deepEqual(dropped, ["groupBy"]);
+    assert.deepEqual(state.tables.decorated.composables
+        .find(composable => composable.kind === "compute").computed.map(rule => rule.id), ["ir3"]);
+    assert.deepEqual(state.tables.decorated.composables
+        .find(composable => composable.kind === "filter").filters, [{ expr: "ir3 > 0" }]);
+    assert.deepEqual(state.tables.decorated.composables
+        .find(composable => composable.kind === "select").columns, ["AMOUNT", "ir3"]);
+    assert.equal(state.tables.grouped, undefined);
+    assert.equal(state.tables.leaf, undefined);
+    assert.equal(state.activeTable, "middle");
+});
+
+test("definition computed deletion strips ordinary descendant references", () => {
+    const state = normalizeReportState({
+        activeTable: "child",
+        tables: {
+            base: {
+                from: "definition",
+                composables: [{ kind: "compute", computed: [{ id: "ir1", expr: "AMOUNT * 2" }] }],
+            },
+            child: {
+                from: "base",
+                composables: nodesFor({
+                    computed: [{ id: "ir2", expr: "ir1 + 1" }],
+                    filters: [{ expr: "ir1 > 0" }],
+                    columns: ["AMOUNT", "ir1", "ir2"],
+                }),
+            },
+        },
+    }, 25);
+
+    assert.deepEqual(removeInputComputedColumn(state, "ir1"), []);
+    assert.deepEqual(state.tables.child.composables
+        .find(composable => composable.kind === "compute").computed, []);
+    assert.deepEqual(state.tables.child.composables
+        .find(composable => composable.kind === "filter").filters, []);
+    assert.deepEqual(state.tables.child.composables
+        .find(composable => composable.kind === "select").columns, ["AMOUNT"]);
+});
+
 test("Pivot cleanup follows opaque server schema ids through unshaped descendants", () => {
     const shipped = "ir7100000000000000001";
     const pending = "ir7100000000000000002";
@@ -951,6 +1067,49 @@ test("Pivot cleanup follows opaque server schema ids through unshaped descendant
 
     removeTerminalComputedColumn(state, "ir5");
     assert.deepEqual(node(state, "compute").computed, []);
+});
+
+test("Pivot cleanup preserves same-table computes independent of opaque cells", () => {
+    const cell = "ir7120000000000000001";
+    const previous = {
+        kind: "pivot",
+        rows: ["CUSTOMER"],
+        cols: ["STATUS"],
+        values: [{ id: "ir1", col: "AMOUNT", fn: "sum" }],
+    };
+    const state = normalizeReportState({
+        activeTable: "pivoted",
+        tables: {
+            base: { from: "definition", composables: [] },
+            pivoted: {
+                from: "base",
+                schema: [
+                    { name: "CUSTOMER" },
+                    { name: cell },
+                    { name: "ir2" },
+                    { name: "ir3" },
+                ],
+                composables: [
+                    structuredClone(previous),
+                    { kind: "compute", computed: [
+                        { id: "ir2", expr: "CUSTOMER || '!'" },
+                        { id: "ir3", expr: `${cell} / 2` },
+                    ] },
+                    { kind: "select", columns: ["CUSTOMER", cell, "ir2", "ir3"] },
+                ],
+            },
+        },
+    }, 25);
+
+    pruneRetiredPivotOutputs(state, "pivoted", previous, {
+        ...previous,
+        values: [],
+    }, ["ir1"]);
+
+    assert.deepEqual(state.tables.pivoted.composables[1].computed, [
+        { id: "ir2", expr: "CUSTOMER || '!'" },
+    ]);
+    assert.deepEqual(state.tables.pivoted.composables[2].columns, ["CUSTOMER", "ir2"]);
 });
 
 test("Pivot cleanup removes descendant Shapes that consume retired opaque cells", () => {
@@ -1180,6 +1339,10 @@ test("expression references skip quoted contents and longer identifiers", () => 
     assert.equal(expressionReferencesColumn("COST$ > 0", "cost$"), true);
     assert.equal(expressionReferencesColumn("ORDER# = 1", "order#"), true);
     assert.equal(expressionReferencesColumn("COST$ADJUSTED > 0", "COST$"), false);
+    assert.equal(expressionReferencesColumn("ÅMOUNT > 0", "åmount"), true);
+    assert.equal(expressionReferencesColumn("NOT ACTIVE", "NOT"), false);
+    assert.equal(expressionReferencesColumn("ROUND(AMOUNT, 2) > 0", "ROUND"), false);
+    assert.equal(expressionReferencesColumn("`ROUND` > 0", "ROUND"), true);
 });
 
 test("scoped search emits escaped and typed predicates", () => {

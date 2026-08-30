@@ -106,6 +106,63 @@ public sealed class PivotTotalsCompatibilityTests : IClassFixture<SqliteE2EFixtu
     }
 
     [Fact]
+    public async Task Totals_reject_a_same_function_footer_aggregate_on_a_generated_cell()
+    {
+        var shipped = TestFixtures.PivotCellId("result", "ir9", "SHIPPED");
+        var document = Document(
+        [
+            new TableComposable
+            {
+                Kind = "pivot",
+                Rows = ["CUSTOMER"],
+                Cols = ["STATUS"],
+                Values = [new MetricRule { Id = "ir9", Col = "AMOUNT", Fn = AggregateFn.Avg }],
+                Totals = true,
+            },
+            new TableComposable
+            {
+                Kind = "aggregate",
+                Aggregates = [new AggregateRule { Col = shipped, Fn = AggregateFn.Avg }],
+            },
+        ]);
+
+        var exception = await Assert.ThrowsAsync<ReportValidationException>(
+            () => _executor.Query(Definition, document, NoParams));
+
+        var error = Assert.Single(exception.Errors);
+        Assert.Equal("tables.result.composables[0].totals", error.Path);
+        Assert.Contains("same response aggregate key", error.Message, StringComparison.Ordinal);
+        Assert.Contains(shipped, error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Totals_allow_a_different_function_footer_aggregate_on_a_generated_cell()
+    {
+        var shipped = TestFixtures.PivotCellId("result", "ir9", "SHIPPED");
+        var document = Document(
+        [
+            new TableComposable
+            {
+                Kind = "pivot",
+                Rows = ["CUSTOMER"],
+                Cols = ["STATUS"],
+                Values = [new MetricRule { Id = "ir9", Col = "AMOUNT", Fn = AggregateFn.Avg }],
+                Totals = true,
+            },
+            new TableComposable
+            {
+                Kind = "aggregate",
+                Aggregates = [new AggregateRule { Col = shipped, Fn = AggregateFn.Sum }],
+            },
+        ]);
+
+        var result = await _executor.Query(Definition, document, NoParams);
+
+        Assert.Equal(5200d, Convert.ToDouble(result.Aggregates[shipped]["avg"]));
+        Assert.True(result.Aggregates[shipped].ContainsKey("sum"));
+    }
+
+    [Fact]
     public async Task Parent_filter_remains_compatible_with_child_pivot_totals()
     {
         var document = new ReportState

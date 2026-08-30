@@ -364,20 +364,12 @@ internal sealed record BoundPivotKeyPart(
                 "time",
                 time.ToString("O", CultureInfo.InvariantCulture),
                 time),
-            decimal number => new(
-                "decimal",
-                number.ToString("G29", CultureInfo.InvariantCulture),
-                number),
-            double number => new(
-                "double",
-                number.ToString("R", CultureInfo.InvariantCulture),
-                number),
-            float number => new(
-                "single",
-                number.ToString("R", CultureInfo.InvariantCulture),
-                number),
             Guid guid => new("guid", guid.ToString("D"), guid),
             byte[] bytes => new("binary", Convert.ToBase64String(bytes), bytes.ToArray()),
+            _ when IsNumeric(value) => new(
+                "number",
+                CanonicalNumber(value),
+                value),
             IFormattable formattable => new(
                 value.GetType().FullName ?? value.GetType().Name,
                 formattable.ToString(null, CultureInfo.InvariantCulture) ?? "",
@@ -387,4 +379,67 @@ internal sealed record BoundPivotKeyPart(
                 value.ToString() ?? "",
                 value),
         };
+
+    private static bool IsNumeric(object value)
+        => Type.GetTypeCode(value.GetType()) is
+            TypeCode.SByte or TypeCode.Byte
+            or TypeCode.Int16 or TypeCode.UInt16
+            or TypeCode.Int32 or TypeCode.UInt32
+            or TypeCode.Int64 or TypeCode.UInt64
+            or TypeCode.Single or TypeCode.Double
+            or TypeCode.Decimal;
+
+    /// <summary>
+    /// Provider CLR widths are storage details, not Pivot-key types. Normalize every
+    /// numeric value to a coefficient/exponent identity so, for example, Int32 1,
+    /// Int64 1, Decimal 1.0, and Double 1E0 retain the same public Pivot-cell id.
+    /// The original value remains in <see cref="SqlValue"/> for dialect binding.
+    /// </summary>
+    private static string CanonicalNumber(object value)
+    {
+        var text = value switch
+        {
+            decimal number => number.ToString("G29", CultureInfo.InvariantCulture),
+            double number => number.ToString("R", CultureInfo.InvariantCulture),
+            float number => number.ToString("R", CultureInfo.InvariantCulture),
+            IFormattable number => number.ToString(null, CultureInfo.InvariantCulture) ?? "0",
+            _ => throw new InvalidOperationException(
+                $"Value '{value}' was classified as numeric but is not formattable."),
+        };
+
+        if (string.Equals(text, "NaN", StringComparison.OrdinalIgnoreCase)) return "nan";
+        if (string.Equals(text, "Infinity", StringComparison.OrdinalIgnoreCase)) return "+infinity";
+        if (string.Equals(text, "+Infinity", StringComparison.OrdinalIgnoreCase)) return "+infinity";
+        if (string.Equals(text, "-Infinity", StringComparison.OrdinalIgnoreCase)) return "-infinity";
+
+        var negative = text.StartsWith("-", StringComparison.Ordinal);
+        var start = text.StartsWith("+", StringComparison.Ordinal) || negative ? 1 : 0;
+        var exponentIndex = text.IndexOfAny(['e', 'E'], start);
+        var mantissaEnd = exponentIndex < 0 ? text.Length : exponentIndex;
+        var exponent = exponentIndex < 0
+            ? 0
+            : int.Parse(text.AsSpan(exponentIndex + 1), CultureInfo.InvariantCulture);
+        var decimalIndex = text.IndexOf('.', start, mantissaEnd - start);
+        var fractionalDigits = decimalIndex < 0 ? 0 : mantissaEnd - decimalIndex - 1;
+
+        var digits = new StringBuilder(mantissaEnd - start);
+        for (var index = start; index < mantissaEnd; index++)
+            if (text[index] != '.') digits.Append(text[index]);
+
+        var first = 0;
+        while (first < digits.Length && digits[first] == '0') first++;
+        if (first == digits.Length) return "0";
+        if (first > 0) digits.Remove(0, first);
+
+        var scale = exponent - fractionalDigits;
+        while (digits.Length > 1 && digits[^1] == '0')
+        {
+            digits.Length--;
+            scale++;
+        }
+
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"{(negative ? "-" : "")}{digits}e{scale}");
+    }
 }

@@ -144,6 +144,14 @@ public sealed class ComposablePipelineSafetyTests : IClassFixture<SqliteE2EFixtu
     }
 
     [Fact]
+    public void Pivot_raw_key_equality_normalizes_numeric_provider_widths_only()
+    {
+        Assert.True(ComposableTableCompiler.PivotKeysEqual([1], [1L]));
+        Assert.True(ComposableTableCompiler.PivotKeysEqual([1m], [1d]));
+        Assert.False(ComposableTableCompiler.PivotKeysEqual([1], ["1"]));
+    }
+
+    [Fact]
     public void Pivot_binary_keys_compare_by_content()
     {
         Assert.True(ComposableTableCompiler.PivotKeysEqual(

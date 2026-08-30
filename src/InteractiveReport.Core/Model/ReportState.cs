@@ -245,7 +245,7 @@ public sealed class HighlightRule : ExpressionRule
     /// <summary>
     /// Positive precedence value. Rules apply from low to high sequence, so the
     /// higher sequence wins when matching rules set the same property and target.
-    /// Legacy documents derive sequence from their list position.
+    /// Documents without a sequence receive stable ten-step values ordered by highlight id.
     /// </summary>
     public int? Sequence { get; set; }
 

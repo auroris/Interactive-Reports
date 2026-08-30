@@ -321,6 +321,30 @@ test("named-table boundaries export masks without leaking owner renderers or sty
         "a later shape inherits the intermediate metric mask, not its renderer/style");
 });
 
+test("same-table source formats do not leak backward through a Shape", () => {
+    const doc = {
+        activeTable: "grouped",
+        tables: {
+            base: {
+                from: "definition",
+                composables: [{ kind: "formats", formats: { AMOUNT: { mask: "plain" } } }],
+            },
+            grouped: {
+                from: "base",
+                composables: [
+                    { kind: "group", by: ["STATUS"], values: [{ id: "ir1", col: "AMOUNT", fn: "sum" }] },
+                    { kind: "formats", formats: { AMOUNT: { mask: "integer" } } },
+                ],
+            },
+        },
+    };
+
+    assert.deepEqual(
+        formatForColumn({ doc }, { name: "ir1", type: "number", formatSource: "AMOUNT" }),
+        { mask: "plain" },
+        "the generated metric inherits its imported mask, not an unknown same-table source assignment");
+});
+
 test("a later shape inherits a direct format from its intermediate metric", () => {
     const column = { name: "ir2", label: "sum(sum(Amount))", type: "number", formatSource: "ir1" };
     const w = {

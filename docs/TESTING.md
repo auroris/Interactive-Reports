@@ -8,7 +8,8 @@ npm test
 ```
 
 The Core and ASP.NET test projects run with zero infrastructure (SQLite in-memory).
-Coverage: composer goldens ×4 dialects, the row-condition corpus × dialect matrix, expression
+Coverage: canonical planner/lowerer/terminal goldens ×4 dialects (exact SQL and ordered
+bindings), the row-condition corpus × dialect matrix, expression
 parser/emitter, the shared computed/filter/highlight rule plan (including disabled-rule
 elision), validator rules, SQL-safety corpus, saved-report store, CSV writer, and
 end-to-end engine passes. The ASP.NET suite also starts a real local server over a clean

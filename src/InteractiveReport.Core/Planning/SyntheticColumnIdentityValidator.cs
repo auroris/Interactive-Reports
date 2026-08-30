@@ -100,7 +100,10 @@ internal static partial class SyntheticColumnIdentityValidator
             int ruleIndex,
             string path)
         {
-            if (string.IsNullOrWhiteSpace(candidate)) return;
+            // Null is already reported by the structural validator. Blank authored
+            // values are declarations too: keep them in this schema-independent pass
+            // so a dormant table with a populated schema cache cannot evade irN rules.
+            if (candidate is null) return;
             var id = candidate;
 
             declarations.Add(new IdentityDeclaration(

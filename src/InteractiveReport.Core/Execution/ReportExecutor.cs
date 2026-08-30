@@ -324,7 +324,11 @@ public sealed class ReportExecutor
         {
             if (!merged.TryGetValue(column, out var target))
                 merged[column] = target = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-            foreach (var (function, value) in values) target[function] = value;
+            foreach (var (function, value) in values)
+                if (!target.TryAdd(function, value))
+                    throw new InvalidOperationException(
+                        $"Pivot and footer totals both produced aggregate '{function}' "
+                        + $"for column '{column}'. The compiler must reject this ambiguous plan.");
         }
         return merged.ToDictionary(
             pair => pair.Key,

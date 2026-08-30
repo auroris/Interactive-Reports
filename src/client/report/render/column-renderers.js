@@ -4,7 +4,7 @@
 import { el } from "../../core/dom.js";
 import { columnOf } from "../schema.js";
 import { terminalTableColumns } from "../table.js";
-import { composedFormats, lookupValue } from "../state.js";
+import { composedFormatContext, lookupValue } from "../state.js";
 import { formatValue, hasFraction } from "./format.js";
 
 const LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:", "tel:"]);
@@ -36,11 +36,11 @@ const sourceName = (w, format, property, fallback) => {
 /// only the safe scalar mask through formatSource; renderer and style state never
 /// crosses a column-lineage or named-table boundary.
 export function formatForColumn(w, col) {
-    const formats = composedFormats(w.doc);
-    const own = lookupValue(formats, col.name);
+    const formats = composedFormatContext(w.doc);
+    const own = lookupValue(formats.effective, col.name);
     if (own !== undefined) return own;
     const source = col.formatSource ?? col.name;
-    const inherited = lookupValue(formats, source);
+    const inherited = lookupValue(formats.imported, source);
     return typeof inherited?.mask === "string" && inherited.mask.trim()
         ? { mask: inherited.mask }
         : null;

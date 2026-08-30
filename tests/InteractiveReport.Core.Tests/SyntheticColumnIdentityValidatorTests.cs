@@ -117,6 +117,62 @@ public sealed class SyntheticColumnIdentityValidatorTests : IClassFixture<Sqlite
     }
 
     [Fact]
+    public async Task Query_rejects_blank_ids_in_a_dormant_table_with_a_populated_cache()
+    {
+        var document = new ReportState
+        {
+            ActiveTable = "active",
+            Tables = new Dictionary<string, ReportTable>
+            {
+                ["active"] = new()
+                {
+                    From = "definition",
+                    Composables = [],
+                },
+                ["dormant"] = new()
+                {
+                    From = "definition",
+                    Schema = [new ColumnInfo("AMOUNT", "Amount", "number", false)],
+                    Composables =
+                    [
+                        new TableComposable
+                        {
+                            Kind = "group",
+                            By = ["STATUS"],
+                            Values =
+                            [
+                                new MetricRule
+                                {
+                                    Id = " ",
+                                    Col = "AMOUNT",
+                                    Fn = AggregateFn.Sum,
+                                },
+                            ],
+                        },
+                        new TableComposable
+                        {
+                            Kind = "compute",
+                            Computed = [new ComputedColumn { Id = "\t", Expr = "AMOUNT + 1" }],
+                        },
+                    ],
+                },
+            },
+        };
+
+        var exception = await Assert.ThrowsAsync<ReportValidationException>(() =>
+            _executor.Query(Definition, document, NoParams));
+
+        Assert.Equal(
+            [
+                "tables.dormant.composables[0].values[0].id",
+                "tables.dormant.composables[1].computed[0].id",
+            ],
+            exception.Errors.Select(error => error.Path).Order());
+        Assert.All(exception.Errors, error =>
+            Assert.Contains("canonical irN namespace", error.Message, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Collect_reserves_ids_across_kinds_siblings_and_disabled_rules()
     {
         var document = new ReportState

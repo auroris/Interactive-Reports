@@ -252,6 +252,83 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task The_same_saved_document_has_rest_and_GraphQL_result_parity()
+    {
+        var state = new
+        {
+            activeTable = "result",
+            page = new { index = 1, size = 2 },
+            tables = new
+            {
+                result = new
+                {
+                    @from = "definition",
+                    // Storage order is deliberately not execution order.
+                    composables = new object[]
+                    {
+                        new { kind = "select", columns = new[] { "LABEL", "ir1" } },
+                        new { kind = "sort", sorts = new[] { new { col = "ir1", dir = "desc" } } },
+                        new { kind = "filter", filters = new[] { new { expr = "ir1 >= 20" } } },
+                        new
+                        {
+                            kind = "compute",
+                            computed = new[] { new { id = "ir1", expr = "ID * 10" } },
+                        },
+                    },
+                },
+            },
+        };
+        using var save = await Send(
+            HttpMethod.Post,
+            $"/api/reports/{ReportName}/saved",
+            "alice",
+            new { title = "Transport parity", state });
+        Assert.Equal(HttpStatusCode.Created, save.StatusCode);
+        var savedId = (await ReadJson(save)).GetProperty("id").GetString()!;
+
+        using var restResponse = await Send(
+            HttpMethod.Post,
+            $"/api/reports/{ReportName}/query",
+            "alice",
+            state);
+        using var graphResponse = await GraphQL(savedId, "alice");
+        Assert.Equal(HttpStatusCode.OK, restResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, graphResponse.StatusCode);
+
+        var rest = await ReadJson(restResponse);
+        var graphEnvelope = await ReadJson(graphResponse);
+        Assert.False(graphEnvelope.TryGetProperty("errors", out _));
+        var graph = graphEnvelope.GetProperty("data").GetProperty("report");
+
+        static string[] Columns(JsonElement result)
+            => result.GetProperty("columns").EnumerateArray()
+                .Select(column => string.Join(
+                    "|",
+                    column.GetProperty("name").GetString(),
+                    column.GetProperty("label").GetString(),
+                    column.GetProperty("type").GetString(),
+                    column.GetProperty("computed").GetBoolean()))
+                .ToArray();
+
+        Assert.Equal(Columns(rest), Columns(graph));
+        Assert.Equal(rest.GetProperty("rows").GetRawText(), graph.GetProperty("rows").GetRawText());
+        Assert.Equal(
+            rest.GetProperty("page").GetProperty("index").GetInt32(),
+            graph.GetProperty("page").GetProperty("index").GetInt32());
+        Assert.Equal(
+            rest.GetProperty("page").GetProperty("size").GetInt32(),
+            graph.GetProperty("page").GetProperty("size").GetInt32());
+        static long LongValue(JsonElement value)
+            => value.ValueKind == JsonValueKind.String
+                ? long.Parse(value.GetString()!, System.Globalization.CultureInfo.InvariantCulture)
+                : value.GetInt64();
+
+        Assert.Equal(
+            LongValue(rest.GetProperty("totalRows")),
+            LongValue(graph.GetProperty("totalRows")));
+    }
+
+    [Fact]
     public async Task Many_aliased_report_fields_are_rejected_before_any_report_executes()
     {
         var id = await CreatePrivateReport("alice", "Alias Limit");

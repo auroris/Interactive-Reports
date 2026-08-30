@@ -109,6 +109,7 @@ internal sealed class ComposableTableCompiler
             errors,
             ignored);
         ValidateTerminalWidths(plan, terminal, errors);
+        ValidatePivotFooterAggregateCompatibility(plan, terminal, errors);
         var projection = ColumnBindingRules.ResolveRendererColumns(
             plan.Formats,
             terminal.SelectColumns,
@@ -849,6 +850,57 @@ internal sealed class ComposableTableCompiler
             throw new ReportValidationException(errors);
     }
 
+    private static void ValidatePivotFooterAggregateCompatibility(
+        CompiledComposableTable plan,
+        BoundLocalResult terminal,
+        List<ValidationError> errors)
+    {
+        if (plan.LastShape is not
+            {
+                Kind: ShapeKind.Pivot,
+                PivotTotals: true,
+                Metrics: { } metrics,
+                PivotKeys: { } keys,
+            } pivot)
+            return;
+
+        var metricFunctions = metrics.ToDictionary(
+            metric => metric.Id,
+            metric => metric.Fn,
+            StringComparer.OrdinalIgnoreCase);
+        var shapeFunctions = new Dictionary<string, AggregateFn>(
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var key in keys)
+        {
+            foreach (var cell in key.Cells)
+            {
+                if (metricFunctions.TryGetValue(cell.SourceName, out var function))
+                    shapeFunctions[cell.Column.Name] = function;
+                else if (metrics.Count == 0
+                         && string.Equals(
+                             cell.SourceName,
+                             "__count",
+                             StringComparison.OrdinalIgnoreCase))
+                    shapeFunctions[cell.Column.Name] = AggregateFn.Count;
+            }
+        }
+
+        foreach (var aggregate in terminal.Aggregates)
+        {
+            if (!shapeFunctions.TryGetValue(aggregate.Column.Name, out var shapeFunction)
+                || shapeFunction != aggregate.Fn)
+                continue;
+
+            errors.Add(new ValidationError(
+                $"{pivot.Path}.totals",
+                $"pivot totals cannot be combined with footer aggregate "
+                + $"'{aggregate.Fn.ToString().ToLowerInvariant()}' on generated cell "
+                + $"'{aggregate.Column.Name}' because both produce the same response "
+                + "aggregate key from different relations; disable pivot totals or "
+                + "remove or change the footer aggregate"));
+        }
+    }
+
     private static string OwningComposablePath(string rulePath, string property)
     {
         var marker = $".{property}[";
@@ -1027,35 +1079,11 @@ internal sealed class ComposableTableCompiler
         public bool Equals(object?[]? left, object?[]? right)
         {
             if (left is null || right is null || left.Length != right.Length) return false;
-            for (var index = 0; index < left.Length; index++)
-            {
-                if (left[index] is byte[] leftBytes && right[index] is byte[] rightBytes)
-                {
-                    if (!leftBytes.AsSpan().SequenceEqual(rightBytes)) return false;
-                    continue;
-                }
-                if (!EqualityComparer<object?>.Default.Equals(left[index], right[index])) return false;
-            }
-            return true;
+            return BoundPivotTypedKey.Create(left).Equals(BoundPivotTypedKey.Create(right));
         }
 
         public int GetHashCode(object?[] key)
-        {
-            var hash = new HashCode();
-            foreach (var value in key)
-            {
-                if (value is byte[] bytes)
-                {
-                    hash.Add(typeof(byte[]));
-                    foreach (var part in bytes) hash.Add(part);
-                }
-                else
-                {
-                    hash.Add(value);
-                }
-            }
-            return hash.ToHashCode();
-        }
+            => BoundPivotTypedKey.Create(key).GetHashCode();
     }
 
     private sealed class PivotKeyOrdering : IComparer<object?[]>

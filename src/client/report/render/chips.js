@@ -70,7 +70,7 @@ function chipRemove(w, kind, index, location) {
         w.apply(d => {
             const dropped = found.source
                 ? removeInputComputedColumn(d, column)
-                : (removeTerminalComputedColumn(d, column, found.tableId), []);
+                : removeTerminalComputedColumn(d, column, found.tableId);
             if (dropped.length) {
                 w.notify(
                     w.t("chip.configurationRemoved", {

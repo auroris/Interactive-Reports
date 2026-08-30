@@ -214,6 +214,13 @@ Filters declared on the Pivot table's parent remain supported because they are a
 part of the Pivot input and therefore affect both the wide relation and totals branch.
 The validation error is attached to the Pivot composable's `.totals` property.
 
+The response aggregate map has one value for each `(public column id, aggregate
+function)` pair. A Pivot total and a footer aggregate on the same generated cell may
+come from different relations and therefore have different values for non-distributive
+functions such as `avg`. That exact collision is rejected at the Pivot composable's
+`.totals` property. A footer aggregate using a different function remains supported;
+both values then have distinct response keys.
+
 ## Terminal query bundle
 
 The active table's bound local result produces independent queries over the same completed
