@@ -6,7 +6,7 @@ import { el } from "../../core/dom.js";
 import { translate } from "../../core/localization.js";
 import { columnSortable, headerLabelHidden, labelOf } from "../schema.js";
 import { tableContext } from "../table.js";
-import { sameColumn } from "../state.js";
+import { composableLocations, normalizedHighlightRules, sameColumn } from "../state.js";
 import { formatAgg, formatInteger, fnLabel, hasFraction, parseReportNumber, FN_ORDER } from "./format.js";
 import { formatForColumn, renderColumnValue, renderTextValue } from "./column-renderers.js";
 import { activeEditLink, renderEditCell } from "./edit-link.js";
@@ -114,10 +114,20 @@ export function renderGrid(w, table) {
             : String(value);
     };
 
-    // Highlight styles come from the exact terminal Highlight node owned by the
-    // active table.
-    const activeHighlights = ctx.node(w.doc, "highlight")?.highlights ?? [];
-    const styleById = new Map(activeHighlights.map(h => [h.id, h.style ?? {}]));
+    // Repeated Highlight nodes form one semantic priority set. Normalize every
+    // declaration first so disabled rules retain their stable slots, then exclude
+    // them from execution. Sorting returned hits here makes visual precedence
+    // independent of both composable storage order and response order.
+    const highlightRules = composableLocations(w.doc)
+        .filter(location => location.participates
+            && String(location.composable?.kind ?? "").trim().toLowerCase() === "highlight")
+        .flatMap(location => location.composable?.highlights ?? []);
+    const executableHighlights = normalizedHighlightRules(highlightRules)
+        .filter(entry => entry.rule?.enabled !== false);
+    const highlightById = new Map(executableHighlights.map((entry, order) => [
+        String(entry.rule?.id ?? "").toLowerCase(),
+        { order, style: entry.rule?.style ?? {} },
+    ]));
     const hitsByRow = new Map();
     for (const h of result.highlights ?? []) {
         if (!hitsByRow.has(h.row)) hitsByRow.set(h.row, []);
@@ -191,10 +201,15 @@ export function renderGrid(w, table) {
             tr.append(el("td", { class: cls, style: presentationStyle(fmt) },
                 renderColumnValue(w, row, col, decimalCols.has(col.name), fmt, true)));
         }
-        const rowHits = (hitsByRow.get(r) ?? []).filter(hit => !hit.col);
-        const cellHits = (hitsByRow.get(r) ?? []).filter(hit => !!hit.col);
-        for (const hit of [...rowHits, ...cellHits]) {
-            const style = styleById.get(hit.id) ?? {};
+        const orderedHits = (hitsByRow.get(r) ?? [])
+            .flatMap(hit => {
+                const rule = highlightById.get(String(hit.id ?? "").toLowerCase());
+                return rule ? [{ hit, rule }] : [];
+            })
+            .sort((left, right) => Number(!!left.hit.col) - Number(!!right.hit.col)
+                || left.rule.order - right.rule.order);
+        for (const { hit, rule } of orderedHits) {
+            const style = rule.style;
             if (!hit.col) {
                 // On the cells, not the tr: a column format's inline background
                 // would beat a tr-level style, and highlights deliberately win.

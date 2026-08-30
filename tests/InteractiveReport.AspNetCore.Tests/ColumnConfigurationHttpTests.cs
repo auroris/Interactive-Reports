@@ -146,8 +146,9 @@ public sealed class ColumnConfigurationHttpTests : IAsyncLifetime
             "/api/reports/broken/query", JsonContent.Create(new { v = 3 }));
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var result = await ReadJson(response);
-        var item = Assert.Single(result.GetProperty("ignored").EnumerateArray()
-            .Where(i => i.GetProperty("kind").GetString() == "editLink"));
+        var item = Assert.Single(
+            result.GetProperty("ignored").EnumerateArray(),
+            i => i.GetProperty("kind").GetString() == "editLink");
         Assert.Contains("GHOST", item.GetProperty("detail").GetString());
     }
 
@@ -176,7 +177,7 @@ public sealed class ColumnConfigurationHttpTests : IAsyncLifetime
         Assert.Equal(
             ["LABEL"],
             result.GetProperty("columns").EnumerateArray()
-                .Select(c => c.GetProperty("name").GetString()).ToArray());
+                .Select(c => c.GetProperty("name").GetString()!).ToArray());
         var row = result.GetProperty("rows")[0];
         Assert.Equal("first", row.GetProperty("LABEL").GetString());
         Assert.True(row.TryGetProperty("ID", out _));
@@ -209,8 +210,9 @@ public sealed class ColumnConfigurationHttpTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var result = await ReadJson(response);
 
-        var item = Assert.Single(result.GetProperty("ignored").EnumerateArray()
-            .Where(i => i.GetProperty("kind").GetString() == "sort"));
+        var item = Assert.Single(
+            result.GetProperty("ignored").EnumerateArray(),
+            i => i.GetProperty("kind").GetString() == "sort");
         Assert.Contains("not sortable", item.GetProperty("detail").GetString());
     }
 

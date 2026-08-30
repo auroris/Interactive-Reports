@@ -119,7 +119,7 @@ test("highlight authoring reserves ids and precedence across repeated-node permu
     const first = {
         kind: "highlight",
         highlights: [{
-            id: "h1", name: "First", sequence: 10, enabled: true,
+            id: "h1", name: "First", sequence: 10, enabled: false,
             scope: "row", expr: "AMOUNT > 10", style: { bg: "#111111" },
         }],
     };
@@ -138,6 +138,10 @@ test("highlight authoring reserves ids and precedence across repeated-node permu
         highlightDialog(w);
         const dialog = w.shadowRoot.querySelector(".ir-dialog");
         assert.equal(dialog.querySelector('input[type="number"]').value, "30");
+        assert.match(
+            [...dialog.querySelectorAll(".ir-dialog-note")]
+                .map(note => note.textContent).join(" "),
+            /Cell highlights apply after row highlights.*higher sequence numbers apply later.*Disabled highlights keep their place/);
         dialog.querySelector("textarea").value = "AMOUNT > 30";
         dialog.querySelector(".ir-btn-primary").click();
         await settle(() => !w.shadowRoot.querySelector(".ir-dialog"));

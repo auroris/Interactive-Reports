@@ -30,47 +30,58 @@ internal static class HighlightRuleValidator
         return false;
     }
 
-    internal static Func<BoundExpression, HighlightEffect>? PrepareEffect(
+    internal static bool TryReserveOrder(
         string id,
-        string? name,
         int? requestedSequence,
-        string scopeName,
-        string? columnName,
-        string? background,
-        string? foreground,
         int globalIndex,
-        IReadOnlyDictionary<string, ColumnModel> columns,
         Context context,
         List<ValidationError> errors,
-        List<IgnoredItem> ignored,
-        string rulePath)
+        string rulePath,
+        out int sequence)
     {
+        sequence = requestedSequence ?? ((globalIndex + 1) * 10);
         if (string.IsNullOrWhiteSpace(id))
         {
             errors.Add(new ValidationError(rulePath, "highlight id is required"));
-            return null;
+            return false;
         }
         if (!context.SeenIds.Add(id))
         {
             errors.Add(new ValidationError(rulePath, $"duplicate highlight id '{id}'"));
-            return null;
+            return false;
         }
 
-        var sequence = requestedSequence ?? ((globalIndex + 1) * 10);
         if (sequence <= 0)
         {
             errors.Add(new ValidationError(
                 $"{rulePath}.sequence",
                 "highlight sequence must be positive"));
-            return null;
+            return false;
         }
         if (!context.SeenSequences.Add(sequence))
         {
             errors.Add(new ValidationError(
                 $"{rulePath}.sequence",
                 $"duplicate highlight sequence '{sequence}'"));
-            return null;
+            return false;
         }
+        return true;
+    }
+
+    internal static Func<BoundExpression, HighlightEffect>? PrepareEffect(
+        string id,
+        string? name,
+        int sequence,
+        string scopeName,
+        string? columnName,
+        string? background,
+        string? foreground,
+        int globalIndex,
+        IReadOnlyDictionary<string, ColumnModel> columns,
+        List<ValidationError> errors,
+        List<IgnoredItem> ignored,
+        string rulePath)
+    {
         var normalizedName = string.IsNullOrWhiteSpace(name) ? id : name.Trim();
 
         var scope = ParseScope(scopeName, rulePath, errors);

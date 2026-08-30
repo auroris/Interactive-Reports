@@ -49,12 +49,19 @@ public sealed class ReportResult
 public sealed record ColumnInfo(string Name, string Label, string Type, bool Computed)
 {
     /// <summary>
-    /// Source report column whose presentation mask applies to this result column.
-    /// Null means <see cref="Name"/>. Group, pivot, and aggregated chart metrics use
-    /// synthetic protocol names, so retaining this identity lets every view pass
-    /// through the same display formatter.
+    /// Immediate input column whose inherited presentation mask applies to this
+    /// result column. Null means <see cref="Name"/>. Each shape boundary advances
+    /// this identity one output at a time, so sibling columns that share an original
+    /// source cannot exchange masks.
     /// </summary>
     public string? FormatSource { get; init; }
+
+    /// <summary>
+    /// Stable metric identity for a data-derived Pivot cell. Explicit Pivot metrics
+    /// use their authored value id; implicit count cells use <c>__count</c>. This is
+    /// advisory result/schema metadata, not authored composable state.
+    /// </summary>
+    public string? PivotMetricId { get; init; }
 }
 
 /// <summary>Totals for one control-break group: the break-column values, row count, and per-column aggregates.</summary>

@@ -98,6 +98,7 @@ internal sealed class InteractiveReportColumnGraphType : ObjectGraphType<ColumnI
         Field<NonNullGraphType<StringGraphType>>("label").Resolve(context => context.Source.Label);
         Field<NonNullGraphType<StringGraphType>>("type").Resolve(context => context.Source.Type);
         Field<NonNullGraphType<BooleanGraphType>>("computed").Resolve(context => context.Source.Computed);
+        Field<StringGraphType>("pivotMetricId").Resolve(context => context.Source.PivotMetricId);
     }
 }
 

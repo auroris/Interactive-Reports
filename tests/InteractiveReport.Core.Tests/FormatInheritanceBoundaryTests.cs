@@ -88,10 +88,12 @@ public sealed class FormatInheritanceBoundaryTests : IClassFixture<SqliteE2EFixt
         var plan = await Compile(document);
 
         Assert.Equal("AMOUNT", Assert.Single(result.Columns).FormatSource);
-        Assert.Equal("currency:USD", plan.Formats["AMOUNT"].Mask);
-        Assert.Null(plan.Formats["AMOUNT"].DisplayAs);
-        Assert.Equal("currency:USD", plan.Export.Formats["AMOUNT"].Mask);
-        Assert.Null(plan.Export.Formats["AMOUNT"].DisplayAs);
+        Assert.Equal("currency:USD", plan.Formats["ir1"].Mask);
+        Assert.Null(plan.Formats["ir1"].DisplayAs);
+        Assert.Equal("currency:USD", plan.Export.Formats["ir1"].Mask);
+        Assert.Null(plan.Export.Formats["ir1"].DisplayAs);
+        Assert.DoesNotContain("AMOUNT", plan.Formats);
+        Assert.DoesNotContain("AMOUNT", plan.Export.Formats);
     }
 
     [Fact]
@@ -218,6 +220,199 @@ public sealed class FormatInheritanceBoundaryTests : IClassFixture<SqliteE2EFixt
         Assert.Null(inherited.DisplayAs);
         Assert.Null(inherited.Bold);
         Assert.Null(inherited.Classes);
+    }
+
+    [Fact]
+    public async Task Derived_renderer_does_not_replace_the_format_owned_by_its_source_dimension()
+    {
+        var document = Document(
+            activeTable: "child",
+            child: new ReportTable
+            {
+                From = "parent",
+                Composables =
+                [
+                    new TableComposable
+                    {
+                        Kind = "group",
+                        By = ["AMOUNT"],
+                        Values =
+                        [
+                            new MetricRule
+                            {
+                                Id = "ir1",
+                                Col = "AMOUNT",
+                                Fn = AggregateFn.Sum,
+                            },
+                        ],
+                    },
+                    new TableComposable
+                    {
+                        Kind = "formats",
+                        Formats = new Dictionary<string, ColumnFormat>
+                        {
+                            ["ir1"] = new()
+                            {
+                                DisplayAs = "link",
+                                UrlColumn = "AMOUNT",
+                                TextColumn = "ir1",
+                            },
+                        },
+                    },
+                ],
+            });
+
+        var plan = await Compile(document);
+
+        var dimension = plan.Formats["AMOUNT"];
+        Assert.Equal("currency:USD", dimension.Mask);
+        Assert.Null(dimension.DisplayAs);
+        Assert.Null(dimension.UrlColumn);
+
+        var metric = plan.Formats["ir1"];
+        Assert.Null(metric.Mask);
+        Assert.Equal("link", metric.DisplayAs);
+        Assert.Equal("AMOUNT", metric.UrlColumn);
+        Assert.Null(plan.FormatSources["ir1"]);
+    }
+
+    [Fact]
+    public async Task Same_table_dimension_renderer_does_not_render_its_sibling_metric()
+    {
+        var document = new ReportState
+        {
+            ActiveTable = "grouped",
+            Page = new PageRequest { Index = 1, Size = 0 },
+            Tables = new Dictionary<string, ReportTable>
+            {
+                ["grouped"] = new()
+                {
+                    From = "definition",
+                    Composables =
+                    [
+                        new TableComposable
+                        {
+                            Kind = "group",
+                            By = ["AMOUNT"],
+                            Values =
+                            [
+                                new MetricRule
+                                {
+                                    Id = "ir1",
+                                    Col = "AMOUNT",
+                                    Fn = AggregateFn.Sum,
+                                },
+                            ],
+                        },
+                        new TableComposable
+                        {
+                            Kind = "formats",
+                            Formats = new Dictionary<string, ColumnFormat>
+                            {
+                                ["AMOUNT"] = new()
+                                {
+                                    DisplayAs = "link",
+                                    UrlColumn = "AMOUNT",
+                                    TextColumn = "AMOUNT",
+                                },
+                            },
+                        },
+                        new TableComposable { Kind = "select", Columns = ["AMOUNT", "ir1"] },
+                    ],
+                },
+            },
+        };
+
+        var export = await _executor.Export(Definition, document, NoParams);
+
+        Assert.All(export.Rows, row =>
+        {
+            Assert.Contains("<a class=", Assert.IsType<string>(row["AMOUNT"]));
+            Assert.IsNotType<string>(row["ir1"]);
+        });
+    }
+
+    [Fact]
+    public async Task Shape_format_lineage_advances_through_the_immediate_input_column()
+    {
+        var document = new ReportState
+        {
+            ActiveTable = "second",
+            Page = new PageRequest { Index = 1, Size = 0 },
+            Tables = new Dictionary<string, ReportTable>
+            {
+                ["base"] = new()
+                {
+                    From = "definition",
+                    Composables =
+                    [
+                        new TableComposable
+                        {
+                            Kind = "formats",
+                            Formats = new Dictionary<string, ColumnFormat>
+                            {
+                                ["AMOUNT"] = new() { Mask = "decimal-2" },
+                            },
+                        },
+                    ],
+                },
+                ["first"] = new()
+                {
+                    From = "base",
+                    Composables =
+                    [
+                        new TableComposable
+                        {
+                            Kind = "group",
+                            By = ["AMOUNT"],
+                            Values =
+                            [
+                                new MetricRule
+                                {
+                                    Id = "ir1",
+                                    Col = "AMOUNT",
+                                    Fn = AggregateFn.Sum,
+                                },
+                            ],
+                        },
+                        new TableComposable
+                        {
+                            Kind = "formats",
+                            Formats = new Dictionary<string, ColumnFormat>
+                            {
+                                ["AMOUNT"] = new() { Mask = "integer" },
+                            },
+                        },
+                    ],
+                },
+                ["second"] = new()
+                {
+                    From = "first",
+                    Composables =
+                    [
+                        new TableComposable
+                        {
+                            Kind = "group",
+                            By = ["ir1"],
+                            Values =
+                            [
+                                new MetricRule
+                                {
+                                    Id = "ir2",
+                                    Col = "ir1",
+                                    Fn = AggregateFn.Sum,
+                                },
+                            ],
+                        },
+                    ],
+                },
+            },
+        };
+
+        var result = await _executor.Query(Definition, document, NoParams);
+        var schema = result.Document!.Tables!["second"].Schema!;
+
+        Assert.Equal("ir1", schema.Single(column => column.Name == "ir2").FormatSource);
     }
 
     private async Task<CompiledComposableTable> Compile(ReportState document)

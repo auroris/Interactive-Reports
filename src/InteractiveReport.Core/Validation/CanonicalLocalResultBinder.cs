@@ -141,17 +141,27 @@ internal static class CanonicalLocalResultBinder
             var rule = rules[index];
             var path = rule.SourcePath;
             var globalIndex = offset + index;
+            if (!HighlightRuleValidator.TryReserveOrder(
+                    rule.Id,
+                    rule.Sequence,
+                    globalIndex,
+                    context,
+                    errors,
+                    path,
+                    out var sequence)) continue;
+            // Disabled highlights reserve identity, precedence, and projection slots,
+            // but their expression and presentation effect are never bound or run.
+            if (!rule.Enabled) continue;
             var effect = HighlightRuleValidator.PrepareEffect(
                 rule.Id,
                 rule.Name,
-                rule.Sequence,
+                sequence,
                 rule.Scope,
                 rule.Column,
                 rule.Style?.Background,
                 rule.Style?.Foreground,
                 globalIndex,
                 columns,
-                context,
                 errors,
                 ignored,
                 path);

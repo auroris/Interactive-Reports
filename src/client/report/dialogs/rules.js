@@ -151,6 +151,7 @@ export function highlightDialog(w, editIndex) {
         build: body => body.append(
             labeled(w.t("common.name"), nameInp),
             labeled(w.t("common.sequence"), sequenceInp),
+            el("p", { class: "ir-dialog-note" }, w.t("highlight.sequenceNote")),
             labeled(w.t("highlight.applyTo"), scopeSel),
             targetField,
             el("div", { class: "ir-field-label ir-condition-head" }, w.t("highlight.when")),

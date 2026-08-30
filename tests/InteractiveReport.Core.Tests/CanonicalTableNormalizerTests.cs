@@ -36,6 +36,12 @@ public class CanonicalTableNormalizerTests
         var labels = ComposableSemanticsCatalog.Get(ComposableKind.Labels);
         Assert.True(labels.IsInherited);
         Assert.True(labels.IsTableLocal);
+
+        var highlight = ComposableSemanticsCatalog.Get(ComposableKind.Highlight);
+        Assert.Equal(ComposableMerge.PrioritySet, highlight.Merge);
+        Assert.Equal(
+            ComposableOrderingHint.ScopeThenSequenceAscending,
+            highlight.OrderingHint);
     }
 
     [Fact]
@@ -424,6 +430,113 @@ public class CanonicalTableNormalizerTests
             []);
         Assert.Empty(errors);
         Assert.Equal([10, 20, 30], layer.Decorations.Select(rule => rule.Effect.Sequence));
+    }
+
+    [Fact]
+    public void Disabled_highlights_reserve_sequence_precedence_without_executing()
+    {
+        var normalized = CanonicalTableNormalizer.Normalize(new ReportTable
+        {
+            Composables =
+            [
+                new TableComposable
+                {
+                    Kind = "highlight",
+                    Highlights =
+                    [
+                        new HighlightRule
+                        {
+                            Id = "h-disabled",
+                            Sequence = 10,
+                            Enabled = false,
+                            Expr = "invalid +",
+                        },
+                        new HighlightRule
+                        {
+                            Id = "h-late",
+                            Expr = "AMOUNT > 20",
+                            Style = new HighlightStyle { Bg = "red" },
+                        },
+                        new HighlightRule
+                        {
+                            Id = "h-middle",
+                            Sequence = 15,
+                            Expr = "AMOUNT > 10",
+                            Style = new HighlightStyle { Bg = "blue" },
+                        },
+                    ],
+                },
+            ],
+        });
+
+        Assert.Equal(
+            [("h-disabled", 10, false), ("h-middle", 15, true), ("h-late", 20, true)],
+            normalized.Local.Highlights.Select(value =>
+                (value.Id, value.Sequence, value.Enabled)));
+
+        var errors = new List<ValidationError>();
+        var layer = CanonicalLocalResultBinder.Bind(
+            normalized.Local,
+            ReportSchema.Create("highlight-order", TestFixtures.OrdersSchema),
+            ColumnPolicy.Unrestricted,
+            errors,
+            []);
+
+        Assert.Empty(errors);
+        Assert.Equal(
+            [("h-middle", 15, "__ir_highlight_1"), ("h-late", 20, "__ir_highlight_2")],
+            layer.Decorations.Select(rule =>
+                (rule.Effect.Id, rule.Effect.Sequence, rule.Effect.ProjectionName)));
+    }
+
+    [Fact]
+    public void Highlight_natural_order_excludes_disabled_rules_and_matches_scope_precedence()
+    {
+        var normalized = CanonicalTableNormalizer.Normalize(new ReportTable
+        {
+            Composables =
+            [
+                new TableComposable
+                {
+                    Kind = "highlight",
+                    Highlights =
+                    [
+                        new HighlightRule
+                        {
+                            Id = "cell-low",
+                            Sequence = 10,
+                            Scope = "cell",
+                            Col = "AMOUNT",
+                            Expr = "AMOUNT > 10",
+                            Style = new HighlightStyle { Bg = "red" },
+                        },
+                        new HighlightRule
+                        {
+                            Id = "row-high",
+                            Sequence = 30,
+                            Expr = "AMOUNT > 30",
+                            Style = new HighlightStyle { Bg = "blue" },
+                        },
+                        new HighlightRule
+                        {
+                            Id = "row-disabled",
+                            Sequence = 20,
+                            Enabled = false,
+                        },
+                    ],
+                },
+            ],
+        });
+
+        Assert.Equal(
+            ["row-disabled", "row-high", "cell-low"],
+            normalized.Local.Highlights.Select(value => value.Id));
+        Assert.Equal(
+            [
+                "table.composables[0].highlights[1]",
+                "table.composables[0].highlights[0]",
+            ],
+            normalized.NaturalOrder.Select(value => value.SourcePath));
     }
 
     [Fact]

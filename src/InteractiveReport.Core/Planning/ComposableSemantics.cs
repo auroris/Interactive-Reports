@@ -63,12 +63,24 @@ internal enum ComposableMerge
     Set,
 }
 
+/// <summary>
+/// Declares when members of one composable category have observable precedence.
+/// Most categories are sets, overlays, or singletons. Highlight rows apply before
+/// highlight cells, then ascending sequence determines precedence within each scope.
+/// </summary>
+internal enum ComposableOrderingHint
+{
+    None,
+    ScopeThenSequenceAscending,
+}
+
 internal sealed record ComposableSemantics(
     ComposableKind Kind,
     string DocumentKind,
     ComposablePhase Phase,
     ComposableEffect Effect,
-    ComposableMerge Merge)
+    ComposableMerge Merge,
+    ComposableOrderingHint OrderingHint = ComposableOrderingHint.None)
 {
     public bool IsInherited => (Effect & (
         ComposableEffect.ExportedRelation
@@ -172,7 +184,8 @@ internal static class ComposableSemanticsCatalog
             "highlight",
             ComposablePhase.TableLocal,
             ComposableEffect.TableLocal,
-            ComposableMerge.PrioritySet),
+            ComposableMerge.PrioritySet,
+            ComposableOrderingHint.ScopeThenSequenceAscending),
         new(
             ComposableKind.Break,
             "break",

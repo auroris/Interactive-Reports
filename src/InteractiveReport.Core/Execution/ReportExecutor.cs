@@ -213,6 +213,7 @@ public sealed class ReportExecutor
                 column.IsComputed)
             {
                 FormatSource = column.FormatSourceLogicalId ?? formatSource,
+                PivotMetricId = PivotMetricId(column),
             };
         }).ToList();
 
@@ -276,12 +277,15 @@ public sealed class ReportExecutor
             ? []
             : HighlightEvaluator.Evaluate(plan.Terminal.Decorations, executionRows);
         var rows = ReportRowProjector.Columns(executionRows, plan.Terminal.ProjectionColumns);
+        var output = plan.Export.Bound.Relation.Output;
         var shapeColumns = plan.Relation.Schema.Columns.Select(column =>
         {
             plan.FormatSources.TryGetValue(column.Name, out var formatSource);
+            output.TryGetValue(column.Name, out var contract);
             return new ColumnInfo(column.Name, column.Label, column.KindName, column.IsComputed)
             {
                 FormatSource = formatSource,
+                PivotMetricId = contract is null ? null : PivotMetricId(contract),
             };
         }).ToList();
         var available = ReportResultColumns.ForBoundRelation(plan.Relation.Schema, shapeColumns);
@@ -310,6 +314,11 @@ public sealed class ReportExecutor
             ElapsedMs = stopwatch.ElapsedMilliseconds,
         };
     }
+
+    private static string? PivotMetricId(BoundColumnContract column)
+        => column.Lineage is BoundPivotCellColumnLineage pivot
+            ? pivot.MetricId
+            : null;
 
     private static IReadOnlyDictionary<string, IReadOnlyDictionary<string, object?>> MergeTotals(
         IReadOnlyDictionary<string, IReadOnlyDictionary<string, object?>>? shape,
@@ -529,8 +538,7 @@ public sealed class ReportExecutor
             exportRows,
             plan.Relation.Schema,
             plan.Formats,
-            ExportLabels(plan),
-            plan.Formats);
+            ExportLabels(plan));
         return new ExportResult(rendered.Columns, rendered.Rows, !chartTerminal && read.Truncated);
     }
 

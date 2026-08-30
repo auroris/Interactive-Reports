@@ -160,7 +160,7 @@ public sealed class DataSourceHttpTests : IAsyncLifetime
         Assert.Equal(
             ["ID", "LABEL"],
             schema.GetProperty("columns").EnumerateArray()
-                .Select(c => c.GetProperty("name").GetString()).ToArray());
+                .Select(c => c.GetProperty("name").GetString()!).ToArray());
 
         using var response = await _client.PostAsync(
             $"/api/reports/{report}/query", JsonContent.Create(new { v = 3 }));

@@ -133,16 +133,15 @@ const applyChartLabels = (shape, input, labels) => {
     return [label, metric];
 };
 
-const replaceAggregateSource = (label, fn, structuralSource, displaySource) => {
-    const structural = aggregateLabel(fn, structuralSource);
+const replacePivotMetricSource = (label, fn, structuralSource, displaySource) => {
+    const structural = ` · ${aggregateLabel(fn, structuralSource)}`;
     const source = String(label ?? "");
-    const at = source.toLowerCase().lastIndexOf(structural.toLowerCase());
-    return at < 0
+    return !source.toLowerCase().endsWith(structural.toLowerCase())
         ? source
-        : `${source.slice(0, at)}${aggregateLabel(fn, displaySource)}${source.slice(at + structural.length)}`;
+        : `${source.slice(0, -structural.length)} · ${aggregateLabel(fn, displaySource)}`;
 };
 
-const applyPivotLabels = (shape, input, output, labels, computedIds = new Set()) => {
+const applyPivotLabels = (shape, input, output, labels) => {
     const metrics = (shape.values ?? []).flatMap(metric => {
         const source = columnFrom(input, metric?.col);
         return source ? [{ metric, source }] : [];
@@ -152,17 +151,11 @@ const applyPivotLabels = (shape, input, output, labels, computedIds = new Set())
         : (shape.rows ?? []).map(name => columnFrom(input, name)).filter(Boolean);
 
     for (const column of output) {
-        if ((shape.rows ?? []).some(name => sameColumn(name, column.name))
-            || computedIds.has(String(column.name).toLowerCase())) continue;
-        const match = metrics.find(({ metric, source }) => {
-            const provenance = source.formatSource ?? source.name;
-            if (column.formatSource && !sameColumn(column.formatSource, provenance)) return false;
-            return String(column.label ?? "").toLowerCase()
-                .includes(aggregateLabel(metric.fn, source.label).toLowerCase());
-        });
+        const match = metrics.find(({ metric }) =>
+            sameColumn(metric?.id, column.pivotMetricId));
         if (!match) continue;
         const display = lookupValue(labels, match.source.name) ?? match.source.label;
-        const label = replaceAggregateSource(
+        const label = replacePivotMetricSource(
             column.label,
             match.metric.fn,
             match.source.label,
@@ -214,19 +207,13 @@ function foldedLabels(w) {
                 case "chart":
                     columns = applyChartLabels(composable, columns, labels);
                     break;
-                case "pivot": {
-                    const computedIds = new Set(composables
-                        .filter(item => kindOf(item) === "compute")
-                        .flatMap(item => item.computed ?? [])
-                        .map(rule => String(rule?.id ?? "").toLowerCase()));
+                case "pivot":
                     columns = applyPivotLabels(
                         composable,
                         columns,
                         index + 1 < shapes.length ? [] : completed,
-                        labels,
-                        computedIds);
+                        labels);
                     break;
-                }
             }
         }
 

@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using InteractiveReport.Core.Composition;
+using InteractiveReport.Core.Expressions;
 using InteractiveReport.Core.Model;
 using InteractiveReport.Core.Planning;
 using InteractiveReport.Core.Schema;
@@ -307,6 +308,11 @@ internal sealed class ComposableTableCompiler
                     }
                     case CanonicalPivotShape pivot:
                     {
+                        ValidatePivotTotalsBeforeDiscovery(
+                            specification,
+                            pivot,
+                            relationNode.Output,
+                            tableId);
                         (relationNode, lastShape) = await ApplyPivot(
                             relationNode,
                             pivot,
@@ -480,9 +486,7 @@ internal sealed class ComposableTableCompiler
                 $"{ReportResultColumns.AggregateName(metric.Function)}({input.EffectiveLabel})",
                 isCount ? null : input.LocalFormat,
                 isCount ? null : input.ExportedMask,
-                isCount
-                    ? null
-                    : input.FormatSourceLogicalId ?? input.LogicalId);
+                isCount || input.ExportedMask is null ? null : input.LogicalId);
         }).ToImmutableArray();
         var output = BoundOutputContract.Create(
             outputName,
@@ -550,7 +554,7 @@ internal sealed class ComposableTableCompiler
                 new BoundChartColumnLineage("value", input.LogicalId, chart.Fn),
                 isCount ? null : input.LocalFormat,
                 isCount ? null : input.ExportedMask,
-                isCount ? null : input.FormatSourceLogicalId ?? input.LogicalId);
+                isCount || input.ExportedMask is null ? null : input.LogicalId);
         }
 
         return new BoundChartRelation(
@@ -753,10 +757,9 @@ internal sealed class ComposableTableCompiler
                             effectiveLabel,
                             isCount ? null : sourceContract.LocalFormat,
                             isCount ? null : sourceContract.ExportedMask,
-                            isCount
+                            isCount || sourceContract.ExportedMask is null
                                 ? null
-                                : sourceContract.FormatSourceLogicalId
-                                    ?? sourceContract.LogicalId)));
+                                : sourceContract.LogicalId)));
                 }
             }
             keys.Add(new PivotColumnKey(key, cells));
@@ -826,28 +829,88 @@ internal sealed class ComposableTableCompiler
             return;
 
         var errors = new List<ValidationError>();
-        var totalsPath = $"{pivot.Path}.totals";
-        if (pivot.HasPostShapeComputed)
+        AddPivotTotalsCompatibilityErrors(
+            pivot.Path,
+            pivot.HasPostShapeComputed,
+            pivot.HasPostShapeFilters,
+            !string.IsNullOrWhiteSpace(_document.Search),
+            errors);
+
+        if (errors.Count > 0)
+            throw new ReportValidationException(errors);
+    }
+
+    private void ValidatePivotTotalsBeforeDiscovery(
+        CanonicalTableSpec specification,
+        CanonicalPivotShape pivot,
+        BoundOutputContract source,
+        string tableId)
+    {
+        if (!pivot.Totals) return;
+
+        var hasFilters = !specification.Filters.IsEmpty
+            && !AllFiltersAreStaticallyRestricted(specification.Filters, source);
+        var hasRequestSearch = string.Equals(
+                _document.ActiveTable?.Trim(),
+                tableId,
+                StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(_document.Search);
+        var errors = new List<ValidationError>();
+        AddPivotTotalsCompatibilityErrors(
+            pivot.Path,
+            !specification.Computed.IsEmpty,
+            hasFilters,
+            hasRequestSearch,
+            errors);
+        if (errors.Count > 0)
+            throw new ReportValidationException(errors);
+    }
+
+    private bool AllFiltersAreStaticallyRestricted(
+        ImmutableArray<CanonicalFilter> filters,
+        BoundOutputContract source)
+    {
+        if (!_policy.HasFilterRestrictions) return false;
+
+        var schema = source.ToReportSchema();
+        foreach (var filter in filters)
+        {
+            var (ast, _) = ExprParser.ParseCondition(filter.Expression, schema.Lookup);
+            if (ast is null
+                || !ExprColumns.Collect(ast).Any(name =>
+                    schema.TryGetValue(name, out var column)
+                    && !_policy.IsFilterable(column)))
+                return false;
+        }
+        return true;
+    }
+
+    private static void AddPivotTotalsCompatibilityErrors(
+        string pivotPath,
+        bool hasComputed,
+        bool hasFilters,
+        bool hasRequestSearch,
+        List<ValidationError> errors)
+    {
+        var totalsPath = $"{pivotPath}.totals";
+        if (hasComputed)
             errors.Add(new ValidationError(
                 totalsPath,
                 "pivot totals cannot currently be combined with computed columns declared "
                 + "on the same table because the totals relation is produced before them; "
                 + "disable totals or move the computation to another table"));
-        if (pivot.HasPostShapeFilters)
+        if (hasFilters)
             errors.Add(new ValidationError(
                 totalsPath,
                 "pivot totals cannot currently be combined with filters declared on the "
                 + "same table because the totals relation is produced before them; disable "
                 + "totals or move a pre-Pivot filter to the parent table"));
-        if (!string.IsNullOrWhiteSpace(_document.Search))
+        if (hasRequestSearch)
             errors.Add(new ValidationError(
                 totalsPath,
                 "pivot totals cannot currently be combined with request search because the "
                 + "totals relation is produced before the search overlay; clear search or "
                 + "disable totals"));
-
-        if (errors.Count > 0)
-            throw new ReportValidationException(errors);
     }
 
     private static void ValidatePivotFooterAggregateCompatibility(
@@ -876,11 +939,7 @@ internal sealed class ComposableTableCompiler
             {
                 if (metricFunctions.TryGetValue(cell.SourceName, out var function))
                     shapeFunctions[cell.Column.Name] = function;
-                else if (metrics.Count == 0
-                         && string.Equals(
-                             cell.SourceName,
-                             "__count",
-                             StringComparison.OrdinalIgnoreCase))
+                else if (metrics.Count == 0)
                     shapeFunctions[cell.Column.Name] = AggregateFn.Count;
             }
         }
@@ -1216,10 +1275,11 @@ internal static class BoundContractMaps
         foreach (var column in contract.Columns)
         {
             if (column.LocalFormat is null) continue;
-            var format = ToColumnFormat(column.LocalFormat);
-            result[column.LogicalId] = format;
-            if (!string.IsNullOrWhiteSpace(column.FormatSourceLogicalId))
-                result[column.FormatSourceLogicalId] = ToColumnFormat(column.LocalFormat);
+            // A format belongs only to the output column that declares it. Scalar
+            // mask lineage is carried separately by FormatSourceLogicalId; copying a
+            // derived column's renderer back onto that source can overwrite a real
+            // output column that happens to share the lineage id.
+            result[column.LogicalId] = ToColumnFormat(column.LocalFormat);
         }
         return result.ToImmutable();
     }

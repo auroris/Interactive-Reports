@@ -72,22 +72,22 @@ public sealed class BoundRelationPlanDebugTests
             metadata path=tables.summary output=orders#summary
               REGION:text label=Region lineage=pass:REGION mask=- formatSource=-
               __count:number label=Count lineage=aggregate:Count:* mask=- formatSource=-
-              ir1:number label=sum(Amount) lineage=aggregate:Sum:AMOUNT mask=- formatSource=AMOUNT
+              ir1:number label=sum(Amount) lineage=aggregate:Sum:AMOUNT mask=- formatSource=-
               ir2:number label=Net lineage=compute:ir1 mask=- formatSource=-
               filter(1) path=tables.summary.composables[0] output=orders#summary
                 REGION:text label=Region lineage=pass:REGION mask=- formatSource=-
                 __count:number label=Count lineage=aggregate:Count:* mask=- formatSource=-
-                ir1:number label=sum(Amount) lineage=aggregate:Sum:AMOUNT mask=- formatSource=AMOUNT
+                ir1:number label=sum(Amount) lineage=aggregate:Sum:AMOUNT mask=- formatSource=-
                 ir2:number label=ir2 lineage=compute:ir1 mask=- formatSource=-
                 compute(ir2) path=tables.summary.composables[2] output=orders#summary
                   REGION:text label=Region lineage=pass:REGION mask=- formatSource=-
                   __count:number label=Count lineage=aggregate:Count:* mask=- formatSource=-
-                  ir1:number label=sum(Amount) lineage=aggregate:Sum:AMOUNT mask=- formatSource=AMOUNT
+                  ir1:number label=sum(Amount) lineage=aggregate:Sum:AMOUNT mask=- formatSource=-
                   ir2:number label=ir2 lineage=compute:ir1 mask=- formatSource=-
                   group(1,1) path=tables.summary.composables[3] output=orders#group
                     REGION:text label=Region lineage=pass:REGION mask=- formatSource=-
                     __count:number label=Count lineage=aggregate:Count:* mask=- formatSource=-
-                    ir1:number label=sum(Amount) lineage=aggregate:Sum:AMOUNT mask=- formatSource=AMOUNT
+                    ir1:number label=sum(Amount) lineage=aggregate:Sum:AMOUNT mask=- formatSource=-
                     export-ref(definition) path=tables.summary.from output=orders#summary
                       REGION:text label=Region lineage=source:REGION mask=- formatSource=-
                       AMOUNT:number label=Amount lineage=source:AMOUNT mask=- formatSource=-

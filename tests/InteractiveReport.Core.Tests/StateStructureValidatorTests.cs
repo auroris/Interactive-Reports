@@ -135,6 +135,128 @@ public sealed class StateStructureValidatorTests : IClassFixture<SqliteE2EFixtur
     }
 
     [Fact]
+    public void Collect_rejects_a_very_oversized_rule_collection_without_visiting_its_elements()
+    {
+        var state = StateWith(
+            new TableComposable
+            {
+                Kind = "compute",
+                Computed = Enumerable
+                    .Repeat<ComputedColumn>(null!, 100_000)
+                    .ToList(),
+            });
+
+        var error = Assert.Single(StateStructureValidator.Collect(state));
+
+        Assert.Equal("tables.source.composables[0].computed", error.Path);
+        Assert.Equal("at most 20 computed columns per report state", error.Message);
+    }
+
+    [Fact]
+    public void Collect_allows_tight_rule_boundaries_and_rejects_the_next_entry()
+    {
+        var computed = Enumerable.Range(0, StateStructureValidator.MaxComputedRules)
+            .Select(index => new ComputedColumn { Id = $"ir{index}", Expr = "AMOUNT" })
+            .ToList();
+        var filters = Enumerable.Range(0, StateStructureValidator.MaxFilterRules)
+            .Select(_ => new FilterRule { Expr = "AMOUNT > 0" })
+            .ToList();
+        var highlights = Enumerable.Range(0, StateStructureValidator.MaxHighlightRules)
+            .Select(index => new HighlightRule
+            {
+                Id = $"highlight-{index}",
+                Scope = "row",
+                Expr = "AMOUNT > 0",
+            })
+            .ToList();
+        var metrics = Enumerable.Range(0, StateStructureValidator.MaxShapeMetrics)
+            .Select(index => new MetricRule { Id = $"metric-{index}", Col = "AMOUNT" })
+            .ToList();
+        var state = StateWith(
+            new TableComposable { Kind = "compute", Computed = computed },
+            new TableComposable { Kind = "filter", Filters = filters },
+            new TableComposable { Kind = "highlight", Highlights = highlights },
+            new TableComposable { Kind = "group", Values = metrics });
+
+        Assert.Empty(StateStructureValidator.Collect(state));
+
+        computed.Add(new ComputedColumn { Id = "computed-over-limit", Expr = "AMOUNT" });
+        filters.Add(new FilterRule { Expr = "AMOUNT > 1" });
+        highlights.Add(new HighlightRule
+        {
+            Id = "highlight-over-limit",
+            Scope = "row",
+            Expr = "AMOUNT > 1",
+        });
+        metrics.Add(new MetricRule { Id = "metric-over-limit", Col = "AMOUNT" });
+
+        var errors = StateStructureValidator.Collect(state);
+
+        Assert.Equal(4, errors.Count);
+        Assert.Contains(errors, error =>
+            error.Path == "tables.source.composables[0].computed"
+            && error.Message == "at most 20 computed columns per report state");
+        Assert.Contains(errors, error =>
+            error.Path == "tables.source.composables[1].filters"
+            && error.Message == "at most 50 filter rules per report state");
+        Assert.Contains(errors, error =>
+            error.Path == "tables.source.composables[2].highlights"
+            && error.Message == "at most 50 highlight rules per report state");
+        Assert.Contains(errors, error =>
+            error.Path == "tables.source.composables[3].values"
+            && error.Message == "a shape may contain at most 256 metrics");
+    }
+
+    [Fact]
+    public void Collect_bounds_generic_lists_maps_and_nested_format_classes()
+    {
+        var columns = Enumerable.Range(0, StateStructureValidator.MaxNestedCollectionEntries)
+            .Select(index => $"column-{index}")
+            .ToList();
+        var labels = Enumerable.Range(0, StateStructureValidator.MaxNestedCollectionEntries)
+            .ToDictionary(index => $"label-{index}", index => $"Label {index}");
+        var formats = Enumerable.Range(0, StateStructureValidator.MaxNestedCollectionEntries)
+            .ToDictionary(index => $"format-{index}", _ => new ColumnFormat());
+        var classes = Enumerable.Range(0, StateStructureValidator.MaxNestedCollectionEntries)
+            .Select(index => $"class-{index}")
+            .ToList();
+        var state = StateWith(
+            new TableComposable { Kind = "select", Columns = columns },
+            new TableComposable { Kind = "labels", Labels = labels },
+            new TableComposable { Kind = "formats", Formats = formats },
+            new TableComposable
+            {
+                Kind = "formats",
+                Formats = new Dictionary<string, ColumnFormat>
+                {
+                    ["AMOUNT"] = new() { Classes = classes },
+                },
+            });
+
+        Assert.Empty(StateStructureValidator.Collect(state));
+
+        columns.Add("column-over-limit");
+        labels.Add("label-over-limit", "Over limit");
+        formats.Add("format-over-limit", new ColumnFormat());
+        classes.Add("class-over-limit");
+
+        var errors = StateStructureValidator.Collect(state);
+
+        Assert.Equal(4, errors.Count);
+        Assert.All(errors, error => Assert.Equal(
+            "a collection may contain at most 900 entries",
+            error.Message));
+        Assert.Equal(
+            [
+                "tables.source.composables[0].columns",
+                "tables.source.composables[1].labels",
+                "tables.source.composables[2].formats",
+                "tables.source.composables[3].formats.AMOUNT.classes",
+            ],
+            errors.Select(error => error.Path));
+    }
+
+    [Fact]
     public void Collect_rejects_blank_reserved_and_case_colliding_table_identifiers()
     {
         var state = new ReportState
@@ -177,4 +299,16 @@ public sealed class StateStructureValidatorTests : IClassFixture<SqliteE2EFixtur
         Assert.Contains("default state document is structurally invalid", exception.Message, StringComparison.Ordinal);
         Assert.Contains("tables.broken", exception.Message, StringComparison.Ordinal);
     }
+
+    private static ReportState StateWith(params TableComposable[] composables) => new()
+    {
+        Tables = new Dictionary<string, ReportTable>
+        {
+            ["source"] = new()
+            {
+                From = "definition",
+                Composables = composables.ToList(),
+            },
+        },
+    };
 }

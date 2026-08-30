@@ -247,6 +247,7 @@ export const messages = {
     "highlight.column": "Highlight Column",
     "highlight.applyTo": "Apply To",
     "highlight.when": "When",
+    "highlight.sequenceNote": "Cell highlights apply after row highlights. Within the same scope, higher sequence numbers apply later and win where highlights overlap. Disabled highlights keep their place in this order.",
     "highlight.editTitle": "Edit Highlight",
     "highlight.title": "Highlight",
     "highlight.enterName": "Enter a highlight name",

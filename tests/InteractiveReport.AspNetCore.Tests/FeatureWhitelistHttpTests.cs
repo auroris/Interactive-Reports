@@ -114,7 +114,7 @@ public sealed class FeatureWhitelistHttpTests : IAsyncLifetime
         var locked = await GetJson("/api/reports/locked/schema");
         Assert.Equal(
             ["search", "sort"],
-            locked.GetProperty("features").EnumerateArray().Select(f => f.GetString()).ToArray());
+            locked.GetProperty("features").EnumerateArray().Select(f => f.GetString()!).ToArray());
         Assert.Equal("/styles/locked-report.css?v=2", locked.GetProperty("styleSheet").GetString());
         Assert.False(open.TryGetProperty("styleSheet", out _));
     }

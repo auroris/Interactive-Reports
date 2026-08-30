@@ -243,8 +243,9 @@ public sealed class HighlightRule : ExpressionRule
     public string? Name { get; set; }
 
     /// <summary>
-    /// Positive precedence value. Rules apply from low to high sequence, so the
-    /// higher sequence wins when matching rules set the same property and target.
+    /// Positive precedence value. Row rules apply before cell rules. Within the
+    /// same scope, rules apply from low to high sequence, so the higher sequence
+    /// wins when matching rules set the same property and target.
     /// Documents without a sequence receive stable ten-step values ordered by highlight id.
     /// </summary>
     public int? Sequence { get; set; }

@@ -159,10 +159,10 @@ const highlightChip = (w, lock) => ({ h, index, sequence, location }) => chip({
     ...lock,
 });
 
-/// Repeated active-table Highlight nodes are one semantic priority set. Explicit
-/// sequence wins; missing sequence is normalized by stable id, never composable
-/// or list position. The displayed fallback uses the canonical first-unused
-/// ten-step slot.
+/// Repeated active-table Highlight nodes are one semantic priority set. Row rules
+/// precede cell rules; within each scope explicit sequence wins. Missing sequence
+/// is normalized by stable id, never composable or list position. The displayed
+/// fallback uses the canonical first-unused ten-step slot.
 const orderedHighlights = locations => {
     const entries = locations
         .filter(location => location.participates

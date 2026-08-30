@@ -105,6 +105,64 @@ public sealed class PivotTotalsCompatibilityTests : IClassFixture<SqliteE2EFixtu
             && error.Message.Contains("request search", StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData("compute", "computed columns")]
+    [InlineData("filter", "filters")]
+    [InlineData("search", "request search")]
+    public async Task Static_totals_incompatibilities_fail_before_pivot_discovery(
+        string incompatibility,
+        string expectedMessage)
+    {
+        var composables = new List<TableComposable> { Pivot(totals: true) };
+        var document = Document(composables);
+        switch (incompatibility)
+        {
+            case "compute":
+                composables.Insert(0, new TableComposable
+                {
+                    Kind = "compute",
+                    Computed = [new ComputedColumn { Id = "ir1", Expr = "CUSTOMER || '!'" }],
+                });
+                break;
+            case "filter":
+                composables.Insert(0, new TableComposable
+                {
+                    Kind = "filter",
+                    Filters = [new FilterRule { Expr = "CUSTOMER = 'Acme Corp'" }],
+                });
+                break;
+            case "search":
+                document.Search = "Acme";
+                break;
+        }
+
+        var discoveryCalls = 0;
+        var compiler = new ComposableTableCompiler(
+            Definition,
+            document,
+            ReportSchema.Create(
+                "pivot-totals-compatibility",
+                [
+                    TestFixtures.Col("CUSTOMER", typeof(string)),
+                    TestFixtures.Col("STATUS", typeof(string)),
+                    TestFixtures.Col("AMOUNT", typeof(decimal)),
+                ]),
+            DateTime.UtcNow,
+            (_, _, _, _, _) =>
+            {
+                discoveryCalls++;
+                return Task.FromResult(new List<PivotGroup>());
+            });
+
+        var exception = await Assert.ThrowsAsync<ReportValidationException>(
+            () => compiler.Compile("result", default));
+
+        Assert.Equal(0, discoveryCalls);
+        Assert.Contains(exception.Errors, error =>
+            error.Path.EndsWith(".totals", StringComparison.Ordinal)
+            && error.Message.Contains(expectedMessage, StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task Totals_reject_a_same_function_footer_aggregate_on_a_generated_cell()
     {
@@ -128,6 +186,37 @@ public sealed class PivotTotalsCompatibilityTests : IClassFixture<SqliteE2EFixtu
 
         var exception = await Assert.ThrowsAsync<ReportValidationException>(
             () => _executor.Query(Definition, document, NoParams));
+
+        var error = Assert.Single(exception.Errors);
+        Assert.Equal("tables.result.composables[0].totals", error.Path);
+        Assert.Contains("same response aggregate key", error.Message, StringComparison.Ordinal);
+        Assert.Contains(shipped, error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Totals_reject_an_implicit_count_footer_collision_when_internal_count_is_renamed()
+    {
+        var definition = Definition;
+        definition.Sql = "SELECT CUSTOMER, STATUS AS __count FROM ORDERS";
+        var shipped = TestFixtures.PivotCellId("result", "__count", "SHIPPED");
+        var document = Document(
+        [
+            new TableComposable
+            {
+                Kind = "pivot",
+                Rows = ["CUSTOMER"],
+                Cols = ["__count"],
+                Totals = true,
+            },
+            new TableComposable
+            {
+                Kind = "aggregate",
+                Aggregates = [new AggregateRule { Col = shipped, Fn = AggregateFn.Count }],
+            },
+        ]);
+
+        var exception = await Assert.ThrowsAsync<ReportValidationException>(
+            () => _executor.Query(definition, document, NoParams));
 
         var error = Assert.Single(exception.Errors);
         Assert.Equal("tables.result.composables[0].totals", error.Path);

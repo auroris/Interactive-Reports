@@ -149,7 +149,7 @@ internal sealed class BoundOutputContract
                     LocalFormat = format,
                     ExportedMask = format.Mask,
                     FormatSourceLogicalId = format.Mask is null
-                        ? result.FormatSourceLogicalId
+                        ? null
                         : result.LogicalId,
                 };
             }

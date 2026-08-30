@@ -247,6 +247,7 @@ export const messages = {
     "highlight.column": "Colonne à mettre en évidence",
     "highlight.applyTo": "Appliquer à",
     "highlight.when": "Lorsque",
+    "highlight.sequenceNote": "Les mises en évidence de cellule sont appliquées après celles de ligne. Dans une même portée, les numéros de séquence plus élevés sont appliqués plus tard et l’emportent en cas de chevauchement. Les mises en évidence désactivées conservent leur place dans cet ordre.",
     "highlight.editTitle": "Modifier la mise en évidence",
     "highlight.title": "Mise en évidence",
     "highlight.enterName": "Entrez un nom de mise en évidence",

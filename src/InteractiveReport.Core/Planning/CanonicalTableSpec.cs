@@ -138,7 +138,8 @@ internal sealed record CanonicalHighlight(
     string? Column,
     string Expression,
     CanonicalHighlightStyle? Style,
-    string SourcePath);
+    string SourcePath,
+    bool Enabled = true);
 
 internal sealed record CanonicalHighlightStyle(string? Background, string? Foreground);
 

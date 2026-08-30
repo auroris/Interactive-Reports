@@ -40,6 +40,10 @@ const ALL_COLUMNS = [
     { name: "IMAGE_URL", label: "Image URL", type: "text" },
     { name: "ir1", label: "Computed URL", type: "text", computed: true },
 ];
+const GROUPED_SOURCE_COLUMNS = [
+    ...ALL_COLUMNS,
+    { name: "AMOUNT", label: "Amount", type: "number" },
+];
 const ROW = {
     ID: 1234.5,
     NAME: "Example",
@@ -56,7 +60,7 @@ const groupedDocument = () => ({
     tables: {
         base: {
             from: "definition",
-            schema: structuredClone(ALL_COLUMNS),
+            schema: structuredClone(GROUPED_SOURCE_COLUMNS),
             composables: [{
                 kind: "formats",
                 formats: {
@@ -94,7 +98,7 @@ globalThis.fetch = async (url, options = {}) => {
                     page: { index: 1, size: 25 },
                 },
             limits: { defaultPageSize: 25, maxPageSize: 100 },
-            columns: ALL_COLUMNS,
+            columns: report === "grouped-metadata" ? GROUPED_SOURCE_COLUMNS : ALL_COLUMNS,
             capabilities: { aggregateFunctions: {}, expressionFunctions: [] },
             ...(FEATURES[report] ? { features: FEATURES[report] } : {}),
         });

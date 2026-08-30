@@ -451,7 +451,7 @@ test("generated labels resolve through the completed parent table", () => {
                 from: "base",
                 schema: [
                     { name: "STATUS", label: "Status", type: "text" },
-                    { name: "ir1", label: "sum(Amount)", type: "number", formatSource: "AMOUNT" },
+                    { name: "ir1", label: "sum(Amount)", type: "number" },
                 ],
                 composables: [
                     { kind: "group", by: ["STATUS"], values: [{ id: "ir1", col: "AMOUNT", fn: "sum" }] },
@@ -462,7 +462,7 @@ test("generated labels resolve through the completed parent table", () => {
                 from: "first",
                 schema: [
                     { name: "STATUS", label: "Status", type: "text" },
-                    { name: "ir2", label: "sum(sum(Amount))", type: "number", formatSource: "AMOUNT" },
+                    { name: "ir2", label: "sum(sum(Amount))", type: "number" },
                 ],
                 composables: [
                     { kind: "group", by: ["STATUS"], values: [{ id: "ir2", col: "ir1", fn: "sum" }] },
@@ -477,7 +477,7 @@ test("generated labels resolve through the completed parent table", () => {
     ]);
 });
 
-test("opaque Pivot cells rebuild multi-metric labels from structural provenance", () => {
+test("opaque Pivot cells rebuild multi-metric labels from explicit metric provenance", () => {
     const sumCell = "ir7400000000000000001";
     const avgCell = "ir7400000000000000002";
     const definitionColumns = [
@@ -497,8 +497,14 @@ test("opaque Pivot cells rebuild multi-metric labels from structural provenance"
                 from: "base",
                 schema: [
                     { name: "CUSTOMER", label: "Customer", type: "text" },
-                    { name: sumCell, label: "SHIPPED · sum(Amount)", type: "number", formatSource: "AMOUNT" },
-                    { name: avgCell, label: "SHIPPED · avg(Amount)", type: "number", formatSource: "AMOUNT" },
+                    {
+                        name: sumCell, label: "SHIPPED · sum(Amount)", type: "number",
+                        pivotMetricId: "ir1",
+                    },
+                    {
+                        name: avgCell, label: "SHIPPED · avg(Amount)", type: "number",
+                        pivotMetricId: "ir2",
+                    },
                 ],
                 composables: [{
                     kind: "pivot",
@@ -523,6 +529,101 @@ test("opaque Pivot cells rebuild multi-metric labels from structural provenance"
     ]);
 });
 
+test("Pivot metric ids disambiguate aggregate-looking keys and repeated sources", () => {
+    const definitionColumns = [
+        { name: "CUSTOMER", label: "Customer", type: "text" },
+        { name: "STATUS", label: "Status", type: "text" },
+        { name: "AMOUNT", label: "Amount", type: "number" },
+    ];
+    const state = normalizeReportState({
+        activeTable: "pivoted",
+        tables: {
+            base: {
+                from: "definition",
+                schema: structuredClone(definitionColumns),
+                composables: [{ kind: "labels", labels: { AMOUNT: "Sales" } }],
+            },
+            pivoted: {
+                from: "base",
+                schema: [
+                    { name: "CUSTOMER", label: "Customer", type: "text" },
+                    {
+                        name: "sum-cell", label: "sum(Amount) · sum(Amount)", type: "number",
+                        pivotMetricId: "ir1",
+                    },
+                    {
+                        name: "avg-cell", label: "sum(Amount) · avg(Amount)", type: "number",
+                        pivotMetricId: "ir2",
+                    },
+                    {
+                        name: "count-cell", label: "sum(Amount) · count(Amount)", type: "number",
+                        pivotMetricId: "ir3",
+                    },
+                    {
+                        name: "unprovenanced-cell", label: "sum(Amount) · sum(Amount)", type: "number",
+                    },
+                ],
+                composables: [{
+                    kind: "pivot",
+                    rows: ["CUSTOMER"],
+                    cols: ["STATUS"],
+                    values: [
+                        { id: "ir1", col: "AMOUNT", fn: "sum" },
+                        { id: "ir2", col: "AMOUNT", fn: "avg" },
+                        { id: "ir3", col: "AMOUNT", fn: "count" },
+                    ],
+                }],
+            },
+        },
+    }, 25);
+
+    assert.deepEqual(terminalTableColumns({
+        doc: state,
+        schema: { columns: definitionColumns },
+    }).map(column => [column.name, column.label]), [
+        ["CUSTOMER", "Customer"],
+        ["sum-cell", "sum(Amount) · sum(Sales)"],
+        ["avg-cell", "sum(Amount) · avg(Sales)"],
+        ["count-cell", "sum(Amount) · count(Sales)"],
+        ["unprovenanced-cell", "sum(Amount) · sum(Amount)"],
+    ]);
+});
+
+test("count-only Pivot provenance does not masquerade as an aggregate metric", () => {
+    const state = normalizeReportState({
+        activeTable: "pivoted",
+        tables: {
+            base: {
+                from: "definition",
+                schema: [
+                    { name: "CUSTOMER", label: "Customer", type: "text" },
+                    { name: "STATUS", label: "Status", type: "text" },
+                    { name: "AMOUNT", label: "Amount", type: "number" },
+                ],
+                composables: [{ kind: "labels", labels: { AMOUNT: "Sales" } }],
+            },
+            pivoted: {
+                from: "base",
+                schema: [
+                    { name: "CUSTOMER", label: "Customer", type: "text" },
+                    {
+                        name: "count-cell", label: "sum(Amount)", type: "number",
+                        pivotMetricId: "__count",
+                    },
+                ],
+                composables: [{
+                    kind: "pivot", rows: ["CUSTOMER"], cols: ["STATUS"], values: [],
+                }],
+            },
+        },
+    }, 25);
+
+    assert.deepEqual(terminalTableColumns({ doc: state }).map(column => [column.name, column.label]), [
+        ["CUSTOMER", "Customer"],
+        ["count-cell", "sum(Amount)"],
+    ]);
+});
+
 test("a later label override cannot rewrite an already-generated child metric", () => {
     const state = normalizeReportState({
         activeTable: "second",
@@ -539,7 +640,7 @@ test("a later label override cannot rewrite an already-generated child metric", 
                 from: "base",
                 schema: [
                     { name: "STATUS", label: "Status", type: "text" },
-                    { name: "ir1", label: "sum(Amount)", type: "number", formatSource: "AMOUNT" },
+                    { name: "ir1", label: "sum(Amount)", type: "number" },
                 ],
                 composables: [
                     { kind: "group", by: ["STATUS"], values: [{ id: "ir1", col: "AMOUNT", fn: "sum" }] },
@@ -549,8 +650,8 @@ test("a later label override cannot rewrite an already-generated child metric", 
             second: {
                 from: "first",
                 schema: [
-                    { name: "ir1", label: "sum(Amount)", type: "number", formatSource: "AMOUNT" },
-                    { name: "ir2", label: "sum(sum(Amount))", type: "number", formatSource: "AMOUNT" },
+                    { name: "ir1", label: "sum(Amount)", type: "number" },
+                    { name: "ir2", label: "sum(sum(Amount))", type: "number" },
                 ],
                 composables: [
                     { kind: "labels", labels: { ir1: "Segment" } },
@@ -1369,11 +1470,11 @@ test("case-insensitive map helpers prevent stale casing variants", () => {
     assert.deepEqual(formats, { OTHER: { bold: true } });
 });
 
-test("missing highlight precedence uses stable ids and unused slots", () => {
+test("missing highlight precedence uses stable ids and disabled rules reserve slots", () => {
     const rules = [
         { id: "h3" },
         { id: "h2", sequence: 20 },
-        { id: "H1" },
+        { id: "H1", enabled: false },
     ];
     const priorities = values => normalizedHighlightRules(values)
         .map(entry => [entry.rule.id, entry.sequence]);

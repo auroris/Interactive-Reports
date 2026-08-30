@@ -288,6 +288,43 @@ const overlayFormatMaps = (inherited, maps) => {
     return effective;
 };
 
+const maskOnlyFormats = formats => {
+    const result = {};
+    for (const [name, value] of Object.entries(formats ?? {})) {
+        if (typeof value?.mask !== "string" || !value.mask.trim()) continue;
+        setMapEntry(result, name, { mask: value.mask });
+    }
+    return result;
+};
+
+/// A named table exports presentation metadata only for columns in its completed
+/// public schema. Generated columns inherit through their structural formatSource,
+/// but a same-table format for a source column removed by a Shape is not allowed to
+/// hitch a ride across the next `from` edge.
+const exportedMaskFormats = (entry, imported, effective, owned) => {
+    const columns = entry?.table?.schema;
+    if (!Array.isArray(columns)) return maskOnlyFormats(effective);
+
+    const result = {};
+    for (const column of columns) {
+        const name = typeof column === "string" ? column : column?.name;
+        if (typeof name !== "string" || !name.trim()) continue;
+        const source = typeof column?.formatSource === "string" && column.formatSource.trim()
+            ? column.formatSource
+            : name;
+        const direct = lookupValue(owned, name);
+        const inherited = direct === undefined
+            ? lookupValue(effective, name) ?? lookupValue(imported, source)
+            : undefined;
+        const selected = direct ?? inherited;
+        if (typeof selected?.mask !== "string" || !selected.mask.trim()) continue;
+
+        const exported = { mask: selected.mask };
+        setMapEntry(result, name, exported);
+    }
+    return result;
+};
+
 /// Effective formats for the selected table plus the mask-only contract imported
 /// by that table. Keeping those maps distinct prevents an active-table assignment
 /// to a pre-Shape source name from leaking backward into a generated column.
@@ -295,15 +332,15 @@ export const composedFormatContext = doc => {
     const chain = activeChain(doc);
     let inherited = {};
     for (let index = 0; index < chain.length; index++) {
-        const imported = inherited;
-        const effective = overlayFormatMaps(inherited, formatMapsOwnedBy(chain[index]));
+        const entry = chain[index];
+        const maps = formatMapsOwnedBy(entry);
+        const clearsInherited = maps.some(values => Object.keys(values).length === 0);
+        const imported = clearsInherited ? {} : inherited;
+        const effective = overlayFormatMaps(inherited, maps);
+        const owned = overlayFormatMaps({}, maps);
         if (index === chain.length - 1) return { effective, imported };
 
-        inherited = {};
-        for (const [name, value] of Object.entries(effective)) {
-            if (typeof value?.mask !== "string" || !value.mask.trim()) continue;
-            setMapEntry(inherited, name, { mask: value.mask });
-        }
+        inherited = exportedMaskFormats(entry, imported, effective, owned);
     }
     return { effective: inherited, imported: inherited };
 };
@@ -603,10 +640,16 @@ const stableTextCompare = (left, right) => {
                     : 0;
 };
 
+const highlightScopeOrder = rule =>
+    String(rule?.scope ?? "row").trim().toLowerCase() === "cell" ? 1 : 0;
+
 /// Canonical client view of one table's highlight priority set. Missing
 /// sequences are assigned by stable id into the first unused ten-step slots,
 /// matching server normalization; document/list position is retained only as a
-/// mutation address in `index`.
+/// mutation address in `index`. Disabled declarations deliberately participate
+/// in this normalization so toggling a rule cannot reorder the remaining rules.
+/// Row rules precede cell rules, and sequence establishes precedence within each
+/// scope. Consumers which execute rules filter disabled entries only afterward.
 export function normalizedHighlightRules(rules) {
     const entries = (rules ?? []).map((rule, index) => ({
         rule,
@@ -626,7 +669,8 @@ export function normalizedHighlightRules(rules) {
         used.add(sequence);
         sequence += 10;
     }
-    return entries.sort((left, right) => left.sequence - right.sequence
+    return entries.sort((left, right) => highlightScopeOrder(left.rule) - highlightScopeOrder(right.rule)
+        || left.sequence - right.sequence
         || stableTextCompare(left.rule?.id, right.rule?.id));
 }
 

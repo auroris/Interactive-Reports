@@ -589,8 +589,6 @@ internal static class CanonicalTableNormalizer
                 errors.Add(new ValidationError(path, "highlight cannot be null"));
                 continue;
             }
-            if (!rule.Enabled) continue;
-
             into.Add(new CanonicalHighlight(
                 rule.Id,
                 rule.Name,
@@ -601,7 +599,8 @@ internal static class CanonicalTableNormalizer
                 rule.Style is null
                     ? null
                     : new CanonicalHighlightStyle(rule.Style.Bg, rule.Style.Fg),
-                path));
+                path,
+                rule.Enabled));
         }
     }
 
@@ -643,10 +642,18 @@ internal static class CanonicalTableNormalizer
         }
 
         return normalized
-            .OrderBy(value => value.Sequence ?? int.MaxValue)
+            .OrderBy(value => HighlightScopeOrder(value.Scope))
+            .ThenBy(value => value.Sequence ?? int.MaxValue)
             .ThenBy(value => value.Id, StableNameComparer.Instance)
             .ToImmutableArray();
     }
+
+    private static int HighlightScopeOrder(string scope)
+        => string.Equals(scope, "row", StringComparison.OrdinalIgnoreCase)
+            ? 0
+            : string.Equals(scope, "cell", StringComparison.OrdinalIgnoreCase)
+                ? 1
+                : 2;
 
     private static CanonicalBreaks SnapshotBreaks(TableComposable composable, string path)
         => new(SnapshotStrings(composable.Breaks), path);
@@ -816,7 +823,7 @@ internal static class CanonicalTableNormalizer
             Add(ComposableKind.Select, selection.SourcePath);
         if (local.Ordering is { } ordering)
             Add(ComposableKind.Sort, ordering.SourcePath);
-        foreach (var highlight in local.Highlights)
+        foreach (var highlight in local.Highlights.Where(value => value.Enabled))
             Add(ComposableKind.Highlight, highlight.SourcePath);
         if (local.Breaks is { } breaks)
             Add(ComposableKind.Break, breaks.SourcePath);

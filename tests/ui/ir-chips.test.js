@@ -120,7 +120,7 @@ test("highlight chips form one stable priority set across repeated-node permutat
     const first = {
         kind: "highlight",
         highlights: [{
-            id: "h3", name: "Third", expr: "STATUS = 'third'", enabled: true,
+            id: "h3", name: "Row Thirty", expr: "STATUS = 'third'", enabled: true,
             scope: "row", style: { bg: "#333333" },
         }],
     };
@@ -128,12 +128,12 @@ test("highlight chips form one stable priority set across repeated-node permutat
         kind: "highlight",
         highlights: [
             {
-                id: "h2", name: "Second", sequence: 20, expr: "STATUS = 'second'", enabled: true,
+                id: "h2", name: "Row Twenty", sequence: 20, expr: "STATUS = 'second'", enabled: true,
                 scope: "row", style: { bg: "#222222" },
             },
             {
-                id: "H1", name: "First", expr: "STATUS = 'first'", enabled: true,
-                scope: "row", style: { bg: "#111111" },
+                id: "H1", name: "Cell Ten", expr: "STATUS = 'first'", enabled: true,
+                scope: "cell", col: "STATUS", style: { bg: "#111111" },
             },
         ],
     };
@@ -159,9 +159,9 @@ test("highlight chips form one stable priority set across repeated-node permutat
                 sequence: Number(/#(\d+)/.exec(node.textContent)?.[1]),
             })),
             [
-                { name: "First", sequence: 10 },
-                { name: "Second", sequence: 20 },
-                { name: "Third", sequence: 30 },
+                { name: "Row Twenty", sequence: 20 },
+                { name: "Row Thirty", sequence: 30 },
+                { name: "Cell Ten", sequence: 10 },
             ]);
     }
 });

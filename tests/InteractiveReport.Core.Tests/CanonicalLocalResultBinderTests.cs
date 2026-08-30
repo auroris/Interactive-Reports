@@ -287,7 +287,8 @@ public class CanonicalLocalResultBinderTests
             new ReportTable { Composables = composables },
             "tables.child");
 
-        Assert.Empty(specification.Local.Highlights);
+        Assert.Equal(2, specification.Local.Highlights.Length);
+        Assert.All(specification.Local.Highlights, rule => Assert.False(rule.Enabled));
         Assert.Equal(2, specification.Local.HighlightPopulation.AuthoredCount);
         Assert.Equal(
             [
@@ -358,6 +359,47 @@ public class CanonicalLocalResultBinderTests
         Assert.Empty(secondResult.Layer.Aggregates);
     }
 
+    [Fact]
+    public void Disabled_highlight_reserves_its_sequence_across_table_layers()
+    {
+        var context = new LocalResultBindingContext();
+        var disabled = new CanonicalLocalResult(
+            null,
+            null,
+            [Highlight(
+                id: "disabled",
+                sequence: 10,
+                expression: "invalid +",
+                style: null,
+                path: "tables.parent.composables[0].highlights[0]",
+                enabled: false)],
+            new CanonicalRulePopulation(1, ["tables.parent.composables[0].highlights"]),
+            null,
+            []);
+        var enabled = new CanonicalLocalResult(
+            null,
+            null,
+            [Highlight(
+                id: "enabled",
+                sequence: 10,
+                expression: "AMOUNT > 1",
+                style: new CanonicalHighlightStyle("red", null),
+                path: "tables.child.composables[0].highlights[0]")],
+            new CanonicalRulePopulation(1, ["tables.child.composables[0].highlights"]),
+            null,
+            []);
+
+        var parentResult = BindDirect(disabled, ColumnPolicy.Unrestricted, context);
+        var childResult = BindDirect(enabled, ColumnPolicy.Unrestricted, context);
+
+        Assert.Empty(parentResult.Errors);
+        Assert.Empty(parentResult.Layer.Decorations);
+        var error = Assert.Single(childResult.Errors);
+        Assert.Equal("tables.child.composables[0].highlights[0].sequence", error.Path);
+        Assert.Equal("duplicate highlight sequence '10'", error.Message);
+        Assert.Empty(childResult.Layer.Decorations);
+    }
+
     private static CanonicalHighlight Highlight(
         string id,
         int? sequence,
@@ -365,8 +407,9 @@ public class CanonicalLocalResultBinderTests
         CanonicalHighlightStyle? style,
         string path,
         string scope = "row",
-        string? column = null)
-        => new(id, null, sequence, scope, column, expression, style, path);
+        string? column = null,
+        bool enabled = true)
+        => new(id, null, sequence, scope, column, expression, style, path, enabled);
 
     private static BindResult BindDirect(
         CanonicalLocalResult local,

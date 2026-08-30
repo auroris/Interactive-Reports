@@ -21,6 +21,7 @@ public sealed class ReportDocumentSchemaJsonTests
                         new ColumnInfo("TOTAL", "Order Total", "number", true)
                         {
                             FormatSource = "AMOUNT",
+                            PivotMetricId = "ir9",
                         },
                     ],
                     Composables = [],
@@ -38,11 +39,13 @@ public sealed class ReportDocumentSchemaJsonTests
         Assert.Equal("number", column.GetProperty("type").GetString());
         Assert.True(column.GetProperty("computed").GetBoolean());
         Assert.Equal("AMOUNT", column.GetProperty("formatSource").GetString());
+        Assert.Equal("ir9", column.GetProperty("pivotMetricId").GetString());
 
         var roundTrip = JsonSerializer.Deserialize<ReportState>(json, IrJson.Options)!;
         var hydrated = Assert.Single(roundTrip.Tables!["orders"].Schema!);
-        Assert.Equal(("TOTAL", "Order Total", "number", true, "AMOUNT"),
-            (hydrated.Name, hydrated.Label, hydrated.Type, hydrated.Computed, hydrated.FormatSource));
+        Assert.Equal(("TOTAL", "Order Total", "number", true, "AMOUNT", "ir9"),
+            (hydrated.Name, hydrated.Label, hydrated.Type, hydrated.Computed,
+                hydrated.FormatSource, hydrated.PivotMetricId));
     }
 
     [Fact]

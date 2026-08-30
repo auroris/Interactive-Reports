@@ -345,6 +345,89 @@ test("same-table source formats do not leak backward through a Shape", () => {
         "the generated metric inherits its imported mask, not an unknown same-table source assignment");
 });
 
+test("removed source formats cannot cross two completed Shape schemas", () => {
+    const column = {
+        name: "ir2", label: "sum(sum(Amount))", type: "number", formatSource: "ir1",
+    };
+    const doc = {
+        activeTable: "second",
+        tables: {
+            base: {
+                from: "definition",
+                schema: [
+                    { name: "STATUS", label: "Status", type: "text" },
+                    { name: "AMOUNT", label: "Amount", type: "number" },
+                ],
+                composables: [{ kind: "formats", formats: { AMOUNT: { mask: "plain" } } }],
+            },
+            first: {
+                from: "base",
+                schema: [
+                    { name: "STATUS", label: "Status", type: "text" },
+                    {
+                        name: "ir1", label: "sum(Amount)", type: "number",
+                        formatSource: "AMOUNT",
+                    },
+                ],
+                composables: [
+                    { kind: "group", by: ["STATUS"], values: [{ id: "ir1", col: "AMOUNT", fn: "sum" }] },
+                    // AMOUNT is not in this completed export. The server ignores
+                    // this stale assignment, so the client must not export it.
+                    { kind: "formats", formats: { AMOUNT: { mask: "integer" } } },
+                ],
+            },
+            second: {
+                from: "first",
+                schema: [column],
+                composables: [
+                    { kind: "group", by: [], values: [{ id: "ir2", col: "ir1", fn: "sum" }] },
+                ],
+            },
+        },
+    };
+
+    assert.deepEqual(formatForColumn({ doc }, column), { mask: "plain" },
+        "only the mask carried by first's real ir1 export reaches the second Shape");
+});
+
+test("a retained dimension format cannot cross through a sibling metric", () => {
+    const column = {
+        name: "ir2", label: "sum(sum(Amount))", type: "number",
+    };
+    const doc = {
+        activeTable: "second",
+        tables: {
+            base: {
+                from: "definition",
+                schema: [{ name: "AMOUNT", label: "Amount", type: "number" }],
+                composables: [],
+            },
+            first: {
+                from: "base",
+                schema: [
+                    { name: "AMOUNT", label: "Amount", type: "number" },
+                    {
+                        name: "ir1", label: "sum(Amount)", type: "number",
+                    },
+                ],
+                composables: [
+                    { kind: "group", by: ["AMOUNT"], values: [{ id: "ir1", col: "AMOUNT", fn: "sum" }] },
+                    { kind: "formats", formats: { AMOUNT: { mask: "integer" } } },
+                ],
+            },
+            second: {
+                from: "first",
+                schema: [column],
+                composables: [
+                    { kind: "group", by: [], values: [{ id: "ir2", col: "ir1", fn: "sum" }] },
+                ],
+            },
+        },
+    };
+
+    assert.equal(formatForColumn({ doc }, column), null);
+});
+
 test("a later shape inherits a direct format from its intermediate metric", () => {
     const column = { name: "ir2", label: "sum(sum(Amount))", type: "number", formatSource: "ir1" };
     const w = {
@@ -479,50 +562,59 @@ test("control breaks own their columns and defer subtotal and grand total to log
     assert.equal(table.querySelectorAll("tr.ir-grand-total").length, 1);
 });
 
-test("higher highlight sequences win within a scope and cell scope wins over row scope", () => {
+test("highlight rendering normalizes precedence and excludes disabled rules", () => {
     const columns = [
         { name: "AMOUNT", label: "Amount", type: "number" },
         { name: "STATUS", label: "Status", type: "text" },
     ];
-    const w = {
-        doc: {
-            ...reportState({
+    const rules = [
+        { id: "row-low", sequence: 10, enabled: true, style: { bg: "#111111" } },
+        { id: "row-high", sequence: 20, enabled: true, style: { bg: "#222222" } },
+        { id: "row-disabled", sequence: 30, enabled: false, style: { bg: "#ff0000" } },
+        { id: "cell-low", sequence: 10, enabled: true, style: { bg: "#333333" } },
+        { id: "cell-high", sequence: 20, enabled: true, style: { bg: "#444444" } },
+        { id: "cell-disabled", sequence: 30, enabled: false, style: { bg: "#00ff00" } },
+    ];
+    const hits = [
+        { row: 0, id: "row-high" },
+        { row: 0, id: "row-disabled" },
+        { row: 0, id: "row-low" },
+        { row: 0, id: "cell-high", col: "AMOUNT" },
+        { row: 0, id: "cell-disabled", col: "AMOUNT" },
+        { row: 0, id: "cell-low", col: "AMOUNT" },
+    ];
+
+    for (const [ruleOrder, hitOrder] of [
+        [rules, hits],
+        [[...rules].reverse(), [...hits].reverse()],
+    ]) {
+        const w = {
+            doc: reportState({
                 breaks: [],
                 sorts: [],
                 formats: {},
-                highlights: [
-                    { id: "row-low", sequence: 10, style: { bg: "#111111" } },
-                    { id: "row-high", sequence: 20, style: { bg: "#222222" } },
-                    { id: "cell-low", sequence: 10, style: { bg: "#333333" } },
-                    { id: "cell-high", sequence: 20, style: { bg: "#444444" } },
-                ],
+                highlights: structuredClone(ruleOrder),
             }),
-        },
-        schema: { columns },
-        lastResult: {
-            availableColumns: columns,
-            columns,
-            rows: [{ AMOUNT: 10, STATUS: "open" }],
-            page: { index: 1, size: 10 },
-            totalRows: 1,
-            aggregates: {},
-            breakTotals: [],
-            highlights: [
-                { row: 0, id: "row-low" },
-                { row: 0, id: "row-high" },
-                { row: 0, id: "cell-low", col: "AMOUNT" },
-                { row: 0, id: "cell-high", col: "AMOUNT" },
-            ],
-        },
-    };
-    const table = document.createElement("table");
+            schema: { columns },
+            lastResult: {
+                availableColumns: columns,
+                columns,
+                rows: [{ AMOUNT: 10, STATUS: "open" }],
+                page: { index: 1, size: 10 },
+                totalRows: 1,
+                aggregates: {},
+                breakTotals: [],
+                highlights: structuredClone(hitOrder),
+            },
+        };
+        const table = document.createElement("table");
 
-    renderGrid(w, table);
+        renderGrid(w, table);
 
-    // Row highlights paint the CELLS (a column format's inline background would
-    // beat a tr-level style): the sequence winner shows on cells without a cell
-    // hit, and the cell-scope winner overrides on its own cell.
-    const row = table.querySelector("tr.ir-row");
-    assert.equal(row.children[0].style.background, "#444444");
-    assert.equal(row.children[1].style.background, "#222222");
+        // Row highlights paint the cells, with cell scope applied afterward.
+        // Disabled rules remain in the normalized order but never paint.
+        const row = table.querySelector("tr.ir-row");
+        assert.equal(row.children[0].style.background, "#444444");
+        assert.equal(row.children[1].style.background, "#222222");
+    }
 });
