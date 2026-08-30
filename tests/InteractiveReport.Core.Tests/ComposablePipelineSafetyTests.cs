@@ -174,7 +174,7 @@ public sealed class ComposablePipelineSafetyTests : IClassFixture<SqliteE2EFixtu
             searched,
             "median",
             [schema.Lookup["STATUS"]],
-            [new ValidMetric("m1", schema.Lookup["AMOUNT"], AggregateFn.Median)],
+            [new ValidMetric("ir1", schema.Lookup["AMOUNT"], AggregateFn.Median)],
             ReportDialect.Sqlite);
 
         Assert.Equal(1, searched.NestingDepth);
@@ -409,13 +409,13 @@ public sealed class ComposablePipelineSafetyTests : IClassFixture<SqliteE2EFixtu
         [
             TestFixtures.Group(
                 by: ["A]B"],
-                values: [TestFixtures.Metric("m1", "AMOUNT", AggregateFn.Sum)]),
+                values: [TestFixtures.Metric("ir1", "AMOUNT", AggregateFn.Sum)]),
         ]);
 
         var query = await _executor.Query(definition, state, NoParams);
         var export = await _executor.Export(definition, state, NoParams);
 
-        Assert.Equal(["A]B", "__count", "m1"], query.Columns.Select(column => column.Name));
+        Assert.Equal(["A]B", "__count", "ir1"], query.Columns.Select(column => column.Name));
         Assert.Equal(4, query.TotalRows);
         Assert.All(query.Rows, row => Assert.True(row.ContainsKey("A]B")));
         Assert.Equal(query.Columns.Select(column => column.Name), export.Columns.Select(column => column.Name));
@@ -436,13 +436,13 @@ public sealed class ComposablePipelineSafetyTests : IClassFixture<SqliteE2EFixtu
         [
             TestFixtures.Group(
                 by: ["A?B"],
-                values: [TestFixtures.Metric("m1", "AMOUNT", AggregateFn.Sum)]),
+                values: [TestFixtures.Metric("ir1", "AMOUNT", AggregateFn.Sum)]),
         ]);
 
         var query = await _executor.Query(definition, state, NoParams);
         var export = await _executor.Export(definition, state, NoParams);
 
-        Assert.Equal(["A?B", "__count", "m1"], query.Columns.Select(column => column.Name));
+        Assert.Equal(["A?B", "__count", "ir1"], query.Columns.Select(column => column.Name));
         Assert.Equal(4, query.TotalRows);
         Assert.All(query.Rows, row => Assert.True(row.ContainsKey("A?B")));
         Assert.Equal(query.Columns.Select(column => column.Name), export.Columns.Select(column => column.Name));
@@ -450,7 +450,7 @@ public sealed class ComposablePipelineSafetyTests : IClassFixture<SqliteE2EFixtu
     }
 
     [Fact]
-    public async Task Intermediate_metric_format_overrides_root_provenance_for_the_next_shape()
+    public async Task Intermediate_metric_mask_overrides_root_provenance_without_inheriting_renderer()
     {
         var definition = new ReportDefinition
         {
@@ -471,12 +471,12 @@ public sealed class ComposablePipelineSafetyTests : IClassFixture<SqliteE2EFixtu
             [
                 TestFixtures.Group(
                     ["STATUS"],
-                    [TestFixtures.Metric("m1", "AMOUNT", AggregateFn.Sum)],
+                    [TestFixtures.Metric("ir1", "AMOUNT", AggregateFn.Sum)],
                     new TestFixtures.StageLayer
                     {
                         Formats = new Dictionary<string, ColumnFormat>
                         {
-                            ["m1"] = new()
+                            ["ir1"] = new()
                             {
                                 DisplayAs = "link",
                                 UrlColumn = "STATUS",
@@ -486,24 +486,23 @@ public sealed class ComposablePipelineSafetyTests : IClassFixture<SqliteE2EFixtu
                     }),
                 TestFixtures.Group(
                     ["STATUS"],
-                    [TestFixtures.Metric("m2", "m1", AggregateFn.Sum)],
-                    new TestFixtures.StageLayer { Columns = ["m2"] }),
+                    [TestFixtures.Metric("ir2", "ir1", AggregateFn.Sum)],
+                    new TestFixtures.StageLayer { Columns = ["ir2"] }),
             ]);
 
         var query = await _executor.Query(definition, state, NoParams);
         var export = await _executor.Export(definition, state, NoParams);
 
         Assert.Equal(
-            "m1",
+            "ir1",
             query.Document!.Tables![state.ActiveTable!].Schema!
-                .Single(column => column.Name == "m2").FormatSource);
-        Assert.Equal(
-            "6,000.00",
-            export.Rows[0]["m2"]);
+                .Single(column => column.Name == "ir2").FormatSource);
+        Assert.Equal(6000m, Convert.ToDecimal(export.Rows[0]["ir2"]));
+        Assert.DoesNotContain("<a", Convert.ToString(export.Rows[0]["ir2"]));
     }
 
     [Fact]
-    public async Task Parent_terminal_validation_does_not_leak_into_a_child_target()
+    public async Task Null_cache_parent_terminal_validation_does_not_leak_into_a_child_target()
     {
         var definition = new ReportDefinition
         {
@@ -512,18 +511,16 @@ public sealed class ComposablePipelineSafetyTests : IClassFixture<SqliteE2EFixtu
             Dialect = ReportDialect.Sqlite,
             Sql = "SELECT ORDER_ID, CUSTOMER, STATUS, AMOUNT, NOTES FROM ORDERS",
         };
-        var state = new ReportState
+
+        static ReportState State(string activeTable) => new()
         {
-            ActiveTable = "child",
+            ActiveTable = activeTable,
             Page = new PageRequest { Index = 1, Size = 0 },
             Tables = new Dictionary<string, ReportTable>
             {
                 ["parent"] = new()
                 {
                     From = "definition",
-                    // A non-null advisory cache keeps this inactive table out of the
-                    // refresh-target set. Its terminal rule must not enter child binding.
-                    Schema = [new ColumnInfo("FORGED", "Forged", "text", false)],
                     Composables =
                     [
                         new TableComposable
@@ -536,6 +533,23 @@ public sealed class ComposablePipelineSafetyTests : IClassFixture<SqliteE2EFixtu
                                     Id = "broken-parent",
                                     Expr = "UNKNOWN_COLUMN > 0",
                                     Style = new HighlightStyle { Bg = "red" },
+                                },
+                            ],
+                        },
+                        new TableComposable
+                        {
+                            Kind = "break",
+                            Breaks = ["UNKNOWN_BREAK"],
+                        },
+                        new TableComposable
+                        {
+                            Kind = "aggregate",
+                            Aggregates =
+                            [
+                                new AggregateRule
+                                {
+                                    Col = "NOTES",
+                                    Fn = AggregateFn.Sum,
                                 },
                             ],
                         },
@@ -556,10 +570,70 @@ public sealed class ComposablePipelineSafetyTests : IClassFixture<SqliteE2EFixtu
             },
         };
 
-        var result = await _executor.Query(definition, state, NoParams);
+        var result = await _executor.Query(definition, State("child"), NoParams);
 
         Assert.Equal(10, result.TotalRows);
-        Assert.DoesNotContain(result.Ignored, item => item.Kind == "highlight");
+        Assert.DoesNotContain(result.Ignored, item =>
+            item.Kind is "highlight" or "break" or "aggregate");
+        Assert.NotNull(result.Document!.Tables!["parent"].Schema);
+
+        var exception = await Assert.ThrowsAsync<ReportValidationException>(() =>
+            _executor.Query(definition, State("parent"), NoParams));
+        Assert.Contains(exception.Errors, error =>
+            error.Path == "tables.parent.composables[0].highlights[0].expr"
+            && error.Message.Contains("UNKNOWN_COLUMN", StringComparison.Ordinal));
+        Assert.Contains(exception.Errors, error =>
+            error.Path == "tables.parent.composables[2].aggregates[0]"
+            && error.Message.Contains("not valid", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Request_search_is_not_applied_to_a_non_active_schema_refresh()
+    {
+        var definition = new ReportDefinition
+        {
+            Name = "non-active-search-isolation",
+            Connection = "E2E",
+            Dialect = ReportDialect.Sqlite,
+            Sql = "SELECT ORDER_ID, CUSTOMER, STATUS, AMOUNT, NOTES FROM ORDERS",
+        };
+        var state = new ReportState
+        {
+            ActiveTable = "active",
+            Search = "Acme",
+            Page = new PageRequest { Index = 1, Size = 0 },
+            Tables = new Dictionary<string, ReportTable>
+            {
+                ["inactive"] = new()
+                {
+                    From = "definition",
+                    Composables =
+                    [
+                        new TableComposable
+                        {
+                            Kind = "pivot",
+                            Rows = ["CUSTOMER"],
+                            Cols = ["STATUS"],
+                            Totals = true,
+                        },
+                    ],
+                },
+                ["active"] = new()
+                {
+                    From = "definition",
+                    Composables = [],
+                },
+            },
+        };
+
+        var result = await _executor.Query(definition, state, NoParams);
+
+        Assert.Equal(3, result.TotalRows);
+        Assert.All(result.Rows, row => Assert.Contains(
+            "acme",
+            Convert.ToString(row["CUSTOMER"])!,
+            StringComparison.OrdinalIgnoreCase));
+        Assert.NotNull(result.Document!.Tables!["inactive"].Schema);
     }
 
     [Fact]
@@ -640,7 +714,7 @@ public sealed class ComposablePipelineSafetyTests : IClassFixture<SqliteE2EFixtu
                             [
                                 new MetricRule
                                 {
-                                    Id = "m1",
+                                    Id = "ir1",
                                     Col = "AMOUNT",
                                     Fn = AggregateFn.Sum,
                                 },

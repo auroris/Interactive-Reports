@@ -122,7 +122,7 @@ public sealed class ConsistentReadTests : IDisposable
                 Pivot(
                     rows: ["ORDER_ID"],
                     cols: ["CUSTOMER"],
-                    values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
+                    values: [Metric("ir1", "AMOUNT", AggregateFn.Sum)],
                     totals: false),
             ])),
             NoParams);

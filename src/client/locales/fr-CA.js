@@ -229,9 +229,9 @@ export const messages = {
     "expression.enterExpression": "Entrez une expression",
     "expression.filterPlaceholder": "p. ex. AMOUNT > 1000 AND STATUS <> 'CANCELLED'",
     "expression.gridValuePlaceholder": "p. ex. ROUND(AMOUNT * 1.0825, 2)",
-    "expression.groupValuePlaceholder": "p. ex. ROUND(m1 / __count, 2)",
+    "expression.groupValuePlaceholder": "p. ex. ROUND(ir1 / __count, 2)",
     "expression.gridHighlightPlaceholder": "p. ex. ROUND(AMOUNT, 2) > 1000 OR NOTES IS NULL",
-    "expression.groupHighlightPlaceholder": "p. ex. m1 > 10000",
+    "expression.groupHighlightPlaceholder": "p. ex. ir1 > 10000",
 
     "filter.editTitle": "Modifier le filtre",
     "filter.addTitle": "Ajouter un filtre",

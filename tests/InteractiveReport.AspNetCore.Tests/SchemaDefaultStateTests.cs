@@ -179,7 +179,7 @@ public sealed class SchemaDefaultStateTests
             new TableComposable
             {
                 Kind = "labels",
-                Labels = new() { ["m1"] = "Revenue" },
+                Labels = new() { ["ir1"] = "Revenue" },
             });
 
         var composables = Active(EndpointExtensions.SchemaDefaultState(def)).Composables!;
@@ -187,7 +187,7 @@ public sealed class SchemaDefaultStateTests
 
         Assert.Equal(["sort", "labels", shapeKind, "labels"], composables.Select(c => c.Kind));
         Assert.Equal("Order #", composables[1].Labels!["ORDER_ID"]);
-        Assert.Equal("Revenue", outputLabels["m1"]);
+        Assert.Equal("Revenue", outputLabels["ir1"]);
         Assert.DoesNotContain("ORDER_ID", outputLabels.Keys);
     }
 

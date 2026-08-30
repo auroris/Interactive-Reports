@@ -178,9 +178,10 @@ const applyComputedSchema = (composable, input) => {
     return result;
 };
 
-/// Fold labels in the same order as the server folds the selected table chain.
-/// Generated labels are captured when their shape executes; a later label for an
-/// input name therefore cannot leak backward and rewrite an already-built metric.
+/// Fold labels in the server's natural semantic order for each selected table.
+/// Shape always precedes same-table Compute and Labels regardless of array
+/// position. Generated labels therefore see completed parent metadata, while a
+/// same-table label cannot leak backward and rewrite an already-built metric.
 /// Cached schemas close each named-table boundary. Within unfamiliar foreign
 /// compositions, the synthesized schema is deliberately best-effort.
 function foldedLabels(w) {
@@ -189,26 +190,13 @@ function foldedLabels(w) {
     for (const entry of activeChain(w.doc)) {
         const composables = entry.table?.composables ?? [];
         const completed = structuralTableColumns(w, entry.id);
-        let localLabelsSeen = false;
-        for (let index = 0; index < composables.length; index++) {
-            const composable = composables[index];
+        const shapes = composables.filter(composable =>
+            ["group", "pivot", "chart"].includes(kindOf(composable)));
+
+        for (let index = 0; index < shapes.length; index++) {
+            const composable = shapes[index];
             const kind = kindOf(composable);
             switch (kind) {
-                case "labels":
-                    mergeLabels(
-                        labels,
-                        composable.labels,
-                        (composable.labels
-                            && typeof composable.labels === "object"
-                            && !Array.isArray(composable.labels)
-                            && Object.keys(composable.labels).length === 0)
-                            || (!localLabelsSeen
-                                && String(entry.table?.from ?? "").trim().toLowerCase() === "definition"));
-                    localLabelsSeen = true;
-                    break;
-                case "compute":
-                    columns = applyComputedSchema(composable, columns);
-                    break;
                 case "group":
                     columns = applyGroupLabels(composable, columns, labels);
                     break;
@@ -216,16 +204,32 @@ function foldedLabels(w) {
                     columns = applyChartLabels(composable, columns, labels);
                     break;
                 case "pivot": {
-                    const laterShape = composables.slice(index + 1)
-                        .some(item => ["group", "pivot", "chart"].includes(kindOf(item)));
                     columns = applyPivotLabels(
                         composable,
                         columns,
-                        laterShape ? [] : completed,
+                        index + 1 < shapes.length ? [] : completed,
                         labels);
                     break;
                 }
             }
+        }
+
+        for (const composable of composables)
+            if (kindOf(composable) === "compute")
+                columns = applyComputedSchema(composable, columns);
+
+        const labelMaps = composables.flatMap(composable =>
+            kindOf(composable) === "labels"
+                && composable.labels
+                && typeof composable.labels === "object"
+                && !Array.isArray(composable.labels)
+                ? [composable.labels]
+                : []);
+        if (labelMaps.some(values => Object.keys(values).length === 0))
+            clearMap(labels);
+        for (const values of labelMaps) {
+            if (Object.keys(values).length === 0) continue;
+            mergeLabels(labels, values, false);
         }
         if (completed.length) columns = completed;
     }
@@ -250,15 +254,14 @@ export function terminalTableColumns(w) {
         ?? w.schema?.columns);
 }
 
-/// A packaged shape editor can replace its exact node when that node is the
-/// first composable owned by the table. Foreign pre-shape compositions remain
-/// executable and visible, but the built-in editor cannot safely reconstruct
-/// their input schema from the parent table cache.
-export const shapeEditable = location => !!location && location.composableIndex === 0;
+/// A packaged shape editor can replace its exact node independent of storage
+/// position. Natural ordering guarantees that its input is the completed parent
+/// table, so siblings written before it in JSON do not obscure that schema.
+export const shapeEditable = location => !!location;
 
-/// Schema immediately before a UI-authored shape, or the base schema selected
-/// for a new view. The UI-created shape is first in its table, so its `from`
-/// table's cache is exact.
+/// Schema before a UI-authored shape, or the base schema selected for a new view.
+/// A shape is naturally first in its table, so its `from` table's cache is exact
+/// even when the shape is stored elsewhere in the composables array.
 export function shapeInputColumns(w, location = null, baseTableId = null) {
     const owner = tableEntry(w.doc, location?.tableId);
     const inputId = owner?.table?.from ?? baseTableId;
@@ -280,8 +283,6 @@ const shapeDimensions = doc => {
 export function tableContext(w) {
     const columns = terminalTableColumns(w);
     const tableId = w.doc?.activeTable;
-    const peerComputed = new Set((terminalComposableLocation(w.doc, "compute", tableId)
-        ?.composable?.computed ?? []).map(rule => String(rule.id).toLowerCase()));
     return {
         mode: modeOf(w.doc),
         tableId,
@@ -293,10 +294,9 @@ export function tableContext(w) {
         edit(doc, kind, mutate) {
             return editTerminalComposable(doc, kind, mutate, tableId);
         },
-        // A completed parent's computed outputs are ordinary input columns here.
-        // Only definitions in this table's own Compute node are peers; the server
-        // evaluates those together, so none may be used as another peer's input.
-        computeTokens: columns.filter(column => !peerComputed.has(column.name.toLowerCase())),
+        // The server dependency-orders computed columns. Existing local outputs are
+        // therefore valid inputs to a new rule; an editor removes only its own id.
+        computeTokens: columns,
         sortColumns: columns.filter(column => columnSortable(w, column.name)),
         filterColumns: columns.filter(column => columnFilterable(w, column.name)),
         caps: capabilities(w),

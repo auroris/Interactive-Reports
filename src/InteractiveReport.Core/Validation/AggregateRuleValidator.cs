@@ -11,40 +11,34 @@ internal static class AggregateRuleValidator
         public HashSet<string> SeenKeys { get; } = new(StringComparer.OrdinalIgnoreCase);
     }
 
-    public static List<ValidAggregate> Validate(
-        List<AggregateRule>? rules,
-        string pathPrefix,
+    internal static ValidAggregate? Bind(
+        string columnName,
+        AggregateFn function,
+        string rulePath,
         IReadOnlyDictionary<string, ColumnModel> columns,
         List<ValidationError> errors,
         List<IgnoredItem> ignored,
-        Context? context = null)
+        Context context)
     {
-        var result = new List<ValidAggregate>();
-        if (rules is null) return result;
-
-        context ??= new Context();
-        for (var i = 0; i < rules.Count; i++)
+        if (!columns.TryGetValue(columnName, out var column))
         {
-            var rule = rules[i];
-            var path = $"{pathPrefix}[{i}]";
-            if (!columns.TryGetValue(rule.Col, out var column))
-            {
-                ignored.Add(new IgnoredItem("aggregate", $"unknown column '{rule.Col}'"));
-                continue;
-            }
-
-            if (!AggregateCatalog.IsCompatible(column.Kind, rule.Fn))
-            {
-                var function = JsonNamingPolicy.CamelCase.ConvertName(rule.Fn.ToString());
-                errors.Add(new ValidationError(
-                    path,
-                    $"aggregate '{function}' is not valid for {column.KindName} column '{column.Name}'"));
-                continue;
-            }
-
-            if (context.SeenKeys.Add($"{column.Name}\0{rule.Fn}"))
-                result.Add(new ValidAggregate(column, rule.Fn));
+            ignored.Add(new IgnoredItem(
+                "aggregate",
+                $"unknown column '{columnName}'"));
+            return null;
         }
-        return result;
+
+        if (!AggregateCatalog.IsCompatible(column.Kind, function))
+        {
+            var functionName = JsonNamingPolicy.CamelCase.ConvertName(function.ToString());
+            errors.Add(new ValidationError(
+                rulePath,
+                $"aggregate '{functionName}' is not valid for {column.KindName} column '{column.Name}'"));
+            return null;
+        }
+
+        return context.SeenKeys.Add($"{column.Name}\0{function}")
+            ? new ValidAggregate(column, function)
+            : null;
     }
 }

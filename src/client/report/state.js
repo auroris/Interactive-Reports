@@ -1,7 +1,8 @@
 // Pure report-state transformations over the composable table document. A
 // document owns an unordered map of named tables. Each table explicitly names
-// its input with `from` and folds its ordered composables over that input. Table
-// names are opaque; the only reserved input is `definition`.
+// its input with `from`; composable kinds determine their semantic phase, while
+// their array positions are retained only as document locations for exact edits.
+// Table names are opaque; the only reserved input is `definition`.
 
 import { resolveLocale, translate } from "../core/localization.js";
 
@@ -47,6 +48,36 @@ export function serializeReportState(source) {
     return result;
 }
 
+const stableValue = value => {
+    if (Array.isArray(value)) return value.map(stableValue);
+    if (!value || typeof value !== "object") return value;
+    return Object.fromEntries(Object.keys(value)
+        .sort()
+        .map(key => [key, stableValue(value[key])]));
+};
+
+const exportedRelationKinds = new Set(["group", "pivot", "chart", "compute", "filter"]);
+
+/// A table signature for schema-cache invalidation. Only `from` and exported
+/// relation operations can change this table's or a descendant's public schema.
+/// Metadata and owner-local response instructions are interpreted live and do not
+/// cross that boundary. Composable array position is not executable semantics, so
+/// a storage-only permutation also leaves the signature unchanged.
+const semanticTableSignature = table => {
+    const composables = (table?.composables ?? []).flatMap(composable => {
+        if (!exportedRelationKinds.has(token(composable?.kind))) return [];
+        const normalized = stableValue(composable);
+        if (normalized && typeof normalized === "object") normalized.kind = token(normalized.kind);
+        return [normalized];
+    });
+    composables.sort((left, right) =>
+        String(JSON.stringify(left)).localeCompare(String(JSON.stringify(right))));
+    return JSON.stringify(stableValue({
+        from: token(table?.from),
+        composables,
+    }));
+};
+
 /// Null cached schemas for changed table definitions and every table delegating
 /// from them. The server replaces null caches on the next document submission.
 export function invalidateChangedSchemas(before, after) {
@@ -57,21 +88,10 @@ export function invalidateChangedSchemas(before, after) {
         if (!retainedIds.has(id.toLowerCase())) changed.add(id.toLowerCase());
     for (const [id, table] of Object.entries(next)) {
         const old = tableEntry(before, id)?.table;
-        const oldDefinition = old
-            ? JSON.stringify({ from: old.from, composables: old.composables ?? [] })
-            : null;
-        const nextDefinition = JSON.stringify({ from: table?.from, composables: table?.composables ?? [] });
+        const oldDefinition = old ? semanticTableSignature(old) : null;
+        const nextDefinition = semanticTableSignature(table);
         if (oldDefinition !== nextDefinition) changed.add(id.toLowerCase());
     }
-
-    // Search can change a Pivot's data-dependent columns, but Group, Chart, and
-    // ordinary table schemas are structural. Seed only Pivot owners here; the
-    // descendant walk below carries invalidation through their completed outputs.
-    // Paging and switching the active table never affect a schema cache.
-    if ((before?.search ?? null) !== (after?.search ?? null))
-        for (const [id, table] of Object.entries(next))
-            if ((table?.composables ?? []).some(item => kindOf(item) === "pivot"))
-                changed.add(id.toLowerCase());
 
     let grew = true;
     while (grew) {
@@ -129,38 +149,35 @@ export const activeChain = (doc, requested = doc?.activeTable) => {
 };
 
 /// Every composable along the selected table's chain, retaining its exact owner and
-/// array position. `participates` mirrors the server fold: parent tables contribute
-/// relational rules and metadata, while their terminal presentation/control state
-/// remains local to those tables. Consumers use these locations instead of
-/// flattening repeated nodes into a synthetic settings object. `authorable` is deliberately
-/// narrower than `owned`: the packaged editors can safely write only the last node
-/// of each kind in the active table's terminal segment. Earlier/repeated/foreign
-/// nodes stay preserved and read-only.
+/// storage position. `participates` mirrors table export: parent tables contribute
+/// relational rules and metadata, while their local presentation/control state
+/// remains local to those tables. Shape position never defines a segment. A shape
+/// is naturally first in its owning table, and every other owned composable is
+/// interpreted against its completed shape. `authorable` is deliberately narrower
+/// than `owned`: packaged editors safely write only the last node of each kind in
+/// the active table. Earlier/repeated/foreign nodes stay preserved and read-only.
 export const composableLocations = (doc, requested = doc?.activeTable) => {
     const chain = activeChain(doc, requested);
     if (!chain.length) return [];
     const activeId = chain.at(-1).id.toLowerCase();
     const rootId = chain[0].id.toLowerCase();
-    let afterShape = false;
+    let inheritedShape = false;
     const result = [];
 
     for (const entry of chain) {
         const composables = entry.table?.composables ?? [];
         const owned = entry.id.toLowerCase() === activeId;
-        let lastShape = -1;
-        if (owned) {
-            for (let index = 0; index < composables.length; index++)
-                if (shapeKinds.has(kindOf(composables[index]))) lastShape = index;
-        }
+        const ownsShape = composables.some(composable => shapeKinds.has(kindOf(composable)));
 
         for (let index = 0; index < composables.length; index++) {
             const composable = composables[index];
             const kind = kindOf(composable);
             const shape = shapeKinds.has(kind);
+            const afterShape = inheritedShape || (ownsShape && !shape);
             const participates = shape
                 || (ordinaryKindSet.has(kind)
                     && (owned || inheritedKindSet.has(kind)));
-            const terminal = owned && !shape && index > lastShape;
+            const terminal = owned && !shape;
             const laterSameKind = terminal && composables
                 .slice(index + 1)
                 .some(item => kindOf(item) === kind);
@@ -173,12 +190,12 @@ export const composableLocations = (doc, requested = doc?.activeTable) => {
                 inherited: !owned,
                 participates,
                 afterShape,
-                source: entry.id.toLowerCase() === rootId && !afterShape,
+                source: entry.id.toLowerCase() === rootId && !ownsShape && !shape,
                 terminal,
                 authorable: terminal && ordinaryKindSet.has(kind) && !laterSameKind,
             });
-            if (shape) afterShape = true;
         }
+        if (ownsShape) inheritedShape = true;
     }
     return result;
 };
@@ -187,25 +204,31 @@ const composedMap = (doc, kind, field) => {
     const result = { input: undefined, output: undefined };
     let afterShape = false;
     for (const entry of activeChain(doc)) {
-        for (const composable of entry.table?.composables ?? []) {
-            if (shapeKinds.has(kindOf(composable))) {
-                afterShape = true;
-                continue;
-            }
-            if (!isKind(composable, kind)) continue;
+        const composables = entry.table?.composables ?? [];
+        if (composables.some(composable => shapeKinds.has(kindOf(composable))))
+            afterShape = true;
+
+        const maps = composables.flatMap(composable => {
+            if (!isKind(composable, kind)) return [];
             const values = composable[field];
-            if (!values || typeof values !== "object" || Array.isArray(values)) continue;
-            const side = afterShape ? "output" : "input";
-            result[side] ??= {};
-            if (Object.keys(values).length === 0) {
-                // An empty presentation map is a reset at this point in the
-                // composition, not merely an empty override for the current side.
-                // Once a shape exists, source metadata would otherwise leak back
-                // through a generated column's formatSource provenance.
-                if (afterShape) result.input = {};
-                result[side] = {};
-                continue;
-            }
+            return values && typeof values === "object" && !Array.isArray(values)
+                ? [values]
+                : [];
+        });
+        if (!maps.length) continue;
+
+        const side = afterShape ? "output" : "input";
+        result[side] ??= {};
+        if (maps.some(values => Object.keys(values).length === 0)) {
+            // A same-table empty map resets inherited metadata once before its
+            // sibling overlays merge. Its storage position cannot erase a
+            // non-empty overlay owned by the same table.
+            if (afterShape) result.input = {};
+            result[side] = {};
+        }
+
+        for (const values of maps) {
+            if (Object.keys(values).length === 0) continue;
             for (const [name, value] of Object.entries(values)) {
                 if (!String(name).trim() || value === null || value === undefined) continue;
                 if (kind === "labels") {
@@ -221,26 +244,78 @@ const composedMap = (doc, kind, field) => {
     return result;
 };
 
-/// Effective presentation metadata over the complete selected ancestry, split at
-/// the optional shape boundary. Later entries on either side win case-insensitively
-/// and an explicit empty map clears everything accumulated before that point,
-/// matching the server's fold.
+/// Effective display labels over the complete selected ancestry, split at the
+/// natural shape boundary. Labels owned by a shaped table apply to that shape's
+/// output regardless of storage position. Same-table overlays merge
+/// case-insensitively; an explicit empty map first clears everything inherited by
+/// that table, wherever the empty map is stored in the array.
 export const composedLabels = doc => composedMap(doc, "labels", "labels");
-export const composedFormats = doc => composedMap(doc, "formats", "formats");
 
-const ownRange = (doc, requested, { terminal = false, input = false } = {}) => {
+const copyFormat = value => ({
+    ...value,
+    ...(Array.isArray(value?.classes) ? { classes: [...value.classes] } : {}),
+});
+
+const formatMapsOwnedBy = entry => (entry?.table?.composables ?? []).flatMap(composable => {
+    if (!isKind(composable, "formats")) return [];
+    const values = composable.formats;
+    return values && typeof values === "object" && !Array.isArray(values)
+        ? [values]
+        : [];
+});
+
+const overlayFormatMaps = (inherited, maps) => {
+    const effective = {};
+    for (const [name, value] of Object.entries(inherited ?? {}))
+        if (value && typeof value === "object" && !Array.isArray(value))
+            setMapEntry(effective, name, copyFormat(value));
+
+    // Empty is a table-boundary reset. Apply it once before every non-empty
+    // same-table overlay so serialization order cannot change the result.
+    if (maps.some(values => Object.keys(values).length === 0))
+        for (const name of Object.keys(effective)) delete effective[name];
+
+    for (const values of maps) {
+        if (Object.keys(values).length === 0) continue;
+        for (const [name, value] of Object.entries(values)) {
+            if (!String(name).trim()
+                || !value
+                || typeof value !== "object"
+                || Array.isArray(value)) continue;
+            setMapEntry(effective, name, copyFormat(value));
+        }
+    }
+    return effective;
+};
+
+/// Effective formats for the selected table. A `from` edge carries only a
+/// column's safe scalar mask. Alignment, styles, classes, renderers, commands,
+/// and renderer source columns remain owner-local. The active table's direct
+/// entries stay complete; a later boundary reduces them to mask metadata again.
+export const composedFormats = doc => {
+    const chain = activeChain(doc);
+    let inherited = {};
+    for (let index = 0; index < chain.length; index++) {
+        const effective = overlayFormatMaps(inherited, formatMapsOwnedBy(chain[index]));
+        if (index === chain.length - 1) return effective;
+
+        inherited = {};
+        for (const [name, value] of Object.entries(effective)) {
+            if (typeof value?.mask !== "string" || !value.mask.trim()) continue;
+            setMapEntry(inherited, name, { mask: value.mask });
+        }
+    }
+    return inherited;
+};
+
+const ownRange = (doc, requested) => {
     const entry = tableEntry(doc, requested);
     if (!entry) return null;
     const composables = entry.table?.composables ?? [];
-    let firstShape = composables.findIndex(item => shapeKinds.has(kindOf(item)));
-    if (firstShape < 0) firstShape = composables.length;
-    let lastShape = -1;
-    for (let index = 0; index < composables.length; index++)
-        if (shapeKinds.has(kindOf(composables[index]))) lastShape = index;
     return {
         entry,
-        start: terminal ? lastShape + 1 : 0,
-        end: input ? firstShape : composables.length,
+        start: 0,
+        end: composables.length,
     };
 };
 
@@ -294,15 +369,14 @@ const editInRange = (range, kind, mutate) => {
     return location;
 };
 
-/// The last exact composable of `kind` in a table's terminal segment. A table
-/// that owns a shape starts its terminal segment after the final owned shape; a
-/// table that inherits a shape has its complete own composition as the segment.
+/// The last exact composable of `kind` owned by a table. Shape position does not
+/// partition the table because natural semantic ordering is inferred by kind.
 export function terminalComposableLocation(doc, kind, requested = doc?.activeTable) {
-    return locationInRange(ownRange(doc, requested, { terminal: true }), kind);
+    return locationInRange(ownRange(doc, requested), kind);
 }
 
 export function editTerminalComposable(doc, kind, mutate, requested = doc?.activeTable) {
-    return editInRange(ownRange(doc, requested, { terminal: true }), kind, mutate);
+    return editInRange(ownRange(doc, requested), kind, mutate);
 }
 
 const definitionInputEntry = doc => {
@@ -315,18 +389,20 @@ const definitionInputEntry = doc => {
 };
 
 /// Input-scoped editors (currently scoped search and definition-table cleanup)
-/// target the final same-kind node before the first shape of the selected root.
+/// target the final same-kind node owned by the selected definition root. A root
+/// shape, when present in an external document, is naturally evaluated before
+/// those ordinary composables regardless of storage position.
 export function inputComposableLocation(doc, kind) {
     const entry = definitionInputEntry(doc);
     return entry
-        ? locationInRange(ownRange(doc, entry.id, { input: true }), kind)
+        ? locationInRange(ownRange(doc, entry.id), kind)
         : null;
 }
 
 export function editInputComposable(doc, kind, mutate) {
     const entry = definitionInputEntry(doc);
     if (!entry) throw new Error("The definition-input table is ambiguous or unavailable.");
-    return editInRange(ownRange(doc, entry.id, { input: true }), kind, mutate);
+    return editInRange(ownRange(doc, entry.id), kind, mutate);
 }
 
 /// Server-populated, non-authoritative schema cache for the active table. This
@@ -509,6 +585,98 @@ export function nextFreeId(usedLowercase, prefix) {
     return `${prefix}${next}`;
 }
 
+const stableTextCompare = (left, right) => {
+    const a = String(left ?? "");
+    const b = String(right ?? "");
+    const lowerA = a.toLowerCase();
+    const lowerB = b.toLowerCase();
+    return lowerA < lowerB ? -1
+        : lowerA > lowerB ? 1
+            : a < b ? -1
+                : a > b ? 1
+                    : 0;
+};
+
+/// Canonical client view of one table's highlight priority set. Missing
+/// sequences are assigned by stable id into the first unused ten-step slots,
+/// matching server normalization; document/list position is retained only as a
+/// mutation address in `index`.
+export function normalizedHighlightRules(rules) {
+    const entries = (rules ?? []).map((rule, index) => ({
+        rule,
+        index,
+        sequence: Number.isInteger(rule?.sequence) ? rule.sequence : null,
+    }));
+    const used = new Set(entries
+        .filter(entry => entry.sequence !== null)
+        .map(entry => entry.sequence));
+    const missing = entries
+        .filter(entry => entry.sequence === null)
+        .sort((left, right) => stableTextCompare(left.rule?.id, right.rule?.id));
+    let sequence = 10;
+    for (const entry of missing) {
+        while (used.has(sequence)) sequence += 10;
+        entry.sequence = sequence;
+        used.add(sequence);
+        sequence += 10;
+    }
+    return entries.sort((left, right) => left.sequence - right.sequence
+        || stableTextCompare(left.rule?.id, right.rule?.id));
+}
+
+const addUsedColumnId = (ids, candidate) => {
+    const value = typeof candidate === "string" ? candidate : candidate?.name;
+    if (typeof value === "string" && value.trim()) ids.add(value.trim().toLowerCase());
+};
+
+/// The shared public-column namespace used by client-authored computed columns
+/// and Group/Pivot metrics. Table schema caches reserve source and generated
+/// column names; composable scans keep allocation safe even before a refreshed
+/// cache arrives. Callers may add the definition or dialog input columns which
+/// live outside the report document.
+export function usedColumnIds(doc, additionalColumns = []) {
+    const ids = new Set();
+    for (const column of additionalColumns ?? []) addUsedColumnId(ids, column);
+    for (const table of Object.values(doc?.tables ?? {})) {
+        for (const column of table?.schema ?? []) addUsedColumnId(ids, column);
+        for (const composable of table?.composables ?? []) {
+            const kind = kindOf(composable);
+            if (kind === "compute")
+                for (const rule of composable?.computed ?? []) addUsedColumnId(ids, rule?.id);
+            if (kind === "group" || kind === "pivot")
+                for (const metric of composable?.values ?? []) addUsedColumnId(ids, metric?.id);
+        }
+    }
+    return ids;
+}
+
+export const nextSyntheticColumnId = (doc, additionalColumns = []) =>
+    nextFreeId(usedColumnIds(doc, additionalColumns), "ir");
+
+/// Preserve metric identities by (column, function) while allocating every new
+/// metric from the same document-wide `irN` namespace as computed columns.
+/// Removed identities stay reserved during the edit because they are still in
+/// `doc`; this prevents a replacement metric from silently inheriting state.
+export function assignShapeMetricIds(doc, rows, previous, additionalColumns = []) {
+    const remaining = [...(previous ?? [])];
+    const used = usedColumnIds(doc, additionalColumns);
+    const fresh = () => {
+        const id = nextFreeId(used, "ir");
+        used.add(id);
+        return id;
+    };
+    const values = (rows ?? []).map(row => {
+        const index = remaining.findIndex(value =>
+            sameColumn(value?.col, row?.col) && value?.fn === row?.fn);
+        if (index >= 0) {
+            const [kept] = remaining.splice(index, 1);
+            return { id: kept.id, col: row.col, fn: row.fn };
+        }
+        return { id: fresh(), col: row.col, fn: row.fn };
+    });
+    return { values, retired: remaining.map(value => value.id) };
+}
+
 const mapDeleteWhere = (map, predicate) => {
     if (!map) return;
     for (const key of Object.keys(map))
@@ -516,13 +684,13 @@ const mapDeleteWhere = (map, predicate) => {
 };
 
 /// True when an expression contains the column as an identifier, excluding quoted
-/// string contents and longer identifiers (c1 does not match c10 or 'c1').
-export function expressionReferencesColumn(expression, column, { pivotFamily = false } = {}) {
+/// string contents and longer identifiers (ir1 does not match ir10 or 'ir1').
+export function expressionReferencesColumn(expression, column) {
     const source = String(expression ?? "");
     const target = String(column ?? "").toLowerCase();
     const matches = name => {
         const candidate = name.toLowerCase();
-        return candidate === target || (pivotFamily && candidate.startsWith(`${target}@`));
+        return candidate === target;
     };
     let quoted = false;
     for (let index = 0; index < source.length;) {
@@ -572,10 +740,10 @@ const shapesReferenceColumn = (locations, column) => locations.some(location => 
 });
 
 /// Remove a column and every computed column that depends on it from all
-/// same-kind nodes in one input or terminal segment. Packaged editors author the
-/// final node of a kind, but foreign documents may contain earlier nodes which
-/// remain executable and therefore must not retain dangling references.
-const cleanupColumnReferences = (range, column, { pivotFamily = false } = {}) => {
+/// same-kind nodes owned by one table. Packaged editors author the final node of
+/// a kind, but foreign documents may contain earlier nodes which remain
+/// executable and therefore must not retain dangling references.
+const cleanupColumnReferences = (range, column) => {
     const retired = [];
     const visited = new Set();
     const nodes = kind => locationsInRange(range, kind).map(location => location.composable);
@@ -584,13 +752,8 @@ const cleanupColumnReferences = (range, column, { pivotFamily = false } = {}) =>
         if (typeof current !== "string" || visited.has(current.toLowerCase())) return;
         visited.add(current.toLowerCase());
         retired.push(current);
-        const matches = name => sameColumn(name, current)
-            || (pivotFamily && typeof name === "string"
-                && name.toLowerCase().startsWith(`${current.toLowerCase()}@`));
-        const expressionMatches = expression => expressionReferencesColumn(
-            expression,
-            current,
-            { pivotFamily });
+        const matches = name => sameColumn(name, current);
+        const expressionMatches = expression => expressionReferencesColumn(expression, current);
 
         const removedComputed = [];
         for (const compute of nodes("compute")) {
@@ -653,7 +816,7 @@ export function removeInputComputedColumn(state, column) {
     const source = definitionInputEntry(state);
     if (!source) return [];
     const retired = cleanupColumnReferences(
-        ownRange(state, source.id, { input: true }),
+        ownRange(state, source.id),
         column);
 
     const descendants = new Set([source.id.toLowerCase()]);
@@ -701,12 +864,9 @@ export function removeInputComputedColumn(state, column) {
 /// Delete one terminal computed column and its references in the exact active
 /// table: filters, sorts, highlights, selection, and presentation maps.
 export function removeTerminalComputedColumn(state, column, tableId = state?.activeTable) {
-    const pivotFamily = shapeLocations(state, tableId)
-        .some(location => isKind(location.composable, "pivot"));
     cleanupColumnReferences(
-        ownRange(state, tableId, { terminal: true }),
-        column,
-        { pivotFamily });
+        ownRange(state, tableId),
+        column);
     return state;
 }
 
@@ -717,9 +877,63 @@ export function pruneRetiredMetrics(state, tableId, retiredIds) {
     return state;
 }
 
-/// Pivot cell names encode the complete ordered column-dimension key. If that
-/// dimension sequence changes, every old count and metric cell family retires,
-/// even when the metric ids themselves remain stable.
+const schemaColumnNames = table => (table?.schema ?? [])
+    .map(column => typeof column === "string" ? column : column?.name)
+    .filter(name => typeof name === "string" && name.length > 0);
+
+/// Remove exported columns from one table and propagate that loss through every
+/// descendant. Ordinary descendant rules are pruned exactly. A descendant whose
+/// Shape consumes a retired column is removed with its subtree because its output
+/// contract can no longer be inferred locally.
+const pruneExportedColumns = (state, tableId, columns) => {
+    const root = tableEntry(state, tableId);
+    if (!root || columns.length === 0) return;
+
+    const retiredByTable = new Map();
+    const rootRetired = [];
+    for (const column of columns)
+        rootRetired.push(...cleanupColumnReferences(ownRange(state, root.id), column));
+    retiredByTable.set(root.id.toLowerCase(), rootRetired);
+
+    const removed = new Set();
+    let changed = true;
+    while (changed) {
+        changed = false;
+        for (const [id, table] of Object.entries(state.tables ?? {})) {
+            const key = id.toLowerCase();
+            if (key === root.id.toLowerCase() || removed.has(key) || retiredByTable.has(key)) continue;
+            const parent = token(table?.from);
+            if (removed.has(parent)) {
+                removed.add(key);
+                changed = true;
+                continue;
+            }
+            const inherited = retiredByTable.get(parent);
+            if (!inherited) continue;
+            if (inherited.some(column => shapesReferenceColumn(ownShapeLocations(state, id), column))) {
+                removed.add(key);
+                changed = true;
+                continue;
+            }
+
+            const retired = [];
+            for (const column of inherited)
+                retired.push(...cleanupColumnReferences(ownRange(state, id), column));
+            retiredByTable.set(key, retired);
+            changed = true;
+        }
+    }
+
+    for (const [id] of Object.entries(state.tables ?? {}))
+        if (removed.has(id.toLowerCase())) delete state.tables[id];
+    if (removed.has(token(state.activeTable))) state.activeTable = root.id;
+};
+
+/// Dynamic Pivot cell ids are intentionally opaque. The previous live schema is
+/// therefore the authority for the cells owned by a Pivot: every output other than
+/// its row dimensions is a generated cell (or a dependent same-table computation).
+/// A column-key change retires all of those ids. Removing a metric does the same
+/// coarse cleanup because the public id deliberately does not encode its family.
 export function pruneRetiredPivotOutputs(
     state,
     tableId,
@@ -730,12 +944,13 @@ export function pruneRetiredPivotOutputs(
     const nextColumns = replacement?.cols ?? [];
     const columnsChanged = oldColumns.length !== nextColumns.length
         || oldColumns.some((name, index) => !sameColumn(name, nextColumns[index]));
-    const retired = [...retiredMetricIds];
-    if (columnsChanged)
-        retired.push("__count", ...(previous?.values ?? []).map(value => value.id));
-    const unique = retired.filter((name, index) => typeof name === "string"
-        && retired.findIndex(candidate => sameColumn(candidate, name)) === index);
-    pruneRetiredMetrics(state, tableId, unique);
+    if (columnsChanged || retiredMetricIds.length > 0) {
+        const table = tableEntry(state, tableId)?.table;
+        const rows = previous?.rows ?? [];
+        const generated = schemaColumnNames(table)
+            .filter(name => !rows.some(row => sameColumn(row, name)));
+        pruneExportedColumns(state, tableId, generated);
+    }
     for (const row of previous?.rows ?? [])
         if (!(replacement?.rows ?? []).some(candidate => sameColumn(candidate, row)))
             removeTerminalComputedColumn(state, row, tableId);

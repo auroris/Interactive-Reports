@@ -181,7 +181,7 @@ normal state document:
         "schema": null,
         "composables": [
           { "kind": "group", "by": [ "CUSTOMER" ],
-            "values": [ { "id": "m1", "col": "AMOUNT", "fn": "sum" } ] }
+            "values": [ { "id": "ir1", "col": "AMOUNT", "fn": "sum" } ] }
         ]
       },
       "pivot": {
@@ -189,7 +189,7 @@ normal state document:
         "schema": null,
         "composables": [
           { "kind": "pivot", "rows": [ "CUSTOMER" ], "cols": [ "STATUS" ],
-            "values": [ { "id": "m1", "col": "AMOUNT", "fn": "sum" } ] }
+            "values": [ { "id": "ir2", "col": "AMOUNT", "fn": "sum" } ] }
         ]
       },
       "chart": {
@@ -207,7 +207,8 @@ normal state document:
 
 `tables` is an unordered map of opaque identifiers. A table reads either the
 configured SQL (`"from": "definition"`) or another named table, then applies its
-`composables` directly. When `from` names a table, the server completes that parent,
+`composables` according to their declared semantics. Array position is serialization,
+not phase ordering. When `from` names a table, the server completes that parent,
 wraps its final SQL as the child's source relation, and carries its output schema and
 column metadata forward. The same rule repeats recursively, to a bounded depth, so
 Group, Pivot, and Chart results can themselves feed later tables. Names such as `base`,
@@ -223,6 +224,12 @@ sort choices remain the base table's own terminal presentation. `definition` is 
 sole reserved input sentinel and cannot be a table key; every other nonblank,
 case-unique id is opaque. The packaged client preserves valid deeper compositions from
 other clients even when they do not map to one built-in toolbar mode.
+
+Authored computed columns and Group/Pivot metrics share one document-wide synthetic
+identity namespace: `ir1`, `ir2`, and so on. IDs are persisted when a column is
+authored and never depend on composable array order. Dynamic Pivot cells also use
+opaque server-issued `irN` identities; clients consume the returned schema instead of
+deriving cell names from metric labels or Pivot values.
 
 Each table's optional `schema` is a non-authoritative cache of its completed public
 relation before terminal `select` visibility is applied. New documents may omit it or
@@ -675,9 +682,8 @@ that report instead. Saved-report titles are case-insensitively unique per repor
 
 Highlights have a report-facing name and a positive sequence. Matching rules are
 applied from lower to higher sequence, so the highest sequence wins when rules set the
-same style; cell highlights are applied after row highlights. Legacy documents without
-these fields use the rule id as the name and list position in increments of ten as the
-sequence.
+same style; cell highlights are applied after row highlights. When these optional fields
+are omitted, the rule id becomes the name and stable increments of ten supply sequence.
 
 ## Embedding the report
 

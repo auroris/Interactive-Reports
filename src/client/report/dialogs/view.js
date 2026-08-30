@@ -8,8 +8,8 @@
 import { el, labeled, sel } from "../../core/dom.js";
 import { openDialog } from "../../core/dialog.js";
 import {
+    assignShapeMetricIds,
     createView,
-    nextFreeId,
     pruneRetiredChartOutputs,
     pruneRetiredMetrics,
     pruneRetiredPivotOutputs,
@@ -97,29 +97,6 @@ function valueList(w, initial, columns) {
     return aggregateRowList(w, initial, { addLabel: w.t("common.value"), columns });
 }
 
-/// Assign stable metric ids to the dialog's (col, fn) rows. A row that matches a
-/// previous value keeps that value's id — its formats, computed references, and
-/// cell state stay attached; new rows get fresh ids never used by the old spec.
-/// Returns the identified values plus the ids the edit retired.
-function assignMetricIds(rows, previous) {
-    const remaining = [...(previous ?? [])];
-    const used = new Set(remaining.map(v => String(v.id).toLowerCase()));
-    const fresh = () => {
-        const id = nextFreeId(used, "m");
-        used.add(id);
-        return id;
-    };
-    const values = rows.map(row => {
-        const index = remaining.findIndex(v => sameColumn(v.col, row.col) && v.fn === row.fn);
-        if (index >= 0) {
-            const [kept] = remaining.splice(index, 1);
-            return { id: kept.id, col: row.col, fn: row.fn };
-        }
-        return { id: fresh(), col: row.col, fn: row.fn };
-    });
-    return { values, retired: remaining.map(v => v.id) };
-}
-
 /// Retired dims and metrics take dependent terminal-table state with them —
 /// the same coarse rule as deleting a computed column.
 function pruneRetiredTableState(d, tableId, retiredMetricIds, retiredDims) {
@@ -146,7 +123,11 @@ export function groupByDialog(w) {
         onApply: () => {
             const by = [...new Set(dims.list.read())];
             if (!by.length) throw new Error(w.t("group.pickColumn"));
-            const { values: withIds, retired } = assignMetricIds(values.list.read(), shape.values);
+            const { values: withIds, retired } = assignShapeMetricIds(
+                w.doc,
+                values.list.read(),
+                shape.values,
+                inputColumns);
             const retiredDims = (shape.by ?? []).filter(old => !by.some(n => sameColumn(n, old)));
             return w.apply(d => {
                 const replacement = { kind: "group", by, values: withIds };
@@ -186,7 +167,11 @@ export function pivotDialog(w) {
             const colNames = [...new Set(cols.list.read())].filter(c => !rowNames.some(n => sameColumn(n, c)));
             if (!rowNames.length || !colNames.length)
                 throw new Error(w.t("pivot.pickDimensions"));
-            const { values: withIds, retired } = assignMetricIds(values.list.read(), shape.values);
+            const { values: withIds, retired } = assignShapeMetricIds(
+                w.doc,
+                values.list.read(),
+                shape.values,
+                inputColumns);
             return w.apply(d => {
                 const replacement = { kind: "pivot", rows: rowNames, cols: colNames, values: withIds };
                 if (totalsInp.checked) replacement.totals = true;

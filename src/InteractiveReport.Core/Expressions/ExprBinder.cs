@@ -8,13 +8,14 @@ namespace InteractiveReport.Core.Expressions;
 /// the client's own input, carrying the source position where it helps.
 ///
 /// The type discipline in one paragraph: values are number/text/date (plus Other
-/// for odd provider types); conditions (Bool) arise from comparisons, BETWEEN,
+/// for odd or provider-untyped values); conditions (Bool) arise from comparisons, BETWEEN,
 /// IS [NOT] NULL, AND/OR/NOT, and are consumed by searched-CASE WHENs and by
 /// NOT/AND/OR — nowhere else. NULL is a value of every type; its type comes from context
 /// (COALESCE/CASE unification), and an expression that is nothing but NULL cannot
 /// be typed and is rejected. Comparing against NULL with '=' is rejected with a
 /// pointer to IS NULL — SQL would silently yield no matches, and silence is the
-/// one thing a validation layer must never emit.
+/// one thing a validation layer must never emit. A provider-untyped source column
+/// likewise takes its type from comparison context; a concrete Other value does not.
 /// </summary>
 internal static class ExprBinder
 {
@@ -37,7 +38,7 @@ internal static class ExprBinder
     private static ExprNode BindName(NameSyntax name, IReadOnlyDictionary<string, ColumnModel> schema)
         => schema.TryGetValue(name.Name, out var column)
             ? new ColumnRef(column)
-            : throw new ExprError($"unknown column '{name.Name}' (computed columns cannot reference other computed columns)");
+            : throw new ExprError($"unknown column '{name.Name}' at this transformation stage");
 
     private static ExprNode BindCall(CallSyntax call, IReadOnlyDictionary<string, ColumnModel> schema)
     {
@@ -190,11 +191,15 @@ internal static class ExprBinder
         if (left is NullLit || right is NullLit)
             throw new ExprError($"'{b.Op} NULL' never matches — use IS NULL or IS NOT NULL at position {b.Pos + 1}");
 
-        if (left.Kind != right.Kind)
+        if (!TryContextualizeComparableValues(
+                [left, right],
+                out var operands,
+                out _,
+                out _))
             throw new ExprError(
                 $"'{b.Op}' compares values of the same type (got {KindName(left)} and {KindName(right)}) at position {b.Pos + 1}");
 
-        return new Comparison(b.Op, left, right);
+        return new Comparison(b.Op, operands[0], operands[1]);
     }
 
     private static ExprNode BindBetween(BetweenSyntax b, IReadOnlyDictionary<string, ColumnModel> schema)
@@ -208,11 +213,15 @@ internal static class ExprBinder
         if (operand is NullLit || lower is NullLit || upper is NullLit)
             throw new ExprError(
                 $"'BETWEEN NULL' never matches — use IS NULL or IS NOT NULL at position {b.Pos + 1}");
-        if (operand.Kind != lower.Kind || operand.Kind != upper.Kind)
+        if (!TryContextualizeComparableValues(
+                [operand, lower, upper],
+                out var operands,
+                out _,
+                out _))
             throw new ExprError(
                 $"BETWEEN needs the value and both bounds to share one type (got {KindName(operand)}, {KindName(lower)}, and {KindName(upper)}) at position {b.Pos + 1}");
 
-        return new Between(operand, lower, upper);
+        return new Between(operands[0], operands[1], operands[2]);
     }
 
     private static ExprNode BindNullTest(NullTestSyntax t, IReadOnlyDictionary<string, ColumnModel> schema)
@@ -251,11 +260,33 @@ internal static class ExprBinder
                     throw new ExprError("WHEN NULL never matches in a simple CASE — use a searched CASE with IS NULL");
                 if (when.Kind == ColumnKind.Bool)
                     throw new ExprError("simple CASE WHEN takes a value, not a condition");
-                if (when.Kind != operand.Kind)
+                if (!IsProviderUnknown(operand)
+                    && !IsProviderUnknown(when)
+                    && when.Kind != operand.Kind)
                     throw new ExprError(
                         $"CASE WHEN value must match the CASE operand's type (got {KindName(when)}, expected {KindName(operand)})");
             }
             branches.Add(new CaseBranch(when, Bind(clause.Then, schema)));
+        }
+
+        if (operand is not null)
+        {
+            var values = new ExprNode[branches.Count + 1];
+            values[0] = operand;
+            for (var index = 0; index < branches.Count; index++)
+                values[index + 1] = branches[index].When;
+
+            if (!TryContextualizeComparableValues(
+                    values,
+                    out var contextualValues,
+                    out var expectedKind,
+                    out var mismatch))
+                throw new ExprError(
+                    $"CASE WHEN value must match the CASE operand's type (got {KindName(mismatch!)}, expected {expectedKind.ToString().ToLowerInvariant()})");
+
+            operand = contextualValues[0];
+            for (var index = 0; index < branches.Count; index++)
+                branches[index] = branches[index] with { When = contextualValues[index + 1] };
         }
 
         var elseNode = c.Else is null ? null : Bind(c.Else, schema);
@@ -280,6 +311,48 @@ internal static class ExprBinder
 
         return new CaseWhen(operand, branches, elseNode, resultKind.Value);
     }
+
+    /// <summary>
+    /// Unifies values which SQL will compare. A provider-unknown source column is a
+    /// type variable, not a concrete Other value: the first concrete operand gives
+    /// it comparison context. Concrete non-portable Other values remain strict and
+    /// therefore cannot be compared to text, numbers, or dates accidentally.
+    /// </summary>
+    private static bool TryContextualizeComparableValues(
+        IReadOnlyList<ExprNode> values,
+        out ExprNode[] contextualValues,
+        out ColumnKind expectedKind,
+        out ExprNode? mismatch)
+    {
+        var anchor = values.FirstOrDefault(value => !IsProviderUnknown(value));
+        if (anchor is null)
+        {
+            contextualValues = values.ToArray();
+            expectedKind = values[0].Kind;
+            mismatch = null;
+            return true;
+        }
+
+        var anchorKind = anchor.Kind;
+        expectedKind = anchorKind;
+        mismatch = values.FirstOrDefault(value =>
+            !IsProviderUnknown(value) && value.Kind != anchorKind);
+        if (mismatch is not null)
+        {
+            contextualValues = values.ToArray();
+            return false;
+        }
+
+        contextualValues = values
+            .Select(value => IsProviderUnknown(value)
+                ? ((ColumnRef)value) with { AssumedKind = anchorKind }
+                : value)
+            .ToArray();
+        return true;
+    }
+
+    private static bool IsProviderUnknown(ExprNode node)
+        => node is ColumnRef { AssumedKind: null, Column.HasKnownType: false };
 
     private static void RequireConcatable(ExprNode node, string where)
     {

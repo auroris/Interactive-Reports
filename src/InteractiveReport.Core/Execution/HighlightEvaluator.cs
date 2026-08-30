@@ -10,9 +10,9 @@ namespace InteractiveReport.Core.Execution;
 /// styles last. Within each scope, rules apply from low to high sequence; the
 /// higher sequence therefore wins when two matches set the same property.
 /// </summary>
-public static class HighlightEvaluator
+internal static class HighlightEvaluator
 {
-    public static List<HighlightHit> Evaluate(
+    internal static List<HighlightHit> Evaluate(
         IReadOnlyList<CompiledRule<HighlightEffect>> rules,
         IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)
     {

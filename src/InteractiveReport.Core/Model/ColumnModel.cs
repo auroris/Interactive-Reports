@@ -12,6 +12,14 @@ public sealed class ColumnModel
     public bool IsNullable { get; init; } = true;
     public bool IsComputed { get; init; }
 
+    /// <summary>
+    /// Whether schema discovery established a concrete provider type. Some ADO.NET
+    /// providers cannot describe expression columns during a zero-row probe. This
+    /// is distinct from a concrete but non-portable <see cref="ColumnKind.Other"/>
+    /// type such as a byte array or provider-specific value.
+    /// </summary>
+    internal bool HasKnownType { get; init; } = true;
+
     public ColumnKind Kind => GetKind(ClrType);
 
     public static ColumnKind GetKind(Type t)

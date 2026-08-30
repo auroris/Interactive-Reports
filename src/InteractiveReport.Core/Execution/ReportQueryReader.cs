@@ -1,6 +1,5 @@
 using System.Data.Common;
 using InteractiveReport.Core.Composition;
-using InteractiveReport.Core.Expressions;
 using InteractiveReport.Core.Model;
 using InteractiveReport.Core.Validation;
 using Microsoft.Extensions.Logging;
@@ -31,26 +30,26 @@ internal sealed class ReportQueryReader(
     /// the same logical contract over ordinary commands.
     /// </summary>
     public async Task<TableQueryRows> ReadTableQueries(
-        ComposedQueries queries,
-        IReadOnlyList<ColumnModel> breaks,
-        IReadOnlyList<ValidAggregate> aggregates,
+        TerminalExecutionBundle bundle,
         CancellationToken ct)
-        => await ReadTableQueries(queries, breaks, aggregates, pagePublicNames: null, ct);
-
-    public async Task<TableQueryRows> ReadTableQueries(
-        MappedComposedQueries mapped,
-        IReadOnlyList<ColumnModel> breaks,
-        IReadOnlyList<ValidAggregate> aggregates,
-        CancellationToken ct)
-        => await ReadTableQueries(
-            mapped.Queries,
-            breaks,
-            aggregates,
-            mapped.PagePublicNames,
+    {
+        ArgumentNullException.ThrowIfNull(bundle);
+        return await ReadTableQueries(
+            new TerminalQueries(
+                bundle.MainRows.Query,
+                bundle.Count,
+                bundle.FooterAggregates?.Query,
+                bundle.BreakTotals?.Query),
+            bundle.BreakTotals?.BreakColumns ?? [],
+            bundle.FooterAggregates?.Aggregates
+                ?? bundle.BreakTotals?.Aggregates
+                ?? [],
+            bundle.MainRows.PublicNames,
             ct);
+    }
 
     private async Task<TableQueryRows> ReadTableQueries(
-        ComposedQueries queries,
+        TerminalQueries queries,
         IReadOnlyList<ColumnModel> breaks,
         IReadOnlyList<ValidAggregate> aggregates,
         IReadOnlyList<string>? pagePublicNames,
@@ -59,29 +58,29 @@ internal sealed class ReportQueryReader(
         if (!UseOracleCursorBatch)
         {
             var totalRows = await ReadCount(queries.Count, ct);
-            var footerValues = queries.Aggregates is null
+            var footerValues = queries.FooterAggregates is null
                 ? new Dictionary<string, IReadOnlyDictionary<string, object?>>()
-                : await ReadAggregates(queries.Aggregates, aggregates, ct);
+                : await ReadAggregates(queries.FooterAggregates, aggregates, ct);
             var breakTotals = queries.BreakTotals is null
                 ? []
                 : await ReadBreakTotals(queries.BreakTotals, breaks, aggregates, ct);
             var rows = (pagePublicNames is null
-                ? await ReadRows(queries.Page, maxRows: null, ct)
-                : await ReadRows(queries.Page, pagePublicNames, maxRows: null, ct)).Rows;
+                ? await ReadRows(queries.MainRows, maxRows: null, ct)
+                : await ReadRows(queries.MainRows, pagePublicNames, maxRows: null, ct)).Rows;
             return new TableQueryRows(totalRows, footerValues, breakTotals, rows);
         }
 
         var resultSets = new List<Query> { queries.Count };
-        if (queries.Aggregates is not null) resultSets.Add(queries.Aggregates);
+        if (queries.FooterAggregates is not null) resultSets.Add(queries.FooterAggregates);
         if (queries.BreakTotals is not null) resultSets.Add(queries.BreakTotals);
-        resultSets.Add(queries.Page);
+        resultSets.Add(queries.MainRows);
 
         await using var command = BuildOracleBatch(resultSets);
         await using var reader = await command.ExecuteReaderAsync(ct);
         var total = await MaterializeCount(reader, ct);
 
         Dictionary<string, IReadOnlyDictionary<string, object?>> aggregateValues = [];
-        if (queries.Aggregates is not null)
+        if (queries.FooterAggregates is not null)
         {
             await RequireNextResult(reader, ct);
             aggregateValues = await MaterializeAggregates(reader, aggregates, ct);
@@ -141,43 +140,6 @@ internal sealed class ReportQueryReader(
             rows.Add(row);
         }
         return ApplyLimit(rows, maxRows);
-    }
-
-    public Task<long> ReadRowCount(Query query, CancellationToken ct)
-        => ReadCount(query, ct);
-
-    /// <summary>
-    /// Reads the chart's stable ordinal shape into collision-free protocol keys and
-    /// applies downstream relational operations while streaming. Stop after one more
-    /// surviving row than the terminal cap; rejected rows do not consume that budget.
-    /// </summary>
-    public async Task<List<IReadOnlyDictionary<string, object?>>> ReadChartRows(
-        Query query,
-        int metricOrdinal,
-        IReadOnlyList<ColumnInfo> shapeColumns,
-        ValidTableLayer layer,
-        DateTime evaluationUtcNow,
-        int maxPoints,
-        CancellationToken ct)
-    {
-        var evaluator = new ExpressionEvaluator(evaluationUtcNow);
-        var rows = new List<IReadOnlyDictionary<string, object?>>();
-        await using var command = Build(query);
-        await using var reader = await command.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
-        {
-            var row = new Dictionary<string, object?>(shapeColumns.Count, StringComparer.OrdinalIgnoreCase)
-            {
-                [shapeColumns[0].Name] = ValueAt(reader, 0),
-                [shapeColumns[1].Name] = ValueAt(reader, metricOrdinal),
-            };
-            if (!MaterializedTableProcessor.ApplyRelationalOperations(row, layer, evaluator)) continue;
-
-            rows.Add(row);
-            if (rows.Count > maxPoints) break;
-        }
-
-        return rows;
     }
 
     /// <summary>Reads a single-row aggregate query whose aliases are a0..aN.</summary>

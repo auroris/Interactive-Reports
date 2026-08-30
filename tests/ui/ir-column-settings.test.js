@@ -38,18 +38,18 @@ const ALL_COLUMNS = [
     { name: "NAME", label: "Name", type: "text" },
     { name: "URL", label: "URL", type: "text" },
     { name: "IMAGE_URL", label: "Image URL", type: "text" },
-    { name: "c1", label: "Computed URL", type: "text", computed: true },
+    { name: "ir1", label: "Computed URL", type: "text", computed: true },
 ];
 const ROW = {
     ID: 1234.5,
     NAME: "Example",
     URL: "/customers/42",
     IMAGE_URL: "https://images.example/42.png",
-    c1: "/computed/42",
+    ir1: "/computed/42",
 };
 const GROUPED_COLUMNS = [
     { name: "URL", label: "URL", type: "text" },
-    { name: "m1", label: "sum(Amount)", type: "number", formatSource: "AMOUNT" },
+    { name: "ir2", label: "sum(Amount)", type: "number", formatSource: "AMOUNT" },
 ];
 const groupedDocument = () => ({
     activeTable: "grouped",
@@ -72,8 +72,8 @@ const groupedDocument = () => ({
             from: "base",
             schema: structuredClone(GROUPED_COLUMNS),
             composables: [
-                { kind: "group", by: ["URL"], values: [{ id: "m1", col: "AMOUNT", fn: "sum" }] },
-                { kind: "labels", labels: { m1: "Sales" } },
+                { kind: "group", by: ["URL"], values: [{ id: "ir2", col: "AMOUNT", fn: "sum" }] },
+                { kind: "labels", labels: { ir2: "Sales" } },
             ],
         },
     },
@@ -108,7 +108,7 @@ globalThis.fetch = async (url, options = {}) => {
             return json({
                 availableColumns: GROUPED_COLUMNS,
                 columns: GROUPED_COLUMNS,
-                rows: [{ URL: "https://images.example/sales.png", m1: 1234.5 }],
+                rows: [{ URL: "https://images.example/sales.png", ir2: 1234.5 }],
                 page: { index: 1, size: 25 },
                 totalRows: 1,
                 aggregates: {},
@@ -295,28 +295,28 @@ test("a hidden computed column offers display settings and can source another co
     const column = fieldControl(dialog, "Column");
     const displayAs = fieldControl(dialog, "Display As");
 
-    column.value = "c1";
+    column.value = "ir1";
     column.dispatchEvent(new window.Event("change", { bubbles: true }));
     assert.equal(dialog.querySelector('.ir-checkline input[type="checkbox"]').checked, false,
         "the computed column starts hidden");
-    assert.equal([...column.options].find(option => option.value === "c1").text.startsWith("ƒ "), true,
+    assert.equal([...column.options].find(option => option.value === "ir1").text.startsWith("ƒ "), true,
         "the dialog identifies the computed column");
     displayAs.value = "image";
     displayAs.dispatchEvent(new window.Event("input", { bubbles: true }));
-    fieldControl(dialog, "URL Column").value = "c1";
+    fieldControl(dialog, "URL Column").value = "ir1";
 
     column.value = "NAME";
     column.dispatchEvent(new window.Event("change", { bubbles: true }));
     displayAs.value = "link";
     displayAs.dispatchEvent(new window.Event("input", { bubbles: true }));
-    fieldControl(dialog, "URL Column").value = "c1";
+    fieldControl(dialog, "URL Column").value = "ir1";
     fieldControl(dialog, "Link Text Column").value = "NAME";
 
     const doc = await applyDialog(report);
     assert.deepEqual(inputNode(doc, "select").columns, ["ID", "NAME"], "the computed source remains hidden");
     assert.deepEqual(inputNode(doc, "formats").formats, {
-        c1: { displayAs: "image", urlColumn: "c1" },
-        NAME: { displayAs: "link", urlColumn: "c1", textColumn: "NAME" },
+        ir1: { displayAs: "image", urlColumn: "ir1" },
+        NAME: { displayAs: "link", urlColumn: "ir1", textColumn: "NAME" },
     });
 
     const link = report.shadowRoot.querySelectorAll("tbody tr td")[1].querySelector("a.ir-cell-link");
@@ -327,7 +327,7 @@ test("a hidden computed column offers display settings and can source another co
     report.remove();
 });
 
-test("restyling a grouped metric preserves its inherited mask and renderer", async () => {
+test("restyling a grouped metric preserves its inherited mask without parent renderer state", async () => {
     requests.length = 0;
     const report = await mount("grouped-metadata");
 
@@ -336,20 +336,18 @@ test("restyling a grouped metric preserves its inherited mask and renderer", asy
     metricHeader.querySelector(".ir-th-button").click();
     clickMenuItem(report, "Column Settings");
     const dialog = report.shadowRoot.querySelector(".ir-dialog");
-    assert.equal(fieldControl(dialog, "Column").value, "m1");
+    assert.equal(fieldControl(dialog, "Column").value, "ir2");
     assert.equal(fieldControl(dialog, "Format Mask").value, "currency:CAD");
-    assert.equal(fieldControl(dialog, "Display As").value, "image");
-    assert.equal(fieldControl(dialog, "URL Column").value, "URL");
+    assert.equal(fieldControl(dialog, "Display As").value, "");
+    assert.equal(fieldControl(dialog, "URL Column").value, "ir2");
 
     const bold = dialog.querySelectorAll('input[type="checkbox"]')[1];
     bold.checked = true;
     const doc = await applyDialog(report);
 
-    assert.deepEqual(terminalNode(doc, "formats").formats.m1, {
+    assert.deepEqual(terminalNode(doc, "formats").formats.ir2, {
         mask: "currency:CAD",
         bold: true,
-        displayAs: "image",
-        urlColumn: "URL",
     });
 
     report.remove();
@@ -371,12 +369,12 @@ test("reapplying a generated-column rename keeps the override", async () => {
     assert.equal(input.value, "Sales");
     assert.equal(input.placeholder, "sum(Amount)", "the neutral generated heading is the stable default");
     let doc = await applyDialog(report);
-    assert.equal(terminalNode(doc, "labels").labels.m1, "Sales");
+    assert.equal(terminalNode(doc, "labels").labels.ir2, "Sales");
 
     input = openRename();
     assert.equal(input.value, "Sales");
     doc = await applyDialog(report);
-    assert.equal(terminalNode(doc, "labels").labels.m1, "Sales");
+    assert.equal(terminalNode(doc, "labels").labels.ir2, "Sales");
 
     report.remove();
 });

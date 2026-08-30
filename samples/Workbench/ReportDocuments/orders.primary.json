@@ -9,13 +9,13 @@
         "schema": null,
         "composables": [
           { "kind": "compute", "computed": [
-            { "id": "c1", "label": "With Tax", "expr": "ROUND(AMOUNT * 1.0825, 2)" }
+            { "id": "ir1", "label": "With Tax", "expr": "ROUND(AMOUNT * 1.0825, 2)" }
           ] },
           { "kind": "sort", "sorts": [
             { "col": "ORDER_DATE", "dir": "desc" }
           ] },
           { "kind": "select", "columns": [
-            "ORDER_ID", "CUSTOMER", "REGION", "STATUS", "AMOUNT", "ORDER_DATE", "NOTES", "c1"
+            "ORDER_ID", "CUSTOMER", "REGION", "STATUS", "AMOUNT", "ORDER_DATE", "NOTES", "ir1"
           ] },
           { "kind": "formats", "formats": {
             "ORDER_ID": {
@@ -24,7 +24,7 @@
               "textColumn": "ORDER_ID"
             },
             "AMOUNT": { "mask": "currency:CAD", "classes": [ "amount-column" ] },
-            "c1": { "mask": "currency:CAD", "classes": [ "amount-column" ] }
+            "ir1": { "mask": "currency:CAD", "classes": [ "amount-column" ] }
           } }
         ]
       },
@@ -36,10 +36,10 @@
             "kind": "group",
             "by": [ "REGION" ],
             "values": [
-              { "id": "m1", "col": "AMOUNT", "fn": "sum" }
+              { "id": "ir2", "col": "AMOUNT", "fn": "sum" }
             ]
           },
-          { "kind": "sort", "sorts": [ { "col": "m1", "dir": "desc" } ] }
+          { "kind": "sort", "sorts": [ { "col": "ir2", "dir": "desc" } ] }
         ]
       },
       "pivot": {
@@ -51,7 +51,7 @@
             "rows": [ "REGION" ],
             "cols": [ "STATUS" ],
             "values": [
-              { "id": "m1", "col": "AMOUNT", "fn": "sum" }
+              { "id": "ir3", "col": "AMOUNT", "fn": "sum" }
             ]
           }
         ]

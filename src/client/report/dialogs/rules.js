@@ -6,8 +6,22 @@
 import { el, labeled, sel } from "../../core/dom.js";
 import { openDialog } from "../../core/dialog.js";
 import { tableContext } from "../table.js";
-import { nextFreeId } from "../state.js";
+import {
+    composableLocations,
+    nextFreeId,
+    nextSyntheticColumnId,
+    normalizedHighlightRules,
+} from "../state.js";
 import { colorPick, expressionColumnToken, expressionEditor, colOptions } from "./parts.js";
+
+const kindOf = composable => String(composable?.kind ?? "").trim().toLowerCase();
+
+/// Highlight declarations in every repeated node owned by the active table form
+/// one priority set. Earlier nodes may be read-only in the packaged editor, but
+/// their ids and explicit/implicit precedence still reserve authoring space.
+const ownedHighlights = doc => composableLocations(doc)
+    .filter(location => location.owned && kindOf(location.composable) === "highlight")
+    .flatMap(location => location.composable?.highlights ?? []);
 
 export function filterDialog(w, { editIndex, col } = {}) {
     const ctx = tableContext(w);
@@ -37,21 +51,13 @@ export function filterDialog(w, { editIndex, col } = {}) {
     });
 }
 
-/// The next computed id is unique across the document. An active table's schema
-/// contains inherited computed columns, so ids can never
-/// be reused across table ancestry.
-function nextComputedId(doc) {
-    const ids = new Set();
-    for (const table of Object.values(doc.tables ?? {}))
-        for (const composable of table?.composables ?? [])
-            if (composable?.kind === "compute")
-                for (const rule of composable.computed ?? []) ids.add(rule.id.toLowerCase());
-    return nextFreeId(ids, "c");
-}
-
 export function computeDialog(w, editIndex) {
     const ctx = tableContext(w);
     const existing = editIndex !== undefined ? ctx.node(w.doc, "compute")?.computed?.[editIndex] : undefined;
+    const computeColumns = existing?.id
+        ? ctx.computeTokens.filter(column =>
+            column.name.toLowerCase() !== String(existing.id).toLowerCase())
+        : ctx.computeTokens;
     const labelInp = el("input", {
         class: "ir-input", type: "text", value: existing?.label ?? "",
         placeholder: w.t("compute.headingPlaceholder"),
@@ -60,10 +66,9 @@ export function computeDialog(w, editIndex) {
         initial: existing?.expr,
         placeholder: w.t("expression.gridValuePlaceholder"),
         result: "value",
-        // The active table's input columns (computed cannot reference computed),
-        // with display labels on the buttons; inserted tokens are always the real
-        // names — base columns in grid, dims/__count/metric ids under a group.
-        columns: ctx.computeTokens,
+        // Existing computed outputs can participate in the dependency graph. When
+        // editing, omit only the rule's own id; the server detects longer cycles.
+        columns: computeColumns,
     });
 
     openDialog({
@@ -75,7 +80,9 @@ export function computeDialog(w, editIndex) {
             expression),
         onApply: () => {
             const expr = expression._read();
-            const id = existing?.id ?? nextComputedId(w.doc);
+            const id = existing?.id ?? nextSyntheticColumnId(
+                w.doc,
+                [...(w.schema?.columns ?? []), ...(ctx.columns ?? [])]);
             const rule = {
                 id,
                 label: labelInp.value.trim() || id,
@@ -96,11 +103,15 @@ export function computeDialog(w, editIndex) {
 export function highlightDialog(w, editIndex) {
     const ctx = tableContext(w);
     const existing = editIndex !== undefined ? ctx.node(w.doc, "highlight")?.highlights?.[editIndex] : undefined;
-    const rules = ctx.node(w.doc, "highlight")?.highlights ?? [];
-    const ids = new Set(rules.map(h => (h.id ?? "").toLowerCase()));
+    const rules = ownedHighlights(w.doc);
+    const ids = new Set(rules
+        .map(rule => String(rule?.id ?? "").trim().toLowerCase())
+        .filter(Boolean));
     const freshId = nextFreeId(ids, "h");
     const id = existing?.id ?? freshId;
-    const nextSequence = Math.max(0, ...rules.map((h, i) => h.sequence ?? ((i + 1) * 10))) + 10;
+    const normalized = normalizedHighlightRules(rules);
+    const nextSequence = Math.max(0, ...normalized.map(entry => entry.sequence)) + 10;
+    const existingSequence = normalized.find(entry => entry.rule === existing)?.sequence;
     const nameInp = el("input", {
         class: "ir-input", type: "text",
         value: existing?.name ?? existing?.id ?? w.t("highlight.defaultName", { number: freshId.slice(1) }),
@@ -108,7 +119,7 @@ export function highlightDialog(w, editIndex) {
     });
     const sequenceInp = el("input", {
         class: "ir-input", type: "number", min: 1, step: 1, required: true,
-        value: existing?.sequence ?? (editIndex !== undefined ? (editIndex + 1) * 10 : nextSequence),
+        value: existing?.sequence ?? existingSequence ?? nextSequence,
     });
 
     const scopeSel = sel([

@@ -197,8 +197,8 @@ internal sealed class EmitContext(
         if (op == "/")
         {
             // INTEGER / INTEGER truncates on SQLite and SQL Server. The portable
-            // expression contract is decimal division, matching the materialized
-            // evaluator, so promote the numerator with a server-owned decimal literal.
+            // expression contract is decimal division on every supported dialect, so
+            // promote the numerator with a server-owned decimal literal.
             // 1.0 participates as NUMBER/numeric/decimal/REAL on the four dialects.
             _sb.Append("((1.0 * ");
             Visit(left);

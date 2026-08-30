@@ -1,8 +1,10 @@
+using System.Collections.Immutable;
 using System.Globalization;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using InteractiveReport.Core.Composition;
 using InteractiveReport.Core.Model;
+using InteractiveReport.Core.Planning;
 using InteractiveReport.Core.Schema;
 using InteractiveReport.Core.Validation;
 using SqlKata;
@@ -33,6 +35,8 @@ internal sealed class ComposableTableCompiler
     private readonly ColumnPolicy _policy;
     private readonly DateTime _evaluationUtcNow;
     private readonly Func<Query, int, int, int, CancellationToken, Task<List<PivotGroup>>> _readPivotGroups;
+    private readonly SqlKataRelationLowerer _lowerer;
+    private readonly DynamicPivotColumnIdentityRegistry _pivotIdentities;
     private readonly Dictionary<string, CompiledComposableTable> _memo =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _visiting = new(StringComparer.OrdinalIgnoreCase);
@@ -50,6 +54,11 @@ internal sealed class ComposableTableCompiler
         _policy = ColumnPolicy.From(definition);
         _evaluationUtcNow = evaluationUtcNow;
         _readPivotGroups = readPivotGroups;
+        _lowerer = new SqlKataRelationLowerer(
+            definition.GetEffectiveDialect(),
+            evaluationUtcNow);
+        _pivotIdentities = new DynamicPivotColumnIdentityRegistry(
+            ReservedLogicalIds(document, definitionSchema));
     }
 
     /// <summary>Completed plans are memoized by table id for shared ancestors.</summary>
@@ -64,32 +73,43 @@ internal sealed class ComposableTableCompiler
     }
 
     /// <summary>
-    /// Applies the request search overlay at the only remaining legal point. Plans
-    /// containing a shape already applied it immediately before their first shape.
+    /// Applies the request-local search overlay to the completed active relation. It is
+    /// deliberately absent from memoized exports, so a child table never inherits a
+    /// presentation request made against its parent.
     /// </summary>
     public CompiledComposableTable CompleteForTarget(CompiledComposableTable plan)
     {
-        if (!plan.SearchApplied && !string.IsNullOrWhiteSpace(_document.Search))
+        ValidatePivotTotalsCompatibility(plan);
+        var request = BoundRequestOverlay.From(_definition, _document);
+        BoundRelationNode executionNode = plan.Export.Bound.Relation;
+        var searchApplied = request.Search is not null;
+        if (searchApplied)
+            executionNode = new BoundSearchRelation(
+                executionNode,
+                request.Search!,
+                executionNode.Output);
+        var executionRelation = _lowerer.Lower(executionNode).AsComposable();
+        plan = plan with
         {
-            plan = plan with
+            Local = plan.Local with
             {
-                Relation = ComposableSqlPlanner.ApplySearch(plan.Relation, _document.Search),
-                SearchApplied = true,
-            };
-        }
+                ExecutionNode = executionNode,
+                ExecutionRelation = executionRelation,
+            },
+            SearchApplied = searchApplied,
+        };
         EnsureRelationComplexity("tables", plan.Relation);
 
         var errors = new List<ValidationError>();
         var ignored = plan.Ignored.ToList();
-        var terminal = TableLayerValidator.Validate(
-            plan.TerminalItems,
-            $"{plan.Relation.SchemaName}#terminal",
+        var terminal = CanonicalLocalResultBinder.Bind(
+            plan.Local.Instructions,
             plan.Relation.Schema,
             _policy,
             errors,
             ignored);
         ValidateTerminalWidths(plan, terminal, errors);
-        var projection = StateValidator.ResolveRendererColumns(
+        var projection = ColumnBindingRules.ResolveRendererColumns(
             plan.Formats,
             terminal.SelectColumns,
             plan.Relation.Schema,
@@ -101,38 +121,87 @@ internal sealed class ComposableTableCompiler
                     StringComparison.OrdinalIgnoreCase)))
                 projection.Add(breakColumn);
         if (plan.ShapeCount == 0 && _definition.EditLink is not null)
-            StateValidator.AddEditLinkColumns(
+            ColumnBindingRules.AddEditLinkColumns(
                 _definition.EditLink,
                 projection,
                 plan.Relation.Schema,
                 ignored);
         terminal = terminal with
         {
-            Labels = plan.Labels,
-            Formats = plan.Formats,
-            ProjectionColumns = projection,
+            Labels = plan.Labels.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase),
+            Formats = plan.Formats.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase),
+            ProjectionColumns = projection.ToImmutableArray(),
         };
         if (errors.Count > 0) throw new ReportValidationException(errors);
-        return plan with { Terminal = terminal, Ignored = ignored };
+        var chartTerminal = plan.LastShape is { Kind: ShapeKind.Chart }
+            && plan.Relation.Schema.Columns.Take(2).All(shapeColumn =>
+                terminal.SelectColumns.Any(selected => string.Equals(
+                    selected.Name,
+                    shapeColumn.Name,
+                    StringComparison.OrdinalIgnoreCase)));
+        var bundle = TerminalExecutionBundleBuilder.Build(
+            _definition,
+            plan.Relation,
+            terminal,
+            _evaluationUtcNow,
+            request,
+            plan.LastShape,
+            chartTerminal);
+        return plan with
+        {
+            Local = plan.Local with
+            {
+                Terminal = terminal,
+                ExecutionBundle = bundle,
+                RequestOverlay = request,
+            },
+            Ignored = ignored.ToImmutableArray(),
+        };
     }
 
     private CompiledComposableTable Definition()
-        => new(
-            ComposableSqlRelation.Definition(_definition, _definitionSchema),
+    {
+        var labels = ColumnBindingRules.ResolveLabels(_definition.GetEffectiveColumnLabels())
+            .ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
+        var output = BoundOutputContract.FromSchema(
+            _definition.Name,
+            _definitionSchema,
+            labels);
+        var node = new BoundOpaqueSqlSource(
+            _definition.Name,
+            _definition.Sql,
+            _definition.GetEffectiveDialect(),
+            output);
+        var boundExport = BoundTableExport.Create(
+            "definition",
+            node,
+            shapeCount: 0,
+            computedRuleCount: 0,
+            filterRuleCount: 0);
+        return new(
+            Export: new CompiledTableExport(
+                Bound: boundExport,
+                ShapeCount: 0,
+                RelationStages: 0,
+                ComputedRuleCount: 0,
+                FilterRuleCount: 0),
+            Local: new CompiledTableLocalResult(
+                ExecutionNode: null,
+                ExecutionRelation: null,
+                ExecutionBundle: null,
+                RequestOverlay: null,
+                Shape: null,
+                Terminal: EmptyLayer(_definitionSchema),
+                Instructions: new CanonicalLocalResult(
+                    null,
+                    null,
+                    [],
+                    CanonicalRulePopulation.Empty,
+                    null,
+                    [])),
             SearchApplied: false,
-            ShapeCount: 0,
-            RelationStages: 0,
-            ComputedRuleCount: 0,
-            FilterRuleCount: 0,
-            LastShape: null,
-            Terminal: EmptyLayer(_definitionSchema),
-            Labels: new Dictionary<string, string>(
-                StateValidator.ResolveLabels(_definition.GetEffectiveColumnLabels()),
-                StringComparer.OrdinalIgnoreCase),
-            Formats: new Dictionary<string, ColumnFormat>(StringComparer.OrdinalIgnoreCase),
-            FormatSources: new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase),
-            TerminalItems: [],
             Ignored: []);
+    }
 
     private async Task<CompiledComposableTable> CompileTable(
         string requestedId,
@@ -156,6 +225,17 @@ internal sealed class ComposableTableCompiler
                     $"tables.{tableId}.from",
                     "from is required and must be 'definition' or another table identifier");
 
+            var specification = CanonicalTableNormalizer.Normalize(
+                table,
+                $"tables.{tableId}");
+
+            // Persistence normalization is separate from execution planning. The
+            // canonical specification above was already built from deep snapshots.
+            foreach (var syntax in table.Composables ?? [])
+                if (syntax is not null
+                    && ComposableSemanticsCatalog.TryResolve(syntax.Kind, out var semantics))
+                    syntax.Kind = semantics.DocumentKind;
+
             CompiledComposableTable parent;
             if (string.Equals(table.From.Trim(), "definition", StringComparison.OrdinalIgnoreCase))
             {
@@ -172,202 +252,140 @@ internal sealed class ComposableTableCompiler
                     $"tables.{tableId}.from",
                     ct);
             }
-            var relation = parent.Relation;
-            var searchApplied = parent.SearchApplied;
-            var shapeCount = parent.ShapeCount;
-            var computedCount = parent.ComputedRuleCount;
-            var filterCount = parent.FilterRuleCount;
+            // A child imports only this channel. The parent's Local result never
+            // participates in binding or lowering the child.
+            var inherited = parent.Export;
+            BoundRelationNode relationNode = new BoundExportReference(
+                inherited.Bound.TableId,
+                inherited.Bound,
+                $"tables.{tableId}.from",
+                $"{_definition.Name}#{tableId}");
+            var relation = _lowerer.Lower(relationNode).AsComposable();
+            var searchApplied = false;
+            var shapeCount = inherited.ShapeCount;
+            var computedCount = inherited.ComputedRuleCount;
+            var filterCount = inherited.FilterRuleCount;
             // A child consumes the parent's relation, schema, and metadata. Renderer
             // hints are terminal state owned by the named table that declared them.
             CompiledShape? lastShape = null;
             var ignored = parent.Ignored.ToList();
             var errors = new List<ValidationError>();
-            var terminalItems = new List<LocatedTableComposable>();
-            var labels = new Dictionary<string, string>(parent.Labels, StringComparer.OrdinalIgnoreCase);
-            var formats = new Dictionary<string, ColumnFormat>(parent.Formats, StringComparer.OrdinalIgnoreCase);
-            var formatSources = new Dictionary<string, string?>(parent.FormatSources, StringComparer.OrdinalIgnoreCase);
-            var localLabelsSeen = false;
 
-            var composables = table.Composables ?? [];
-            for (var index = 0; index < composables.Count; index++)
+            if (specification.Shape is { } shape)
             {
-                var composable = composables[index];
-                var path = $"tables.{tableId}.composables[{index}]";
-                var located = new LocatedTableComposable(composable, path);
-                var kind = (composable.Kind ?? "").Trim().ToLowerInvariant();
-                if (kind.Length > 0) composable.Kind = kind;
-                switch (kind)
+                switch (shape)
                 {
-                    case "compute":
-                    case "filter":
+                    case CanonicalGroupShape group:
                     {
-                        computedCount += kind == "compute" ? composable.Computed?.Count ?? 0 : 0;
-                        filterCount += kind == "filter" ? composable.Filters?.Count ?? 0 : 0;
-                        if (computedCount > 20)
-                            errors.Add(new ValidationError(
-                                $"{path}.computed",
-                                "at most 20 computed columns per report state"));
-                        if (filterCount > 50)
-                            errors.Add(new ValidationError(
-                                $"{path}.filters",
-                                "at most 50 filter rules per report state"));
-
-                        var layer = TableLayerValidator.Validate(
-                            [located],
-                            $"{_definition.Name}#{tableId}",
-                            relation.Schema,
-                            _policy,
+                        (relationNode, lastShape) = ApplyGroup(
+                            relationNode,
+                            group,
                             errors,
                             ignored);
-                        if (layer.Operations.Count > 0)
-                        {
-                            relation = ComposableSqlPlanner.ApplyOperations(
-                                relation,
-                                layer.Operations,
-                                _definition.GetEffectiveDialect(),
-                                _evaluationUtcNow);
-                            EnsureRelationComplexity(path, relation);
-                        }
                         break;
                     }
-                    case "group":
+                    case CanonicalChartShape chartShape:
                     {
-                        if (!searchApplied)
-                        {
-                            relation = ComposableSqlPlanner.ApplySearch(relation, _document.Search);
-                            searchApplied = true;
-                        }
-                        (relation, lastShape) = ApplyGroup(
-                            relation,
-                            composable,
-                            path,
-                            errors,
-                            ignored);
-                        if (lastShape is { Metrics: { } groupMetrics, Dimensions: { } groupDimensions })
-                        {
-                            formatSources = GroupFormatSources(
-                                formatSources,
-                                groupDimensions,
-                                groupMetrics,
-                                lastShape.CountName ?? "__count",
-                                formats);
-                            ApplyGroupLabels(labels, groupMetrics);
-                        }
-                        shapeCount++;
-                        EnsureRelationComplexity(path, relation);
-                        break;
-                    }
-                    case "chart":
-                    {
-                        if (!searchApplied)
-                        {
-                            relation = ComposableSqlPlanner.ApplySearch(relation, _document.Search);
-                            searchApplied = true;
-                        }
-                        var chart = TableCompositionValidator.ValidateChartShape(
-                            composable,
-                            path,
-                            relation.Schema.Lookup,
+                        var chart = ShapeBindingRules.BindChart(
+                            chartShape,
+                            relationNode.Output.ToReportSchema().Lookup,
                             errors);
                         if (chart is not null)
                         {
-                            var priorFormatSources = formatSources;
-                            relation = ComposableSqlPlanner.Chart(
-                                relation,
+                            relationNode = CreateChartNode(
+                                relationNode,
+                                chart,
                                 $"{_definition.Name}#{tableId}#chart{shapeCount + 1}",
-                                chart,
-                                _definition.GetEffectiveDialect());
-                            lastShape = new CompiledShape(ShapeKind.Chart, path, Chart: chart);
-                            formatSources = ChartFormatSources(
-                                priorFormatSources,
-                                chart,
-                                relation.Schema,
-                                formats);
-                            ApplyChartLabels(labels, chart, relation.Schema);
+                                chartShape.Path);
+                            lastShape = new CompiledShape(
+                                ShapeKind.Chart,
+                                chartShape.Path,
+                                Chart: chart);
                         }
-                        shapeCount++;
-                        EnsureRelationComplexity(path, relation);
                         break;
                     }
-                    case "pivot":
+                    case CanonicalPivotShape pivot:
                     {
-                        if (!searchApplied)
-                        {
-                            relation = ComposableSqlPlanner.ApplySearch(relation, _document.Search);
-                            searchApplied = true;
-                        }
-                        (relation, lastShape) = await ApplyPivot(
-                            relation,
-                            composable,
-                            path,
+                        (relationNode, lastShape) = await ApplyPivot(
+                            relationNode,
+                            pivot,
                             tableId,
                             shapeCount + 1,
                             errors,
                             ignored,
-                            labels,
-                            formats,
-                            formatSources,
                             ct);
-                        shapeCount++;
-                        EnsureRelationComplexity(path, relation);
                         break;
                     }
-                    case "select":
-                    case "sort":
-                    case "highlight":
-                    case "break":
-                    case "aggregate":
-                        terminalItems.Add(located);
-                        break;
-                    case "labels":
-                        Merge(
-                            labels,
-                            StateValidator.ResolveLabels(composable.Labels),
-                            composable.Labels is { Count: 0 }
-                                || (!localLabelsSeen && string.Equals(
-                                    table.From.Trim(),
-                                    "definition",
-                                    StringComparison.OrdinalIgnoreCase)));
-                        localLabelsSeen = true;
-                        break;
-                    case "formats":
-                        var clearFormats = composable.Formats is { Count: 0 };
-                        Merge(
-                            formats,
-                            StateValidator.ResolveFormats(composable.Formats),
-                            clearFormats);
-                        if (clearFormats)
-                            formatSources = relation.Schema.Columns.ToDictionary(
-                                column => column.Name,
-                                _ => (string?)null,
-                                StringComparer.OrdinalIgnoreCase);
-                        break;
-                    case "":
-                        errors.Add(new ValidationError($"{path}.kind", "composable kind is required"));
-                        break;
                     default:
-                        errors.Add(new ValidationError(
-                            $"{path}.kind",
-                            $"unknown composable kind '{composable.Kind}'"));
-                        break;
+                        throw new InvalidOperationException(
+                            $"Unknown canonical shape '{shape.GetType().Name}'.");
                 }
+
+                shapeCount++;
+                relation = _lowerer.Lower(relationNode).AsComposable();
+                EnsureRelationComplexity(shape.SourcePath, relation);
+            }
+
+            var relationBinding = CanonicalRelationBinder.Bind(
+                specification,
+                $"{_definition.Name}#{tableId}",
+                relationNode.Output,
+                _policy,
+                inherited.ComputedRuleCount,
+                inherited.FilterRuleCount,
+                errors,
+                ignored);
+            computedCount = relationBinding.ComputedRuleCount;
+            filterCount = relationBinding.FilterRuleCount;
+            relationNode = relationBinding.ApplyTo(relationNode);
+            relation = _lowerer.Lower(relationNode).AsComposable();
+            foreach (var mutation in relationBinding.Mutations)
+                EnsureRelationComplexity(mutation.OperationPath, relation);
+
+            var metadataOutput = relationNode.Output
+                .ApplyMetadata(specification.Metadata)
+                .Rename($"{_definition.Name}#{tableId}");
+            relationNode = new BoundMetadataRelation(
+                relationNode,
+                metadataOutput,
+                $"tables.{tableId}");
+            relation = _lowerer.Lower(relationNode).AsComposable();
+
+            if (lastShape is { Kind: ShapeKind.Pivot, PivotTotals: true })
+            {
+                lastShape = lastShape with
+                {
+                    HasPostShapeComputed = relationBinding.Mutations.Any(operation =>
+                        operation.Kind == ComposableKind.Compute),
+                    HasPostShapeFilters = relationBinding.Mutations.Any(operation =>
+                        operation.Kind == ComposableKind.Filter),
+                };
             }
 
             if (errors.Count > 0) throw new ReportValidationException(errors);
-            var result = new CompiledComposableTable(
-                relation,
-                searchApplied,
+            var boundExport = BoundTableExport.Create(
+                tableId,
+                relationNode,
                 shapeCount,
-                relation.NestingDepth,
                 computedCount,
-                filterCount,
-                lastShape,
-                EmptyLayer(relation.Schema),
-                labels,
-                formats,
-                formatSources,
-                terminalItems,
-                ignored);
+                filterCount);
+            var result = new CompiledComposableTable(
+                Export: new CompiledTableExport(
+                    Bound: boundExport,
+                    ShapeCount: shapeCount,
+                    RelationStages: relation.NestingDepth,
+                    ComputedRuleCount: computedCount,
+                    FilterRuleCount: filterCount),
+                Local: new CompiledTableLocalResult(
+                    ExecutionNode: null,
+                    ExecutionRelation: null,
+                    ExecutionBundle: null,
+                    RequestOverlay: null,
+                    Shape: lastShape,
+                    Terminal: EmptyLayer(relation.Schema),
+                    Instructions: specification.Local),
+                SearchApplied: searchApplied,
+                Ignored: ignored.ToImmutableArray());
             _memo[tableId] = result;
             return result;
         }
@@ -377,26 +395,25 @@ internal sealed class ComposableTableCompiler
         }
     }
 
-    private (ComposableSqlRelation Relation, CompiledShape? Shape) ApplyGroup(
-        ComposableSqlRelation source,
-        TableComposable composable,
-        string path,
+    private (BoundRelationNode Relation, CompiledShape? Shape) ApplyGroup(
+        BoundRelationNode source,
+        CanonicalGroupShape shape,
         List<ValidationError> errors,
         List<IgnoredItem> ignored)
     {
+        var path = shape.Path;
         var before = errors.Count;
-        var dimensions = TableCompositionValidator.ResolveDimensions(
-            composable.By,
+        var dimensions = ShapeBindingRules.BindDimensions(
+            shape.By,
             "group",
-            source.Schema.Lookup,
+            source.Output.ToReportSchema().Lookup,
             ignored);
         if (dimensions.Count == 0)
             errors.Add(new ValidationError($"{path}.by", "a group stage requires at least one valid group column"));
-        ValidateMetricCount(composable.Values, path, errors);
-        var metrics = TableCompositionValidator.ValidateMetrics(
-            composable.Values,
-            $"{path}.values",
-            source.Schema,
+        ValidateMetricCount(shape.Values.Length, path, errors);
+        var metrics = ShapeBindingRules.BindMetrics(
+            shape.Values,
+            source.Output.ToReportSchema(),
             errors,
             ignored);
         ValidateGroupedWidth(dimensions.Count, metrics.Count, $"{path}.by", errors);
@@ -408,13 +425,13 @@ internal sealed class ComposableTableCompiler
                 .Concat(metrics.Select(metric => metric.Id)),
             "__count");
 
-        var relation = ComposableSqlPlanner.Group(
+        var relation = CreateGroupNode(
             source,
             $"{_definition.Name}#group",
             dimensions,
             metrics,
-            _definition.GetEffectiveDialect(),
-            countName);
+            countName,
+            path);
         return (relation, new CompiledShape(
             ShapeKind.Group,
             path,
@@ -423,29 +440,162 @@ internal sealed class ComposableTableCompiler
             CountName: countName));
     }
 
-    private async Task<(ComposableSqlRelation Relation, CompiledShape? Shape)> ApplyPivot(
-        ComposableSqlRelation source,
-        TableComposable composable,
-        string path,
+    private static BoundGroupRelation CreateGroupNode(
+        BoundRelationNode source,
+        string outputName,
+        IReadOnlyList<ColumnModel> dimensions,
+        IReadOnlyList<ValidMetric> metrics,
+        string countName,
+        string sourcePath)
+    {
+        var boundDimensions = dimensions
+            .Select(dimension => source.Output.GetRequired(dimension.Name) with
+            {
+                Lineage = new BoundPassThroughColumnLineage(dimension.Name),
+            })
+            .ToImmutableArray();
+        var count = new BoundColumnContract(
+            countName,
+            "Count",
+            "Count",
+            typeof(long),
+            IsNullable: false,
+            IsComputed: false,
+            new BoundAggregateColumnLineage(AggregateFn.Count, null));
+        var boundMetrics = metrics.Select(metric => new BoundMetric(
+                metric.Id,
+                source.Output.GetRequired(metric.Column.Name),
+                metric.Fn,
+                sourcePath))
+            .ToImmutableArray();
+        var outputMetrics = boundMetrics.Select(metric =>
+        {
+            var input = metric.Input;
+            var isCount = metric.Function is AggregateFn.Count or AggregateFn.CountDistinct;
+            var model = MetricColumn(metric.Id, input.ToColumnModel(), metric.Function);
+            return BoundColumnContract.FromColumn(
+                model,
+                new BoundAggregateColumnLineage(metric.Function, input.LogicalId),
+                $"{ReportResultColumns.AggregateName(metric.Function)}({input.EffectiveLabel})",
+                isCount ? null : input.LocalFormat,
+                isCount ? null : input.ExportedMask,
+                isCount
+                    ? null
+                    : input.FormatSourceLogicalId ?? input.LogicalId);
+        }).ToImmutableArray();
+        var output = BoundOutputContract.Create(
+            outputName,
+            boundDimensions.Cast<BoundColumnContract>()
+                .Concat([count])
+                .Concat(outputMetrics));
+        return new BoundGroupRelation(
+            source,
+            boundDimensions,
+            boundMetrics,
+            count,
+            output,
+            sourcePath);
+    }
+
+    private static BoundChartRelation CreateChartNode(
+        BoundRelationNode source,
+        ValidChart chart,
+        string outputName,
+        string sourcePath)
+    {
+        var shapeColumns = ReportResultColumns.ForChart(chart);
+        var labelInput = source.Output.GetRequired(chart.Label.Name);
+        var label = labelInput with
+        {
+            LogicalId = shapeColumns[0].Name,
+            DefaultLabel = shapeColumns[0].Label,
+            Lineage = new BoundChartColumnLineage("label", labelInput.LogicalId, null),
+        };
+
+        var metricInfo = shapeColumns[1];
+        BoundColumnContract metric;
+        if (chart.Value is null)
+        {
+            metric = new BoundColumnContract(
+                metricInfo.Name,
+                metricInfo.Label,
+                metricInfo.Label,
+                typeof(long),
+                IsNullable: false,
+                IsComputed: false,
+                new BoundChartColumnLineage("value", null, chart.Fn));
+        }
+        else
+        {
+            var input = source.Output.GetRequired(chart.Value.Name);
+            var isCount = chart.Fn is AggregateFn.Count or AggregateFn.CountDistinct;
+            var type = chart.Fn switch
+            {
+                AggregateFn.Min or AggregateFn.Max => input.ClrType,
+                AggregateFn.Count or AggregateFn.CountDistinct => typeof(long),
+                null => input.ClrType,
+                _ => typeof(decimal),
+            };
+            var effectiveLabel = chart.Fn is { } function
+                ? $"{ReportResultColumns.AggregateName(function)}({input.EffectiveLabel})"
+                : input.EffectiveLabel;
+            metric = new BoundColumnContract(
+                metricInfo.Name,
+                metricInfo.Label,
+                effectiveLabel,
+                type,
+                IsNullable: true,
+                IsComputed: metricInfo.Computed,
+                new BoundChartColumnLineage("value", input.LogicalId, chart.Fn),
+                isCount ? null : input.LocalFormat,
+                isCount ? null : input.ExportedMask,
+                isCount ? null : input.FormatSourceLogicalId ?? input.LogicalId);
+        }
+
+        return new BoundChartRelation(
+            source,
+            chart,
+            BoundOutputContract.Create(outputName, [label, metric]),
+            sourcePath);
+    }
+
+    private static ColumnModel MetricColumn(
+        string id,
+        ColumnModel input,
+        AggregateFn function)
+        => new()
+        {
+            Name = id,
+            Label = ReportResultColumns.AggregateLabel(new ValidAggregate(input, function)),
+            ClrType = function switch
+            {
+                AggregateFn.Min or AggregateFn.Max => input.ClrType,
+                AggregateFn.Count or AggregateFn.CountDistinct => typeof(long),
+                _ => typeof(decimal),
+            },
+        };
+
+    private async Task<(BoundRelationNode Relation, CompiledShape? Shape)> ApplyPivot(
+        BoundRelationNode source,
+        CanonicalPivotShape shape,
         string tableId,
         int shapeOrdinal,
         List<ValidationError> errors,
         List<IgnoredItem> ignored,
-        Dictionary<string, string> labels,
-        IReadOnlyDictionary<string, ColumnFormat> formats,
-        Dictionary<string, string?> formatSources,
         CancellationToken ct)
     {
+        var path = shape.Path;
         var before = errors.Count;
-        var rows = TableCompositionValidator.ResolveDimensions(
-            composable.Rows,
+        var sourceSchema = source.Output.ToReportSchema();
+        var rows = ShapeBindingRules.BindDimensions(
+            shape.Rows,
             "pivot row",
-            source.Schema.Lookup,
+            sourceSchema.Lookup,
             ignored);
-        var columns = TableCompositionValidator.ResolveDimensions(
-            composable.Cols,
+        var columns = ShapeBindingRules.BindDimensions(
+            shape.Columns,
             "pivot",
-            source.Schema.Lookup,
+            sourceSchema.Lookup,
             ignored);
         if (rows.Count == 0)
             errors.Add(new ValidationError($"{path}.rows", "a pivot stage requires at least one valid row dimension"));
@@ -455,11 +605,10 @@ internal sealed class ComposableTableCompiler
         var overlap = columns.FirstOrDefault(column => rowNames.Contains(column.Name));
         if (overlap is not null)
             errors.Add(new ValidationError($"{path}.cols", $"pivot column '{overlap.Name}' is already a row dimension"));
-        ValidateMetricCount(composable.Values, path, errors);
-        var metrics = TableCompositionValidator.ValidateMetrics(
-            composable.Values,
-            $"{path}.values",
-            source.Schema,
+        ValidateMetricCount(shape.Values.Length, path, errors);
+        var metrics = ShapeBindingRules.BindMetrics(
+            shape.Values,
+            sourceSchema,
             errors,
             ignored);
         ValidateGroupedWidth(rows.Count + columns.Count, metrics.Count, path, errors);
@@ -476,24 +625,28 @@ internal sealed class ComposableTableCompiler
             rows.Concat(columns).Select(column => column.Name)
                 .Concat(metrics.Select(metric => metric.Id)),
             "__count");
-        var grouped = ComposableSqlPlanner.Group(
+        var grouped = CreateGroupNode(
             source,
             $"{_definition.Name}#{tableId}#pivot-source{shapeOrdinal}",
             rows.Concat(columns).ToList(),
             metrics,
-            _definition.GetEffectiveDialect(),
-            pivotCountName);
-        var totalsRelation = composable.Totals == true
-            ? ComposableSqlPlanner.Group(
+            pivotCountName,
+            path);
+        var loweredDiscovery = _lowerer.Lower(grouped);
+        var totalsNode = shape.Totals
+            ? CreateGroupNode(
                 source,
                 $"{_definition.Name}#{tableId}#pivot-totals{shapeOrdinal}",
                 columns,
                 metrics,
-                _definition.GetEffectiveDialect(),
-                pivotCountName)
+                pivotCountName,
+                path)
             : null;
+        var totalsRelation = totalsNode is null
+            ? null
+            : _lowerer.Lower(totalsNode).AsComposable();
         var groups = await _readPivotGroups(
-            grouped.Query.Clone().Limit(ReportExecutor.MaxPivotGroups + 1),
+            loweredDiscovery.Query.Clone().Limit(ReportExecutor.MaxPivotGroups + 1),
             rows.Count,
             columns.Count,
             metrics.Count,
@@ -527,35 +680,44 @@ internal sealed class ComposableTableCompiler
                 $"pivot would require {bindingCount} bound cell predicates (max {MaxPivotBindings})");
 
         var keys = new List<PivotColumnKey>(columnKeys.Count);
-        var publicColumnNames = new HashSet<string>(
-            rows.Select(row => row.Name),
-            StringComparer.OrdinalIgnoreCase);
+        var boundKeys = ImmutableArray.CreateBuilder<BoundResolvedPivotKey>(columnKeys.Count);
         foreach (var key in columnKeys)
         {
-            var baseKeyName = PivotKeyName(key);
-            var keyName = baseKeyName;
-            var suffix = 2;
+            var typedKey = BoundPivotTypedKey.Create(key);
             var cellIds = metrics.Count == 0
                 ? ["__count"]
                 : metrics.Select(metric => metric.Id).ToArray();
-            while (cellIds.Any(id => publicColumnNames.Contains($"{id}@{keyName}")))
-                keyName = $"{baseKeyName}~{suffix++}";
-            foreach (var id in cellIds) publicColumnNames.Add($"{id}@{keyName}");
             var keyLabel = string.Join(" · ", key.Select(FormatPivotKeyPart));
             var cells = new List<PivotCellColumn>();
+            var boundCells = ImmutableArray.CreateBuilder<BoundPivotCell>(cellIds.Length);
             if (metrics.Count == 0)
             {
-                var name = $"__count@{keyName}";
+                var name = _pivotIdentities.Register(tableId, "__count", typedKey);
+                var column = new ColumnModel
+                {
+                    Name = name,
+                    Label = keyLabel,
+                    ClrType = typeof(long),
+                    IsNullable = true,
+                };
                 cells.Add(new PivotCellColumn(
                     pivotCountName,
-                    new ColumnModel { Name = name, Label = keyLabel, ClrType = typeof(long), IsNullable = true }));
-                formatSources[name] = null;
+                    column));
+                boundCells.Add(new BoundPivotCell(
+                    pivotCountName,
+                    BoundColumnContract.FromColumn(
+                        column,
+                        new BoundPivotCellColumnLineage(
+                            tableId,
+                            "__count",
+                            typedKey),
+                        keyLabel)));
             }
             else
             {
                 foreach (var metric in metrics)
                 {
-                    var name = $"{metric.Id}@{keyName}";
+                    var name = _pivotIdentities.Register(tableId, metric.Id, typedKey);
                     var label = metrics.Count == 1
                         ? keyLabel
                         : $"{keyLabel} · {ReportResultColumns.AggregateLabel(metric.ToAggregate())}";
@@ -572,37 +734,61 @@ internal sealed class ComposableTableCompiler
                         IsNullable = true,
                     };
                     cells.Add(new PivotCellColumn(metric.Id, column));
-                    formatSources[name] = metric.Fn is AggregateFn.Count or AggregateFn.CountDistinct
-                        ? null
-                        : ResolveFormatSource(formatSources, metric.Column, formats);
-                    var sourceLabel = labels.TryGetValue(metric.Column.Name, out var displayLabel)
-                        ? displayLabel
-                        : metric.Column.Label;
+                    var isCount = metric.Fn is AggregateFn.Count or AggregateFn.CountDistinct;
+                    var sourceContract = source.Output.GetRequired(metric.Column.Name);
+                    var sourceLabel = sourceContract.EffectiveLabel;
                     var aggregateLabel = $"{ReportResultColumns.AggregateName(metric.Fn)}({sourceLabel})";
-                    labels[name] = metrics.Count == 1
+                    var effectiveLabel = metrics.Count == 1
                         ? keyLabel
                         : $"{keyLabel} · {aggregateLabel}";
+                    boundCells.Add(new BoundPivotCell(
+                        metric.Id,
+                        BoundColumnContract.FromColumn(
+                            column,
+                            new BoundPivotCellColumnLineage(
+                                tableId,
+                                metric.Id,
+                                typedKey),
+                            effectiveLabel,
+                            isCount ? null : sourceContract.LocalFormat,
+                            isCount ? null : sourceContract.ExportedMask,
+                            isCount
+                                ? null
+                                : sourceContract.FormatSourceLogicalId
+                                    ?? sourceContract.LogicalId)));
                 }
             }
             keys.Add(new PivotColumnKey(key, cells));
+            boundKeys.Add(new BoundResolvedPivotKey(typedKey, boundCells.ToImmutable()));
         }
 
-        var wide = ComposableSqlPlanner.PivotWide(
-            grouped,
+        var boundRows = rows.Select(row => source.Output.GetRequired(row.Name) with
+            {
+                Lineage = new BoundPassThroughColumnLineage(row.Name),
+            })
+            .ToImmutableArray();
+        var boundColumns = columns
+            .Select(column => source.Output.GetRequired(column.Name))
+            .ToImmutableArray();
+        var boundMetrics = metrics.Select(metric => new BoundMetric(
+                metric.Id,
+                source.Output.GetRequired(metric.Column.Name),
+                metric.Fn,
+                path))
+            .ToImmutableArray();
+        var output = BoundOutputContract.Create(
             $"{_definition.Name}#{tableId}#pivot{shapeOrdinal}",
-            rows,
-            columns,
-            metrics,
-            keys,
-            _definition.GetEffectiveDialect());
-        var retainedSources = rows.ToDictionary(
-            row => row.Name,
-            row => ResolveFormatSource(formatSources, row, formats),
-            StringComparer.OrdinalIgnoreCase);
-        foreach (var cell in keys.SelectMany(key => key.Cells))
-            retainedSources[cell.Column.Name] = formatSources[cell.Column.Name];
-        formatSources.Clear();
-        foreach (var (name, sourceName) in retainedSources) formatSources[name] = sourceName;
+            boundRows.Cast<BoundColumnContract>()
+                .Concat(boundKeys.SelectMany(pivotKey => pivotKey.Cells)
+                    .Select(cell => cell.Output)));
+        var wide = new BoundResolvedPivotRelation(
+            grouped,
+            boundRows,
+            boundColumns,
+            boundMetrics,
+            boundKeys.ToImmutable(),
+            output,
+            path);
         return (
             wide,
             new CompiledShape(
@@ -611,7 +797,7 @@ internal sealed class ComposableTableCompiler
                 Dimensions: rows,
                 Metrics: metrics,
                 PivotColumns: columns,
-                PivotTotals: composable.Totals == true,
+                PivotTotals: shape.Totals,
                 PivotTotalsRelation: totalsRelation,
                 PivotKeys: keys));
     }
@@ -626,44 +812,56 @@ internal sealed class ComposableTableCompiler
         throw Validation(incomingEdgePath, $"unknown table '{requested}'");
     }
 
-    private static ValidTableLayer EmptyLayer(ReportSchema schema)
-        => new(schema, [], [], [], [], [], schema.Columns, schema.Columns, [], [],
-            new Dictionary<string, string>(), new Dictionary<string, ColumnFormat>());
+    private static BoundLocalResult EmptyLayer(ReportSchema schema)
+        => BoundLocalResult.Empty(schema);
 
-    private static void Merge<T>(
-        Dictionary<string, T> target,
-        IReadOnlyDictionary<string, T> source,
-        bool clear)
+    private void ValidatePivotTotalsCompatibility(CompiledComposableTable plan)
     {
-        if (clear) target.Clear();
-        foreach (var (name, value) in source) target[name] = value;
+        if (plan.LastShape is not
+            {
+                Kind: ShapeKind.Pivot,
+                PivotTotals: true,
+            } pivot)
+            return;
+
+        var errors = new List<ValidationError>();
+        var totalsPath = $"{pivot.Path}.totals";
+        if (pivot.HasPostShapeComputed)
+            errors.Add(new ValidationError(
+                totalsPath,
+                "pivot totals cannot currently be combined with computed columns declared "
+                + "on the same table because the totals relation is produced before them; "
+                + "disable totals or move the computation to another table"));
+        if (pivot.HasPostShapeFilters)
+            errors.Add(new ValidationError(
+                totalsPath,
+                "pivot totals cannot currently be combined with filters declared on the "
+                + "same table because the totals relation is produced before them; disable "
+                + "totals or move a pre-Pivot filter to the parent table"));
+        if (!string.IsNullOrWhiteSpace(_document.Search))
+            errors.Add(new ValidationError(
+                totalsPath,
+                "pivot totals cannot currently be combined with request search because the "
+                + "totals relation is produced before the search overlay; clear search or "
+                + "disable totals"));
+
+        if (errors.Count > 0)
+            throw new ReportValidationException(errors);
     }
 
-    private static Dictionary<string, string?> GroupFormatSources(
-        IReadOnlyDictionary<string, string?> prior,
-        IReadOnlyList<ColumnModel> dimensions,
-        IReadOnlyList<ValidMetric> metrics,
-        string countName,
-        IReadOnlyDictionary<string, ColumnFormat> formats)
+    private static string OwningComposablePath(string rulePath, string property)
     {
-        var result = dimensions.ToDictionary(
-            dimension => dimension.Name,
-            dimension => ResolveFormatSource(prior, dimension, formats),
-            StringComparer.OrdinalIgnoreCase);
-        result[countName] = null;
-        foreach (var metric in metrics)
-            result[metric.Id] = metric.Fn is AggregateFn.Count or AggregateFn.CountDistinct
-                ? null
-                : ResolveFormatSource(prior, metric.Column, formats);
-        return result;
+        var marker = $".{property}[";
+        var markerIndex = rulePath.LastIndexOf(marker, StringComparison.Ordinal);
+        return markerIndex < 0 ? rulePath : rulePath[..markerIndex];
     }
 
     private static void ValidateMetricCount(
-        IReadOnlyList<MetricRule>? values,
+        int valueCount,
         string path,
         List<ValidationError> errors)
     {
-        if (values is { Count: > MaxShapeMetrics })
+        if (valueCount > MaxShapeMetrics)
             errors.Add(new ValidationError(
                 $"{path}.values",
                 $"a shape may contain at most {MaxShapeMetrics} metrics"));
@@ -684,32 +882,34 @@ internal sealed class ComposableTableCompiler
 
     private void ValidateTerminalWidths(
         CompiledComposableTable plan,
-        ValidTableLayer terminal,
+        BoundLocalResult terminal,
         List<ValidationError> errors)
     {
-        var breakItem = plan.TerminalItems.LastOrDefault(item => string.Equals(
-            item.Value.Kind,
-            "break",
-            StringComparison.OrdinalIgnoreCase));
-        var aggregateItem = plan.TerminalItems.LastOrDefault(item => string.Equals(
-            item.Value.Kind,
-            "aggregate",
-            StringComparison.OrdinalIgnoreCase));
-        if (terminal.Aggregates.Count > MaxGeneratedColumns)
+        var local = plan.Local.Instructions;
+        var breakPath = local.Breaks?.SourcePath;
+        var aggregatePath = local.Aggregates.IsEmpty
+            ? null
+            : local.Aggregates
+                .Select(aggregate => OwningComposablePath(
+                    aggregate.SourcePath,
+                    "aggregates"))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .First();
+        if (terminal.Aggregates.Length > MaxGeneratedColumns)
             errors.Add(new ValidationError(
-                aggregateItem is null ? "tables" : $"{aggregateItem.Path}.aggregates",
+                aggregatePath is null ? "tables" : $"{aggregatePath}.aggregates",
                 $"terminal aggregates may expose at most {MaxGeneratedColumns} values"));
-        var breakOutputCount = (long)terminal.Breaks.Count + 1L + terminal.Aggregates.Count;
-        if (terminal.Breaks.Count > 0 && breakOutputCount > MaxGeneratedColumns)
+        var breakOutputCount = (long)terminal.Breaks.Length + 1L + terminal.Aggregates.Length;
+        if (terminal.Breaks.Length > 0 && breakOutputCount > MaxGeneratedColumns)
             errors.Add(new ValidationError(
-                aggregateItem?.Path ?? breakItem?.Path ?? "tables",
+                aggregatePath ?? breakPath ?? "tables",
                 $"break totals may expose at most {MaxGeneratedColumns} columns"));
-        if (terminal.Aggregates.Count > 0)
+        if (terminal.Aggregates.Length > 0)
             ValidateMedianProjectionWidth(
                 terminal.Breaks,
                 terminal.Aggregates.Select(aggregate =>
                     (aggregate.Column, aggregate.Fn)),
-                aggregateItem?.Path ?? breakItem?.Path ?? "tables",
+                aggregatePath ?? breakPath ?? "tables",
                 errors);
     }
 
@@ -752,64 +952,24 @@ internal sealed class ComposableTableCompiler
         return candidate;
     }
 
-    private static void ApplyGroupLabels(
-        Dictionary<string, string> labels,
-        IReadOnlyList<ValidMetric> metrics)
+    private static IEnumerable<string> ReservedLogicalIds(
+        ReportState document,
+        ReportSchema definitionSchema)
     {
-        foreach (var metric in metrics)
+        foreach (var column in definitionSchema.Columns)
+            yield return column.Name;
+
+        foreach (var table in document.Tables?.Values ?? Enumerable.Empty<ReportTable>())
+        foreach (var composable in table?.Composables ?? [])
         {
-            var sourceLabel = labels.TryGetValue(metric.Column.Name, out var displayLabel)
-                ? displayLabel
-                : metric.Column.Label;
-            labels[metric.Id] = $"{ReportResultColumns.AggregateName(metric.Fn)}({sourceLabel})";
+            foreach (var computed in composable?.Computed ?? [])
+                if (!string.IsNullOrWhiteSpace(computed?.Id))
+                    yield return computed.Id.Trim();
+            foreach (var metric in composable?.Values ?? [])
+                if (!string.IsNullOrWhiteSpace(metric?.Id))
+                    yield return metric.Id.Trim();
         }
     }
-
-    private static void ApplyChartLabels(
-        Dictionary<string, string> labels,
-        ValidChart chart,
-        ReportSchema output)
-    {
-        var metricName = output.Columns[1].Name;
-        if (chart.Value is null)
-        {
-            labels[metricName] = "Count";
-            return;
-        }
-        var sourceLabel = labels.TryGetValue(chart.Value.Name, out var displayLabel)
-            ? displayLabel
-            : chart.Value.Label;
-        labels[metricName] = chart.Fn is { } function
-            ? $"{ReportResultColumns.AggregateName(function)}({sourceLabel})"
-            : sourceLabel;
-    }
-
-    private static Dictionary<string, string?> ChartFormatSources(
-        IReadOnlyDictionary<string, string?> prior,
-        ValidChart chart,
-        ReportSchema output,
-        IReadOnlyDictionary<string, ColumnFormat> formats)
-    {
-        var result = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-        {
-            [output.Columns[0].Name] = ResolveFormatSource(prior, chart.Label, formats),
-        };
-        result[output.Columns[1].Name] = chart.Value is null
-            || chart.Fn is AggregateFn.Count or AggregateFn.CountDistinct
-                ? null
-                : ResolveFormatSource(prior, chart.Value, formats);
-        return result;
-    }
-
-    private static string? ResolveFormatSource(
-        IReadOnlyDictionary<string, string?> prior,
-        ColumnModel column,
-        IReadOnlyDictionary<string, ColumnFormat> formats)
-        => formats.ContainsKey(column.Name)
-            ? column.Name
-            : prior.TryGetValue(column.Name, out var inherited)
-            ? inherited
-            : column.Name;
 
     private void EnsureRelationComplexity(
         string path,
@@ -945,20 +1105,120 @@ internal sealed class ComposableTableCompiler
     }
 }
 
-internal sealed record CompiledComposableTable(
-    ComposableSqlRelation Relation,
-    bool SearchApplied,
+/// <summary>
+/// The only state a child table may consume. It contains the completed relational
+/// contract and inherited structural metadata, but no owner-local presentation.
+/// </summary>
+internal sealed record CompiledTableExport(
+    BoundTableExport Bound,
     int ShapeCount,
     int RelationStages,
     int ComputedRuleCount,
-    int FilterRuleCount,
-    CompiledShape? LastShape,
-    ValidTableLayer Terminal,
-    IReadOnlyDictionary<string, string> Labels,
-    IReadOnlyDictionary<string, ColumnFormat> Formats,
-    IReadOnlyDictionary<string, string?> FormatSources,
-    IReadOnlyList<LocatedTableComposable> TerminalItems,
-    IReadOnlyList<IgnoredItem> Ignored);
+    int FilterRuleCount)
+{
+    /// <summary>Inherited scalar metadata; every value contains only Mask.</summary>
+    public IReadOnlyDictionary<string, ColumnFormat> Formats
+        => BoundContractMaps.Formats(Bound.Output);
+}
+
+/// <summary>
+/// Instructions and renderer state owned by one named table. This value is reset at
+/// every <c>from</c> edge and is never part of a child's imported relation.
+/// </summary>
+internal sealed record CompiledTableLocalResult(
+    BoundRelationNode? ExecutionNode,
+    ComposableSqlRelation? ExecutionRelation,
+    TerminalExecutionBundle? ExecutionBundle,
+    BoundRequestOverlay? RequestOverlay,
+    CompiledShape? Shape,
+    BoundLocalResult Terminal,
+    CanonicalLocalResult Instructions);
+
+internal sealed record CompiledComposableTable(
+    CompiledTableExport Export,
+    CompiledTableLocalResult Local,
+    bool SearchApplied,
+    IReadOnlyList<IgnoredItem> Ignored)
+{
+    // Read-only forwarding properties keep lowering/execution call sites compact
+    // without weakening the explicit Export/Local inheritance boundary above.
+    /// <summary>
+    /// The relation executed for the active request. Request overlays may replace it
+    /// locally, while <see cref="Export"/> remains the only relation a child can consume.
+    /// </summary>
+    public ComposableSqlRelation Relation
+        => Local.ExecutionRelation
+            ?? throw new InvalidOperationException(
+                "The table must be completed for an active target before SQL execution.");
+    public int ShapeCount => Export.ShapeCount;
+    public int RelationStages => Export.RelationStages;
+    public int ComputedRuleCount => Export.ComputedRuleCount;
+    public int FilterRuleCount => Export.FilterRuleCount;
+    public IReadOnlyDictionary<string, string> Labels
+        => BoundContractMaps.Labels(Export.Bound.Relation.Output);
+    /// <summary>Full effective formats owned by the active table.</summary>
+    public IReadOnlyDictionary<string, ColumnFormat> Formats
+        => BoundContractMaps.Formats(Export.Bound.Relation.Output);
+    public IReadOnlyDictionary<string, string?> FormatSources
+        => BoundContractMaps.FormatSources(Export.Bound.Relation.Output);
+    public CompiledShape? LastShape => Local.Shape;
+    public BoundLocalResult Terminal => Local.Terminal;
+    public TerminalExecutionBundle ExecutionBundle
+        => Local.ExecutionBundle
+            ?? throw new InvalidOperationException(
+                "The table must be completed for an active target before execution.");
+    public BoundRequestOverlay RequestOverlay
+        => Local.RequestOverlay
+            ?? throw new InvalidOperationException(
+                "The table must be completed for an active target before execution.");
+}
+
+internal static class BoundContractMaps
+{
+    public static IReadOnlyDictionary<string, string> Labels(BoundOutputContract contract)
+        => contract.Columns.ToImmutableDictionary(
+            column => column.LogicalId,
+            column => column.EffectiveLabel,
+            StringComparer.OrdinalIgnoreCase);
+
+    public static IReadOnlyDictionary<string, ColumnFormat> Formats(BoundOutputContract contract)
+    {
+        var result = ImmutableDictionary.CreateBuilder<string, ColumnFormat>(
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var column in contract.Columns)
+        {
+            if (column.LocalFormat is null) continue;
+            var format = ToColumnFormat(column.LocalFormat);
+            result[column.LogicalId] = format;
+            if (!string.IsNullOrWhiteSpace(column.FormatSourceLogicalId))
+                result[column.FormatSourceLogicalId] = ToColumnFormat(column.LocalFormat);
+        }
+        return result.ToImmutable();
+    }
+
+    public static IReadOnlyDictionary<string, string?> FormatSources(BoundOutputContract contract)
+        => contract.Columns.ToImmutableDictionary(
+            column => column.LogicalId,
+            column => column.FormatSourceLogicalId,
+            StringComparer.OrdinalIgnoreCase);
+
+    private static ColumnFormat ToColumnFormat(CanonicalColumnFormat value)
+        => new()
+        {
+            Mask = value.Mask,
+            Align = value.Align,
+            Bold = value.Bold,
+            Italic = value.Italic,
+            Fg = value.Foreground,
+            Bg = value.Background,
+            Classes = value.Classes.IsDefaultOrEmpty ? null : value.Classes.ToList(),
+            DisplayAs = value.DisplayAs,
+            UrlColumn = value.UrlColumn,
+            TextColumn = value.TextColumn,
+            Command = value.Command,
+            KeyColumn = value.KeyColumn,
+        };
+}
 
 internal sealed record CompiledShape(
     ShapeKind Kind,
@@ -970,7 +1230,9 @@ internal sealed record CompiledShape(
     bool PivotTotals = false,
     ValidChart? Chart = null,
     ComposableSqlRelation? PivotTotalsRelation = null,
-    IReadOnlyList<PivotColumnKey>? PivotKeys = null);
+    IReadOnlyList<PivotColumnKey>? PivotKeys = null,
+    bool HasPostShapeComputed = false,
+    bool HasPostShapeFilters = false);
 
 internal enum ShapeKind
 {

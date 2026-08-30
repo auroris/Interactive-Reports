@@ -58,6 +58,92 @@ public class ExprParserTests
     }
 
     [Fact]
+    public void Provider_unknown_column_takes_text_comparison_context()
+    {
+        var schema = ComparisonUnknownSchema();
+
+        var (ast, error) = ExprParser.ParseCondition("UNKNOWN_VALUE = 'x'", schema);
+
+        Assert.Null(error);
+        var comparison = Assert.IsType<Comparison>(ast);
+        var column = Assert.IsType<ColumnRef>(comparison.Left);
+        Assert.False(column.Column.HasKnownType);
+        Assert.Equal(ColumnKind.Text, column.Kind);
+        Assert.Equal(ColumnKind.Text, comparison.Right.Kind);
+    }
+
+    [Fact]
+    public void Provider_unknown_column_takes_between_and_simple_case_context()
+    {
+        var schema = ComparisonUnknownSchema();
+
+        var (betweenAst, betweenError) = ExprParser.ParseCondition(
+            "UNKNOWN_VALUE BETWEEN 'a' AND 'z'",
+            schema);
+        var (caseAst, caseError) = ExprParser.Parse(
+            "CASE UNKNOWN_VALUE WHEN 'x' THEN 1 ELSE 0 END",
+            schema);
+
+        Assert.Null(betweenError);
+        var between = Assert.IsType<Between>(betweenAst);
+        Assert.Equal(
+            [ColumnKind.Text, ColumnKind.Text, ColumnKind.Text],
+            new[] { between.Operand.Kind, between.Lower.Kind, between.Upper.Kind });
+
+        Assert.Null(caseError);
+        var @case = Assert.IsType<CaseWhen>(caseAst);
+        Assert.Equal(ColumnKind.Text, @case.Operand!.Kind);
+        Assert.Equal(ColumnKind.Text, Assert.Single(@case.Branches).When.Kind);
+    }
+
+    [Fact]
+    public void Concrete_other_column_does_not_take_text_comparison_context()
+    {
+        var schema = ComparisonUnknownSchema();
+
+        var (ast, error) = ExprParser.ParseCondition("BINARY_VALUE = 'x'", schema);
+
+        Assert.Null(ast);
+        Assert.Contains("same type (got other and text)", error);
+    }
+
+    [Fact]
+    public void Provider_unknown_context_still_rejects_conflicting_concrete_types()
+    {
+        var schema = ComparisonUnknownSchema();
+
+        var (between, betweenError) = ExprParser.ParseCondition(
+            "UNKNOWN_VALUE BETWEEN 'a' AND 1",
+            schema);
+        var (@case, caseError) = ExprParser.Parse(
+            "CASE UNKNOWN_VALUE WHEN 'x' THEN 1 WHEN 2 THEN 2 END",
+            schema);
+
+        Assert.Null(between);
+        Assert.Contains("value and both bounds to share one type", betweenError);
+        Assert.Null(@case);
+        Assert.Contains("got number, expected text", caseError);
+    }
+
+    private static IReadOnlyDictionary<string, ColumnModel> ComparisonUnknownSchema()
+        => new Dictionary<string, ColumnModel>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["UNKNOWN_VALUE"] = new ColumnModel
+            {
+                Name = "UNKNOWN_VALUE",
+                Label = "Unknown",
+                ClrType = typeof(object),
+                HasKnownType = false,
+            },
+            ["BINARY_VALUE"] = new ColumnModel
+            {
+                Name = "BINARY_VALUE",
+                Label = "Binary",
+                ClrType = typeof(byte[]),
+            },
+        };
+
+    [Fact]
     public void Backticks_quote_data_derived_column_names()
     {
         const string name = "m1@[\"SHIP`PED\"]";

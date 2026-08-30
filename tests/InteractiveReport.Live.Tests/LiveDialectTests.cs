@@ -205,16 +205,16 @@ public class LiveDialectTests
         {
             Computed =
             [
-                new ComputedColumn { Id = "c1", Expr = "ROUND(AMOUNT * 2, 0)" },
-                new ComputedColumn { Id = "c2", Expr = "UPPER(CUSTOMER) || '!'" },
+                new ComputedColumn { Id = "ir1", Expr = "ROUND(AMOUNT * 2, 0)" },
+                new ComputedColumn { Id = "ir2", Expr = "UPPER(CUSTOMER) || '!'" },
             ],
-            Filters = [Filter("c1 >= 10000")],
-            Sorts = [new SortRule { Col = "c1", Dir = SortDir.Desc }],
+            Filters = [Filter("ir1 >= 10000")],
+            Sorts = [new SortRule { Col = "ir1", Dir = SortDir.Desc }],
         }), NoParams);
 
         Assert.Equal(5, result.TotalRows);
-        Assert.Equal(24000m, Convert.ToDecimal(result.Rows[0]["c1"]));
-        Assert.Equal("STARK IND!", result.Rows[0]["c2"]);
+        Assert.Equal(24000m, Convert.ToDecimal(result.Rows[0]["ir1"]));
+        Assert.Equal("STARK IND!", result.Rows[0]["ir2"]);
     }
 
     [SkippableTheory]
@@ -228,26 +228,26 @@ public class LiveDialectTests
             [
                 new ComputedColumn
                 {
-                    Id = "c1",
+                    Id = "ir1",
                     Expr = "CASE WHEN AMOUNT >= 6000 THEN 'BIG' WHEN AMOUNT >= 2000 THEN 'MID' ELSE 'SMALL' END",
                 },
                 new ComputedColumn
                 {
-                    Id = "c2",
+                    Id = "ir2",
                     Expr = "CASE WHEN NOTES IS NULL THEN 0 ELSE 1 END",
                 },
             ],
-            Filters = [Filter("c1 = 'BIG'")],
+            Filters = [Filter("ir1 = 'BIG'")],
             Sorts = [new SortRule { Col = "AMOUNT", Dir = SortDir.Desc }],
-            Aggregates = [new AggregateRule { Col = "c2", Fn = AggregateFn.Sum }],
+            Aggregates = [new AggregateRule { Col = "ir2", Fn = AggregateFn.Sum }],
         }), NoParams);
 
         // BIG = amounts ≥ 6000: Stark 12000, Acme 9000, Globex 7500, Tyrell 6000.
         Assert.Equal(4, result.TotalRows);
-        Assert.All(result.Rows, r => Assert.Equal("BIG", r["c1"]));
+        Assert.All(result.Rows, r => Assert.Equal("BIG", r["ir1"]));
         // Of the BIG rows, those with a real note: insured, rush, refunded.
         // Globex's NOTES is NULL. Empty-string parity is covered separately below.
-        Assert.Equal(3m, Convert.ToDecimal(result.Aggregates["c2"]["sum"]));
+        Assert.Equal(3m, Convert.ToDecimal(result.Aggregates["ir2"]["sum"]));
     }
 
     [SkippableTheory]
@@ -261,16 +261,16 @@ public class LiveDialectTests
             [
                 new ComputedColumn
                 {
-                    Id = "c1",
+                    Id = "ir1",
                     Expr = "CASE WHEN NOTES IS NULL OR NOTES = '' THEN 1 ELSE 0 END",
                 },
             ],
-            Aggregates = [new AggregateRule { Col = "c1", Fn = AggregateFn.Sum }],
+            Aggregates = [new AggregateRule { Col = "ir1", Fn = AggregateFn.Sum }],
         }), NoParams);
 
         // SQL Server preserves the seeded empty string; Oracle stores it as NULL.
         // The explicit portable blank condition must count the same four rows on both.
-        Assert.Equal(4m, Convert.ToDecimal(result.Aggregates["c1"]["sum"]));
+        Assert.Equal(4m, Convert.ToDecimal(result.Aggregates["ir1"]["sum"]));
     }
 
     [SkippableFact]
@@ -291,14 +291,14 @@ public class LiveDialectTests
             [
                 new ComputedColumn
                 {
-                    Id = "c1",
+                    Id = "ir1",
                     Expr = "CASE WHEN LARGE_FLAG THEN 1 ELSE 0 END",
                 },
             ],
-            Aggregates = [new AggregateRule { Col = "c1", Fn = AggregateFn.Sum }],
+            Aggregates = [new AggregateRule { Col = "ir1", Fn = AggregateFn.Sum }],
         }), NoParams);
 
-        Assert.Equal(5m, Convert.ToDecimal(result.Aggregates["c1"]["sum"]));
+        Assert.Equal(5m, Convert.ToDecimal(result.Aggregates["ir1"]["sum"]));
     }
 
     [SkippableFact]
@@ -320,12 +320,12 @@ public class LiveDialectTests
         {
             Computed =
             [
-                new ComputedColumn { Id = "c1", Expr = "CASE WHEN LARGE_FLAG THEN 1 ELSE 0 END" },
+                new ComputedColumn { Id = "ir1", Expr = "CASE WHEN LARGE_FLAG THEN 1 ELSE 0 END" },
             ],
-            Aggregates = [new AggregateRule { Col = "c1", Fn = AggregateFn.Sum }],
+            Aggregates = [new AggregateRule { Col = "ir1", Fn = AggregateFn.Sum }],
         }), NoParams);
 
-        Assert.Equal(5m, Convert.ToDecimal(result.Aggregates["c1"]["sum"]));
+        Assert.Equal(5m, Convert.ToDecimal(result.Aggregates["ir1"]["sum"]));
     }
 
     [SkippableTheory]
@@ -343,23 +343,23 @@ public class LiveDialectTests
         {
             Computed =
             [
-                new ComputedColumn { Id = "c1", Expr = "YEAR(ORDER_DATE)" },
-                new ComputedColumn { Id = "c2", Expr = "YEAR(ORDER_DATE_TEXT)" },
-                new ComputedColumn { Id = "c3", Expr = "MONTH(ORDER_DATE_TEXT)" },
-                new ComputedColumn { Id = "c4", Expr = "DAY(ORDER_DATE)" },
+                new ComputedColumn { Id = "ir1", Expr = "YEAR(ORDER_DATE)" },
+                new ComputedColumn { Id = "ir2", Expr = "YEAR(ORDER_DATE_TEXT)" },
+                new ComputedColumn { Id = "ir3", Expr = "MONTH(ORDER_DATE_TEXT)" },
+                new ComputedColumn { Id = "ir4", Expr = "DAY(ORDER_DATE)" },
             ],
-            Filters = [Filter("c1 = 2026")],
+            Filters = [Filter("ir1 = 2026")],
             Sorts = [new SortRule { Col = "ORDER_ID", Dir = SortDir.Asc }],
         }), NoParams);
 
         // 2026 rows: ids 6–10.
         Assert.Equal(5, result.TotalRows);
         Assert.All(result.Rows, r =>
-            Assert.Equal(Convert.ToInt32(r["c1"]), Convert.ToInt32(r["c2"])));   // text agrees with native
+            Assert.Equal(Convert.ToInt32(r["ir1"]), Convert.ToInt32(r["ir2"])));   // text agrees with native
         var first = result.Rows[0];                                              // id 6 → 2026-02-16
         Assert.Equal(6, Convert.ToInt32(first["ORDER_ID"]));
-        Assert.Equal(2, Convert.ToInt32(first["c3"]));
-        Assert.Equal(16, Convert.ToInt32(first["c4"]));
+        Assert.Equal(2, Convert.ToInt32(first["ir3"]));
+        Assert.Equal(16, Convert.ToInt32(first["ir4"]));
     }
 
     [SkippableTheory]
@@ -368,7 +368,7 @@ public class LiveDialectTests
     {
         // The decided date design (ARCHITECTURE §8): NOW/TO_DATE/DATE_TRUNC/TO_STRING,
         // whole-day arithmetic, plain SQL comparisons, inclusive BETWEEN. Bounds are
-        // fixed dates so counts are clock-independent; only c6 needs a sane engine
+        // fixed dates so counts are clock-independent; only ir6 needs a sane engine
         // clock (anything past 2020).
         var live = LiveDb.For(dialect);
         var def = live.Definition();
@@ -380,42 +380,42 @@ public class LiveDialectTests
             Computed =
             [
                 // Inclusive 2026 window over the native date column: ids 6–10.
-                new ComputedColumn { Id = "c1", Expr = "CASE WHEN ORDER_DATE BETWEEN TO_DATE('2026-01-01') AND TO_DATE('2026-12-31') THEN 1 ELSE 0 END" },
+                new ComputedColumn { Id = "ir1", Expr = "CASE WHEN ORDER_DATE BETWEEN TO_DATE('2026-01-01') AND TO_DATE('2026-12-31') THEN 1 ELSE 0 END" },
                 // Text→date conversion agrees with the native date at day granularity.
-                new ComputedColumn { Id = "c2", Expr = "CASE WHEN TO_DATE(ORDER_DATE_TEXT) = DATE_TRUNC('DAY', ORDER_DATE) THEN 1 ELSE 0 END" },
+                new ComputedColumn { Id = "ir2", Expr = "CASE WHEN TO_DATE(ORDER_DATE_TEXT) = DATE_TRUNC('DAY', ORDER_DATE) THEN 1 ELSE 0 END" },
                 // Whole-day arithmetic: the shifted date passes the original.
-                new ComputedColumn { Id = "c3", Expr = "CASE WHEN TO_DATE(ORDER_DATE_TEXT) + 1 > ORDER_DATE THEN 1 ELSE 0 END" },
+                new ComputedColumn { Id = "ir3", Expr = "CASE WHEN TO_DATE(ORDER_DATE_TEXT) + 1 > ORDER_DATE THEN 1 ELSE 0 END" },
                 // Format translation parity: YYYY-MM equals the ISO text prefix.
-                new ComputedColumn { Id = "c4", Expr = "TO_STRING(ORDER_DATE, 'YYYY-MM')" },
+                new ComputedColumn { Id = "ir4", Expr = "TO_STRING(ORDER_DATE, 'YYYY-MM')" },
                 // Feb 2026 via month truncation: ids 6, 7, 10.
-                new ComputedColumn { Id = "c5", Expr = "CASE WHEN DATE_TRUNC('MONTH', ORDER_DATE) = TO_DATE('2026-02-01') THEN 1 ELSE 0 END" },
+                new ComputedColumn { Id = "ir5", Expr = "CASE WHEN DATE_TRUNC('MONTH', ORDER_DATE) = TO_DATE('2026-02-01') THEN 1 ELSE 0 END" },
                 // One request-scoped UTC NOW(), exercised through BETWEEN + arithmetic.
-                new ComputedColumn { Id = "c6", Expr = "CASE WHEN NOW() BETWEEN TO_DATE('2020-01-01') AND NOW() + 1 THEN 1 ELSE 0 END" },
+                new ComputedColumn { Id = "ir6", Expr = "CASE WHEN NOW() BETWEEN TO_DATE('2020-01-01') AND NOW() + 1 THEN 1 ELSE 0 END" },
                 // NULL keeps its Date type through producers and arithmetic: with a
                 // bare NULL, Oracle typed the sum as NUMBER and Postgres either made
                 // an INTERVAL of it or could not resolve date_trunc at all.
-                new ComputedColumn { Id = "c7", Expr = "CASE WHEN TO_DATE(NULL) + 1 IS NULL AND DATE_TRUNC('DAY', TO_DATE(NULL)) IS NULL THEN 1 ELSE 0 END" },
+                new ComputedColumn { Id = "ir7", Expr = "CASE WHEN TO_DATE(NULL) + 1 IS NULL AND DATE_TRUNC('DAY', TO_DATE(NULL)) IS NULL THEN 1 ELSE 0 END" },
             ],
             Aggregates =
             [
-                new AggregateRule { Col = "c1", Fn = AggregateFn.Sum },
-                new AggregateRule { Col = "c2", Fn = AggregateFn.Sum },
-                new AggregateRule { Col = "c3", Fn = AggregateFn.Sum },
-                new AggregateRule { Col = "c5", Fn = AggregateFn.Sum },
-                new AggregateRule { Col = "c6", Fn = AggregateFn.Sum },
-                new AggregateRule { Col = "c7", Fn = AggregateFn.Sum },
+                new AggregateRule { Col = "ir1", Fn = AggregateFn.Sum },
+                new AggregateRule { Col = "ir2", Fn = AggregateFn.Sum },
+                new AggregateRule { Col = "ir3", Fn = AggregateFn.Sum },
+                new AggregateRule { Col = "ir5", Fn = AggregateFn.Sum },
+                new AggregateRule { Col = "ir6", Fn = AggregateFn.Sum },
+                new AggregateRule { Col = "ir7", Fn = AggregateFn.Sum },
             ],
             Sorts = [new SortRule { Col = "ORDER_ID", Dir = SortDir.Asc }],
         }), NoParams);
 
-        Assert.Equal(5m, Convert.ToDecimal(result.Aggregates["c1"]["sum"]));
-        Assert.Equal(10m, Convert.ToDecimal(result.Aggregates["c2"]["sum"]));
-        Assert.Equal(10m, Convert.ToDecimal(result.Aggregates["c3"]["sum"]));
-        Assert.Equal(3m, Convert.ToDecimal(result.Aggregates["c5"]["sum"]));
-        Assert.Equal(10m, Convert.ToDecimal(result.Aggregates["c6"]["sum"]));
-        Assert.Equal(10m, Convert.ToDecimal(result.Aggregates["c7"]["sum"]));
+        Assert.Equal(5m, Convert.ToDecimal(result.Aggregates["ir1"]["sum"]));
+        Assert.Equal(10m, Convert.ToDecimal(result.Aggregates["ir2"]["sum"]));
+        Assert.Equal(10m, Convert.ToDecimal(result.Aggregates["ir3"]["sum"]));
+        Assert.Equal(3m, Convert.ToDecimal(result.Aggregates["ir5"]["sum"]));
+        Assert.Equal(10m, Convert.ToDecimal(result.Aggregates["ir6"]["sum"]));
+        Assert.Equal(10m, Convert.ToDecimal(result.Aggregates["ir7"]["sum"]));
         Assert.All(result.Rows, r =>
-            Assert.Equal(((string)r["ORDER_DATE_TEXT"]!)[..7], (string)r["c4"]!));
+            Assert.Equal(((string)r["ORDER_DATE_TEXT"]!)[..7], (string)r["ir4"]!));
     }
 
     [SkippableTheory]
@@ -611,36 +611,37 @@ public class LiveDialectTests
 
         var grouped = await live.Executor.Query(live.Definition(), Doc(tail:
         [
-            Group(by: ["STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)]),
+            Group(by: ["STATUS"], values: [Metric("ir1", "AMOUNT", AggregateFn.Sum)]),
         ]), NoParams);
         Assert.Equal([1L, 1L, 3L, 5L], grouped.Rows.Select(r => Convert.ToInt64(r["__count"])));
-        Assert.Equal([6000m, 400m, 14800m, 26000m], grouped.Rows.Select(r => Convert.ToDecimal(r["m1"])));
+        Assert.Equal([6000m, 400m, 14800m, 26000m], grouped.Rows.Select(r => Convert.ToDecimal(r["ir1"])));
 
         var groupedTable = await live.Executor.Query(live.Definition(), Doc(tail:
         [
             Group(
                 by: ["STATUS", "CUSTOMER"],
-                values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
+                values: [Metric("ir1", "AMOUNT", AggregateFn.Sum)],
                 layer: new StageLayer
                 {
-                    Filters = [Filter("m1 >= 1000")],
+                    Filters = [Filter("ir1 >= 1000")],
                     Breaks = ["STATUS"],
-                    Aggregates = [new AggregateRule { Col = "m1", Fn = AggregateFn.Sum }],
+                    Aggregates = [new AggregateRule { Col = "ir1", Fn = AggregateFn.Sum }],
                 }),
         ]), NoParams);
         Assert.Equal(7, groupedTable.TotalRows);
-        Assert.Equal(46000m, Convert.ToDecimal(groupedTable.Aggregates["m1"]["sum"]));
+        Assert.Equal(46000m, Convert.ToDecimal(groupedTable.Aggregates["ir1"]["sum"]));
         var shippedGroups = groupedTable.BreakTotals.Single(total => Equals(total.Key["STATUS"], "SHIPPED"));
         Assert.Equal(4, shippedGroups.Rows);
-        Assert.Equal(26000m, Convert.ToDecimal(shippedGroups.Aggregates["m1"]["sum"]));
+        Assert.Equal(26000m, Convert.ToDecimal(shippedGroups.Aggregates["ir1"]["sum"]));
 
         var pivot = await live.Executor.Query(live.Definition(), Doc(tail:
         [
-            Pivot(rows: ["CUSTOMER"], cols: ["STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)], totals: true),
+            Pivot(rows: ["CUSTOMER"], cols: ["STATUS"], values: [Metric("ir1", "AMOUNT", AggregateFn.Sum)], totals: true),
         ]), NoParams);
+        var shippedCell = PivotCellId("pivot1", "ir1", "SHIPPED");
         var acme = pivot.Rows.Single(r => (string?)r["CUSTOMER"] == "Acme Corp");
-        Assert.Equal(12000m, Convert.ToDecimal(acme["m1@[\"SHIPPED\"]"]));
-        Assert.Equal(26000m, Convert.ToDecimal(pivot.Aggregates["m1@[\"SHIPPED\"]"]["sum"]));
+        Assert.Equal(12000m, Convert.ToDecimal(acme[shippedCell]));
+        Assert.Equal(26000m, Convert.ToDecimal(pivot.Aggregates[shippedCell]["sum"]));
     }
 
     [SkippableTheory]

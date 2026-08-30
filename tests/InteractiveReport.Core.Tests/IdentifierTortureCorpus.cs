@@ -75,6 +75,13 @@ internal static class IdentifierTortureCorpus
         var expectedNames = NamesForRuntime(definition.GetEffectiveDialect());
         var schema = await executor.GetSchema(definition, NoParams);
         Assert.Equal(expectedNames, schema.Select(column => column.Name));
+        if (definition.GetEffectiveDialect() == ReportDialect.Sqlite)
+        {
+            var literal = schema.Single(column => column.Name == "literal?");
+            Assert.False(
+                literal.HasKnownType,
+                $"SQLite literal schema type should be unknown, got {literal.ClrType.FullName}");
+        }
 
         var source = Doc(
             source: new StageLayer
@@ -83,7 +90,7 @@ internal static class IdentifierTortureCorpus
                 [
                     new ComputedColumn
                     {
-                        Id = "c1",
+                        Id = "ir1",
                         Expr = $"{ExpressionIdentifier(AmountName)} + {ExpressionIdentifier(OrderIdName)}",
                     },
                 ],
@@ -95,20 +102,20 @@ internal static class IdentifierTortureCorpus
                         + "AND `literal?` = '?'"),
                 ],
                 Sorts = [new SortRule { Col = DotName, Dir = SortDir.Asc }],
-                Columns = [.. expectedNames, "c1"],
+                Columns = [.. expectedNames, "ir1"],
             },
             search: "ship");
 
         var query = await executor.Query(definition, source, NoParams);
         var export = await executor.Export(definition, source, NoParams);
-        var projectedNames = expectedNames.Concat(["c1"]).ToArray();
+        var projectedNames = expectedNames.Concat(["ir1"]).ToArray();
 
         Assert.Equal(projectedNames, query.Columns.Select(column => column.Name));
         Assert.Equal(3, query.TotalRows);
         Assert.Equal(["Acme Corp", "Globex", "Initech"],
             query.Rows.Select(row => row[DotName]));
         Assert.Equal([9001m, 7502m, 5003m],
-            query.Rows.Select(row => Convert.ToDecimal(row["c1"])));
+            query.Rows.Select(row => Convert.ToDecimal(row["ir1"])));
         Assert.All(query.Rows, row => AssertExactKeys(row, projectedNames));
 
         Assert.Equal(projectedNames, export.Columns.Select(column => column.Name));
@@ -119,11 +126,11 @@ internal static class IdentifierTortureCorpus
         [
             Group(
                 by: [RawMarkerName],
-                values: [Metric("m1", AmountName, AggregateFn.Sum)]),
+                values: [Metric("ir1", AmountName, AggregateFn.Sum)]),
         ]);
         var grouped = await executor.Query(definition, groupedState, NoParams);
         var groupedExport = await executor.Export(definition, groupedState, NoParams);
-        string[] groupedNames = [RawMarkerName, "__count", "m1"];
+        string[] groupedNames = [RawMarkerName, "__count", "ir1"];
 
         Assert.Equal(groupedNames, grouped.Columns.Select(column => column.Name));
         Assert.Equal(4, grouped.TotalRows);

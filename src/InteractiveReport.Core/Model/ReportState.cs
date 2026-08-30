@@ -29,7 +29,10 @@ public sealed class ReportState
     public Dictionary<string, ReportTable>? Tables { get; set; }
 }
 
-/// <summary>One named table: an explicit input relation plus ordered composables.</summary>
+/// <summary>
+/// One named table: an explicit input relation plus composable declarations. Array
+/// position is storage order; composable semantics determine execution order.
+/// </summary>
 public sealed class ReportTable
 {
     /// <summary>"definition" or another table identifier in this document.</summary>
@@ -49,8 +52,8 @@ public sealed class ReportTable
 /// One operation composed onto a table. Kind selects the payload fields.
 /// Relation-changing composables (group, pivot, chart) and other composables (compute,
 /// filter, sort, select, labels, formats, highlight, break, aggregate) deliberately
-/// share one ordered protocol. The engine interprets Kind; the owning table's name does
-/// not.
+/// share one protocol. The engine interprets Kind and its natural phase; the owning
+/// table's name and array position do not.
 /// </summary>
 public sealed class TableComposable
 {
@@ -113,10 +116,9 @@ public sealed class TableComposable
 }
 
 /// <summary>
-/// One aggregate metric of a group composable. The id ("m1", "m2", …) is the metric's
-/// stable output-column name, in a namespace like computed columns' c1. It is unique
-/// within the composable and never shadows input columns, so reordering the values list can
-/// never silently change what downstream references mean.
+/// One aggregate metric of a group composable. The id is a stable synthetic output-column
+/// name such as "ir1". Metrics and computed columns use the same logical namespace. An id
+/// is unique across the report document and never derives from compiler traversal order.
 /// </summary>
 public sealed class MetricRule
 {
@@ -220,7 +222,9 @@ public sealed class PageRequest
 
 public sealed class ComputedColumn : ExpressionRule
 {
-    /// <summary>Separate namespace from input columns ("c1", "c2", ...); may not shadow them.</summary>
+    /// <summary>
+    /// Document-wide stable synthetic id such as "ir1"; may not shadow an input column.
+    /// </summary>
     public string Id { get; set; } = "";
     public string? Label { get; set; }
 }
@@ -260,7 +264,7 @@ public sealed class HighlightStyle
     public string? Fg { get; set; }
 }
 
-/// <summary>Default point ordering owned by a chart composable; later sort composables may reorder its output.</summary>
+/// <summary>Default point ordering owned by a chart composable; a table-local sort may reorder its output.</summary>
 public sealed class ChartSortSpec
 {
     /// <summary>"label" (default) or "value".</summary>

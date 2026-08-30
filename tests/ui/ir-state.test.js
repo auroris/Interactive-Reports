@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-    activeChain, activeShapeLocation, activeTableSchema, composableLocations,
+    activeChain, activeShapeLocation, activeTableSchema, assignShapeMetricIds,
+    composableLocations,
     composedFormats, composedLabels, createView, editInputComposable,
     editTerminalComposable, expressionReferencesColumn, inputComposableLocation,
     invalidateChangedSchemas, lookupValue, modeOf, nextFreeId,
-    normalizeReportState, ownShapeLocations, pruneRetiredChartOutputs,
+    nextSyntheticColumnId, normalizeReportState, normalizedHighlightRules,
+    ownShapeLocations, pruneRetiredChartOutputs,
     pruneRetiredMetrics, pruneRetiredPivotOutputs,
     removeInputComputedColumn, removeTerminalComputedColumn, replaceComposable,
     resolveCreationBase, resolveView, scopedSearchExpression, selectView,
@@ -281,8 +283,11 @@ test("shape edits replace one exact node and preserve all sibling composables", 
         ],
     };
     state.activeTable = "foreign";
-    assert.equal(shapeEditable(activeShapeLocation(state, "chart")), false,
-        "packaged editors leave foreign pre-shape compositions read-only");
+    const storedAfterFilter = activeShapeLocation(state, "chart");
+    assert.equal(shapeEditable(storedAfterFilter), true,
+        "shape editability follows natural semantics rather than array position");
+    assert.deepEqual(shapeInputColumns({ doc: state, schema: { columns: [] } }, storedAfterFilter)
+        .map(column => column.name), ["CUSTOMER"]);
 });
 
 test("terminal edits target the final exact node owned by the selected table", () => {
@@ -324,7 +329,7 @@ test("terminal edits target the final exact node owned by the selected table", (
     });
 });
 
-test("input edits target the exact root node before its first owned shape", () => {
+test("input edits target the final exact root node independent of shape position", () => {
     const state = normalizeReportState({
         activeTable: "derived",
         tables: {
@@ -340,10 +345,10 @@ test("input edits target the exact root node before its first owned shape", () =
         },
     }, 25);
 
-    assert.deepEqual(inputNode(state, "filter").filters, [{ expr: "INPUT" }]);
+    assert.deepEqual(inputNode(state, "filter").filters, [{ expr: "OUTPUT" }]);
     editInputComposable(state, "filter", composable => composable.filters.push({ expr: "ADDED" }));
-    assert.deepEqual(state.tables.root.composables[0].filters, [{ expr: "INPUT" }, { expr: "ADDED" }]);
-    assert.deepEqual(state.tables.root.composables[2].filters, [{ expr: "OUTPUT" }]);
+    assert.deepEqual(state.tables.root.composables[0].filters, [{ expr: "INPUT" }]);
+    assert.deepEqual(state.tables.root.composables[2].filters, [{ expr: "OUTPUT" }, { expr: "ADDED" }]);
 });
 
 test("located composables retain exact ancestry ownership and editability", () => {
@@ -355,7 +360,7 @@ test("located composables retain exact ancestry ownership and editability", () =
                 from: "source",
                 composables: [
                     { kind: "group", by: ["STATUS"], values: [] },
-                    { kind: "compute", computed: [{ id: "c1", expr: "__count / 2" }] },
+                    { kind: "compute", computed: [{ id: "ir1", expr: "__count / 2" }] },
                     { kind: "break", breaks: ["STATUS"] },
                 ],
             },
@@ -378,6 +383,11 @@ test("located composables retain exact ancestry ownership and editability", () =
     ]);
     assert.equal(locations.find(location => location.composable.kind === "compute").inherited, true);
     assert.equal(locations.find(location => location.composable.kind === "compute").participates, true);
+    assert.equal(locations.find(location => location.composable.kind === "compute").afterShape, true,
+        "same-table ordinary operations naturally follow the owned shape");
+    assert.equal(locations.find(location => location.composable.kind === "compute").source, false,
+        "an ordinary composable owned beside a shape is not definition-input state");
+    assert.equal(locations[0].source, true);
     assert.equal(locations.find(location => location.composable.kind === "break").participates, false);
     assert.equal(locations.find(location => location.composable?.payload?.keep).authorable, false);
     assert.deepEqual(locations.filter(location => location.authorable)
@@ -441,21 +451,21 @@ test("generated labels resolve through the completed parent table", () => {
                 from: "base",
                 schema: [
                     { name: "STATUS", label: "Status", type: "text" },
-                    { name: "m1", label: "sum(Amount)", type: "number", formatSource: "AMOUNT" },
+                    { name: "ir1", label: "sum(Amount)", type: "number", formatSource: "AMOUNT" },
                 ],
                 composables: [
-                    { kind: "group", by: ["STATUS"], values: [{ id: "m1", col: "AMOUNT", fn: "sum" }] },
-                    { kind: "labels", labels: { m1: "Sales" } },
+                    { kind: "group", by: ["STATUS"], values: [{ id: "ir1", col: "AMOUNT", fn: "sum" }] },
+                    { kind: "labels", labels: { ir1: "Sales" } },
                 ],
             },
             second: {
                 from: "first",
                 schema: [
                     { name: "STATUS", label: "Status", type: "text" },
-                    { name: "m2", label: "sum(sum(Amount))", type: "number", formatSource: "AMOUNT" },
+                    { name: "ir2", label: "sum(sum(Amount))", type: "number", formatSource: "AMOUNT" },
                 ],
                 composables: [
-                    { kind: "group", by: ["STATUS"], values: [{ id: "m2", col: "m1", fn: "sum" }] },
+                    { kind: "group", by: ["STATUS"], values: [{ id: "ir2", col: "ir1", fn: "sum" }] },
                 ],
             },
         },
@@ -463,7 +473,7 @@ test("generated labels resolve through the completed parent table", () => {
 
     assert.deepEqual(terminalTableColumns({ doc: state }).map(column => [column.name, column.label]), [
         ["STATUS", "Status"],
-        ["m2", "sum(Sales)"],
+        ["ir2", "sum(Sales)"],
     ]);
 });
 
@@ -483,34 +493,34 @@ test("a later label override cannot rewrite an already-generated child metric", 
                 from: "base",
                 schema: [
                     { name: "STATUS", label: "Status", type: "text" },
-                    { name: "m1", label: "sum(Amount)", type: "number", formatSource: "AMOUNT" },
+                    { name: "ir1", label: "sum(Amount)", type: "number", formatSource: "AMOUNT" },
                 ],
                 composables: [
-                    { kind: "group", by: ["STATUS"], values: [{ id: "m1", col: "AMOUNT", fn: "sum" }] },
-                    { kind: "labels", labels: { m1: "Sales" } },
+                    { kind: "group", by: ["STATUS"], values: [{ id: "ir1", col: "AMOUNT", fn: "sum" }] },
+                    { kind: "labels", labels: { ir1: "Sales" } },
                 ],
             },
             second: {
                 from: "first",
                 schema: [
-                    { name: "m1", label: "sum(Amount)", type: "number", formatSource: "AMOUNT" },
-                    { name: "m2", label: "sum(sum(Amount))", type: "number", formatSource: "AMOUNT" },
+                    { name: "ir1", label: "sum(Amount)", type: "number", formatSource: "AMOUNT" },
+                    { name: "ir2", label: "sum(sum(Amount))", type: "number", formatSource: "AMOUNT" },
                 ],
                 composables: [
-                    { kind: "group", by: ["m1"], values: [{ id: "m2", col: "m1", fn: "sum" }] },
-                    { kind: "labels", labels: { m1: "Segment" } },
+                    { kind: "labels", labels: { ir1: "Segment" } },
+                    { kind: "group", by: ["ir1"], values: [{ id: "ir2", col: "ir1", fn: "sum" }] },
                 ],
             },
         },
     }, 25);
 
     assert.deepEqual(terminalTableColumns({ doc: state }).map(column => [column.name, column.label]), [
-        ["m1", "Segment"],
-        ["m2", "sum(Sales)"],
+        ["ir1", "Segment"],
+        ["ir2", "sum(Sales)"],
     ]);
 });
 
-test("compute tokens include inherited computed columns but exclude local peers", () => {
+test("compute tokens include inherited and local computed dependency candidates", () => {
     const state = normalizeReportState({
         activeTable: "child",
         tables: {
@@ -518,30 +528,30 @@ test("compute tokens include inherited computed columns but exclude local peers"
                 from: "definition",
                 schema: [
                     { name: "AMOUNT", label: "Amount", type: "number" },
-                    { name: "c1", label: "Taxed", type: "number", computed: true },
+                    { name: "ir1", label: "Taxed", type: "number", computed: true },
                 ],
                 composables: [
-                    { kind: "compute", computed: [{ id: "c1", label: "Taxed", expr: "AMOUNT * 1.05" }] },
+                    { kind: "compute", computed: [{ id: "ir1", label: "Taxed", expr: "AMOUNT * 1.05" }] },
                 ],
             },
             child: {
                 from: "parent",
                 schema: [
                     { name: "AMOUNT", label: "Amount", type: "number" },
-                    { name: "c1", label: "Taxed", type: "number", computed: true },
-                    { name: "c2", label: "Rounded", type: "number", computed: true },
+                    { name: "ir1", label: "Taxed", type: "number", computed: true },
+                    { name: "ir2", label: "Rounded", type: "number", computed: true },
                 ],
                 composables: [
-                    { kind: "compute", computed: [{ id: "c2", label: "Rounded", expr: "ROUND(c1, 0)" }] },
+                    { kind: "compute", computed: [{ id: "ir2", label: "Rounded", expr: "ROUND(ir1, 0)" }] },
                 ],
             },
         },
     }, 25);
 
-    assert.deepEqual(tableContext({ doc: state }).computeTokens.map(column => column.name), ["AMOUNT", "c1"]);
+    assert.deepEqual(tableContext({ doc: state }).computeTokens.map(column => column.name), ["AMOUNT", "ir1", "ir2"]);
 });
 
-test("presentation maps compose over input and output ancestry without flattening nodes", () => {
+test("presentation maps infer the shape boundary independently of storage order", () => {
     const state = normalizeReportState({
         activeTable: "decorated",
         tables: {
@@ -555,19 +565,20 @@ test("presentation maps compose over input and output ancestry without flattenin
             grouped: {
                 from: "base",
                 composables: [
-                    { kind: "group", by: ["CUSTOMER"], values: [{ id: "m1", col: "AMOUNT", fn: "sum" }] },
-                    { kind: "formats", formats: { m1: { mask: "integer" } } },
+                    { kind: "formats", formats: { ir1: { mask: "integer" } } },
+                    { kind: "group", by: ["CUSTOMER"], values: [{ id: "ir1", col: "AMOUNT", fn: "sum" }] },
                 ],
             },
-            decorated: { from: "grouped", composables: [{ kind: "labels", labels: { m1: "Sales" } }] },
+            decorated: { from: "grouped", composables: [{ kind: "labels", labels: { ir1: "Sales" } }] },
         },
     }, 25);
 
     assert.deepEqual(composedLabels(state), {
-        input: { CUSTOMER: "Account", AMOUNT: "Revenue" }, output: { m1: "Sales" },
+        input: { CUSTOMER: "Account", AMOUNT: "Revenue" }, output: { ir1: "Sales" },
     });
     assert.deepEqual(composedFormats(state), {
-        input: { AMOUNT: { mask: "plain" } }, output: { m1: { mask: "integer" } },
+        AMOUNT: { mask: "plain" },
+        ir1: { mask: "integer" },
     });
 });
 
@@ -586,17 +597,17 @@ test("an empty post-shape presentation map clears inherited source metadata", ()
                 from: "base",
                 schema: [
                     { name: "CUSTOMER", label: "Customer", type: "text" },
-                    { name: "m1", label: "sum(Amount)", type: "number", formatSource: "AMOUNT" },
+                    { name: "ir1", label: "sum(Amount)", type: "number", formatSource: "AMOUNT" },
                 ],
                 composables: [
-                    { kind: "group", by: ["CUSTOMER"], values: [{ id: "m1", col: "AMOUNT", fn: "sum" }] },
+                    { kind: "group", by: ["CUSTOMER"], values: [{ id: "ir1", col: "AMOUNT", fn: "sum" }] },
                 ],
             },
             plain: {
                 from: "grouped",
                 schema: [
                     { name: "CUSTOMER", label: "Customer", type: "text" },
-                    { name: "m1", label: "sum(Amount)", type: "number", formatSource: "AMOUNT" },
+                    { name: "ir1", label: "sum(Amount)", type: "number", formatSource: "AMOUNT" },
                 ],
                 composables: [
                     { kind: "labels", labels: {} },
@@ -607,8 +618,76 @@ test("an empty post-shape presentation map clears inherited source metadata", ()
     }, 25);
 
     assert.deepEqual(composedLabels(state), { input: {}, output: {} });
-    assert.deepEqual(composedFormats(state), { input: {}, output: {} });
-    assert.equal(terminalTableColumns({ doc: state }).find(column => column.name === "m1").label, "sum(Amount)");
+    assert.deepEqual(composedFormats(state), {});
+    assert.equal(terminalTableColumns({ doc: state }).find(column => column.name === "ir1").label, "sum(Amount)");
+});
+
+test("same-table metadata clears once before every overlay in either storage order", () => {
+    const makeState = resetFirst => {
+        const labels = [
+            { kind: "labels", labels: { ir1: "Sales" } },
+            { kind: "labels", labels: { CUSTOMER: "Client" } },
+        ];
+        const formats = [
+            { kind: "formats", formats: { ir1: { mask: "integer" } } },
+            { kind: "formats", formats: { CUSTOMER: { bold: true } } },
+        ];
+        const resetLabels = { kind: "labels", labels: {} };
+        const resetFormats = { kind: "formats", formats: {} };
+        return normalizeReportState({
+            activeTable: "plain",
+            tables: {
+                base: {
+                    from: "definition",
+                    schema: [
+                        { name: "CUSTOMER", label: "Customer", type: "text" },
+                        { name: "AMOUNT", label: "Amount", type: "number" },
+                    ],
+                    composables: [
+                        { kind: "labels", labels: { CUSTOMER: "Account", AMOUNT: "Revenue" } },
+                        { kind: "formats", formats: { AMOUNT: { mask: "currency:CAD" } } },
+                    ],
+                },
+                grouped: {
+                    from: "base",
+                    schema: [
+                        { name: "CUSTOMER", label: "Customer", type: "text" },
+                        { name: "ir1", label: "sum(Amount)", type: "number", formatSource: "AMOUNT" },
+                    ],
+                    composables: [{
+                        kind: "group",
+                        by: ["CUSTOMER"],
+                        values: [{ id: "ir1", col: "AMOUNT", fn: "sum" }],
+                    }],
+                },
+                plain: {
+                    from: "grouped",
+                    schema: [
+                        { name: "CUSTOMER", label: "Customer", type: "text" },
+                        { name: "ir1", label: "sum(Amount)", type: "number", formatSource: "AMOUNT" },
+                    ],
+                    composables: resetFirst
+                        ? [resetLabels, ...labels, resetFormats, ...formats]
+                        : [...labels, resetLabels, ...formats, resetFormats],
+                },
+            },
+        }, 25);
+    };
+
+    for (const state of [makeState(true), makeState(false)]) {
+        assert.deepEqual(composedLabels(state), {
+            input: {},
+            output: { ir1: "Sales", CUSTOMER: "Client" },
+        });
+        assert.deepEqual(composedFormats(state), {
+            ir1: { mask: "integer" },
+            CUSTOMER: { bold: true },
+        });
+        assert.deepEqual(terminalTableColumns({ doc: state }).map(column => [column.name, column.label]), [
+            ["CUSTOMER", "Client"],
+            ["ir1", "Sales"],
+        ]);
+    }
 });
 
 test("schema invalidation follows exact changed tables and their descendants", () => {
@@ -646,8 +725,10 @@ test("schema invalidation follows exact changed tables and their descendants", (
     assert.notEqual(searched.tables.base.schema, null);
     assert.notEqual(searched.tables.grouped.schema, null);
     assert.notEqual(searched.tables.decorated.schema, null);
-    assert.equal(searched.tables.pivoted.schema, null);
-    assert.equal(searched.tables.pivotChild.schema, null);
+    assert.notEqual(searched.tables.pivoted.schema, null,
+        "request search runs after Pivot and cannot change its discovered schema");
+    assert.notEqual(searched.tables.pivotChild.schema, null,
+        "a search-only change leaves descendants of the Pivot cacheable");
     assert.notEqual(searched.tables.unrelated.schema, null);
 
     const removedParent = structuredClone(before);
@@ -659,6 +740,72 @@ test("schema invalidation follows exact changed tables and their descendants", (
     assert.notEqual(removedParent.tables.unrelated.schema, null);
 });
 
+test("storage-only composable permutations do not invalidate schema caches", () => {
+    const before = {
+        activeTable: "child",
+        tables: {
+            base: {
+                from: "definition",
+                schema: [{ name: "ID" }],
+                composables: [
+                    { kind: "filter", filters: [{ expr: "ID > 0" }] },
+                    { kind: "compute", computed: [{ id: "ir1", expr: "ID * 2" }] },
+                    { kind: "labels", labels: { ir1: "Double" } },
+                ],
+            },
+            child: {
+                from: "base",
+                schema: [{ name: "ID" }, { name: "ir1" }],
+                composables: [],
+            },
+        },
+    };
+    const after = structuredClone(before);
+    after.tables.base.composables = [
+        after.tables.base.composables[2],
+        after.tables.base.composables[0],
+        after.tables.base.composables[1],
+    ];
+
+    invalidateChangedSchemas(before, after);
+
+    assert.notEqual(after.tables.base.schema, null);
+    assert.notEqual(after.tables.child.schema, null);
+});
+
+test("metadata and owner-local edits do not invalidate exported schema caches", () => {
+    const before = {
+        activeTable: "child",
+        tables: {
+            base: {
+                from: "definition",
+                schema: [{ name: "ID" }],
+                composables: [
+                    { kind: "select", columns: ["ID"] },
+                    { kind: "formats", formats: { ID: { bold: true } } },
+                    { kind: "labels", labels: { ID: "Identifier" } },
+                    { kind: "sort", sorts: [{ col: "ID", dir: "asc" }] },
+                ],
+            },
+            child: {
+                from: "base",
+                schema: [{ name: "ID" }],
+                composables: [],
+            },
+        },
+    };
+    const after = structuredClone(before);
+    after.tables.base.composables[0].columns = [];
+    after.tables.base.composables[1].formats.ID = { mask: "integer", italic: true };
+    after.tables.base.composables[2].labels.ID = "Record";
+    after.tables.base.composables[3].sorts[0].dir = "desc";
+
+    invalidateChangedSchemas(before, after);
+
+    assert.notEqual(after.tables.base.schema, null);
+    assert.notEqual(after.tables.child.schema, null);
+});
+
 test("computed deletion cleans every repeated input node and dependent computed identity", () => {
     const state = normalizeReportState({
         activeTable: "grouped",
@@ -666,35 +813,35 @@ test("computed deletion cleans every repeated input node and dependent computed 
             base: {
                 from: "definition",
                 composables: [
-                    { kind: " COMPUTE ", computed: [{ id: "c1", expr: "AMOUNT * 2" }] },
-                    { kind: " FILTER ", filters: [{ expr: "c1 > 0" }] },
+                    { kind: " COMPUTE ", computed: [{ id: "ir1", expr: "AMOUNT * 2" }] },
+                    { kind: " FILTER ", filters: [{ expr: "ir1 > 0" }] },
                     { kind: "compute", computed: [
-                        { id: "c2", expr: "c1 + 1" },
-                        { id: "c3", expr: "AMOUNT + 1" },
+                        { id: "ir2", expr: "ir1 + 1" },
+                        { id: "ir3", expr: "AMOUNT + 1" },
                     ] },
-                    { kind: "filter", filters: [{ expr: "c2 > 0" }, { expr: "c3 > 0" }] },
-                    { kind: "select", columns: ["c1", "c3"] },
-                    { kind: " SELECT ", columns: ["CUSTOMER", "c2", "c3"] },
+                    { kind: "filter", filters: [{ expr: "ir2 > 0" }, { expr: "ir3 > 0" }] },
+                    { kind: "select", columns: ["ir1", "ir3"] },
+                    { kind: " SELECT ", columns: ["CUSTOMER", "ir2", "ir3"] },
                     { kind: "formats", formats: {
-                        c1: { bold: true },
-                        CUSTOMER: { displayAs: "link", urlColumn: "c2", textColumn: "CUSTOMER", italic: true },
+                        ir1: { bold: true },
+                        CUSTOMER: { displayAs: "link", urlColumn: "ir2", textColumn: "CUSTOMER", italic: true },
                     } },
                 ],
             },
             grouped: {
                 from: "base",
-                composables: [{ kind: "group", by: ["c2"], values: [] }],
+                composables: [{ kind: "group", by: ["ir2"], values: [] }],
             },
         },
     }, 25);
 
-    assert.deepEqual(removeInputComputedColumn(state, "c1"), ["groupBy"]);
+    assert.deepEqual(removeInputComputedColumn(state, "ir1"), ["groupBy"]);
     assert.deepEqual(state.tables.base.composables[0].computed, []);
-    assert.deepEqual(state.tables.base.composables[2].computed.map(rule => rule.id), ["c3"]);
+    assert.deepEqual(state.tables.base.composables[2].computed.map(rule => rule.id), ["ir3"]);
     assert.deepEqual(state.tables.base.composables[1].filters, []);
-    assert.deepEqual(state.tables.base.composables[3].filters, [{ expr: "c3 > 0" }]);
-    assert.deepEqual(state.tables.base.composables[4].columns, ["c3"]);
-    assert.deepEqual(state.tables.base.composables[5].columns, ["CUSTOMER", "c3"]);
+    assert.deepEqual(state.tables.base.composables[3].filters, [{ expr: "ir3 > 0" }]);
+    assert.deepEqual(state.tables.base.composables[4].columns, ["ir3"]);
+    assert.deepEqual(state.tables.base.composables[5].columns, ["CUSTOMER", "ir3"]);
     assert.deepEqual(state.tables.base.composables[6].formats, {
         CUSTOMER: { italic: true },
     });
@@ -710,23 +857,23 @@ test("input computed deletion strips exact input nodes and removes only dependen
             base: {
                 from: "definition",
                 composables: nodesFor({
-                    computed: [{ id: "c1", expr: "AMOUNT * 1.05" }, { id: "c2", expr: "AMOUNT * 2" }],
-                    columns: ["CUSTOMER", "c1", "c2"],
-                    labels: { c1: "Taxed", CUSTOMER: "Customer" },
-                    sorts: [{ col: "c1", dir: "desc" }, { col: "CUSTOMER", dir: "asc" }],
-                    filters: [{ expr: "c1 > 100" }, { expr: "CUSTOMER = 'c1'" }, { expr: "c10 > 100" }],
+                    computed: [{ id: "ir1", expr: "AMOUNT * 1.05" }, { id: "ir2", expr: "AMOUNT * 2" }],
+                    columns: ["CUSTOMER", "ir1", "ir2"],
+                    labels: { ir1: "Taxed", CUSTOMER: "Customer" },
+                    sorts: [{ col: "ir1", dir: "desc" }, { col: "CUSTOMER", dir: "asc" }],
+                    filters: [{ expr: "ir1 > 100" }, { expr: "CUSTOMER = 'ir1'" }, { expr: "ir10 > 100" }],
                     formats: {
-                        c1: { mask: "currency:CAD" },
-                        CUSTOMER: { displayAs: "link", urlColumn: "c1", textColumn: "CUSTOMER", bold: true },
+                        ir1: { mask: "currency:CAD" },
+                        CUSTOMER: { displayAs: "link", urlColumn: "ir1", textColumn: "CUSTOMER", bold: true },
                     },
                 }),
             },
             pivoted: {
                 from: "base",
-                composables: [{ kind: "pivot", rows: ["CUSTOMER"], cols: ["STATUS"], values: [{ id: "m1", col: "c1", fn: "sum" }] }],
+                composables: [{ kind: "pivot", rows: ["CUSTOMER"], cols: ["STATUS"], values: [{ id: "ir3", col: "ir1", fn: "sum" }] }],
             },
             decorated: { from: "pivoted", composables: [{ kind: "labels", labels: {} }] },
-            grouped: { from: "base", composables: [{ kind: "group", by: ["c1"], values: [] }] },
+            grouped: { from: "base", composables: [{ kind: "group", by: ["ir1"], values: [] }] },
             charted: {
                 from: "base",
                 composables: [{ kind: "chart", type: "bar", label: "CUSTOMER", value: "AMOUNT", fn: "sum" }],
@@ -734,12 +881,12 @@ test("input computed deletion strips exact input nodes and removes only dependen
         },
     }, 25);
 
-    const dropped = removeInputComputedColumn(state, "C1");
-    assert.deepEqual(inputNode(state, "compute").computed.map(rule => rule.id), ["c2"]);
-    assert.deepEqual(inputNode(state, "select").columns, ["CUSTOMER", "c2"]);
+    const dropped = removeInputComputedColumn(state, "IR1");
+    assert.deepEqual(inputNode(state, "compute").computed.map(rule => rule.id), ["ir2"]);
+    assert.deepEqual(inputNode(state, "select").columns, ["CUSTOMER", "ir2"]);
     assert.deepEqual(inputNode(state, "labels").labels, { CUSTOMER: "Customer" });
     assert.deepEqual(inputNode(state, "sort").sorts, [{ col: "CUSTOMER", dir: "asc" }]);
-    assert.deepEqual(inputNode(state, "filter").filters.map(rule => rule.expr), ["CUSTOMER = 'c1'", "c10 > 100"]);
+    assert.deepEqual(inputNode(state, "filter").filters.map(rule => rule.expr), ["CUSTOMER = 'ir1'", "ir10 > 100"]);
     assert.deepEqual(inputNode(state, "formats").formats, { CUSTOMER: { bold: true } });
     assert.deepEqual(dropped.sort(), ["groupBy", "pivot"]);
     assert.equal(state.tables.pivoted, undefined);
@@ -749,28 +896,39 @@ test("input computed deletion strips exact input nodes and removes only dependen
     assert.equal(state.activeTable, "base");
 });
 
-test("terminal cleanup is table-local and understands inherited Pivot cell families", () => {
-    const shipped = 'm1@["SHIPPED"]';
-    const pending = 'm1@["PENDING"]';
+test("Pivot cleanup follows opaque server schema ids through unshaped descendants", () => {
+    const shipped = "ir7100000000000000001";
+    const pending = "ir7100000000000000002";
+    const previous = {
+        kind: "pivot",
+        rows: ["CUSTOMER"],
+        cols: ["STATUS"],
+        values: [{ id: "ir3", col: "AMOUNT", fn: "sum" }],
+    };
     const state = normalizeReportState({
         activeTable: "decorated",
         tables: {
             base: { from: "definition", composables: [] },
             pivoted: {
                 from: "base",
-                composables: [{ kind: "pivot", rows: ["CUSTOMER"], cols: ["STATUS"], values: [{ id: "m1", col: "AMOUNT", fn: "sum" }] }],
+                schema: [
+                    { name: "CUSTOMER" },
+                    { name: shipped },
+                    { name: pending },
+                ],
+                composables: [structuredClone(previous)],
             },
             decorated: {
                 from: "pivoted",
                 composables: nodesFor({
-                    computed: [{ id: "c2", expr: '`m1@["SHIPPED"]` / 2' }, { id: "c3", expr: "CUSTOMER || '!'" }],
-                    filters: [{ expr: '`m1@["PENDING"]` > 0' }],
+                    computed: [{ id: "ir4", expr: `${shipped} / 2` }, { id: "ir5", expr: "CUSTOMER || '!'" }],
+                    filters: [{ expr: `${pending} > 0` }],
                     sorts: [{ col: shipped, dir: "desc" }, { col: "CUSTOMER", dir: "asc" }],
                     highlights: [
                         { id: "h1", scope: "cell", col: pending, expr: "CUSTOMER IS NOT NULL" },
                         { id: "h2", scope: "row", expr: "CUSTOMER IS NOT NULL" },
                     ],
-                    columns: ["CUSTOMER", shipped, pending, "c2", "c3"],
+                    columns: ["CUSTOMER", shipped, pending, "ir4", "ir5"],
                     labels: { [shipped]: "Shipped", CUSTOMER: "Customer" },
                     formats: { [pending]: { bold: true }, CUSTOMER: { italic: true } },
                 }),
@@ -778,18 +936,56 @@ test("terminal cleanup is table-local and understands inherited Pivot cell famil
         },
     }, 25);
 
-    pruneRetiredMetrics(state, "decorated", ["m1"]);
-    assert.deepEqual(node(state, "compute").computed.map(rule => rule.id), ["c3"]);
+    pruneRetiredPivotOutputs(state, "pivoted", previous, {
+        ...previous,
+        values: [],
+    }, ["ir3"]);
+    assert.deepEqual(node(state, "compute").computed.map(rule => rule.id), ["ir5"]);
     assert.deepEqual(node(state, "filter").filters, []);
     assert.deepEqual(node(state, "sort").sorts, [{ col: "CUSTOMER", dir: "asc" }]);
     assert.deepEqual(node(state, "highlight").highlights.map(rule => rule.id), ["h2"]);
-    assert.deepEqual(node(state, "select").columns, ["CUSTOMER", "c3"]);
+    assert.deepEqual(node(state, "select").columns, ["CUSTOMER", "ir5"]);
     assert.deepEqual(node(state, "labels").labels, { CUSTOMER: "Customer" });
     assert.deepEqual(node(state, "formats").formats, { CUSTOMER: { italic: true } });
-    assert.deepEqual(state.tables.pivoted.composables[0].values, [{ id: "m1", col: "AMOUNT", fn: "sum" }]);
+    assert.deepEqual(state.tables.pivoted.composables[0].values, [{ id: "ir3", col: "AMOUNT", fn: "sum" }]);
 
-    removeTerminalComputedColumn(state, "c3");
+    removeTerminalComputedColumn(state, "ir5");
     assert.deepEqual(node(state, "compute").computed, []);
+});
+
+test("Pivot cleanup removes descendant Shapes that consume retired opaque cells", () => {
+    const cell = "ir7150000000000000001";
+    const previous = {
+        kind: "pivot",
+        rows: ["CUSTOMER"],
+        cols: ["STATUS"],
+        values: [{ id: "ir3", col: "AMOUNT", fn: "sum" }],
+    };
+    const state = normalizeReportState({
+        activeTable: "leaf",
+        tables: {
+            base: { from: "definition", composables: [] },
+            pivoted: {
+                from: "base",
+                schema: [{ name: "CUSTOMER" }, { name: cell }],
+                composables: [structuredClone(previous)],
+            },
+            grouped: {
+                from: "pivoted",
+                composables: [{ kind: "group", by: [cell], values: [] }],
+            },
+            leaf: { from: "grouped", composables: [] },
+        },
+    }, 25);
+
+    pruneRetiredPivotOutputs(state, "pivoted", previous, {
+        ...previous,
+        cols: ["REGION"],
+    });
+
+    assert.equal(state.tables.grouped, undefined);
+    assert.equal(state.tables.leaf, undefined);
+    assert.equal(state.activeTable, "pivoted");
 });
 
 test("computed cleanup retires an action whose key column disappears", () => {
@@ -799,12 +995,12 @@ test("computed cleanup retires an action whose key column disappears", () => {
             base: {
                 from: "definition",
                 composables: nodesFor({
-                    computed: [{ id: "c1", expr: "AMOUNT * 2" }],
+                    computed: [{ id: "ir1", expr: "AMOUNT * 2" }],
                     formats: {
                         ACTION: {
                             displayAs: "action",
                             command: "open-order",
-                            keyColumn: "c1",
+                            keyColumn: "ir1",
                             bold: true,
                         },
                         SAFE_ACTION: {
@@ -818,7 +1014,7 @@ test("computed cleanup retires an action whose key column disappears", () => {
         },
     }, 25);
 
-    removeTerminalComputedColumn(state, "c1");
+    removeTerminalComputedColumn(state, "ir1");
 
     assert.deepEqual(node(state, "formats").formats, {
         ACTION: { bold: true },
@@ -831,15 +1027,22 @@ test("computed cleanup retires an action whose key column disappears", () => {
 });
 
 test("metric cleanup traverses repeated terminal nodes, including read-only predecessors", () => {
-    const cell = 'm1@["SHIPPED"]';
+    const cell = "ir7200000000000000001";
+    const previous = {
+        kind: "pivot",
+        rows: ["CUSTOMER"],
+        cols: ["STATUS"],
+        values: [{ id: "ir3", col: "AMOUNT", fn: "sum" }],
+    };
     const state = normalizeReportState({
         activeTable: "pivoted",
         tables: {
             base: { from: "definition", composables: [] },
             pivoted: {
                 from: "base",
+                schema: [{ name: "CUSTOMER" }, { name: cell }],
                 composables: [
-                    { kind: "pivot", rows: ["CUSTOMER"], cols: ["STATUS"], values: [{ id: "m1", col: "AMOUNT", fn: "sum" }] },
+                    structuredClone(previous),
                     { kind: " FILTER ", filters: [{ expr: `\`${cell}\` > 0` }] },
                     { kind: "filter", filters: [{ expr: `\`${cell}\` < 1000` }, { expr: "CUSTOMER <> ''" }] },
                     { kind: "sort", sorts: [{ col: cell, dir: "desc" }] },
@@ -853,7 +1056,10 @@ test("metric cleanup traverses repeated terminal nodes, including read-only pred
         },
     }, 25);
 
-    pruneRetiredMetrics(state, "pivoted", ["m1"]);
+    pruneRetiredPivotOutputs(state, "pivoted", previous, {
+        ...previous,
+        values: [],
+    }, ["ir3"]);
     assert.deepEqual(state.tables.pivoted.composables[1].filters, []);
     assert.deepEqual(state.tables.pivoted.composables[2].filters, [{ expr: "CUSTOMER <> ''" }]);
     assert.deepEqual(state.tables.pivoted.composables[3].sorts, []);
@@ -864,13 +1070,13 @@ test("metric cleanup traverses repeated terminal nodes, including read-only pred
 });
 
 test("Pivot column-dimension edits retire old cell families but stable dimensions preserve them", () => {
-    const shipped = 'm1@["SHIPPED"]';
-    const count = '__count@["SHIPPED"]';
+    const shipped = "ir7300000000000000001";
+    const count = "ir7300000000000000002";
     const previous = {
         kind: "pivot",
         rows: ["CUSTOMER"],
         cols: ["STATUS"],
-        values: [{ id: "m1", col: "AMOUNT", fn: "sum" }],
+        values: [{ id: "ir3", col: "AMOUNT", fn: "sum" }],
     };
     const makeState = () => normalizeReportState({
         activeTable: "pivoted",
@@ -878,6 +1084,11 @@ test("Pivot column-dimension edits retire old cell families but stable dimension
             base: { from: "definition", composables: [] },
             pivoted: {
                 from: "base",
+                schema: [
+                    { name: "CUSTOMER" },
+                    { name: shipped },
+                    { name: count },
+                ],
                 composables: [
                     structuredClone(previous),
                     { kind: "sort", sorts: [
@@ -964,9 +1175,8 @@ test("expression references skip quoted contents and longer identifiers", () => 
     assert.equal(expressionReferencesColumn("CUSTOMER = 'c1'", "c1"), false);
     assert.equal(expressionReferencesColumn("c10 > 0", "c1"), false);
     assert.equal(expressionReferencesColumn("CUSTOMER = 'it''s c1'", "c1"), false);
-    assert.equal(expressionReferencesColumn('`m1@["SHIPPED"]` > 0', 'm1@["SHIPPED"]'), true);
-    assert.equal(expressionReferencesColumn('`m1@["SHIPPED"]` > 0', "m1"), false);
-    assert.equal(expressionReferencesColumn('`m1@["SHIPPED"]` > 0', "m1", { pivotFamily: true }), true);
+    assert.equal(expressionReferencesColumn("ir7100000000000000001 > 0", "ir7100000000000000001"), true);
+    assert.equal(expressionReferencesColumn("ir7100000000000000001 > 0", "ir3"), false);
     assert.equal(expressionReferencesColumn("COST$ > 0", "cost$"), true);
     assert.equal(expressionReferencesColumn("ORDER# = 1", "order#"), true);
     assert.equal(expressionReferencesColumn("COST$ADJUSTED > 0", "COST$"), false);
@@ -987,11 +1197,79 @@ test("scoped search emits escaped and typed predicates", () => {
 test("case-insensitive map helpers prevent stale casing variants", () => {
     assert.deepEqual(lookupValue({ Amount: { mask: "currency" } }, "AMOUNT"), { mask: "currency" });
     assert.equal(lookupValue({ Amount: 1 }, "missing"), undefined);
-    assert.equal(nextFreeId(new Set(["c1", "c3"]), "c"), "c2");
+    assert.equal(nextFreeId(new Set(["h1", "h3"]), "h"), "h2");
 
     const formats = { amount: { mask: "integer" }, OTHER: { bold: true } };
     setMapEntry(formats, "AMOUNT", { mask: "currency:CAD" });
     assert.deepEqual(formats, { OTHER: { bold: true }, AMOUNT: { mask: "currency:CAD" } });
     setMapEntry(formats, "Amount", undefined);
     assert.deepEqual(formats, { OTHER: { bold: true } });
+});
+
+test("missing highlight precedence uses stable ids and unused slots", () => {
+    const rules = [
+        { id: "h3" },
+        { id: "h2", sequence: 20 },
+        { id: "H1" },
+    ];
+    const priorities = values => normalizedHighlightRules(values)
+        .map(entry => [entry.rule.id, entry.sequence]);
+
+    assert.deepEqual(priorities(rules), [
+        ["H1", 10],
+        ["h2", 20],
+        ["h3", 30],
+    ]);
+    assert.deepEqual(priorities([rules[2], rules[0], rules[1]]), [
+        ["H1", 10],
+        ["h2", 20],
+        ["h3", 30],
+    ]);
+});
+
+test("computed columns and shape metrics share one document-wide ir namespace", () => {
+    const doc = {
+        activeTable: "grouped",
+        tables: {
+            base: {
+                from: "definition",
+                schema: [{ name: "IR1" }, { name: "AMOUNT" }],
+                composables: [{
+                    kind: "compute",
+                    computed: [{ id: "ir2", expr: "AMOUNT * 2" }],
+                }],
+            },
+            grouped: {
+                from: "base",
+                composables: [{
+                    kind: "group",
+                    by: ["STATUS"],
+                    values: [{ id: "ir4", col: "AMOUNT", fn: "sum" }],
+                }],
+            },
+        },
+    };
+    const extraColumns = [{ name: "ir3" }];
+
+    assert.equal(nextSyntheticColumnId(doc, extraColumns), "ir5");
+
+    const assigned = assignShapeMetricIds(
+        doc,
+        [
+            { col: "AMOUNT", fn: "sum" },
+            { col: "AMOUNT", fn: "avg" },
+        ],
+        [{ id: "ir4", col: "AMOUNT", fn: "sum" }],
+        extraColumns);
+    assert.deepEqual(assigned, {
+        values: [
+            { id: "ir4", col: "AMOUNT", fn: "sum" },
+            { id: "ir5", col: "AMOUNT", fn: "avg" },
+        ],
+        retired: [],
+    });
+
+    doc.tables.grouped.composables[0].values = assigned.values;
+    assert.equal(nextSyntheticColumnId(doc, extraColumns), "ir6",
+        "a later computed column cannot reuse the metric id");
 });

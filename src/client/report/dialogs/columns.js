@@ -151,8 +151,8 @@ export function columnSettingsDialog(w, initialCol) {
     const settingsFor = name => {
         if (staged.has(name)) return staged.get(name);
         // Seed a new local entry from the effective composed format. Otherwise
-        // toggling one style on a synthetic metric would replace, and silently
-        // discard, an inherited source mask or renderer configuration.
+        // toggling one style on a synthetic metric would replace and silently
+        // discard its inherited scalar mask. Renderer/style state is owner-local.
         const fmt = lookupValue(formatsOf(w.doc), name)
             ?? formatForColumn(w, byName.get(name) ?? { name })
             ?? {};

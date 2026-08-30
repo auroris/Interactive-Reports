@@ -5,8 +5,9 @@ namespace InteractiveReport.Core.Expressions;
 /// <summary>
 /// Stage 2 output: the typed AST. Only the binder constructs these — client text
 /// never reaches SQL; only this tree does, via ExprEmitter. Column references
-/// resolve against the BASE schema only: computed columns cannot reference each
-/// other (no dependency ordering in v1).
+/// resolve against the schema at the current canonical operation. Computed-column
+/// dependencies are topologically scheduled, so a later bound tree may reference
+/// an earlier computed output.
 ///
 /// ColumnKind.Bool is internal to the tree: conditions exist inside CASE/NOT/AND/OR
 /// and never escape as a computed column's result (SQL Server has no scalar
@@ -33,9 +34,16 @@ public sealed record NullLit : ExprNode
     public override ColumnKind Kind => ColumnKind.Other;
 }
 
+/// <summary>
+/// A schema-bound column. AssumedKind is present only when the provider could not
+/// describe a raw source expression and a comparison context supplied its scalar
+/// type. The source column remains unchanged, including its logical identity.
+/// </summary>
 public sealed record ColumnRef(ColumnModel Column) : ExprNode
 {
-    public override ColumnKind Kind => Column.Kind;
+    internal ColumnKind? AssumedKind { get; init; }
+
+    public override ColumnKind Kind => AssumedKind ?? Column.Kind;
 }
 
 public sealed record UnaryMinus(ExprNode Operand) : ExprNode

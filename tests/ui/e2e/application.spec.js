@@ -415,7 +415,7 @@ test("applies control breaks and footer aggregates to a Group By table", async (
 
     await clickAction(page, "Aggregate…");
     dialog = page.getByRole("dialog");
-    await dialog.getByRole("combobox", { name: "Column", exact: true }).selectOption("m1");
+    await dialog.getByRole("combobox", { name: "Column", exact: true }).selectOption("ir2");
     await dialog.getByRole("combobox", { name: "Function", exact: true }).selectOption("sum");
     const response = await runAndWaitForQuery(page, () =>
         dialog.getByRole("button", { name: "Apply", exact: true }).click());
@@ -424,7 +424,7 @@ test("applies control breaks and footer aggregates to a Group By table", async (
         .find(table => table.composables.some(item => item.kind === "group"));
     expect(groupTable.composables.find(item => item.kind === "break").breaks).toEqual(["STATUS"]);
     expect(groupTable.composables.find(item => item.kind === "aggregate").aggregates)
-        .toEqual([{ col: "m1", fn: "sum" }]);
+        .toEqual([{ col: "ir2", fn: "sum" }]);
     await expect(page.locator("tr.ir-break-header")).not.toHaveCount(0);
     await expect(page.locator("tr.ir-grand-total")).toHaveCount(1);
 });
@@ -448,7 +448,7 @@ test("adds correctly aggregated total rows to a pivot without a right-side total
         kind: "pivot",
         rows: ["CUSTOMER"],
         cols: ["STATUS"],
-        values: [{ id: "m1", col: "AMOUNT", fn: "sum" }],
+        values: [{ id: "ir3", col: "AMOUNT", fn: "sum" }],
         totals: true,
     });
 
@@ -524,9 +524,9 @@ test("deleting a computed column also deletes its references", async ({ page }) 
     const input = inputFieldsOf(response.request().postDataJSON());
 
     expect(input.computed).toEqual([]);
-    expect(input.columns).not.toContain("c1");
-    expect(input.formats).not.toHaveProperty("c1");
-    await expect(page.getByText(/unknown column 'c1'/)).toHaveCount(0);
+    expect(input.columns).not.toContain("ir1");
+    expect(input.formats).not.toHaveProperty("ir1");
+    await expect(page.getByText(/unknown column 'ir1'/)).toHaveCount(0);
 });
 
 test("Save As confirms and replaces an existing report instead of creating a duplicate", async ({ page, request }) => {

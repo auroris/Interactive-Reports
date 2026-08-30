@@ -6,7 +6,7 @@ using SqlKata;
 namespace InteractiveReport.Core.Composition;
 
 /// <summary>
-/// Applies compiled expression values according to their typed effects. QueryComposer
+/// Applies compiled expression values according to their typed effects. Relation lowering
 /// controls phase ordering; this class owns the SQL representation of each effect.
 /// </summary>
 internal static class ExpressionRuleSqlApplicator

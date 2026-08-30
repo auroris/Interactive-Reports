@@ -104,7 +104,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                 [
                     new ComputedColumn
                     {
-                        Id = "c1",
+                        Id = "ir1",
                         Label = "Order URL",
                         Expr = "'/orders/' || ORDER_ID",
                     },
@@ -116,7 +116,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                     ["CUSTOMER"] = new ColumnFormat
                     {
                         DisplayAs = "link",
-                        UrlColumn = "c1",
+                        UrlColumn = "ir1",
                         TextColumn = "CUSTOMER",
                     },
                 },
@@ -126,16 +126,16 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         var result = await _executor.Query(Definition, state, NoParams);
 
         Assert.Equal(["CUSTOMER"], result.Columns.Select(c => c.Name));
-        Assert.True(result.AvailableColumns.Single(c => c.Name == "c1").Computed);
+        Assert.True(result.AvailableColumns.Single(c => c.Name == "ir1").Computed);
         var row = Assert.Single(result.Rows);
-        Assert.Equal(["CUSTOMER", "c1"], row.Keys);
-        Assert.Equal("/orders/1", row["c1"]);
+        Assert.Equal(["CUSTOMER", "ir1"], row.Keys);
+        Assert.Equal("/orders/1", row["ir1"]);
         Assert.DoesNotContain("ORDER_ID", row.Keys);
 
         var export = await _executor.Export(Definition, state, NoParams);
         Assert.Equal(["CUSTOMER"], export.Columns.Select(c => c.Name));
         Assert.Equal("<a class=\"ir-cell-link\" href=\"/orders/1\">Acme Corp</a>", export.Rows[0]["CUSTOMER"]);
-        Assert.All(export.Rows, exported => Assert.DoesNotContain("c1", exported.Keys));
+        Assert.All(export.Rows, exported => Assert.DoesNotContain("ir1", exported.Keys));
     }
 
     /// An action-labeled column: CASE labels some rows and leaves the rest NULL
@@ -201,10 +201,10 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         {
             Computed =
             [
-                new ComputedColumn { Id = "c1", Expr = "'/orders/' || ORDER_ID || '?a=1&b=2'" },
-                new ComputedColumn { Id = "c2", Expr = "'/images/' || ORDER_ID || '.png?a=1&b=2'" },
-                new ComputedColumn { Id = "c3", Expr = "'<Order & Customer>'" },
-                new ComputedColumn { Id = "c4", Expr = "'javascript:alert(1)'" },
+                new ComputedColumn { Id = "ir1", Expr = "'/orders/' || ORDER_ID || '?a=1&b=2'" },
+                new ComputedColumn { Id = "ir2", Expr = "'/images/' || ORDER_ID || '.png?a=1&b=2'" },
+                new ComputedColumn { Id = "ir3", Expr = "'<Order & Customer>'" },
+                new ComputedColumn { Id = "ir4", Expr = "'javascript:alert(1)'" },
             ],
             Columns = ["CUSTOMER", "NOTES", "STATUS"],
             Filters = [Filter("ORDER_ID = 1")],
@@ -213,19 +213,19 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                 ["CUSTOMER"] = new ColumnFormat
                 {
                     DisplayAs = "link",
-                    UrlColumn = "c1",
-                    TextColumn = "c3",
+                    UrlColumn = "ir1",
+                    TextColumn = "ir3",
                 },
                 ["NOTES"] = new ColumnFormat
                 {
                     DisplayAs = "image",
-                    UrlColumn = "c2",
+                    UrlColumn = "ir2",
                 },
                 ["STATUS"] = new ColumnFormat
                 {
                     DisplayAs = "link",
-                    UrlColumn = "c4",
-                    TextColumn = "c3",
+                    UrlColumn = "ir4",
+                    TextColumn = "ir3",
                 },
             },
         });
@@ -248,7 +248,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     {
         var export = await _executor.Export(Definition, Doc(source: new StageLayer
         {
-            Computed = [new ComputedColumn { Id = "c1", Expr = "'/orders/' || ORDER_ID" }],
+            Computed = [new ComputedColumn { Id = "ir1", Expr = "'/orders/' || ORDER_ID" }],
             Columns = ["CUSTOMER"],
             Filters = [Filter("ORDER_ID = 1")],
             Formats = new()
@@ -256,7 +256,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                 ["CUSTOMER"] = new ColumnFormat
                 {
                     DisplayAs = "link",
-                    UrlColumn = "c1",
+                    UrlColumn = "ir1",
                     TextColumn = "AMOUNT",
                 },
                 ["AMOUNT"] = new ColumnFormat { Mask = "currency:USD" },
@@ -274,8 +274,8 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         var def = Definition;
         def.ColumnLabels = new() { ["ORDER_ID"] = "Order #" };
 
-        // The posted document is the source of truth — this one was never saved
-        // server-side. Its labels override the configured mapping wholesale.
+        // Document metadata overlays the definition mapping. A mapping is cleared
+        // only by an explicit empty labels composable.
         var grid = await _executor.Export(def, Doc(source: new StageLayer
         {
             Columns = ["ORDER_ID", "AMOUNT"],
@@ -283,13 +283,13 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         }), NoParams);
 
         Assert.Equal(["ORDER_ID", "AMOUNT"], grid.Columns.Select(c => c.Name));
-        Assert.Equal(["Order Id", "Order Total"], grid.Columns.Select(c => c.Label));
+        Assert.Equal(["Order #", "Order Total"], grid.Columns.Select(c => c.Label));
 
         // A document with no labels of its own falls back to the configured mapping,
         // and synthetic aggregate columns rebuild their labels from the display name.
         var grouped = await _executor.Export(def, Doc(tail:
         [
-            Group(by: ["STATUS"], values: [Metric("m1", "ORDER_ID", AggregateFn.Max)]),
+            Group(by: ["STATUS"], values: [Metric("ir1", "ORDER_ID", AggregateFn.Max)]),
         ]), NoParams);
 
         Assert.Equal(["Status", "Count", "max(Order #)"], grouped.Columns.Select(c => c.Label));
@@ -298,7 +298,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
             source: new StageLayer { Labels = new() { ["AMOUNT"] = "Revenue" } },
             tail:
             [
-                Group(by: ["STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)]),
+                Group(by: ["STATUS"], values: [Metric("ir1", "AMOUNT", AggregateFn.Sum)]),
             ]), NoParams);
 
         Assert.Equal(["Status", "Count", "sum(Revenue)"], inherited.Columns.Select(c => c.Label));
@@ -441,6 +441,42 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     }
 
     [Fact]
+    public async Task Search_shapes_every_complete_set_but_export_ignores_request_paging()
+    {
+        var state = Doc(
+            source: new StageLayer
+            {
+                Sorts = [new SortRule { Col = "ORDER_ID" }],
+                Breaks = ["CUSTOMER"],
+                Aggregates = [new AggregateRule { Col = "AMOUNT", Fn = AggregateFn.Sum }],
+                Highlights =
+                [
+                    new HighlightRule
+                    {
+                        Id = "positive",
+                        Expr = "AMOUNT > 0",
+                        Style = new HighlightStyle { Bg = "yellow" },
+                    },
+                ],
+            },
+            search: "ACME",
+            page: new PageRequest { Index = 2, Size = 1 });
+
+        var result = await _executor.Query(Definition, state, NoParams);
+        var export = await _executor.Export(Definition, state, NoParams);
+
+        Assert.Equal(3, result.TotalRows);
+        Assert.Single(result.Rows);
+        Assert.Equal(14000m, Convert.ToDecimal(result.Aggregates["AMOUNT"]["sum"]));
+        Assert.Equal(2, result.BreakTotals.Count);
+        Assert.Single(result.Highlights);
+        Assert.Equal(0, result.Highlights[0].Row);
+        Assert.Equal(3, export.Rows.Count);
+        Assert.All(export.Rows, row =>
+            Assert.Contains("acme", Convert.ToString(row["CUSTOMER"])!, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task Blank_matches_null_and_empty_string_on_sqlite()
     {
         var result = await _executor.Query(Definition, Doc(source: new StageLayer
@@ -515,15 +551,15 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
             [
                 new ComputedColumn
                 {
-                    Id = "c1",
+                    Id = "ir1",
                     Expr = "CASE WHEN ORDER_ID = 1 THEN NULL ELSE AMOUNT END",
                 },
             ],
             Filters = [Filter("ORDER_ID <= 5")],
-            Aggregates = [new AggregateRule { Col = "c1", Fn = AggregateFn.Median }],
+            Aggregates = [new AggregateRule { Col = "ir1", Fn = AggregateFn.Median }],
         }), NoParams);
 
-        Assert.Equal(4000m, Convert.ToDecimal(result.Aggregates["c1"]["median"]));
+        Assert.Equal(4000m, Convert.ToDecimal(result.Aggregates["ir1"]["median"]));
     }
 
     [Fact]
@@ -618,25 +654,25 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     {
         var result = await _executor.Query(Definition, Doc(source: new StageLayer
         {
-            Computed = [new ComputedColumn { Id = "c1", Label = "Double", Expr = "ROUND(AMOUNT * 2, 0)" }],
-            Columns = ["CUSTOMER", "c1"],
-            Filters = [Filter("c1 >= 10000")],
-            Sorts = [new SortRule { Col = "c1", Dir = SortDir.Desc }],
+            Computed = [new ComputedColumn { Id = "ir1", Label = "Double", Expr = "ROUND(AMOUNT * 2, 0)" }],
+            Columns = ["CUSTOMER", "ir1"],
+            Filters = [Filter("ir1 >= 10000")],
+            Sorts = [new SortRule { Col = "ir1", Dir = SortDir.Desc }],
         }), NoParams);
 
         // Doubled amounts ≥ 10000: 24000 (Stark), 18000 (Acme 9000), 15000 (Globex), 12000 (Tyrell), 10000 (Initech)
         Assert.Equal(5, result.TotalRows);
-        Assert.Equal(["CUSTOMER", "c1"], result.Columns.Select(c => c.Name));
-        Assert.True(result.Columns.Single(c => c.Name == "c1").Computed);
-        var availableComputed = result.AvailableColumns.Single(c => c.Name == "c1");
+        Assert.Equal(["CUSTOMER", "ir1"], result.Columns.Select(c => c.Name));
+        Assert.True(result.Columns.Single(c => c.Name == "ir1").Computed);
+        var availableComputed = result.AvailableColumns.Single(c => c.Name == "ir1");
         Assert.True(availableComputed.Computed);
         Assert.Equal("number", availableComputed.Type);
-        Assert.Equal(24000m, Convert.ToDecimal(result.Rows[0]["c1"]));
+        Assert.Equal(24000m, Convert.ToDecimal(result.Rows[0]["ir1"]));
         Assert.Equal("Stark Ind", result.Rows[0]["CUSTOMER"]);
     }
 
     [Fact]
-    public async Task Relational_composables_execute_in_document_order_on_an_opaque_table_id()
+    public async Task Relational_composables_follow_computed_dependencies_on_an_opaque_table_id()
     {
         var document = new ReportState
         {
@@ -651,21 +687,23 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                         new TableComposable
                         {
                             Kind = "compute",
-                            Computed = [new ComputedColumn { Id = "c1", Expr = "AMOUNT * 2" }],
+                            // Forward references are scheduled by dependency, not by
+                            // the composable's position in the document.
+                            Computed = [new ComputedColumn { Id = "ir2", Expr = "ir1 + 1" }],
                         },
-                        new TableComposable { Kind = "filter", Filters = [Filter("c1 >= 10000")] },
+                        new TableComposable { Kind = "filter", Filters = [Filter("ir2 < 20000")] },
                         new TableComposable
                         {
                             Kind = "compute",
-                            Computed = [new ComputedColumn { Id = "c2", Expr = "c1 + 1" }],
+                            Computed = [new ComputedColumn { Id = "ir1", Expr = "AMOUNT * 2" }],
                         },
-                        new TableComposable { Kind = "filter", Filters = [Filter("c2 < 20000")] },
+                        new TableComposable { Kind = "filter", Filters = [Filter("ir1 >= 10000")] },
                         new TableComposable
                         {
                             Kind = "sort",
-                            Sorts = [new SortRule { Col = "c2", Dir = SortDir.Desc }],
+                            Sorts = [new SortRule { Col = "ir2", Dir = SortDir.Desc }],
                         },
-                        new TableComposable { Kind = "select", Columns = ["AMOUNT", "c2"] },
+                        new TableComposable { Kind = "select", Columns = ["AMOUNT", "ir2"] },
                     ],
                 },
             },
@@ -676,11 +714,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         Assert.Equal([9000m, 7500m, 6000m, 5000m],
             result.Rows.Select(row => Convert.ToDecimal(row["AMOUNT"])));
         Assert.Equal([18001m, 15001m, 12001m, 10001m],
-            result.Rows.Select(row => Convert.ToDecimal(row["c2"])));
-        Assert.Equal(
-            ["compute", "filter", "compute", "filter"],
-            StateValidator.Validate(Definition, document, await _executor.GetSchema(Definition, NoParams))
-                .Operations.Select(operation => operation.Kind));
+            result.Rows.Select(row => Convert.ToDecimal(row["ir2"])));
     }
 
     [Fact]
@@ -688,11 +722,11 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     {
         var result = await _executor.Query(Definition, Doc(source: new StageLayer
         {
-            Computed = [new ComputedColumn { Id = "c1", Expr = "AMOUNT * 2" }],
-            Aggregates = [new AggregateRule { Col = "c1", Fn = AggregateFn.Sum }],
+            Computed = [new ComputedColumn { Id = "ir1", Expr = "AMOUNT * 2" }],
+            Aggregates = [new AggregateRule { Col = "ir1", Fn = AggregateFn.Sum }],
         }), NoParams);
 
-        Assert.Equal(94400m, Convert.ToDecimal(result.Aggregates["c1"]["sum"]));   // 2 × 47200
+        Assert.Equal(94400m, Convert.ToDecimal(result.Aggregates["ir1"]["sum"]));   // 2 × 47200
     }
 
     [Fact]
@@ -700,11 +734,11 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     {
         var result = await _executor.Query(Definition, Doc(source: new StageLayer
         {
-            Computed = [new ComputedColumn { Id = "c1", Expr = "UPPER(CUSTOMER) || '!'" }],
+            Computed = [new ComputedColumn { Id = "ir1", Expr = "UPPER(CUSTOMER) || '!'" }],
             Filters = [Filter("CUSTOMER = 'Globex'")],
         }), NoParams);
 
-        Assert.Equal("GLOBEX!", Assert.Single(result.Rows)["c1"]);
+        Assert.Equal("GLOBEX!", Assert.Single(result.Rows)["ir1"]);
     }
 
     [Fact]
@@ -714,12 +748,12 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         {
             Computed = [new ComputedColumn
             {
-                Id = "c1",
+                Id = "ir1",
                 Label = "Size",
                 Expr = "CASE WHEN AMOUNT >= 6000 THEN 'BIG' WHEN AMOUNT >= 2000 THEN 'MID' ELSE 'SMALL' END",
             }],
-            Columns = ["CUSTOMER", "AMOUNT", "c1"],
-            Filters = [Filter("c1 = 'BIG'")],
+            Columns = ["CUSTOMER", "AMOUNT", "ir1"],
+            Filters = [Filter("ir1 = 'BIG'")],
             Sorts = [new SortRule { Col = "AMOUNT", Dir = SortDir.Desc }],
         }), NoParams);
 
@@ -727,7 +761,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         Assert.Equal(4, result.TotalRows);
         Assert.Equal(["Stark Ind", "Acme Corp", "Globex", "Tyrell Corp"],
             result.Rows.Select(r => (string)r["CUSTOMER"]!));
-        Assert.All(result.Rows, r => Assert.Equal("BIG", r["c1"]));
+        Assert.All(result.Rows, r => Assert.Equal("BIG", r["ir1"]));
     }
 
     [Fact]
@@ -737,14 +771,14 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         {
             Computed = [new ComputedColumn
             {
-                Id = "c1",
+                Id = "ir1",
                 Expr = "CASE WHEN NOTES IS NULL OR NOTES = '' THEN 0 ELSE 1 END",
             }],
-            Aggregates = [new AggregateRule { Col = "c1", Fn = AggregateFn.Sum }],
+            Aggregates = [new AggregateRule { Col = "ir1", Fn = AggregateFn.Sum }],
         }), NoParams);
 
         // Rows with a real note: rush, fragile, call first, insured, standard, refunded.
-        Assert.Equal(6m, Convert.ToDecimal(result.Aggregates["c1"]["sum"]));
+        Assert.Equal(6m, Convert.ToDecimal(result.Aggregates["ir1"]["sum"]));
     }
 
     // ORDER_DATE is stored (and discovered) as ISO text — the SQLite date story.
@@ -767,13 +801,13 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         {
             Computed = [new ComputedColumn
             {
-                Id = "c1",
+                Id = "ir1",
                 Expr = "CASE WHEN TO_DATE(ORDER_DATE) BETWEEN TO_DATE('2026-01-01') AND TO_DATE('2026-12-31') THEN 1 ELSE 0 END",
             }],
-            Aggregates = [new AggregateRule { Col = "c1", Fn = AggregateFn.Sum }],
+            Aggregates = [new AggregateRule { Col = "ir1", Fn = AggregateFn.Sum }],
         }), NoParams);
 
-        Assert.Equal(5m, Convert.ToDecimal(result.Aggregates["c1"]["sum"]));
+        Assert.Equal(5m, Convert.ToDecimal(result.Aggregates["ir1"]["sum"]));
     }
 
     [Fact]
@@ -785,24 +819,24 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
             [
                 new ComputedColumn
                 {
-                    Id = "c1",
+                    Id = "ir1",
                     Expr = "CASE WHEN TO_DATE(ORDER_DATE) BETWEEN TO_DATE('2026-02-08') AND TO_DATE('2026-02-08') THEN 1 ELSE 0 END",
                 },
                 new ComputedColumn
                 {
-                    Id = "c2",
+                    Id = "ir2",
                     Expr = "CASE WHEN TO_DATE(ORDER_DATE) BETWEEN TO_DATE('2026-12-31') AND TO_DATE('2026-01-01') THEN 1 ELSE 0 END",
                 },
             ],
             Aggregates =
             [
-                new AggregateRule { Col = "c1", Fn = AggregateFn.Sum },
-                new AggregateRule { Col = "c2", Fn = AggregateFn.Sum },
+                new AggregateRule { Col = "ir1", Fn = AggregateFn.Sum },
+                new AggregateRule { Col = "ir2", Fn = AggregateFn.Sum },
             ],
         }), NoParams);
 
-        Assert.Equal(1m, Convert.ToDecimal(result.Aggregates["c1"]["sum"]));
-        Assert.Equal(0m, Convert.ToDecimal(result.Aggregates["c2"]["sum"]));
+        Assert.Equal(1m, Convert.ToDecimal(result.Aggregates["ir1"]["sum"]));
+        Assert.Equal(0m, Convert.ToDecimal(result.Aggregates["ir2"]["sum"]));
     }
 
     [Fact]
@@ -812,14 +846,14 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         {
             Computed = [new ComputedColumn
             {
-                Id = "c1",
+                Id = "ir1",
                 Expr = "CASE WHEN DATE_TRUNC('MONTH', TO_DATE(ORDER_DATE)) = TO_DATE('2026-02-01') THEN 1 ELSE 0 END",
             }],
-            Aggregates = [new AggregateRule { Col = "c1", Fn = AggregateFn.Sum }],
+            Aggregates = [new AggregateRule { Col = "ir1", Fn = AggregateFn.Sum }],
         }), NoParams);
 
         // Feb 2026: acme llc (02-16), Umbrella (02-08), Tyrell Corp (02-19).
-        Assert.Equal(3m, Convert.ToDecimal(result.Aggregates["c1"]["sum"]));
+        Assert.Equal(3m, Convert.ToDecimal(result.Aggregates["ir1"]["sum"]));
     }
 
     [Fact]
@@ -827,11 +861,11 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     {
         var result = await _executor.Query(DateDefinition, Doc(source: new StageLayer
         {
-            Computed = [new ComputedColumn { Id = "c1", Expr = "TO_STRING(TO_DATE(ORDER_DATE), 'MM/DD/YYYY')" }],
+            Computed = [new ComputedColumn { Id = "ir1", Expr = "TO_STRING(TO_DATE(ORDER_DATE), 'MM/DD/YYYY')" }],
             Filters = [Filter("CUSTOMER = 'Globex'")],
         }), NoParams);
 
-        Assert.Equal("07/21/2025", Assert.Single(result.Rows)["c1"]);
+        Assert.Equal("07/21/2025", Assert.Single(result.Rows)["ir1"]);
     }
 
     [Fact]
@@ -839,12 +873,12 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     {
         var result = await _executor.Query(DateDefinition, Doc(source: new StageLayer
         {
-            Computed = [new ComputedColumn { Id = "c1", Expr = "TO_STRING(TO_DATE(ORDER_DATE) + 10)" }],
+            Computed = [new ComputedColumn { Id = "ir1", Expr = "TO_STRING(TO_DATE(ORDER_DATE) + 10)" }],
             Filters = [Filter("CUSTOMER = 'Tyrell Corp'")],
         }), NoParams);
 
         // 2026-02-19 + 10 crosses the February month end.
-        Assert.Equal("2026-03-01", Assert.Single(result.Rows)["c1"]);
+        Assert.Equal("2026-03-01", Assert.Single(result.Rows)["ir1"]);
     }
 
     [Fact]
@@ -867,13 +901,13 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         {
             Computed = [new ComputedColumn
             {
-                Id = "c1",
+                Id = "ir1",
                 Expr = "CASE WHEN NOW() BETWEEN TO_DATE('2020-01-01') AND NOW() + 1 THEN 1 ELSE 0 END",
             }],
-            Aggregates = [new AggregateRule { Col = "c1", Fn = AggregateFn.Sum }],
+            Aggregates = [new AggregateRule { Col = "ir1", Fn = AggregateFn.Sum }],
         }), NoParams);
 
-        Assert.Equal(10m, Convert.ToDecimal(result.Aggregates["c1"]["sum"]));
+        Assert.Equal(10m, Convert.ToDecimal(result.Aggregates["ir1"]["sum"]));
     }
 
     [Fact]
@@ -883,13 +917,13 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         {
             Computed = [new ComputedColumn
             {
-                Id = "c1",
+                Id = "ir1",
                 Expr = "CASE STATUS WHEN 'SHIPPED' THEN 'done' WHEN 'CANCELLED' THEN 'void' ELSE 'open' END",
             }],
             Filters = [Filter("CUSTOMER = 'Tyrell Corp'")],
         }), NoParams);
 
-        Assert.Equal("void", Assert.Single(result.Rows)["c1"]);
+        Assert.Equal("void", Assert.Single(result.Rows)["ir1"]);
     }
 
     [Fact]
@@ -982,17 +1016,22 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
             },
         };
 
-        var validated = StateValidator.Validate(
-            Definition,
+        var definition = Definition;
+        var schema = await _executor.GetSchema(definition, NoParams);
+        var compiler = new ComposableTableCompiler(
+            definition,
             document,
-            await _executor.GetSchema(Definition, NoParams));
-        Assert.Equal([10, 20], validated.Rules.Decorations.Select(rule => rule.Effect.Sequence));
-        Assert.Equal(2, validated.Rules.Decorations
+            schema,
+            new DateTime(2026, 8, 29, 12, 0, 0, DateTimeKind.Utc),
+            (_, _, _, _, _) => Task.FromResult(new List<PivotGroup>()));
+        var plan = compiler.CompleteForTarget(await compiler.Compile("result", default));
+        Assert.Equal([10, 20], plan.Terminal.Decorations.Select(rule => rule.Effect.Sequence));
+        Assert.Equal(2, plan.Terminal.Decorations
             .Select(rule => rule.Effect.ProjectionName)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Count());
 
-        var result = await _executor.Query(Definition, document, NoParams);
+        var result = await _executor.Query(definition, document, NoParams);
         var large = result.Highlights.Single(hit => hit.Id == "large");
         var small = result.Highlights.Single(hit => hit.Id == "small");
         Assert.Equal("Stark Ind", result.Rows[large.Row]["CUSTOMER"]);
@@ -1004,17 +1043,17 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     {
         var result = await _executor.Query(Definition, Doc(tail:
         [
-            Group(by: ["STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)]),
+            Group(by: ["STATUS"], values: [Metric("ir1", "AMOUNT", AggregateFn.Sum)]),
         ]), NoParams);
 
         Assert.Equal(4, result.TotalRows);
-        Assert.Equal(["STATUS", "__count", "m1"], result.Columns.Select(c => c.Name));
+        Assert.Equal(["STATUS", "__count", "ir1"], result.Columns.Select(c => c.Name));
         Assert.Equal("sum(Amount)", result.Columns[2].Label);
         Assert.Null(result.Columns[1].FormatSource);
         Assert.Equal("AMOUNT", result.Columns[2].FormatSource);
         Assert.Equal(["CANCELLED", "NEW", "PENDING", "SHIPPED"], result.Rows.Select(r => (string)r["STATUS"]!));
         Assert.Equal([1L, 1L, 3L, 5L], result.Rows.Select(r => Convert.ToInt64(r["__count"])));
-        Assert.Equal([6000m, 400m, 14800m, 26000m], result.Rows.Select(r => Convert.ToDecimal(r["m1"])));
+        Assert.Equal([6000m, 400m, 14800m, 26000m], result.Rows.Select(r => Convert.ToDecimal(r["ir1"])));
     }
 
     [Fact]
@@ -1064,10 +1103,10 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         await AssertHideAndRestore(
             Doc(tail:
             [
-                Group(by: ["STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)]),
+                Group(by: ["STATUS"], values: [Metric("ir1", "AMOUNT", AggregateFn.Sum)]),
             ]),
             hidden: "STATUS",
-            kept: "m1");
+            kept: "ir1");
         await AssertHideAndRestore(
             Doc(tail:
             [
@@ -1086,11 +1125,12 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
             Pivot(
                 rows: ["CUSTOMER"],
                 cols: ["STATUS"],
-                values: [Metric("m1", "AMOUNT", AggregateFn.Sum)]),
+                values: [Metric("ir1", "AMOUNT", AggregateFn.Sum)]),
         ]);
         var pivotSchema = await _executor.Query(Definition, pivotDocument, NoParams);
+        var shippedPivotCell = PivotCellId("pivot1", "ir1", "SHIPPED");
         var shipped = pivotSchema.AvailableColumns.Single(column =>
-            column.Name == "m1@[\"SHIPPED\"]").Name;
+            column.Name == shippedPivotCell).Name;
         await AssertHideAndRestore(
             pivotSchema.Document!,
             hidden: "CUSTOMER",
@@ -1104,20 +1144,20 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         [
             Group(
                 by: ["STATUS"],
-                values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
+                values: [Metric("ir1", "AMOUNT", AggregateFn.Sum)],
                 layer: new StageLayer
                 {
                     Computed =
                     [
-                        new ComputedColumn { Id = "c2", Label = "Per Order", Expr = "ROUND(m1 * 1.0 / __count, 2)" },
+                        new ComputedColumn { Id = "ir2", Label = "Per Order", Expr = "ROUND(ir1 * 1.0 / __count, 2)" },
                     ],
-                    Filters = [Filter("c2 >= 1000")],
-                    Sorts = [new SortRule { Col = "m1", Dir = SortDir.Desc }],
+                    Filters = [Filter("ir2 >= 1000")],
+                    Sorts = [new SortRule { Col = "ir1", Dir = SortDir.Desc }],
                     Highlights =
                     [
                         new HighlightRule
                         {
-                            Id = "big", Scope = "row", Expr = "m1 > 20000",
+                            Id = "big", Scope = "row", Expr = "ir1 > 20000",
                             Style = new HighlightStyle { Bg = "#fee2e2" },
                         },
                     ],
@@ -1127,19 +1167,19 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         Assert.Equal(3, result.TotalRows);
 
         // Metadata comes from ForGroupStage: dims, __count, metrics by id, layer computed.
-        Assert.Equal(["STATUS", "__count", "m1", "c2"], result.Columns.Select(c => c.Name));
+        Assert.Equal(["STATUS", "__count", "ir1", "ir2"], result.Columns.Select(c => c.Name));
         Assert.Equal(["Status", "Count", "sum(Amount)", "Per Order"], result.Columns.Select(c => c.Label));
         Assert.Equal("AMOUNT", result.Columns[2].FormatSource);
         Assert.False(result.Columns[2].Computed);
         Assert.True(result.Columns[3].Computed);
         Assert.Null(result.Columns[3].FormatSource);
 
-        // Sorted by the metric, descending; computed values derive from m1 and __count.
+        // Sorted by the metric, descending; computed values derive from ir1 and __count.
         Assert.Equal(["SHIPPED", "PENDING", "CANCELLED"], result.Rows.Select(r => (string)r["STATUS"]!));
-        Assert.Equal([26000m, 14800m, 6000m], result.Rows.Select(r => Convert.ToDecimal(r["m1"])));
+        Assert.Equal([26000m, 14800m, 6000m], result.Rows.Select(r => Convert.ToDecimal(r["ir1"])));
         Assert.Equal([5L, 3L, 1L], result.Rows.Select(r => Convert.ToInt64(r["__count"])));
-        Assert.Equal([5200m, 4933.33m, 6000m], result.Rows.Select(r => Convert.ToDecimal(r["c2"])));
-        Assert.All(result.Rows, row => Assert.Equal(["STATUS", "__count", "m1", "c2"], row.Keys));
+        Assert.Equal([5200m, 4933.33m, 6000m], result.Rows.Select(r => Convert.ToDecimal(r["ir2"])));
+        Assert.All(result.Rows, row => Assert.Equal(["STATUS", "__count", "ir1", "ir2"], row.Keys));
 
         // The group-layer highlight evaluated in SQL against the stage table.
         var hit = Assert.Single(result.Highlights);
@@ -1156,20 +1196,20 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
             [
                 Group(
                     by: ["STATUS", "CUSTOMER"],
-                    values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
+                    values: [Metric("ir1", "AMOUNT", AggregateFn.Sum)],
                     layer: new StageLayer
                     {
                         Computed =
                         [
-                            new ComputedColumn { Id = "c2", Expr = "m1 * 1.0 / __count" },
+                            new ComputedColumn { Id = "ir2", Expr = "ir1 * 1.0 / __count" },
                         ],
-                        Filters = [Filter("m1 >= 1000")],
+                        Filters = [Filter("ir1 >= 1000")],
                         Breaks = ["STATUS"],
                         Aggregates =
                         [
-                            new AggregateRule { Col = "m1", Fn = AggregateFn.Sum },
+                            new AggregateRule { Col = "ir1", Fn = AggregateFn.Sum },
                             new AggregateRule { Col = "__count", Fn = AggregateFn.Sum },
-                            new AggregateRule { Col = "c2", Fn = AggregateFn.Sum },
+                            new AggregateRule { Col = "ir2", Fn = AggregateFn.Sum },
                         ],
                     }),
             ],
@@ -1180,20 +1220,20 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         Assert.Equal(["CANCELLED", "PENDING", "PENDING", "SHIPPED"], result.Rows.Select(row => row["STATUS"]));
         Assert.True(result.BreakContinues); // The next page also begins inside SHIPPED.
 
-        Assert.Equal(46000m, Convert.ToDecimal(result.Aggregates["m1"]["sum"]));
+        Assert.Equal(46000m, Convert.ToDecimal(result.Aggregates["ir1"]["sum"]));
         Assert.Equal(8m, Convert.ToDecimal(result.Aggregates["__count"]["sum"]));
-        Assert.Equal(40000m, Convert.ToDecimal(result.Aggregates["c2"]["sum"]));
+        Assert.Equal(40000m, Convert.ToDecimal(result.Aggregates["ir2"]["sum"]));
 
         var pending = result.BreakTotals.Single(total => Equals(total.Key["STATUS"], "PENDING"));
         Assert.Equal(2, pending.Rows); // Two surviving Group rows, not source rows.
-        Assert.Equal(14000m, Convert.ToDecimal(pending.Aggregates["m1"]["sum"]));
+        Assert.Equal(14000m, Convert.ToDecimal(pending.Aggregates["ir1"]["sum"]));
         Assert.Equal(2m, Convert.ToDecimal(pending.Aggregates["__count"]["sum"]));
 
         var shipped = result.BreakTotals.Single(total => Equals(total.Key["STATUS"], "SHIPPED"));
         Assert.Equal(4, shipped.Rows); // Four customer groups contain five source rows.
-        Assert.Equal(26000m, Convert.ToDecimal(shipped.Aggregates["m1"]["sum"]));
+        Assert.Equal(26000m, Convert.ToDecimal(shipped.Aggregates["ir1"]["sum"]));
         Assert.Equal(5m, Convert.ToDecimal(shipped.Aggregates["__count"]["sum"]));
-        Assert.Equal(20000m, Convert.ToDecimal(shipped.Aggregates["c2"]["sum"]));
+        Assert.Equal(20000m, Convert.ToDecimal(shipped.Aggregates["ir2"]["sum"]));
     }
 
     [Fact]
@@ -1249,21 +1289,24 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                 [
                     Group(
                         by: ["STATUS", "CUSTOMER"],
-                        values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
-                        layer: TerminalLayer("m1")),
+                        values: [Metric("ir1", "AMOUNT", AggregateFn.Sum)],
+                        layer: TerminalLayer("ir1")),
                 ],
                 page: page),
-            "m1",
+            "ir1",
             totalRows: 9);
     }
 
     [Fact]
     public async Task Pivot_view_builds_the_matrix_in_memory()
     {
-        const string shippedCell = "m1@[\"SHIPPED\"]";
+        var cancelledCell = PivotCellId("pivot1", "ir1", "CANCELLED");
+        var newCell = PivotCellId("pivot1", "ir1", "NEW");
+        var pendingCell = PivotCellId("pivot1", "ir1", "PENDING");
+        var shippedCell = PivotCellId("pivot1", "ir1", "SHIPPED");
         var state = Doc(tail:
         [
-            Pivot(rows: ["CUSTOMER"], cols: ["STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)], totals: true),
+            Pivot(rows: ["CUSTOMER"], cols: ["STATUS"], values: [Metric("ir1", "AMOUNT", AggregateFn.Sum)], totals: true),
         ]);
         var result = await _executor.Query(Definition, state, NoParams);
 
@@ -1271,18 +1314,18 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         Assert.Equal(9, result.TotalRows);
         Assert.Equal(5, result.Columns.Count);
         Assert.Equal(
-            ["m1@[\"CANCELLED\"]", "m1@[\"NEW\"]", "m1@[\"PENDING\"]", "m1@[\"SHIPPED\"]"],
+            [cancelledCell, newCell, pendingCell, shippedCell],
             result.Columns.Skip(1).Select(c => c.Name));
         Assert.Equal(["CANCELLED", "NEW", "PENDING", "SHIPPED"], result.Columns.Skip(1).Select(c => c.Label));
         Assert.All(result.Columns.Skip(1), column => Assert.Equal("AMOUNT", column.FormatSource));
 
         var acme = result.Rows.Single(r => (string?)r["CUSTOMER"] == "Acme Corp");
-        Assert.Equal(12000m, Convert.ToDecimal(acme["m1@[\"SHIPPED\"]"]));       // SHIPPED: 9000 + 3000
-        Assert.False(acme.TryGetValue("m1@[\"PENDING\"]", out var pending) && pending is not null);   // no PENDING cell
-        Assert.Equal(6000m, Convert.ToDecimal(result.Aggregates["m1@[\"CANCELLED\"]"]["sum"]));
-        Assert.Equal(400m, Convert.ToDecimal(result.Aggregates["m1@[\"NEW\"]"]["sum"]));
-        Assert.Equal(14800m, Convert.ToDecimal(result.Aggregates["m1@[\"PENDING\"]"]["sum"]));
-        Assert.Equal(26000m, Convert.ToDecimal(result.Aggregates["m1@[\"SHIPPED\"]"]["sum"]));
+        Assert.Equal(12000m, Convert.ToDecimal(acme[shippedCell]));       // SHIPPED: 9000 + 3000
+        Assert.False(acme.TryGetValue(pendingCell, out var pending) && pending is not null);   // no PENDING cell
+        Assert.Equal(6000m, Convert.ToDecimal(result.Aggregates[cancelledCell]["sum"]));
+        Assert.Equal(400m, Convert.ToDecimal(result.Aggregates[newCell]["sum"]));
+        Assert.Equal(14800m, Convert.ToDecimal(result.Aggregates[pendingCell]["sum"]));
+        Assert.Equal(26000m, Convert.ToDecimal(result.Aggregates[shippedCell]["sum"]));
 
         var export = await _executor.Export(Definition, state, NoParams);
         var exportedTotal = export.Rows[^1];
@@ -1294,7 +1337,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
             Pivot(
                 rows: ["CUSTOMER"],
                 cols: ["STATUS"],
-                values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
+                values: [Metric("ir1", "AMOUNT", AggregateFn.Sum)],
                 totals: true,
                 layer: new StageLayer { Columns = [shippedCell] }),
         ]), NoParams);
@@ -1303,28 +1346,28 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
 
         var averages = await _executor.Query(Definition, Doc(tail:
         [
-            Pivot(rows: ["CUSTOMER"], cols: ["STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Avg)], totals: true),
+            Pivot(rows: ["CUSTOMER"], cols: ["STATUS"], values: [Metric("ir1", "AMOUNT", AggregateFn.Avg)], totals: true),
         ]), NoParams);
-        Assert.Equal(5200d, Convert.ToDouble(averages.Aggregates["m1@[\"SHIPPED\"]"]["avg"]));
+        Assert.Equal(5200d, Convert.ToDouble(averages.Aggregates[shippedCell]["avg"]));
     }
 
     [Fact]
     public async Task Pivot_export_applies_terminal_labels_formats_and_link_renderer()
     {
-        const string shipped = "m1@[\"SHIPPED\"]";
+        var shipped = PivotCellId("pivot1", "ir1", "SHIPPED");
         var state = Doc(tail:
         [
             Pivot(
                 rows: ["CUSTOMER"],
                 cols: ["STATUS"],
-                values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
+                values: [Metric("ir1", "AMOUNT", AggregateFn.Sum)],
                 layer: new StageLayer
                 {
                     Computed =
                     [
                         new ComputedColumn
                         {
-                            Id = "c2",
+                            Id = "ir2",
                             Label = "Customer URL",
                             Expr = "'/customer'",
                         },
@@ -1336,7 +1379,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                         [shipped] = new ColumnFormat
                         {
                             DisplayAs = "link",
-                            UrlColumn = "c2",
+                            UrlColumn = "ir2",
                             TextColumn = shipped,
                             Mask = "currency:USD",
                         },
@@ -1363,18 +1406,19 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     [Fact]
     public async Task Pivot_with_no_values_defaults_to_counts()
     {
+        var shippedCount = PivotCellId("pivot1", "__count", "SHIPPED");
         var result = await _executor.Query(Definition, Doc(tail:
         [
             Pivot(rows: ["CUSTOMER"], cols: ["STATUS"]),
         ]), NoParams);
 
         var acme = result.Rows.Single(r => (string?)r["CUSTOMER"] == "Acme Corp");
-        Assert.Equal(2L, Convert.ToInt64(acme["__count@[\"SHIPPED\"]"]));        // two SHIPPED orders
+        Assert.Equal(2L, Convert.ToInt64(acme[shippedCount]));        // two SHIPPED orders
         Assert.All(result.Columns.Skip(1), column => Assert.Null(column.FormatSource));
 
         var explicitCount = await _executor.Query(Definition, Doc(tail:
         [
-            Pivot(rows: ["CUSTOMER"], cols: ["STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Count)]),
+            Pivot(rows: ["CUSTOMER"], cols: ["STATUS"], values: [Metric("ir1", "AMOUNT", AggregateFn.Count)]),
         ]), NoParams);
         Assert.All(explicitCount.Columns.Skip(1), column => Assert.Null(column.FormatSource));
     }
@@ -1382,27 +1426,27 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     [Fact]
     public async Task Pivot_layer_computes_filters_sorts_highlights_and_projects_generated_cells()
     {
-        const string shipped = "m1@[\"SHIPPED\"]";
-        const string pending = "m1@[\"PENDING\"]";
+        var shipped = PivotCellId("pivot1", "ir1", "SHIPPED");
+        var pending = PivotCellId("pivot1", "ir1", "PENDING");
         var state = Doc(tail:
         [
             Pivot(
                 rows: ["CUSTOMER"],
                 cols: ["STATUS"],
-                values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
+                values: [Metric("ir1", "AMOUNT", AggregateFn.Sum)],
                 layer: new StageLayer
                 {
                     Computed =
                     [
                         new ComputedColumn
                         {
-                            Id = "c2",
+                            Id = "ir2",
                             Label = "Shipped Less Pending",
                             Expr = $"COALESCE(`{shipped}`, 0) - COALESCE(`{pending}`, 0)",
                         },
                     ],
-                    Filters = [Filter("c2 >= 10000")],
-                    Sorts = [new SortRule { Col = "c2", Dir = SortDir.Desc }],
+                    Filters = [Filter("ir2 >= 10000")],
+                    Sorts = [new SortRule { Col = "ir2", Dir = SortDir.Desc }],
                     Highlights =
                     [
                         new HighlightRule
@@ -1412,8 +1456,8 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                             Style = new HighlightStyle { Bg = "gold" },
                         },
                     ],
-                    Columns = ["CUSTOMER", shipped, "c2"],
-                    Labels = new() { [shipped] = "Shipped", ["c2"] = "Shipped Less Pending" },
+                    Columns = ["CUSTOMER", shipped, "ir2"],
+                    Labels = new() { [shipped] = "Shipped", ["ir2"] = "Shipped Less Pending" },
                 }),
         ]);
 
@@ -1422,8 +1466,8 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         var acme = Assert.Single(result.Rows);
         Assert.Equal("Acme Corp", acme["CUSTOMER"]);
         Assert.Equal(12000m, Convert.ToDecimal(acme[shipped]));
-        Assert.Equal(12000m, Convert.ToDecimal(acme["c2"]));
-        Assert.Equal(["CUSTOMER", shipped, "c2"], acme.Keys);
+        Assert.Equal(12000m, Convert.ToDecimal(acme["ir2"]));
+        Assert.Equal(["CUSTOMER", shipped, "ir2"], acme.Keys);
         // Label composables are client presentation. Query/cache metadata stays on
         // structural labels; export applies the override.
         Assert.Equal(["Customer", "SHIPPED", "Shipped Less Pending"], result.Columns.Select(column => column.Label));
@@ -1434,13 +1478,13 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     [Fact]
     public async Task Pivot_uses_the_shared_break_aggregate_and_hidden_projection_path()
     {
-        const string shipped = "m1@[\"SHIPPED\"]";
+        var shipped = PivotCellId("pivot1", "ir1", "SHIPPED");
         var result = await _executor.Query(Definition, Doc(tail:
         [
             Pivot(
                 rows: ["CUSTOMER"],
                 cols: ["STATUS"],
-                values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
+                values: [Metric("ir1", "AMOUNT", AggregateFn.Sum)],
                 layer: new StageLayer
                 {
                     Columns = [shipped],
@@ -1492,12 +1536,12 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     {
         var export = await _executor.Export(Definition, Doc(tail:
         [
-            Group(by: ["STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)]),
+            Group(by: ["STATUS"], values: [Metric("ir1", "AMOUNT", AggregateFn.Sum)]),
         ]), NoParams);
 
         Assert.False(export.Truncated);
         Assert.Equal(4, export.Rows.Count);
-        Assert.Equal(["STATUS", "__count", "m1"], export.Columns.Select(c => c.Name));
+        Assert.Equal(["STATUS", "__count", "ir1"], export.Columns.Select(c => c.Name));
     }
 
     [Fact]
@@ -1507,26 +1551,26 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         [
             Group(
                 by: ["STATUS"],
-                values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
+                values: [Metric("ir1", "AMOUNT", AggregateFn.Sum)],
                 layer: new StageLayer
                 {
                     Computed =
                     [
                         new ComputedColumn
                         {
-                            Id = "c2",
+                            Id = "ir2",
                             Label = "Status image",
                             Expr = "'/status.png'",
                         },
                     ],
-                    Columns = ["m1"],
-                    Labels = new() { ["m1"] = "Revenue image" },
+                    Columns = ["ir1"],
+                    Labels = new() { ["ir1"] = "Revenue image" },
                     Formats = new()
                     {
-                        ["m1"] = new ColumnFormat
+                        ["ir1"] = new ColumnFormat
                         {
                             DisplayAs = "image",
-                            UrlColumn = "c2",
+                            UrlColumn = "ir2",
                         },
                     },
                 }),
@@ -1537,7 +1581,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         Assert.Equal(
             "sum(Amount)",
             query.Document!.Tables![state.ActiveTable!].Schema!
-                .Single(column => column.Name == "m1").Label);
+                .Single(column => column.Name == "ir1").Label);
 
         var export = await _executor.Export(Definition, state, NoParams);
         Assert.Equal("Revenue image", Assert.Single(export.Columns).Label);
@@ -1545,13 +1589,13 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         {
             Assert.Equal(
                 "<img class=\"ir-cell-image\" src=\"/status.png\" alt=\"\" loading=\"lazy\" decoding=\"async\">",
-                row["m1"]);
-            Assert.Equal(["m1"], row.Keys);
+                row["ir1"]);
+            Assert.Equal(["ir1"], row.Keys);
         });
     }
 
     [Fact]
-    public async Task Group_export_does_not_make_a_link_from_a_missing_inherited_source()
+    public async Task Group_export_does_not_inherit_a_source_tables_renderer()
     {
         var state = Doc(
             source: new StageLayer
@@ -1570,33 +1614,33 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
             [
                 Group(
                     by: ["STATUS"],
-                    values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
-                    layer: new StageLayer { Columns = ["m1"] }),
+                    values: [Metric("ir1", "AMOUNT", AggregateFn.Sum)],
+                    layer: new StageLayer { Columns = ["ir1"] }),
             ]);
 
         var export = await _executor.Export(Definition, state, NoParams);
 
-        Assert.Equal("$6,000.00", export.Rows[0]["m1"]);
-        Assert.DoesNotContain("<a", Assert.IsType<string>(export.Rows[0]["m1"]));
+        Assert.Equal(6000m, Convert.ToDecimal(export.Rows[0]["ir1"]));
+        Assert.DoesNotContain("<a", Convert.ToString(export.Rows[0]["ir1"]));
     }
 
     [Fact]
-    public async Task Group_export_folds_post_shape_presentation_across_table_ancestry()
+    public async Task Group_export_inherits_labels_and_masks_but_not_parent_renderers()
     {
         ReportTable Ancestor() => Group(
             by: ["STATUS"],
-            values: [Metric("m1", "AMOUNT", AggregateFn.Sum)],
+            values: [Metric("ir1", "AMOUNT", AggregateFn.Sum)],
             layer: new StageLayer
             {
-                Computed = [new ComputedColumn { Id = "c2", Expr = "'/ancestor'" }],
-                Labels = new() { ["m1"] = "Ancestor revenue" },
+                Computed = [new ComputedColumn { Id = "ir2", Expr = "'/ancestor'" }],
+                Labels = new() { ["ir1"] = "Ancestor revenue" },
                 Formats = new()
                 {
-                    ["m1"] = new ColumnFormat
+                    ["ir1"] = new ColumnFormat
                     {
                         DisplayAs = "link",
-                        UrlColumn = "c2",
-                        TextColumn = "m1",
+                        UrlColumn = "ir2",
+                        TextColumn = "ir1",
                         Mask = "currency:USD",
                     },
                 },
@@ -1622,7 +1666,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                 Ancestor(),
                 new ReportTable
                 {
-                    Composables = Composables(new StageLayer { Columns = ["m1"] }),
+                    Composables = Composables(new StageLayer { Columns = ["ir1"] }),
                 },
             ]);
         var query = await _executor.Query(Definition, inheritedState, NoParams);
@@ -1630,14 +1674,13 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         Assert.Equal(
             "sum(Amount)",
             query.Document!.Tables![inheritedState.ActiveTable!].Schema!
-                .Single(column => column.Name == "m1").Label);
+                .Single(column => column.Name == "ir1").Label);
 
         var inherited = await _executor.Export(Definition, inheritedState, NoParams);
 
         Assert.Equal("Ancestor revenue", Assert.Single(inherited.Columns).Label);
-        Assert.Equal(
-            "<a class=\"ir-cell-link\" href=\"/ancestor\">$6,000.00</a>",
-            inherited.Rows[0]["m1"]);
+        Assert.Equal(6000m, Convert.ToDecimal(inherited.Rows[0]["ir1"]));
+        Assert.DoesNotContain("<a", Convert.ToString(inherited.Rows[0]["ir1"]));
 
         var clearedState = Doc(
             source,
@@ -1648,7 +1691,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                 {
                     Composables = Composables(new StageLayer
                     {
-                        Columns = ["m1"],
+                        Columns = ["ir1"],
                         Labels = new(),
                         Formats = new(),
                     }),
@@ -1658,9 +1701,9 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         var cleared = await _executor.Export(Definition, clearedState, NoParams);
 
         Assert.Equal("sum(Amount)", Assert.Single(cleared.Columns).Label);
-        Assert.Equal(6000m, Convert.ToDecimal(cleared.Rows[0]["m1"]));
+        Assert.Equal(6000m, Convert.ToDecimal(cleared.Rows[0]["ir1"]));
         Assert.Null(clearedQuery.Document!.Tables![clearedState.ActiveTable!].Schema!
-            .Single(column => column.Name == "m1").FormatSource);
+            .Single(column => column.Name == "ir1").FormatSource);
     }
 
     [Fact]
@@ -1705,19 +1748,19 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
             new TableComposable
             {
                 Kind = "compute",
-                Computed = [new ComputedColumn { Id = "c2", Expr = "v0 / 100" }],
+                Computed = [new ComputedColumn { Id = "ir2", Expr = "v0 / 100" }],
             },
-            new TableComposable { Kind = "filter", Filters = [Filter("c2 >= 100")] },
+            new TableComposable { Kind = "filter", Filters = [Filter("ir2 >= 100")] },
             new TableComposable
             {
                 Kind = "sort",
-                Sorts = [new SortRule { Col = "c2", Dir = SortDir.Asc }],
+                Sorts = [new SortRule { Col = "ir2", Dir = SortDir.Asc }],
             },
             new TableComposable { Kind = "break", Breaks = ["STATUS"] },
             new TableComposable
             {
                 Kind = "aggregate",
-                Aggregates = [new AggregateRule { Col = "c2", Fn = AggregateFn.Sum }],
+                Aggregates = [new AggregateRule { Col = "ir2", Fn = AggregateFn.Sum }],
             },
             new TableComposable
             {
@@ -1726,20 +1769,20 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                 [
                     new HighlightRule
                     {
-                        Id = "large", Scope = "row", Expr = "c2 > 200",
+                        Id = "large", Scope = "row", Expr = "ir2 > 200",
                         Style = new HighlightStyle { Bg = "gold" },
                     },
                 ],
             },
-            new TableComposable { Kind = "select", Columns = ["c2"] },
+            new TableComposable { Kind = "select", Columns = ["ir2"] },
         ]);
 
         var result = await _executor.Query(Definition, Doc(tail: [chart]), NoParams);
 
-        Assert.Equal(["c2"], result.Columns.Select(column => column.Name));
-        Assert.Equal([148m, 260m], result.Rows.Select(row => Convert.ToDecimal(row["c2"])));
+        Assert.Equal(["ir2"], result.Columns.Select(column => column.Name));
+        Assert.Equal([148m, 260m], result.Rows.Select(row => Convert.ToDecimal(row["ir2"])));
         Assert.All(result.Rows, row => Assert.Contains("STATUS", row.Keys));
-        Assert.Equal(408m, Convert.ToDecimal(result.Aggregates["c2"]["sum"]));
+        Assert.Equal(408m, Convert.ToDecimal(result.Aggregates["ir2"]["sum"]));
         Assert.Equal(2, result.BreakTotals.Count);
         Assert.Equal((1, "large"), (Assert.Single(result.Highlights).Row, Assert.Single(result.Highlights).Id));
     }
@@ -1836,7 +1879,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
             _executor.Query(Definition, Doc(
                 source: new StageLayer
                 {
-                    Computed = [new ComputedColumn { Id = "c1", Label = "Loss", Expr = "0 - AMOUNT" }],
+                    Computed = [new ComputedColumn { Id = "ir1", Label = "Loss", Expr = "0 - AMOUNT" }],
                 },
                 tail:
                 [
@@ -1844,7 +1887,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                     {
                         shape.Type = "pie";
                         shape.Label = "STATUS";
-                        shape.Value = "c1";
+                        shape.Value = "ir1";
                         shape.Fn = AggregateFn.Sum;
                     }),
                 ]), NoParams));
@@ -1860,7 +1903,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         {
             shape.Type = "pie";
             shape.Label = "STATUS";
-            shape.Value = "c1";
+            shape.Value = "ir1";
             shape.Fn = AggregateFn.Sum;
         });
         chart.Composables!.Add(new TableComposable
@@ -1872,7 +1915,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         var state = Doc(
                 source: new StageLayer
                 {
-                    Computed = [new ComputedColumn { Id = "c1", Label = "Loss", Expr = "0 - AMOUNT" }],
+                    Computed = [new ComputedColumn { Id = "ir1", Label = "Loss", Expr = "0 - AMOUNT" }],
                 },
                 tail: [chart]);
         var result = await _executor.Query(Definition, state, NoParams);
@@ -1891,7 +1934,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         {
             shape.Type = "pie";
             shape.Label = "STATUS";
-            shape.Value = "c1";
+            shape.Value = "ir1";
             shape.Fn = AggregateFn.Sum;
         });
         chart.Composables!.Add(new TableComposable
@@ -1903,7 +1946,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         var result = await _executor.Query(Definition, Doc(
             source: new StageLayer
             {
-                Computed = [new ComputedColumn { Id = "c1", Label = "Loss", Expr = "0 - AMOUNT" }],
+                Computed = [new ComputedColumn { Id = "ir1", Label = "Loss", Expr = "0 - AMOUNT" }],
             },
             tail: [chart]), NoParams);
 
@@ -1961,8 +2004,8 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
             {
                 Computed =
                 [
-                    new ComputedColumn { Id = "c1", Label = "Size", Expr = "CASE WHEN AMOUNT >= 6000 THEN 'BIG' ELSE 'SMALL' END" },
-                    new ComputedColumn { Id = "c2", Label = "Doubled", Expr = "AMOUNT * 2" },
+                    new ComputedColumn { Id = "ir1", Label = "Size", Expr = "CASE WHEN AMOUNT >= 6000 THEN 'BIG' ELSE 'SMALL' END" },
+                    new ComputedColumn { Id = "ir2", Label = "Doubled", Expr = "AMOUNT * 2" },
                 ],
             },
             tail:
@@ -1970,15 +2013,15 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                 ChartStage(shape =>
                 {
                     shape.Type = "bar";
-                    shape.Label = "c1";
-                    shape.Value = "c2";
+                    shape.Label = "ir1";
+                    shape.Value = "ir2";
                     shape.Fn = AggregateFn.Sum;
                 }),
             ]), NoParams);
 
         Assert.Equal("sum(Doubled)", result.Columns[1].Label);
-        Assert.Equal("c2", result.Columns[1].FormatSource);
-        Assert.Equal(["BIG", "SMALL"], result.Rows.Select(r => (string)r["c1"]!));
+        Assert.Equal("ir2", result.Columns[1].FormatSource);
+        Assert.Equal(["BIG", "SMALL"], result.Rows.Select(r => (string)r["ir1"]!));
         Assert.Equal([69000m, 25400m], result.Rows.Select(r => Convert.ToDecimal(r["v0"])));
     }
 
@@ -2062,7 +2105,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         });
         chart.Composables!.AddRange(Composables(new StageLayer
         {
-            Computed = [new ComputedColumn { Id = "c2", Label = "Chart URL", Expr = "'/chart'" }],
+            Computed = [new ComputedColumn { Id = "ir2", Label = "Chart URL", Expr = "'/chart'" }],
             Columns = ["STATUS", "v0"],
             Labels = new() { ["v0"] = "Chart revenue" },
             Formats = new()
@@ -2070,7 +2113,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                 ["v0"] = new ColumnFormat
                 {
                     DisplayAs = "link",
-                    UrlColumn = "c2",
+                    UrlColumn = "ir2",
                     TextColumn = "v0",
                     Mask = "currency:USD",
                 },
@@ -2102,16 +2145,16 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     {
         var result = await _executor.Query(Definition, Doc(source: new StageLayer
         {
-            Computed = [new ComputedColumn { Id = "c1", Expr = "AMOUNT * 2" }],
+            Computed = [new ComputedColumn { Id = "ir1", Expr = "AMOUNT * 2" }],
             Sorts = [new SortRule { Col = "AMOUNT", Dir = SortDir.Desc }],
             Highlights =
             [
-                new HighlightRule { Id = "h1", Scope = "cell", Col = "c1", Expr = "c1 > 20000", Style = new HighlightStyle { Bg = "#fef3c7" } },
+                new HighlightRule { Id = "h1", Scope = "cell", Col = "ir1", Expr = "ir1 > 20000", Style = new HighlightStyle { Bg = "#fef3c7" } },
             ],
         }), NoParams);
 
         var hit = Assert.Single(result.Highlights);
-        Assert.Equal((0, "h1", "c1"), (hit.Row, hit.Id, hit.Col));   // only Stark: 24000
+        Assert.Equal((0, "h1", "ir1"), (hit.Row, hit.Id, hit.Col));   // only Stark: 24000
     }
 }
 

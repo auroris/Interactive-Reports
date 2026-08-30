@@ -1,6 +1,8 @@
 using InteractiveReport.Core.Composition;
+using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Expressions;
 using InteractiveReport.Core.Model;
+using InteractiveReport.Core.Schema;
 using InteractiveReport.Core.Validation;
 using static InteractiveReport.Core.Tests.TestFixtures;
 
@@ -16,10 +18,8 @@ public class SqlSafetyTests
 
     private static (string Sql, ICollection<object?> Bindings) Compile(ReportState state)
     {
-        var def = OrdersDefinition(ReportDialect.Sqlite);
-        var validated = StateValidator.Validate(def, state, OrdersSchema);
-        var compiled = DialectSupport.GetCompiler(ReportDialect.Sqlite).Compile(QueryComposer.Compose(def, validated).Page);
-        return (compiled.Sql, compiled.NamedBindings.Values);
+        var result = CompileDocument(state);
+        return (result.Sql, result.Bindings);
     }
 
     [Fact]
@@ -60,23 +60,20 @@ public class SqlSafetyTests
     {
         // Expression identifiers are parsed, while structural column/sort names
         // are matched against the discovered schema.
-        var def = OrdersDefinition(ReportDialect.Sqlite);
-        Assert.Throws<ReportValidationException>(() => StateValidator.Validate(def, Doc(source: new StageLayer
+        Assert.Throws<ReportValidationException>(() => CompileDocument(Doc(source: new StageLayer
         {
             Filters = [new FilterRule { Expr = "AMOUNT\" OR 1=1 -- = 1" }],
-        }), OrdersSchema));
+        })));
 
-        var validated = StateValidator.Validate(def, Doc(source: new StageLayer
+        var compiled = CompileDocument(Doc(source: new StageLayer
         {
             Columns = ["ORDER_ID", "CUSTOMER]; DROP TABLE ORDERS;--"],
             Sorts = [new SortRule { Col = "1; DELETE FROM ORDERS" }],
-        }), OrdersSchema);
+        }));
 
-        var sql = DialectSupport.GetCompiler(ReportDialect.Sqlite).Compile(QueryComposer.Compose(def, validated).Page).Sql;
-
-        Assert.DoesNotContain("DROP", sql, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("DELETE", sql, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(2, validated.Ignored.Count);
+        Assert.DoesNotContain("DROP", compiled.Sql, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("DELETE", compiled.Sql, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(2, compiled.Ignored.Count);
     }
 
     [Theory]
@@ -111,4 +108,32 @@ public class SqlSafetyTests
 
     private static string TextLiteral(string value)
         => $"'{value.Replace("'", "''", StringComparison.Ordinal)}'";
+
+    private static CanonicalCompileResult CompileDocument(ReportState document)
+    {
+        var definition = OrdersDefinition(ReportDialect.Sqlite);
+        var schema = ReportSchema.Create(definition.Name, OrdersSchema);
+        var compiler = new ComposableTableCompiler(
+            definition,
+            document,
+            schema,
+            new DateTime(2026, 8, 29, 12, 0, 0, DateTimeKind.Utc),
+            (_, _, _, _, _) => Task.FromResult(new List<PivotGroup>()));
+        var target = document.Tables is { Count: > 0 }
+            ? document.ActiveTable!
+            : "definition";
+        var plan = compiler.CompleteForTarget(
+            compiler.Compile(target, default).GetAwaiter().GetResult());
+        var query = DialectSupport.GetCompiler(ReportDialect.Sqlite)
+            .Compile(plan.ExecutionBundle.MainRows.Query);
+        return new CanonicalCompileResult(
+            query.Sql,
+            query.NamedBindings.Values,
+            plan.Ignored);
+    }
+
+    private sealed record CanonicalCompileResult(
+        string Sql,
+        ICollection<object?> Bindings,
+        IReadOnlyList<IgnoredItem> Ignored);
 }

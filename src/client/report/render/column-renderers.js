@@ -32,17 +32,18 @@ const sourceName = (w, format, property, fallback) => {
 };
 
 /// A column's effective format over the complete selected ancestry. A direct
-/// terminal-table entry wins; synthetic shape outputs otherwise inherit through
-/// formatSource without choosing a shape-specific renderer path.
+/// active-table entry wins in full. Synthetic shape outputs otherwise inherit
+/// only the safe scalar mask through formatSource; renderer and style state never
+/// crosses a column-lineage or named-table boundary.
 export function formatForColumn(w, col) {
     const formats = composedFormats(w.doc);
-    const own = lookupValue(formats.output, col.name)
-        ?? lookupValue(formats.input, col.name);
-    if (own) return own;
+    const own = lookupValue(formats, col.name);
+    if (own !== undefined) return own;
     const source = col.formatSource ?? col.name;
-    return lookupValue(formats.output, source)
-        ?? lookupValue(formats.input, source)
-        ?? null;
+    const inherited = lookupValue(formats, source);
+    return typeof inherited?.mask === "string" && inherited.mask.trim()
+        ? { mask: inherited.mask }
+        : null;
 }
 
 function sourceColumn(w, name, fallback) {

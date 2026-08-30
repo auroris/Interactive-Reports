@@ -90,13 +90,13 @@ test("computed, group, and pivot values all use the normal mask path", () => {
     const w = {
         doc: reportState(
             { formats: { AMOUNT: { mask: "plain" } } },
-            { kind: "group", by: ["STATUS"], values: [{ id: "m1", col: "AMOUNT", fn: "sum" }] }),
+            { kind: "group", by: ["STATUS"], values: [{ id: "ir1", col: "AMOUNT", fn: "sum" }] }),
         lastResult: {
             columns: [
                 { name: "STATUS", label: "Status", type: "text", computed: false },
-                { name: "m1", label: "sum(Amount)", type: "number", computed: false, formatSource: "AMOUNT" },
+                { name: "ir1", label: "sum(Amount)", type: "number", computed: false, formatSource: "AMOUNT" },
             ],
-            rows: [{ STATUS: "SHIPPED", m1: "9007199254740993.125" }],
+            rows: [{ STATUS: "SHIPPED", ir1: "9007199254740993.125" }],
             aggregates: {}, breakTotals: [], highlights: [],
         },
         schema: {
@@ -113,14 +113,14 @@ test("computed, group, and pivot values all use the normal mask path", () => {
     assert.equal(table.querySelector("tbody tr").children[1].textContent, "9007199254740993.13");
 
     // A Format node owned by the grouped table overrides the inherited source mask.
-    w.doc.tables.groupBy.composables.push({ kind: "formats", formats: { m1: { mask: "integer" } } });
+    w.doc.tables.groupBy.composables.push({ kind: "formats", formats: { ir1: { mask: "integer" } } });
     renderGrid(w, table);
     assert.equal(table.querySelector("tbody tr").children[1].textContent, "9,007,199,254,740,993");
 
     w.doc = source;
-    sourceComposableOf(w.doc, "formats").formats.c1 = { mask: "plain" };
-    w.lastResult.columns = [{ name: "c1", label: "Computed", type: "number", computed: true }];
-    w.lastResult.rows = [{ c1: "999999999999999999.999" }];
+    sourceComposableOf(w.doc, "formats").formats.ir1 = { mask: "plain" };
+    w.lastResult.columns = [{ name: "ir1", label: "Computed", type: "number", computed: true }];
+    w.lastResult.rows = [{ ir1: "999999999999999999.999" }];
     renderGrid(w, table);
     assert.equal(table.querySelector("tbody tr").children[0].textContent, "1000000000000000000.00");
 
@@ -128,14 +128,14 @@ test("computed, group, and pivot values all use the normal mask path", () => {
         { formats: sourceComposableOf(source, "formats").formats },
         {
             kind: "pivot", rows: ["CUSTOMER"], cols: ["STATUS"],
-                values: [{ id: "m1", col: "AMOUNT", fn: "sum" }],
+                values: [{ id: "ir1", col: "AMOUNT", fn: "sum" }],
         });
     w.lastResult.columns = [
         { name: "CUSTOMER", label: "Customer", type: "text", computed: false },
-        { name: 'm1@["SHIPPED"]', label: "SHIPPED", type: "number", computed: false, formatSource: "AMOUNT" },
+        { name: "ir7100000000000000001", label: "SHIPPED", type: "number", computed: false, formatSource: "AMOUNT" },
     ];
-    w.lastResult.rows = [{ CUSTOMER: "Acme", 'm1@["SHIPPED"]': "12345678901234567890.125" }];
-    w.lastResult.aggregates = { 'm1@["SHIPPED"]': { sum: "24691357802469135780.25" } };
+    w.lastResult.rows = [{ CUSTOMER: "Acme", ir7100000000000000001: "12345678901234567890.125" }];
+    w.lastResult.aggregates = { ir7100000000000000001: { sum: "24691357802469135780.25" } };
     renderGrid(w, table);
     assert.equal(table.querySelector("tbody tr").children[1].textContent, "12345678901234567890.13");
     assert.equal(table.querySelector("tr.ir-grand-total td:last-child").textContent, "24691357802469135780.25");
@@ -214,7 +214,7 @@ test("a count chart renders when its label owns the __count name", () => {
 });
 
 test("presentation formats compose through intermediate table ancestry", () => {
-    const columns = [{ name: "m1", label: "sum(Amount)", type: "number", formatSource: "AMOUNT" }];
+    const columns = [{ name: "ir1", label: "sum(Amount)", type: "number", formatSource: "AMOUNT" }];
     const w = {
         doc: {
             activeTable: "decorated",
@@ -226,8 +226,8 @@ test("presentation formats compose through intermediate table ancestry", () => {
                 grouped: {
                     from: "source",
                     composables: [
-                        { kind: "group", by: ["STATUS"], values: [{ id: "m1", col: "AMOUNT", fn: "sum" }] },
-                        { kind: "formats", formats: { m1: { mask: "integer" } } },
+                        { kind: "group", by: ["STATUS"], values: [{ id: "ir1", col: "AMOUNT", fn: "sum" }] },
+                        { kind: "formats", formats: { ir1: { mask: "integer" } } },
                     ],
                 },
                 decorated: { from: "grouped", schema: columns, composables: [] },
@@ -236,7 +236,7 @@ test("presentation formats compose through intermediate table ancestry", () => {
         lastResult: {
             availableColumns: columns,
             columns,
-            rows: [{ m1: "9007199254740993.125" }],
+            rows: [{ ir1: "9007199254740993.125" }],
             aggregates: {}, breakTotals: [], highlights: [],
         },
         schema: { columns: [{ name: "AMOUNT", label: "Amount", type: "number" }] },
@@ -248,8 +248,81 @@ test("presentation formats compose through intermediate table ancestry", () => {
     assert.equal(table.querySelector("tbody td").textContent, "9,007,199,254,740,993");
 });
 
+test("named-table boundaries export masks without leaking owner renderers or styles", () => {
+    const parentFormat = {
+        mask: "currency:CAD",
+        align: "center",
+        bold: true,
+        italic: true,
+        fg: "#111111",
+        bg: "#eeeeee",
+        classes: ["financial"],
+        displayAs: "link",
+        urlColumn: "URL",
+        textColumn: "AMOUNT",
+        command: "open",
+        keyColumn: "ID",
+    };
+    const groupedFormat = {
+        mask: "integer",
+        bold: true,
+        displayAs: "image",
+        urlColumn: "URL",
+    };
+    const doc = {
+        activeTable: "base",
+        tables: {
+            base: {
+                from: "definition",
+                composables: [{ kind: "formats", formats: { AMOUNT: parentFormat } }],
+            },
+            plain: {
+                from: "base",
+                composables: [],
+            },
+            grouped: {
+                from: "base",
+                composables: [
+                    { kind: "formats", formats: { ir1: groupedFormat } },
+                    { kind: "group", by: ["STATUS"], values: [{ id: "ir1", col: "AMOUNT", fn: "sum" }] },
+                ],
+            },
+            second: {
+                from: "grouped",
+                composables: [
+                    { kind: "group", by: ["STATUS"], values: [{ id: "ir2", col: "ir1", fn: "sum" }] },
+                ],
+            },
+        },
+    };
+    const w = { doc };
+
+    assert.deepEqual(
+        formatForColumn(w, { name: "AMOUNT", type: "number" }),
+        parentFormat,
+        "the declaring active table keeps its complete renderer and style");
+
+    doc.activeTable = "plain";
+    assert.deepEqual(
+        formatForColumn(w, { name: "AMOUNT", type: "number" }),
+        { mask: "currency:CAD" },
+        "an unchanged child column receives only the safe scalar mask");
+
+    doc.activeTable = "grouped";
+    assert.deepEqual(
+        formatForColumn(w, { name: "ir1", type: "number", formatSource: "AMOUNT" }),
+        groupedFormat,
+        "a direct active-table format remains complete");
+
+    doc.activeTable = "second";
+    assert.deepEqual(
+        formatForColumn(w, { name: "ir2", type: "number", formatSource: "ir1" }),
+        { mask: "integer" },
+        "a later shape inherits the intermediate metric mask, not its renderer/style");
+});
+
 test("a later shape inherits a direct format from its intermediate metric", () => {
-    const column = { name: "m2", label: "sum(sum(Amount))", type: "number", formatSource: "m1" };
+    const column = { name: "ir2", label: "sum(sum(Amount))", type: "number", formatSource: "ir1" };
     const w = {
         doc: {
             activeTable: "second",
@@ -261,15 +334,15 @@ test("a later shape inherits a direct format from its intermediate metric", () =
                 first: {
                     from: "source",
                     composables: [
-                        { kind: "group", by: ["STATUS"], values: [{ id: "m1", col: "AMOUNT", fn: "sum" }] },
-                        { kind: "formats", formats: { m1: { mask: "integer" } } },
+                        { kind: "group", by: ["STATUS"], values: [{ id: "ir1", col: "AMOUNT", fn: "sum" }] },
+                        { kind: "formats", formats: { ir1: { mask: "integer" } } },
                     ],
                 },
                 second: {
                     from: "first",
                     schema: [column],
                     composables: [
-                        { kind: "group", by: ["STATUS"], values: [{ id: "m2", col: "m1", fn: "sum" }] },
+                        { kind: "group", by: ["STATUS"], values: [{ id: "ir2", col: "ir1", fn: "sum" }] },
                     ],
                 },
             },

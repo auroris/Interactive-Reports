@@ -114,8 +114,8 @@ internal static class ExprFunctionEmitter
 
     public static void EmitNow(EmitContext context, IReadOnlyList<ExprNode> arguments)
         // NOW is a request value, not an engine/session clock. Binding the one UTC
-        // instant carried by the validated plan also keeps repeated occurrences and
-        // separate page/count/aggregate statements coherent with materialized rows.
+        // instant carried by the bound plan also keeps repeated occurrences and
+        // separate terminal statements coherent.
         => context.AppendBinding(context.EvaluationUtcNow);
 
     public static void EmitToDate(EmitContext context, IReadOnlyList<ExprNode> arguments)

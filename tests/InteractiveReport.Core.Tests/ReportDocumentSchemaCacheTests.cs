@@ -33,7 +33,7 @@ public sealed class ReportDocumentSchemaCacheTests : IClassFixture<SqliteE2EFixt
             [
                 Group(
                     by: ["STATUS"],
-                    values: [Metric("m1", "AMOUNT", AggregateFn.Sum)]),
+                    values: [Metric("ir1", "AMOUNT", AggregateFn.Sum)]),
             ],
             alternatives: new()
             {
@@ -42,7 +42,7 @@ public sealed class ReportDocumentSchemaCacheTests : IClassFixture<SqliteE2EFixt
                     Pivot(
                         rows: ["CUSTOMER"],
                         cols: ["STATUS"],
-                        values: [Metric("m1", "AMOUNT", AggregateFn.Sum)]),
+                        values: [Metric("ir2", "AMOUNT", AggregateFn.Sum)]),
                 ],
             });
 
@@ -62,7 +62,7 @@ public sealed class ReportDocumentSchemaCacheTests : IClassFixture<SqliteE2EFixt
             ["ORDER_ID", "CUSTOMER", "STATUS", "AMOUNT", "NOTES"],
             returnedTables["source"].Schema!.Select(column => column.Name));
         Assert.Equal(
-            ["STATUS", "__count", "m1"],
+            ["STATUS", "__count", "ir1"],
             returnedTables[returned.ActiveTable!].Schema!.Select(column => column.Name));
         Assert.Equal(
             result.AvailableColumns.Select(column => column.Name),
@@ -151,7 +151,7 @@ public sealed class ReportDocumentSchemaCacheTests : IClassFixture<SqliteE2EFixt
     }
 
     [Fact]
-    public async Task Active_table_reference_is_accepted_liberally_and_returned_canonically()
+    public async Task Executor_leaves_the_caller_document_unchanged_and_returns_a_canonical_copy()
     {
         var document = Doc();
         document.ActiveTable = "  SoUrCe  ";
@@ -164,13 +164,29 @@ public sealed class ReportDocumentSchemaCacheTests : IClassFixture<SqliteE2EFixt
                 Filters = [Filter("AMOUNT >= 0")],
             },
         ];
+        var callerTables = document.Tables!;
+        var callerTable = callerTables["source"];
+        var callerComposables = callerTable.Composables;
 
         var result = await _executor.Query(Definition(), document, NoParams);
         var export = await _executor.Export(Definition(), document, NoParams);
 
+        Assert.Equal("  SoUrCe  ", document.ActiveTable);
+        Assert.Same(callerTables, document.Tables);
+        Assert.Same(callerTable, document.Tables!["source"]);
+        Assert.Same(callerComposables, document.Tables["source"].Composables);
+        Assert.Equal("  DeFiNiTiOn  ", document.Tables["source"].From);
+        Assert.Equal("  FiLtEr  ", Assert.Single(document.Tables["source"].Composables!).Kind);
+        Assert.Null(document.Tables["source"].Schema);
+
+        Assert.NotSame(document, result.Document);
+        Assert.NotSame(callerTables, result.Document!.Tables);
+        Assert.NotSame(callerTable, result.Document.Tables!["source"]);
+        Assert.NotSame(callerComposables, result.Document.Tables["source"].Composables);
         Assert.Equal("source", result.Document!.ActiveTable);
         Assert.Equal("definition", result.Document.Tables!["source"].From);
         Assert.Equal("filter", Assert.Single(result.Document.Tables["source"].Composables!).Kind);
+        Assert.NotNull(result.Document.Tables["source"].Schema);
         Assert.Equal(10, result.TotalRows);
         Assert.Equal(10, export.Rows.Count);
     }
@@ -201,7 +217,7 @@ public sealed class ReportDocumentSchemaCacheTests : IClassFixture<SqliteE2EFixt
         [
             Group(
                 by: ["STATUS"],
-                values: [Metric("m1", "AMOUNT", AggregateFn.Sum)]),
+                values: [Metric("ir1", "AMOUNT", AggregateFn.Sum)]),
         ]);
         var partial = new ReportState
         {

@@ -13,103 +13,91 @@ internal static class HighlightRuleValidator
         public int RuleCount { get; set; }
     }
 
-    public static List<CompiledRule<HighlightEffect>> Validate(
-        List<HighlightRule>? rules,
-        IReadOnlyDictionary<string, ColumnModel> columns,
+    internal static bool TryBeginBatch(
+        int ruleCount,
+        string collectionPath,
+        Context context,
         List<ValidationError> errors,
-        List<IgnoredItem> ignored,
-        string collectionPath = "highlights",
-        Context? context = null)
+        out int offset)
     {
-        context ??= new Context();
-        var offset = context.RuleCount;
-        context.RuleCount += rules?.Count ?? 0;
-        if (context.RuleCount > 50)
-        {
-            errors.Add(new ValidationError(
-                collectionPath,
-                "at most 50 highlight rules per report state"));
-            return [];
-        }
+        offset = context.RuleCount;
+        context.RuleCount += ruleCount;
+        if (context.RuleCount <= 50) return true;
 
-        return ExpressionRuleCompiler.Compile<HighlightRule, HighlightEffect>(
-            rules,
-            maxRules: int.MaxValue,
+        errors.Add(new ValidationError(
             collectionPath,
-            columns,
-            ExpressionRequirement.Predicate,
-            prepareEffect: (rule, index) => PrepareEffect(
-                rule,
-                localIndex: index,
-                globalIndex: offset + index,
-                columns,
-                context.SeenIds,
-                context.SeenSequences,
-                errors,
-                ignored,
-                collectionPath),
-            errors);
+            "at most 50 highlight rules per report state"));
+        return false;
     }
 
-    private static Func<BoundExpression, HighlightEffect>? PrepareEffect(
-        HighlightRule rule,
-        int localIndex,
+    internal static Func<BoundExpression, HighlightEffect>? PrepareEffect(
+        string id,
+        string? name,
+        int? requestedSequence,
+        string scopeName,
+        string? columnName,
+        string? background,
+        string? foreground,
         int globalIndex,
         IReadOnlyDictionary<string, ColumnModel> columns,
-        HashSet<string> seenIds,
-        HashSet<int> seenSequences,
+        Context context,
         List<ValidationError> errors,
         List<IgnoredItem> ignored,
-        string collectionPath)
+        string rulePath)
     {
-        var path = $"{collectionPath}[{localIndex}]";
-        if (string.IsNullOrWhiteSpace(rule.Id))
+        if (string.IsNullOrWhiteSpace(id))
         {
-            errors.Add(new ValidationError(path, "highlight id is required"));
+            errors.Add(new ValidationError(rulePath, "highlight id is required"));
             return null;
         }
-        if (!seenIds.Add(rule.Id))
+        if (!context.SeenIds.Add(id))
         {
-            errors.Add(new ValidationError(path, $"duplicate highlight id '{rule.Id}'"));
+            errors.Add(new ValidationError(rulePath, $"duplicate highlight id '{id}'"));
             return null;
         }
 
-        var sequence = rule.Sequence ?? ((globalIndex + 1) * 10);
+        var sequence = requestedSequence ?? ((globalIndex + 1) * 10);
         if (sequence <= 0)
         {
-            errors.Add(new ValidationError($"{path}.sequence", "highlight sequence must be positive"));
+            errors.Add(new ValidationError(
+                $"{rulePath}.sequence",
+                "highlight sequence must be positive"));
             return null;
         }
-        if (!seenSequences.Add(sequence))
+        if (!context.SeenSequences.Add(sequence))
         {
-            errors.Add(new ValidationError($"{path}.sequence", $"duplicate highlight sequence '{sequence}'"));
+            errors.Add(new ValidationError(
+                $"{rulePath}.sequence",
+                $"duplicate highlight sequence '{sequence}'"));
             return null;
         }
-        var name = string.IsNullOrWhiteSpace(rule.Name) ? rule.Id : rule.Name.Trim();
+        var normalizedName = string.IsNullOrWhiteSpace(name) ? id : name.Trim();
 
-        var scope = ParseScope(rule, path, errors);
+        var scope = ParseScope(scopeName, rulePath, errors);
         if (scope is null) return null;
 
         ColumnModel? cellColumn = null;
         if (scope == HighlightScope.Cell
-            && (rule.Col is null || !columns.TryGetValue(rule.Col, out cellColumn)))
+            && (columnName is null || !columns.TryGetValue(columnName, out cellColumn)))
         {
             ignored.Add(new IgnoredItem(
                 "highlight",
-                $"'{rule.Id}': unknown cell column '{rule.Col}'"));
+                $"'{id}': unknown cell column '{columnName}'"));
             return null;
         }
 
-        if (string.IsNullOrWhiteSpace(rule.Style?.Bg)
-            && string.IsNullOrWhiteSpace(rule.Style?.Fg))
+        if (string.IsNullOrWhiteSpace(background)
+            && string.IsNullOrWhiteSpace(foreground))
         {
-            errors.Add(new ValidationError($"{path}.style", "pick a background or text color"));
+            errors.Add(new ValidationError(
+                $"{rulePath}.style",
+                "pick a background or text color"));
             return null;
         }
 
         return _ => new HighlightEffect(
-            rule.Id,
-            name,
+            id,
+            normalizedName,
             sequence,
             scope.Value,
             cellColumn,
@@ -117,18 +105,18 @@ internal static class HighlightRuleValidator
     }
 
     private static HighlightScope? ParseScope(
-        HighlightRule rule,
+        string scopeName,
         string path,
         List<ValidationError> errors)
     {
-        if (string.Equals(rule.Scope, "row", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(scopeName, "row", StringComparison.OrdinalIgnoreCase))
             return HighlightScope.Row;
-        if (string.Equals(rule.Scope, "cell", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(scopeName, "cell", StringComparison.OrdinalIgnoreCase))
             return HighlightScope.Cell;
 
         errors.Add(new ValidationError(
             path,
-            $"scope must be 'row' or 'cell', got '{rule.Scope}'"));
+            $"scope must be 'row' or 'cell', got '{scopeName}'"));
         return null;
     }
 

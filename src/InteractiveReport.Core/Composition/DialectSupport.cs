@@ -9,7 +9,7 @@ public static class DialectSupport
 {
     /// <summary>
     /// Returns the compiler paired with Interactive Reports' raw-SQL codec. Queries
-    /// produced by <see cref="QueryComposer"/> must use this compiler so literal raw
+    /// produced by the relation lowerer must use this compiler so literal raw
     /// marker characters and question marks remain distinct from SqlKata syntax.
     /// </summary>
     public static Compiler GetCompiler(ReportDialect dialect) => dialect switch
@@ -124,7 +124,7 @@ public static class DialectSupport
             ? $"AVG(CAST({quotedCol} AS FLOAT))"
             : $"AVG({quotedCol})",
         AggregateFn.Median => throw new InvalidOperationException(
-            "Median requires QueryComposer's ranked aggregate shape."),
+            "Median requires the ranked aggregate relation shape."),
         _ => throw new ArgumentOutOfRangeException(nameof(fn), fn, null),
     };
 }

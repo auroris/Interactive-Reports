@@ -8,48 +8,6 @@ namespace InteractiveReport.Core.Execution;
 /// <summary>Builds protocol column metadata from validated engine models.</summary>
 internal static class ReportResultColumns
 {
-    public static List<ColumnInfo> From(IEnumerable<ColumnModel> columns)
-        => columns
-            .Select(column => new ColumnInfo(
-                column.Name,
-                column.Label,
-                column.KindName,
-                column.IsComputed))
-            .ToList();
-
-    /// <summary>
-    /// The terminal grouped table's visible columns, in selection order. Metadata
-    /// remains structural on query paths; export relabels it after execution.
-    /// </summary>
-    public static List<ColumnInfo> ForGroupStage(ValidatedState state)
-    {
-        var view = state.View;
-        var layer = view.Output!;
-        return Select(ForGroupTable(state), layer.SelectColumns);
-    }
-
-    /// <summary>The complete Group output schema before a select composable.</summary>
-    public static List<ColumnInfo> ForGroupTable(ValidatedState state)
-    {
-        var view = state.View;
-        var layer = view.Output!;
-        var metrics = view.Values.ToDictionary(m => m.Id, StringComparer.OrdinalIgnoreCase);
-
-        var result = new List<ColumnInfo>(layer.Schema.Columns.Count);
-        foreach (var column in layer.Schema.Columns)
-        {
-            ColumnInfo info;
-            if (metrics.TryGetValue(column.Name, out var metric))
-                info = ForMetric(metric);
-            else if (string.Equals(column.Name, "__count", StringComparison.OrdinalIgnoreCase))
-                info = new ColumnInfo("__count", "Count", "number", false);
-            else
-                info = new ColumnInfo(column.Name, column.Label, column.KindName, column.IsComputed);
-            result.Add(info);
-        }
-        return result;
-    }
-
     /// <summary>Projects metadata by canonical selected-column order.</summary>
     public static List<ColumnInfo> Select(
         IReadOnlyList<ColumnInfo> available,
@@ -61,9 +19,6 @@ internal static class ReportResultColumns
             .Select(column => lookup[column.Name])
             .ToList();
     }
-
-    public static ColumnInfo ForMetric(ValidMetric metric)
-        => ForAggregate(metric.ToAggregate(), metric.Id);
 
     /// <summary>Two columns always: the label as itself, then the metric.</summary>
     public static List<ColumnInfo> ForChart(ValidChart chart)
@@ -82,12 +37,12 @@ internal static class ReportResultColumns
     }
 
     /// <summary>
-    /// Complete metadata for a statically-known materialized table. Shape columns
-    /// retain format-source metadata and computed output columns come from the bound
-    /// schema. Presentation labels are deliberately absent: query/cache metadata is
-    /// structural, while export applies labels in its shared renderer.
+    /// Complete metadata for a statically-known bound relation. Shape columns retain
+    /// format-source metadata and computed output columns come from the relation's
+    /// schema contract. Presentation labels are deliberately absent: query/cache
+    /// metadata is structural, while export applies labels in its shared renderer.
     /// </summary>
-    public static List<ColumnInfo> ForMaterializedTable(
+    public static List<ColumnInfo> ForBoundRelation(
         ReportSchema schema,
         IReadOnlyList<ColumnInfo> shapeColumns)
     {

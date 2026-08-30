@@ -17,7 +17,7 @@ Object.assign(globalThis, {
 const columns = [
     { name: "STATUS", label: "Status", type: "text" },
     { name: "__count", label: "Count", type: "number" },
-    { name: "c1", label: "Half", type: "number", computed: true },
+    { name: "ir1", label: "Half", type: "number", computed: true },
 ];
 
 function widget(doc) {
@@ -48,11 +48,11 @@ test("chips show intermediate ordinary composables read-only and mutate only the
                 from: "source",
                 composables: [
                     { kind: "group", by: ["STATUS"], values: [] },
-                    { kind: "compute", computed: [{ id: "c1", label: "Half", expr: "__count / 2", enabled: true }] },
-                    { kind: "filter", filters: [{ expr: "c1 > 0", enabled: true }] },
+                    { kind: "compute", computed: [{ id: "ir1", label: "Half", expr: "__count / 2", enabled: true }] },
+                    { kind: "filter", filters: [{ expr: "ir1 > 0", enabled: true }] },
                     { kind: "break", breaks: ["STATUS"] },
                     { kind: "aggregate", aggregates: [{ col: "__count", fn: "sum" }] },
-                    { kind: "highlight", highlights: [{ expr: "c1 > 10", color: "red", enabled: true }] },
+                    { kind: "highlight", highlights: [{ expr: "ir1 > 10", color: "red", enabled: true }] },
                 ],
             },
             decorated: {
@@ -78,7 +78,7 @@ test("chips show intermediate ordinary composables read-only and mutate only the
         [
             "Filter STATUS IS NOT NULL",
             "ƒ Half",
-            "Filter c1 > 0",
+            "Filter ir1 > 0",
             "Filter EARLIER",
             "Filter CURRENT",
         ]);
@@ -87,7 +87,7 @@ test("chips show intermediate ordinary composables read-only and mutate only the
     assert.equal(inherited.length, 3);
     assert.ok(inherited.every(chip => !chip.querySelector("button, input")),
         "ancestor settings are visible without toggle, edit, or remove controls");
-    assert.ok(!ordinary.some(chip => /Break|sum|c1 > 10/.test(chip.textContent)),
+    assert.ok(!ordinary.some(chip => /Break|sum|ir1 > 10/.test(chip.textContent)),
         "ancestor terminal controls ignored by the server fold stay hidden");
 
     const earlier = ordinary.find(chip => chip.textContent.includes("EARLIER"));
@@ -113,5 +113,55 @@ test("chips show intermediate ordinary composables read-only and mutate only the
         kind: "foreign-decoration",
         payload: { keep: true },
     });
-    assert.deepEqual(doc.tables.grouped.composables[2].filters, [{ expr: "c1 > 0", enabled: true }]);
+    assert.deepEqual(doc.tables.grouped.composables[2].filters, [{ expr: "ir1 > 0", enabled: true }]);
+});
+
+test("highlight chips form one stable priority set across repeated-node permutations", () => {
+    const first = {
+        kind: "highlight",
+        highlights: [{
+            id: "h3", name: "Third", expr: "STATUS = 'third'", enabled: true,
+            scope: "row", style: { bg: "#333333" },
+        }],
+    };
+    const second = {
+        kind: "highlight",
+        highlights: [
+            {
+                id: "h2", name: "Second", sequence: 20, expr: "STATUS = 'second'", enabled: true,
+                scope: "row", style: { bg: "#222222" },
+            },
+            {
+                id: "H1", name: "First", expr: "STATUS = 'first'", enabled: true,
+                scope: "row", style: { bg: "#111111" },
+            },
+        ],
+    };
+
+    for (const nodes of [[first, second], [second, first]]) {
+        const doc = normalizeReportState({
+            activeTable: "base",
+            tables: {
+                base: {
+                    from: "definition",
+                    schema: columns,
+                    composables: structuredClone(nodes),
+                },
+            },
+        }, 25);
+        const container = document.createElement("div");
+
+        renderChips(widget(doc), container);
+
+        assert.deepEqual(
+            [...container.querySelectorAll('[data-kind="highlight"]')].map(node => ({
+                name: node.querySelector("b")?.textContent,
+                sequence: Number(/#(\d+)/.exec(node.textContent)?.[1]),
+            })),
+            [
+                { name: "First", sequence: 10 },
+                { name: "Second", sequence: 20 },
+                { name: "Third", sequence: 30 },
+            ]);
+    }
 });

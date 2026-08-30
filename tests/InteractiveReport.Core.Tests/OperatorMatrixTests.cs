@@ -1,5 +1,7 @@
 using InteractiveReport.Core.Composition;
 using InteractiveReport.Core.Model;
+using InteractiveReport.Core.Planning;
+using InteractiveReport.Core.Schema;
 using InteractiveReport.Core.Validation;
 using static InteractiveReport.Core.Tests.TestFixtures;
 
@@ -9,10 +11,10 @@ namespace InteractiveReport.Core.Tests;
 public class OperatorMatrixTests
 {
     [Theory]
-    [InlineData(ReportDialect.Sqlite, "(\"AMOUNT\" >= @p0)")]
-    [InlineData(ReportDialect.SqlServer, "([AMOUNT] >= @p0)")]
-    [InlineData(ReportDialect.Oracle, "(\"AMOUNT\" >= :p0)")]
-    [InlineData(ReportDialect.Postgres, "(\"AMOUNT\" >= @p0)")]
+    [InlineData(ReportDialect.Sqlite, "(\"__irc4\" >= @p0)")]
+    [InlineData(ReportDialect.SqlServer, "([__irc4] >= @p0)")]
+    [InlineData(ReportDialect.Oracle, "(\"__irc4\" >= :p0)")]
+    [InlineData(ReportDialect.Postgres, "(\"__irc4\" >= @p0)")]
     public void Comparisons_are_bound_predicates(ReportDialect dialect, string expected)
     {
         var compiled = Compile(dialect, "AMOUNT >= 1000");
@@ -22,10 +24,10 @@ public class OperatorMatrixTests
     }
 
     [Theory]
-    [InlineData(ReportDialect.Sqlite, "\"STATUS\" IN (@p0, @p1)")]
-    [InlineData(ReportDialect.SqlServer, "[STATUS] IN (@p0, @p1)")]
-    [InlineData(ReportDialect.Oracle, "\"STATUS\" IN (:p0, :p1)")]
-    [InlineData(ReportDialect.Postgres, "\"STATUS\" IN (@p0, @p1)")]
+    [InlineData(ReportDialect.Sqlite, "\"__irc3\" IN (@p0, @p1)")]
+    [InlineData(ReportDialect.SqlServer, "[__irc3] IN (@p0, @p1)")]
+    [InlineData(ReportDialect.Oracle, "\"__irc3\" IN (:p0, :p1)")]
+    [InlineData(ReportDialect.Postgres, "\"__irc3\" IN (@p0, @p1)")]
     public void In_list_is_a_typed_condition_function(ReportDialect dialect, string expected)
     {
         var compiled = Compile(dialect, "IN_LIST(STATUS, 'NEW', 'SHIPPED')");
@@ -67,10 +69,45 @@ public class OperatorMatrixTests
     private static SqlKata.SqlResult Compile(ReportDialect dialect, string expression)
     {
         var definition = OrdersDefinition(dialect);
-        var state = StateValidator.Validate(
-            definition,
-            Doc(source: new StageLayer { Filters = [new FilterRule { Expr = expression }] }),
-            OrdersSchema);
-        return DialectSupport.GetCompiler(dialect).Compile(QueryComposer.Compose(definition, state).Page);
+        var schema = ReportSchema.Create(definition.Name, OrdersSchema);
+        var source = new BoundOpaqueSqlSource(
+            definition.Name,
+            definition.Sql,
+            dialect,
+            BoundOutputContract.FromSchema(definition.Name, schema));
+        var specification = CanonicalTableNormalizer.Normalize(
+            new ReportTable
+            {
+                From = "definition",
+                Composables =
+                [
+                    new TableComposable
+                    {
+                        Kind = "filter",
+                        Filters = [new FilterRule { Expr = expression }],
+                    },
+                ],
+            },
+            "tables.source");
+        var errors = new List<ValidationError>();
+        var ignored = new List<IgnoredItem>();
+        var binding = CanonicalRelationBinder.Bind(
+            specification,
+            $"{definition.Name}#source",
+            source.Output,
+            ColumnPolicy.Unrestricted,
+            inheritedComputedCount: 0,
+            inheritedFilterCount: 0,
+            errors,
+            ignored);
+
+        Assert.Empty(errors);
+        Assert.Empty(ignored);
+        var relation = binding.ApplyTo(source);
+        var lowered = new SqlKataRelationLowerer(
+            dialect,
+            new DateTime(2026, 8, 29, 12, 0, 0, DateTimeKind.Utc))
+            .Lower(relation);
+        return DialectSupport.GetCompiler(dialect).Compile(lowered.Query);
     }
 }

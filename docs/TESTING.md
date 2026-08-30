@@ -69,10 +69,9 @@ UTC `NOW()` parity, definition `TimeZone` session pinning for developer SQL and 
 database conversions, context-param
 binding/groupBy/pivot/export against it.
 
-Materialized text comparisons and sorts are ordinal, while SQL-backed operations use
-the target database's configured collation. The live battery checks deterministic cases,
-but exact cross-path text ordering is portable only when the test database uses a
-binary/ordinal collation.
+Text comparisons and sorts use the target database's configured collation. The live
+battery checks deterministic cases, but exact cross-dialect text ordering is portable
+only when each test database uses a binary/ordinal collation.
 
 The server-level persistence scenario also runs against every configured live dialect.
 For each database it starts the ASP.NET host over `SELECT * FROM IR_TEST_ORDERS`, obtains

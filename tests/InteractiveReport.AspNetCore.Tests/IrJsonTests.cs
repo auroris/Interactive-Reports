@@ -113,7 +113,7 @@ public sealed class IrJsonTests
                         Kind = "pivot",
                         Rows = ["CUSTOMER"],
                         Cols = ["STATUS"],
-                        Values = [new MetricRule { Id = "m1", Col = "AMOUNT", Fn = AggregateFn.Sum }],
+                        Values = [new MetricRule { Id = "ir1", Col = "AMOUNT", Fn = AggregateFn.Sum }],
                         Totals = true,
                         },
                         new TableComposable
@@ -154,7 +154,7 @@ public sealed class IrJsonTests
         Assert.Equal("anything", roundTrip.ActiveTable);
         var pivotComposable = roundTrip.Tables["anything"].Composables![0];
         var metric = Assert.Single(pivotComposable.Values!);
-        Assert.Equal(("m1", "AMOUNT", AggregateFn.Sum), (metric.Id, metric.Col, metric.Fn));
+        Assert.Equal(("ir1", "AMOUNT", AggregateFn.Sum), (metric.Id, metric.Col, metric.Fn));
         Assert.Equal(["CUSTOMER"], pivotComposable.Rows!);
         Assert.Equal(["STATUS"], pivotComposable.Cols!);
         Assert.True(pivotComposable.Totals);
@@ -191,7 +191,7 @@ public sealed class IrJsonTests
             """{"activeTable":"x","tables":{"x":{"from":"definition","composables":[{"kind":"sort","sorts":[{"col":"A","dir":99}]}]}}}""",
             IrJson.Options));
         Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<ReportState>(
-            """{"activeTable":"x","tables":{"x":{"from":"definition","composables":[{"kind":"group","by":["A"],"values":[{"id":"m1","col":"A","fn":3}]}]}}}""",
+            """{"activeTable":"x","tables":{"x":{"from":"definition","composables":[{"kind":"group","by":["A"],"values":[{"id":"ir1","col":"A","fn":3}]}]}}}""",
             IrJson.Options));
     }
 

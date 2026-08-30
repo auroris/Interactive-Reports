@@ -1,4 +1,5 @@
 using InteractiveReport.Core.Model;
+using InteractiveReport.Core.Planning;
 
 namespace InteractiveReport.Core.Tests;
 
@@ -48,6 +49,13 @@ public static class TestFixtures
     };
 
     public static FilterRule Filter(string expression) => new() { Expr = expression };
+
+    public static string PivotCellId(
+        string tableId,
+        string metricId,
+        params object?[] key)
+        => new DynamicPivotColumnIdentityRegistry([])
+            .Register(tableId, metricId, key);
 
     // ---- composable table document construction shorthand ----
 

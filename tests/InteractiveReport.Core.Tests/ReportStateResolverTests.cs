@@ -83,7 +83,7 @@ public sealed class ReportStateResolverTests
                 Sorts = [new SortRule { Col = "AMOUNT" }],
                 Columns = ["CUSTOMER"],
             },
-            tail: [Group(by: ["STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)])]);
+            tail: [Group(by: ["STATUS"], values: [Metric("ir1", "AMOUNT", AggregateFn.Sum)])]);
 
         var resolved = ReportStateResolver.Resolve(defaults, Doc());
 
@@ -128,7 +128,7 @@ public sealed class ReportStateResolverTests
         var request = Doc(
             source: new StageLayer
             {
-                Computed = [new ComputedColumn { Id = "c1", Expr = "AMOUNT * 2" }],
+                Computed = [new ComputedColumn { Id = "ir1", Expr = "AMOUNT * 2" }],
                 Formats = new()
                 {
                     ["AMOUNT"] = new ColumnFormat
@@ -151,7 +151,7 @@ public sealed class ReportStateResolverTests
                     },
                 ],
             },
-            tail: [Group(by: ["STATUS"], values: [Metric("m1", "AMOUNT", AggregateFn.Sum)])]);
+            tail: [Group(by: ["STATUS"], values: [Metric("ir1", "AMOUNT", AggregateFn.Sum)])]);
 
         var resolved = ReportStateResolver.Resolve(null, request);
         var source = resolved.Tables!["source"];
@@ -171,7 +171,7 @@ public sealed class ReportStateResolverTests
         Assert.Equal(("link", "NOTES", "CUSTOMER", "open", "ORDER_ID"),
             (format.DisplayAs, format.UrlColumn, format.TextColumn, format.Command, format.KeyColumn));
         Assert.Equal(("h1", "Big", 10), (highlight.Id, highlight.Name, highlight.Sequence));
-        Assert.Equal(("m1", "AMOUNT", AggregateFn.Sum), (metric.Id, metric.Col, metric.Fn));
+        Assert.Equal(("ir1", "AMOUNT", AggregateFn.Sum), (metric.Id, metric.Col, metric.Fn));
     }
 
     [Fact]

@@ -13,6 +13,9 @@ namespace InteractiveReport.Core.Composition;
 /// </summary>
 internal static class SqlKataSyntax
 {
+    /// <summary>Portable alias for the opaque configured SQL derived table.</summary>
+    public const string BaseRelationAlias = "ir_base";
+
     // Private-use characters keep literal question marks out of SqlKata's binding
     // scanner. Doubling Sentinel escapes an actual occurrence from configured SQL,
     // so the encoding remains reversible for every input string.

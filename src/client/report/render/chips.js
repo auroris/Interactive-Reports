@@ -3,11 +3,12 @@
 // is the doc made visible — everything here reads the doc and mutates it
 // through w.apply, never through private render state.
 //
-// Executable ordinary composables are enumerated in composition order across the
-// complete active table ancestry. Inherited and foreign/repeated nodes remain
-// visible but read-only. Only the last node of each kind in the active table's
-// terminal segment is safe for the packaged editors to mutate. The view chip
-// summarizes the shape directly owned by the active table.
+// Executable ordinary composables are enumerated with exact document ownership
+// across the complete active table ancestry. Array position is a mutation
+// address, not execution order. Inherited and foreign/repeated nodes remain
+// visible but read-only. Only the last node of each kind owned by the active
+// table is safe for the packaged editors to mutate. The view chip summarizes
+// the shape directly owned by the active table.
 //
 // A chip whose owning feature is not whitelisted still renders (the state is
 // real — a default or saved report put it there) but renders locked: no toggle,
@@ -22,6 +23,7 @@ import {
     activeShapeLocation,
     composableLocations,
     modeOf,
+    normalizedHighlightRules,
     removeInputComputedColumn,
     removeTerminalComputedColumn,
 } from "../state.js";
@@ -146,8 +148,8 @@ function chip({ w, kind, index, text, colLabel, off, toggleable = true, removabl
     return node;
 }
 
-const highlightChip = (w, kind, lock, location) => ({ h, i, sequence }) => chip({
-    w, kind, index: i, off: h.enabled === false,
+const highlightChip = (w, lock) => ({ h, index, sequence, location }) => chip({
+    w, kind: "highlight", index, off: h.enabled === false,
     // Preview whichever color the rule actually sets; the dialog's default
     // background is the last resort for legacy rules with no style at all.
     swatch: h.style?.bg ?? h.style?.fg ?? "#fff3cd",
@@ -157,9 +159,22 @@ const highlightChip = (w, kind, lock, location) => ({ h, i, sequence }) => chip(
     ...lock,
 });
 
-const bySequence = rules => (rules ?? [])
-    .map((h, i) => ({ h, i, sequence: h.sequence ?? ((i + 1) * 10) }))
-    .sort((left, right) => left.sequence - right.sequence);
+/// Repeated active-table Highlight nodes are one semantic priority set. Explicit
+/// sequence wins; missing sequence is normalized by stable id, never composable
+/// or list position. The displayed fallback uses the canonical first-unused
+/// ten-step slot.
+const orderedHighlights = locations => {
+    const entries = locations
+        .filter(location => location.participates
+            && String(location.composable?.kind ?? "").trim().toLowerCase() === "highlight")
+        .flatMap(location => (location.composable?.highlights ?? [])
+            .map((h, index) => ({ h, index, location })));
+    return normalizedHighlightRules(entries.map(entry => entry.h))
+        .map(normalized => ({
+            ...entries[normalized.index],
+            sequence: normalized.sequence,
+        }));
+};
 
 /// The view chip's text: a compact summary of the active table's owned shape.
 function shapeSummary(w, mode) {
@@ -191,7 +206,8 @@ export function renderChips(w, container) {
         .map(column => [column.name.toLowerCase(), column]));
     const columnLabel = name => terminalColumns.get(String(name).toLowerCase())?.label ?? labelOf(w, name);
 
-    for (const location of composableLocations(d)) {
+    const locations = composableLocations(d);
+    for (const location of locations) {
         if (!location.participates) continue;
         const node = location.composable ?? {};
         switch (node.kind) {
@@ -229,17 +245,14 @@ export function renderChips(w, container) {
                     location, ...controls(location, "compute"),
                 })));
                 break;
-            case "highlight": {
-                bySequence(node.highlights).forEach(entry =>
-                    chips.push(highlightChip(
-                        w,
-                        "highlight",
-                        controls(location, "highlight"),
-                        location)(entry)));
-                break;
-            }
+            case "highlight": break;
         }
     }
+
+    for (const entry of orderedHighlights(locations))
+        chips.push(highlightChip(
+            w,
+            controls(entry.location, "highlight"))(entry));
 
     if (mode !== "grid" && mode !== "custom" && activeShapeLocation(d)) {
         // Remove (back to grid) survives the lock — see the header comment.

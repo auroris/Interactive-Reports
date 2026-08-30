@@ -29,7 +29,7 @@ internal sealed record ComposableSqlRelation(
         var names = new SqlPhysicalNameAllocator(schema.Columns.Select(column => column.Name));
         var physical = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var query = new Query().FromRaw(SqlKataSyntax.PreserveRaw(
-            $"({definition.Sql}) {QueryComposer.BaseAlias}"));
+            $"({definition.Sql}) {SqlKataSyntax.BaseRelationAlias}"));
         foreach (var column in schema.Columns)
         {
             // Database-authored names may contain SqlKata structure such as dots,
@@ -100,58 +100,58 @@ internal static class ComposableSqlPlanner
         return source with { Query = query, NestingDepth = source.NestingDepth + 1 };
     }
 
-    public static ComposableSqlRelation ApplyOperations(
+    public static ComposableSqlRelation ApplyComputed(
         ComposableSqlRelation source,
-        IReadOnlyList<ValidTableOperation> operations,
+        CompiledRule<DefineColumnEffect> rule,
         ReportDialect dialect,
         DateTime evaluationUtcNow)
     {
-        if (operations.Count == 0) return source;
         var current = Addressable(source);
         var physical = new Dictionary<string, string>(
             source.PhysicalColumns,
             StringComparer.OrdinalIgnoreCase);
-
-        foreach (var operation in operations)
-        {
-            if (operation.Definitions.Count > 0)
-            {
-                foreach (var rule in operation.Definitions)
-                {
-                    current.Select(physical.Values.ToArray());
-                    var alias = source.Names.Column();
-                    ExpressionRuleSqlApplicator.ApplyDefinition(
-                        current,
-                        rule,
-                        dialect,
-                        evaluationUtcNow,
-                        physical,
-                        alias);
-                    physical[rule.Effect.Column.Name] = alias;
-                    current = new Query().From(current.As(source.Names.Relation()));
-                }
-            }
-
-            foreach (var rule in operation.Predicates)
-                ExpressionRuleSqlApplicator.ApplyRowPredicate(
-                    current,
-                    rule,
-                    dialect,
-                    evaluationUtcNow,
-                    physical);
-        }
-
-        var schema = source.Schema.Extend(
-            source.SchemaName,
-            operations.SelectMany(operation => operation.Definitions)
-                .Select(rule => rule.Effect.Column));
-        var definitionCount = operations.Sum(operation => operation.Definitions.Count);
+        current.Select(source.Schema.Columns
+            .Select(column => physical[column.Name])
+            .ToArray());
+        var alias = source.Names.Column();
+        ExpressionRuleSqlApplicator.ApplyDefinition(
+            current,
+            rule,
+            dialect,
+            evaluationUtcNow,
+            physical,
+            alias);
+        physical[rule.Effect.Column.Name] = alias;
+        current = new Query().From(current.As(source.Names.Relation()));
+        var schema = source.Schema.Extend(source.SchemaName, [rule.Effect.Column]);
         return source with
         {
             Query = current,
             Schema = schema,
             PhysicalColumns = physical,
-            NestingDepth = source.NestingDepth + 1 + definitionCount,
+            NestingDepth = source.NestingDepth + 2,
+        };
+    }
+
+    public static ComposableSqlRelation ApplyFilters(
+        ComposableSqlRelation source,
+        IReadOnlyList<CompiledRule<IncludeRowEffect>> predicates,
+        ReportDialect dialect,
+        DateTime evaluationUtcNow)
+    {
+        if (predicates.Count == 0) return source;
+        var current = Addressable(source);
+        foreach (var predicate in predicates)
+            ExpressionRuleSqlApplicator.ApplyRowPredicate(
+                current,
+                predicate,
+                dialect,
+                evaluationUtcNow,
+                source.PhysicalColumns);
+        return source with
+        {
+            Query = current,
+            NestingDepth = source.NestingDepth + 1,
         };
     }
 

@@ -33,7 +33,7 @@ public static class SchemaDiscovery
     {
         var probe = new Query()
             .FromRaw(SqlKataSyntax.PreserveRaw(
-                $"({def.Sql}) {QueryComposer.BaseAlias}")) // no AS: Oracle table aliases
+                $"({def.Sql}) {SqlKataSyntax.BaseRelationAlias}")) // no AS: Oracle table aliases
             .WhereRaw("1 = 0");
 
         var compiled = DialectSupport.GetCompiler(def.GetEffectiveDialect()).Compile(probe);
@@ -42,6 +42,7 @@ public static class SchemaDiscovery
         await using var reader = await cmd.ExecuteReaderAsync(CommandBehavior.SchemaOnly, ct);
 
         var columns = new List<ColumnModel>();
+        var dialect = def.GetEffectiveDialect();
         foreach (var col in reader.GetColumnSchema())
         {
             var name = col.ColumnName;
@@ -54,6 +55,13 @@ public static class SchemaDiscovery
                 Name = name,
                 Label = ColumnModel.Prettify(name),
                 ClrType = col.DataType ?? typeof(object),
+                // Microsoft.Data.Sqlite reports every source expression as BLOB /
+                // byte[] during a zero-row probe. Only an origin column carries a
+                // meaningful type there; treating the expression as a known BLOB
+                // would make ordinary text/number literals impossible to filter.
+                HasKnownType = col.DataType is not null
+                    && (dialect != ReportDialect.Sqlite
+                        || !string.IsNullOrWhiteSpace(col.BaseColumnName)),
                 IsNullable = col.AllowDBNull ?? true,
             });
         }

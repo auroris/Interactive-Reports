@@ -1,5 +1,6 @@
 using InteractiveReport.Core.Model;
 using InteractiveReport.Core.Execution;
+using InteractiveReport.Core.Planning;
 using InteractiveReport.Core.Schema;
 using InteractiveReport.Core.Validation;
 using SqlKata;
@@ -12,10 +13,10 @@ namespace InteractiveReport.Core.Composition;
 /// </summary>
 internal static class ComposableTerminalQueryComposer
 {
-    public static MappedComposedQueries Compose(
+    public static MappedTerminalQueries Compose(
         ReportDefinition definition,
         ComposableSqlRelation relation,
-        ValidTableLayer terminal,
+        BoundLocalResult terminal,
         DateTime evaluationUtcNow,
         int pageIndex,
         int pageSize,
@@ -24,20 +25,29 @@ internal static class ComposableTerminalQueryComposer
         bool chartTerminal = false)
     {
         var dialect = definition.GetEffectiveDialect();
-        var core = Addressable(relation);
+        // ComposableSqlRelation still owns a mutable physical-name allocator. Every
+        // terminal role receives an independent snapshot so adding a footer or break
+        // query cannot rename aliases in an unrelated statement.
+        var rowRelation = Isolate(relation);
+        var core = Addressable(rowRelation);
         var count = core.Clone().AsCount();
         var effectiveSorts = EffectiveSorts(terminal, terminalShape, relation.Schema).ToList();
-        var aggregates = terminal.Aggregates.Count == 0
+        var aggregates = terminal.Aggregates.Length == 0
             ? null
-            : AggregateQuery(relation, terminal.Aggregates, dialect);
-        var breakTotals = terminal.Breaks.Count == 0
+            : AggregateQuery(Isolate(relation), terminal.Aggregates, dialect);
+        var breakTotals = terminal.Breaks.Length == 0
             ? null
-            : BreakQuery(relation, terminal.Breaks, terminal.Aggregates, effectiveSorts, dialect);
+            : BreakQuery(
+                Isolate(relation),
+                terminal.Breaks,
+                terminal.Aggregates,
+                effectiveSorts,
+                dialect);
 
         var projection = terminal.ProjectionColumns.ToList();
 
         var page = core.Clone().Select(
-            projection.Select(column => relation.PhysicalColumns[column.Name]).ToArray());
+            projection.Select(column => rowRelation.PhysicalColumns[column.Name]).ToArray());
         var publicNames = projection.Select(column => column.Name).ToList();
         foreach (var rule in terminal.Decorations)
         {
@@ -46,12 +56,12 @@ internal static class ComposableTerminalQueryComposer
                 rule,
                 dialect,
                 evaluationUtcNow,
-                relation.PhysicalColumns);
+                rowRelation.PhysicalColumns);
             publicNames.Add(rule.Effect.ProjectionName);
         }
 
         foreach (var sort in effectiveSorts)
-            ApplySort(page, sort, relation.PhysicalColumns[sort.Column.Name], dialect);
+            ApplySort(page, sort, rowRelation.PhysicalColumns[sort.Column.Name], dialect);
 
         if (chartTerminal)
         {
@@ -60,7 +70,7 @@ internal static class ComposableTerminalQueryComposer
         else if (!pageAll)
         {
             page.ForPage(pageIndex, pageSize);
-            if (terminal.Breaks.Count > 0 && pageSize < int.MaxValue)
+            if (terminal.Breaks.Length > 0 && pageSize < int.MaxValue)
                 page.Limit(pageSize + 1);
         }
         else if (definition.MaxRows > 0)
@@ -68,27 +78,28 @@ internal static class ComposableTerminalQueryComposer
             page.Limit(definition.MaxRows);
         }
 
-        return new MappedComposedQueries(
-            new ComposedQueries(page, count, aggregates, breakTotals),
+        return new MappedTerminalQueries(
+            new TerminalQueries(page, count, aggregates, breakTotals),
             publicNames);
     }
 
     public static MappedQuery ComposeExport(
         ReportDefinition definition,
         ComposableSqlRelation relation,
-        ValidTableLayer terminal,
+        BoundLocalResult terminal,
         CompiledShape? terminalShape,
         int maxRows)
     {
-        var query = Addressable(relation).Select(
+        var exportRelation = Isolate(relation);
+        var query = Addressable(exportRelation).Select(
             terminal.ProjectionColumns
-                .Select(column => relation.PhysicalColumns[column.Name])
+                .Select(column => exportRelation.PhysicalColumns[column.Name])
                 .ToArray());
         foreach (var sort in EffectiveSorts(terminal, terminalShape, relation.Schema))
             ApplySort(
                 query,
                 sort,
-                relation.PhysicalColumns[sort.Column.Name],
+                exportRelation.PhysicalColumns[sort.Column.Name],
                 definition.GetEffectiveDialect());
         if (maxRows > 0)
             query.Limit(maxRows == int.MaxValue ? int.MaxValue : maxRows + 1);
@@ -165,15 +176,30 @@ internal static class ComposableTerminalQueryComposer
     private static Query Addressable(ComposableSqlRelation relation)
         => new Query().From(relation.Query.Clone().As(relation.Names.Relation()));
 
+    private static ComposableSqlRelation Isolate(ComposableSqlRelation relation)
+    {
+        var reserved = relation.Schema.Columns
+            .Select(column => column.Name)
+            .Concat(relation.PhysicalColumns.Values);
+        return relation with
+        {
+            Query = relation.Query.Clone(),
+            PhysicalColumns = new Dictionary<string, string>(
+                relation.PhysicalColumns,
+                StringComparer.OrdinalIgnoreCase),
+            Names = new SqlPhysicalNameAllocator(reserved),
+        };
+    }
+
     private static IEnumerable<ValidSort> EffectiveSorts(
-        ValidTableLayer terminal,
+        BoundLocalResult terminal,
         CompiledShape? shape,
         ReportSchema schema)
     {
-        var owned = ShapeSorts(shape, schema, terminal.Sorts.Count > 0).ToList();
+        var owned = ShapeSorts(shape, schema, terminal.Sorts.Length > 0).ToList();
         var declared = terminal.Sorts.Concat(owned.Where(candidate => !terminal.Sorts.Any(sort =>
             string.Equals(sort.Column.Name, candidate.Column.Name, StringComparison.OrdinalIgnoreCase)))).ToList();
-        if (terminal.Breaks.Count == 0) return declared;
+        if (terminal.Breaks.Length == 0) return declared;
         var byName = declared.ToDictionary(
             sort => sort.Column.Name,
             StringComparer.OrdinalIgnoreCase);
@@ -236,8 +262,14 @@ internal static class ComposableTerminalQueryComposer
     }
 }
 
-internal sealed record MappedComposedQueries(
-    ComposedQueries Queries,
+internal sealed record TerminalQueries(
+    Query MainRows,
+    Query Count,
+    Query? FooterAggregates = null,
+    Query? BreakTotals = null);
+
+internal sealed record MappedTerminalQueries(
+    TerminalQueries Queries,
     IReadOnlyList<string> PagePublicNames);
 
 internal sealed record MappedQuery(Query Query, IReadOnlyList<string> PublicNames);
