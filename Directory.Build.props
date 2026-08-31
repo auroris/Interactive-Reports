@@ -1,8 +1,8 @@
 <Project>
 
-  <!-- Shared package identity for every project in the repository. Only the three
-       src\ projects are packable (samples and tests set IsPackable=false or are
-       never packed); the metadata is harmless elsewhere. -->
+  <!-- Invariant: shared package identity for every project in the repository. Only the three
+       src\ projects are packable (samples and tests set IsPackable=false or are never
+       packed); the metadata is harmless elsewhere. -->
   <PropertyGroup>
     <Version>0.9.0</Version>
     <Authors>auroris</Authors>
@@ -19,9 +19,9 @@
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
 
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <!-- Comment readability outranks XML-doc pedantry: no exhaustive coverage
-         (CS1591/CS1573), and prose like "comparison = <> < <=" stays literal
-         rather than entity-escaped (CS1570). -->
+    <!-- Comment readability outranks XML-doc pedantry: no exhaustive coverage (CS1591/CS1573),
+         and prose like "comparison = <> < <=" stays literal rather than entity-escaped
+         (CS1570). -->
     <NoWarn>$(NoWarn);CS1591;CS1573;CS1570</NoWarn>
   </PropertyGroup>
 

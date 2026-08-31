@@ -26,10 +26,10 @@
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
-  <!-- The embedded-resource glob above is silent when Ui\dist is empty (bundles are
-       built by npm, not committed). A UI-less package or Release build is always a
-       mistake, so fail loudly. Debug builds stay guard-free: the Workbench's
-       light-DOM "run npm build" warning is the intended inner dev loop. -->
+  <!-- Invariant: the embedded-resource glob above is silent when Ui\dist is empty (bundles
+       are built by npm, not committed). A UI-less package or Release build is always a
+       mistake, so fail loudly. Debug builds stay guard-free: the Workbench's light-DOM "run
+       npm build" warning is the intended inner dev loop. -->
   <Target Name="EnsureUiBundlesOnReleaseBuild" BeforeTargets="BeforeBuild" Condition="'$(Configuration)' == 'Release'">
     <Error Condition="!Exists('$(MSBuildProjectDirectory)\Ui\dist\ir.js') or !Exists('$(MSBuildProjectDirectory)\Ui\dist\ir-admin.js') or !Exists('$(MSBuildProjectDirectory)\Ui\dist\ir-chart.js')" Text="InteractiveReport.AspNetCore: Ui\dist is missing the browser bundles (ir.js, ir-admin.js, ir-chart.js). Run 'npm ci &amp;&amp; npm run build' at the repository root first." />
   </Target>

@@ -11,9 +11,20 @@ namespace InteractiveReport.Core.Planning;
 /// </summary>
 internal static partial class SyntheticColumnIdentityValidator
 {
+    /// <summary>
+    /// Determines whether an identifier may be assigned to an authored synthetic column.
+    /// </summary>
+    /// <param name="id">The authored identifier to test.</param>
+    /// <returns><see langword="true"/> when the identifier is valid for an authored node; otherwise, <see langword="false"/>.</returns>
     internal static bool IsValidAuthoredId(string id)
         => AuthoredIdPattern().IsMatch(id);
 
+    /// <summary>
+    /// Collects every computed-column and group/pivot metric id, then validates the shared namespace in deterministic order.
+    /// </summary>
+    /// <param name="document">The complete report-state document whose table graph is inspected.</param>
+    /// <returns>Path-specific errors for malformed or duplicate authored synthetic ids.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="document"/> is <see langword="null"/>.</exception>
     public static List<ValidationError> Collect(ReportState document)
     {
         ArgumentNullException.ThrowIfNull(document);
@@ -74,9 +85,9 @@ internal static partial class SyntheticColumnIdentityValidator
             }
         }
 
-        // Map order and composable storage order have no meaning. Shape metrics own
-        // their identities before Computed within a table, matching the canonical
-        // phase schedule; all remaining choices use stable syntax keys only.
+        // Invariant: map order and composable storage order have no meaning. Shape metrics own
+        // their identities before Computed within a table, matching the canonical phase
+        // schedule; all remaining choices use stable syntax keys only.
         foreach (var declaration in declarations
                      .OrderBy(value => value.TableId, StringComparer.OrdinalIgnoreCase)
                      .ThenBy(value => value.TableId, StringComparer.Ordinal)
@@ -91,6 +102,9 @@ internal static partial class SyntheticColumnIdentityValidator
 
         return errors;
 
+        // Accepts one authored identifier and its declaration coordinates, then appends a
+        // normalized declaration for the later validation pass. Null identifiers are ignored;
+        // the method returns no value.
         void Collect(
             string? candidate,
             string tableId,
@@ -100,8 +114,8 @@ internal static partial class SyntheticColumnIdentityValidator
             int ruleIndex,
             string path)
         {
-            // Null is already reported by the structural validator. Blank authored
-            // values are declarations too: keep them in this schema-independent pass
+            // Cache policy: null is already reported by the structural validator. Blank
+            // authored values are declarations too: keep them in this schema-independent pass
             // so a dormant table with a populated schema cache cannot evade irN rules.
             if (candidate is null) return;
             var id = candidate;
@@ -116,6 +130,9 @@ internal static partial class SyntheticColumnIdentityValidator
                 path));
         }
 
+        // Accepts one collected declaration and records it as the first use of its identifier.
+        // Invalid or duplicate declarations append validation errors instead. It returns no
+        // value and mutates only the enclosing validation accumulators.
         void Register(IdentityDeclaration declaration)
         {
             if (!IsValidAuthoredId(declaration.Id))
@@ -148,6 +165,10 @@ internal static partial class SyntheticColumnIdentityValidator
         int RuleIndex,
         string Path);
 
+    /// <summary>
+    /// Returns the compiled expression that accepts the canonical <c>irN</c> authored-id namespace.
+    /// </summary>
+    /// <returns>The compiled regular expression.</returns>
     [GeneratedRegex(@"^ir[1-9]\d*$")]
     private static partial Regex AuthoredIdPattern();
 }

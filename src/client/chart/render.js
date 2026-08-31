@@ -1,5 +1,5 @@
-// Chart assembly — the only module that knows Chart.js. Chart.js is tree-shaken
-// down to the four forms the state document allows (bar, line, area, pie).
+// Chart.js assembly boundary. This is the only module that knows Chart.js, which is tree-shaken down
+// to the four forms the state document allows (bar, line, area, pie).
 
 import {
     ArcElement,
@@ -32,17 +32,24 @@ Chart.register(
     PointElement,
     Tooltip);
 
+/**
+ * Formats a numeric value with locale-aware separators and requested precision.
+ *
+ * @param {unknown} value - A chart value; numeric values receive localized separators.
+ * @param {string} locale - The BCP 47 locale used for numeric formatting.
+ * @returns {string} A number with at most two fractional digits, or the value coerced to text.
+ */
 const formatNumber = (value, locale) =>
     typeof value === "number" ? value.toLocaleString(locale, { maximumFractionDigits: 2 }) : String(value);
 
 /**
- * Render one chart. spec:
- *   { type: "bar"|"line"|"area"|"pie", horizontal, labels[], values[],
- *     displayValues[], metricLabel, labelAxisTitle, valueAxisTitle }
- * displayValues carries the canonical formatted string per point — tooltips show
- * it verbatim so they match the data table (exact precision, masks) instead of
- * re-formatting the lossy numeric coordinate.
- * Returns the Chart.js instance; the caller owns destroy().
+ * Creates a responsive Chart.js instance for the supplied report chart specification.
+ *
+ * @param {HTMLCanvasElement} canvas - The themed canvas on which Chart.js will render.
+ * @param {object} spec - The validated type, orientation, labels, numeric values, display values, metric label, locale, and optional axis titles.
+ * @returns {Chart} The live Chart.js instance; callers are responsible for destroying it.
+ *
+ * Side effects: initializes Chart.js against the canvas and installs its responsive and interaction handlers.
  */
 export function renderChart(canvas, spec) {
     const theme = readTheme(canvas);
@@ -53,13 +60,13 @@ export function renderChart(canvas, spec) {
 
     const dataset = { data: spec.values };
     if (pie) {
-        // 2px surface ring between slices so adjacent fills never touch.
+        // Invariant: 2px surface ring between slices so adjacent fills never touch.
         dataset.backgroundColor = sliceColors(spec.values.length, theme.palette);
         dataset.borderColor = theme.surface;
         dataset.borderWidth = 2;
     } else if (spec.type === "bar") {
         dataset.backgroundColor = series;
-        dataset.borderRadius = 4;                                    // rounded data end, flat baseline
+        dataset.borderRadius = 4; // Rounded data end, flat baseline.
         dataset.maxBarThickness = 40;
     } else {
         dataset.borderColor = series;
@@ -111,8 +118,8 @@ export function renderChart(canvas, spec) {
                 ? { x: valueAxis, y: categoryAxis }
                 : { x: categoryAxis, y: valueAxis },
             plugins: {
-                // Single series: the chip/summary names the metric, so no legend
-                // box outside pie, where the legend carries slice identity.
+                // Single series: the chip/summary names the metric, so no legend box outside
+                // pie, where the legend carries slice identity.
                 legend: pie
                     ? { position: "right", labels: { color: theme.text, font, boxWidth: 10, boxHeight: 10 } }
                     : { display: false },

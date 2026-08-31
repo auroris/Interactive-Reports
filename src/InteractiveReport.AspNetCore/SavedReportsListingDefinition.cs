@@ -4,7 +4,7 @@ using InteractiveReport.Core.SavedReports;
 namespace InteractiveReport.AspNetCore;
 
 /// <summary>
-/// The built-in, administrators-only report over the saved-report store: the admin
+/// Defines the built-in, administrators-only report over the saved-report store. The admin
 /// widget's listing IS a report, riding the ordinary schema/query/export pipeline.
 /// Synthesized from the live SavedReports options (never from configuration — the
 /// name is reserved), it works because configured documents sync into the same table
@@ -17,11 +17,22 @@ namespace InteractiveReport.AspNetCore;
 /// </summary>
 internal static class SavedReportsListingDefinition
 {
+    /// <summary>The reserved configured-report name used to route the synthetic listing.</summary>
     internal const string Name = "__saved-reports";
 
+    /// <summary>
+    /// Determines whether a route name selects the synthetic saved-reports listing.
+    /// </summary>
+    /// <param name="name">The case-insensitive report route name.</param>
+    /// <returns><see langword="true"/> when the name identifies the synthetic saved-reports listing; otherwise, <see langword="false"/>.</returns>
     internal static bool Matches(string name)
         => string.Equals(name, Name, StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Creates the synthetic report definition that exposes saved-report metadata as a regular report.
+    /// </summary>
+    /// <param name="cfg">The validated saved-report store configuration.</param>
+    /// <returns>An administrators-only definition targeting the configured persistence table.</returns>
     internal static ReportDefinition Create(SavedReportStoreConfig cfg)
     {
         SavedReportStoreConfig.EnsureValidTableName(cfg.TableName);
@@ -53,8 +64,14 @@ internal static class SavedReportsListingDefinition
         };
     }
 
+    /// <summary>
+    /// Creates the default report state for the saved-reports listing.
+    /// </summary>
+    /// <returns>A listing state that selects metadata, sorts by report and title, and configures action renderers.</returns>
     private static ReportState DefaultState()
     {
+        // Accepts an action command and returns the renderer configuration for that command.
+        // The returned format always uses the listing row's ID as its action key.
         static ColumnFormat Action(string command) => new()
         {
             DisplayAs = "action",
@@ -107,13 +124,16 @@ internal static class SavedReportsListingDefinition
     }
 
     /// <summary>
-    /// One plain SELECT per dialect. Values are pre-rendered text: SCOPE and the
-    /// action labels are CASE expressions over ORIGIN/IS_GLOBAL/IS_PRIMARY, and MODIFIED trims
-    /// the ISO-8601 "o" text to sortable "yyyy-MM-dd HH:mm". No ORDER BY (sorting
-    /// belongs to report state); no bracket/brace characters (SqlKata rewrites them
-    /// even inside raw SQL). Postgres quotes every identifier because the store's
-    /// DDL created quoted-uppercase names.
+    /// Returns one plain SELECT per dialect. Values are pre-rendered text: SCOPE and the action labels are CASE
+    /// expressions over ORIGIN/IS_GLOBAL/IS_PRIMARY, and MODIFIED trims the ISO-8601 "o" text to sortable
+    /// "yyyy-MM-dd HH:mm". No ORDER BY (sorting belongs to report state); no bracket/brace characters
+    /// (SqlKata rewrites them even inside raw SQL). PostgreSQL quotes every identifier because the store's DDL
+    /// created quoted-uppercase names.
     /// </summary>
+    /// <param name="dialect">The database dialect whose SQL rules apply.</param>
+    /// <param name="table">The validated effective persistence table name.</param>
+    /// <returns>The generated SQL text.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="dialect"/> is not supported.</exception>
     private static string Sql(ReportDialect dialect, string table) => dialect switch
     {
         ReportDialect.Sqlite or ReportDialect.Oracle => $"""

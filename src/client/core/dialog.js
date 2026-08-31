@@ -1,6 +1,6 @@
-// Dialog windows. Editors are modeless manual popovers: they stay in the
-// widget's shadow root, enter the browser top layer, and leave the report below
-// them interactive. Destructive confirmations use a native modal <dialog>.
+// Dialog-window coordinator. Editors are modeless manual popovers: they stay in the widget's
+// shadow root, enter the browser top layer, and leave the report below them interactive. Destructive
+// confirmations use a native modal <dialog>.
 
 import { errorLines } from "./api.js";
 import { el, icon } from "./dom.js";
@@ -13,9 +13,27 @@ const openDialogs = [];
 let titleSequence = 0;
 let fallbackZ = 1100;
 
+/**
+ * Detects the compact layout in which dialogs are not independently positioned.
+ *
+ * @returns {boolean} Whether the viewport is at most 640 CSS pixels wide.
+ */
 const compactWindow = () => window.matchMedia?.("(max-width: 640px)").matches === true;
+/**
+ * Constrains a numeric value to the supplied inclusive bounds.
+ *
+ * @param {number} value - The numeric value to constrain.
+ * @param {number} min - The inclusive lower bound for the clamped value.
+ * @param {number} max - The inclusive upper bound for the clamped value.
+ * @returns {number} `value` constrained to the inclusive interval.
+ */
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 
+/**
+ * Returns the viewport rectangle available for dialog placement.
+ *
+ * @returns {{left: number, top: number, right: number, bottom: number}} Visual-viewport bounds, falling back to layout-viewport dimensions.
+ */
 function viewportBounds() {
     const viewport = window.visualViewport;
     const left = viewport?.offsetLeft ?? 0;
@@ -25,6 +43,14 @@ function viewportBounds() {
     return { left, top, right: left + width, bottom: top + height };
 }
 
+/**
+ * Promotes an already-open modeless dialog to the end of the visual stacking order.
+ *
+ * @param {object} dlg - The dialog controller to promote.
+ * @returns {void} No value.
+ *
+ * Side effects: reorders the open-dialog registry, advances fallback z-index, and may re-show a native popover while preserving focus.
+ */
 function activateDialog(dlg) {
     const index = openDialogs.indexOf(dlg);
     if (index < 0 || index === openDialogs.length - 1) return;
@@ -32,8 +58,8 @@ function activateDialog(dlg) {
     openDialogs.push(dlg);
     dlg.root.style.zIndex = String(++fallbackZ);
 
-    // Top-layer entries paint in insertion order; re-showing a manual popover
-    // promotes it without moving its DOM or losing its component-owned styles.
+    // Top-layer entries paint in insertion order; re-showing a manual popover promotes it
+    // without moving its DOM or losing its component-owned styles.
     if (!dlg.modal && typeof dlg.root.showPopover === "function" && popoverIsOpen(dlg.root)) {
         const focused = dlg.root.getRootNode().activeElement;
         dlg.root.hidePopover();
@@ -42,22 +68,46 @@ function activateDialog(dlg) {
     }
 }
 
+/**
+ * Removes a dialog from the open-dialog registry and updates active styling.
+ *
+ * @param {object} dlg - The dialog controller to remove.
+ * @returns {void} No value.
+ */
 function removeOpenDialog(dlg) {
     const index = openDialogs.indexOf(dlg);
     if (index >= 0) openDialogs.splice(index, 1);
 }
 
+/**
+ * Returns focus to the element that was active before the dialog opened.
+ *
+ * @param {HTMLElement|null} node - The element focused before the dialog opened.
+ * @returns {void} No value.
+ *
+ * Side effects: focuses the prior element immediately or retries once on the next animation frame.
+ */
 function restorePreviousFocus(node) {
     const focus = () => {
         if (!node?.isConnected || node.disabled) return false;
         node.focus?.({ preventScroll: true });
         return true;
     };
-    // A confirmation can be opened while its parent Apply button is disabled.
-    // Let that async handler finish before making a second restoration attempt.
+    // A confirmation can be opened while its parent Apply button is disabled. Let that async
+    // handler finish before making a second restoration attempt.
     if (!focus()) window.requestAnimationFrame?.(() => focus());
 }
 
+/**
+ * Places a dialog within the viewport near its requested coordinates.
+ *
+ * @param {object} dlg - The modeless dialog controller to position.
+ * @param {number} requestedLeft - The preferred horizontal dialog position in viewport coordinates.
+ * @param {number} requestedTop - The preferred vertical dialog position in viewport coordinates.
+ * @returns {void} No value.
+ *
+ * Side effects: writes viewport-constrained CSS position variables and marks the dialog as moved.
+ */
 function placeWindow(dlg, requestedLeft, requestedTop) {
     if (dlg.modal || compactWindow()) return;
     const rect = dlg.root.getBoundingClientRect();
@@ -73,11 +123,25 @@ function placeWindow(dlg, requestedLeft, requestedTop) {
     dlg.moved = true;
 }
 
+/**
+ * Returns the dialog's current viewport-relative position.
+ *
+ * @param {object} dlg - The dialog controller whose root rectangle will be measured.
+ * @returns {{left: number, top: number}} The root's current viewport coordinates.
+ */
 function currentWindowPosition(dlg) {
     const rect = dlg.root.getBoundingClientRect();
     return { left: rect.left, top: rect.top };
 }
 
+/**
+ * Adds pointer and Alt+Arrow keyboard movement to a modeless dialog title bar.
+ *
+ * @param {object} dlg - The dialog controller whose title bar receives movement handlers.
+ * @returns {void} No value.
+ *
+ * Side effects: registers title-bar listeners and mutates dialog position, pointer capture, and dragging classes during interaction.
+ */
 function makeDraggable(dlg) {
     let drag = null;
     const titleBar = dlg.titleBar;
@@ -126,17 +190,29 @@ function makeDraggable(dlg) {
     });
 }
 
-/// Widget teardown: close every dialog this host still owns.
+/**
+ * Closes every still-open dialog owned by one widget and removes its ownership set.
+ *
+ * @param {HTMLElement} host - The custom-element host being disconnected.
+ * @returns {void} No value.
+ *
+ * Side effects: closes dialogs, aborts their listeners, removes their DOM, and restores prior focus where possible.
+ */
 export function closeDialogsOwnedBy(host) {
     for (const dialog of [...(dialogsByOwner.get(host) ?? [])]) dialog.close();
     dialogsByOwner.delete(host);
 }
 
 /**
- * Open an editor window. build(body, dlg) fills the content; onApply(dlg) runs on
- * the primary button. Return a promise and the window closes on success or shows
- * the precise error and stays open on failure. Omit onApply for a plain
- * informational window. modal is reserved for short confirmations.
+ * Opens an editor or confirmation window. `build(body, dlg)` fills the content; `onApply(dlg)` runs on the
+ * primary button. Return a promise and the window closes on success or shows the precise error and
+ * stays open on failure. Omit onApply for a plain informational window. modal is reserved for short
+ * confirmations.
+ *
+ * @param {{owner?: HTMLElement, title: string, width?: string, cls?: string, build: Function, applyLabel?: string, onApply?: Function, destructive?: boolean, modal?: boolean}} options - Ownership, content builder, apply behavior, sizing, and modality.
+ * @returns {object} The mounted dialog controller, including `root`, `body`, `titleBar`, `close()`, and `setError()`.
+ *
+ * Side effects: closes popup menus, mounts a dialog, registers abortable global and local listeners, manages focus, and invokes the content builder.
  */
 export function openDialog({
     owner,
@@ -173,6 +249,10 @@ export function openDialog({
         titleBar: null,
         modal,
         moved: false,
+        /**
+         * Closes this dialog once, aborts its listeners, removes ownership records, and restores prior focus.
+         * @returns {void} No value.
+         */
         close() {
             if (closed) return;
             closed = true;
@@ -184,6 +264,11 @@ export function openDialog({
             ownedDialogs?.delete(dlg);
             restorePreviousFocus(restoreFocus);
         },
+        /**
+         * Replaces the dialog error region with normalized messages and an optional trace reference.
+         * @param {Error|string|object|null} err - The failure to display, or `null` to clear the region.
+         * @returns {void} No value.
+         */
         setError(err) {
             errorBox.replaceChildren();
             if (err == null) { errorBox.hidden = true; return; }
@@ -195,6 +280,8 @@ export function openDialog({
     };
 
     let applying = false;
+    // Runs at most one apply callback at a time, disables footer actions during the await,
+    // closes on any result other than false, and renders thrown failures in the dialog.
     const runApply = async () => {
         if (!onApply || applying) return;
         applying = true;
@@ -293,6 +380,17 @@ export function openDialog({
     return dlg;
 }
 
+/**
+ * Opens a destructive confirmation dialog and resolves whether the user confirmed it.
+ *
+ * @param {HTMLElement|object} owner - The widget or localization context that owns the confirmation.
+ * @param {string} title - The title displayed by the confirmation dialog.
+ * @param {string} message - The confirmation message.
+ * @param {string|null} [confirmLabel=null] - The destructive action label, or the localized Delete label by default.
+ * @returns {Promise<boolean>} Resolves `true` only when the apply action closed the dialog; cancellation resolves `false`.
+ *
+ * Side effects: opens a modal dialog, registers listeners, and restores focus when it closes.
+ */
 export function confirmDialog(owner, title, message, confirmLabel = null) {
     return new Promise(resolve => {
         let confirmed = false;

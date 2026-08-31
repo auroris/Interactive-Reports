@@ -5,6 +5,11 @@ namespace InteractiveReport.Core.Expressions;
 /// </summary>
 public static class ExprColumns
 {
+    /// <summary>
+    /// Returns the distinct schema columns referenced by a bound expression tree.
+    /// </summary>
+    /// <param name="node">The root of the bound expression tree.</param>
+    /// <returns>A case-insensitive set containing each referenced schema column once.</returns>
     public static IReadOnlySet<string> Collect(ExprNode node)
     {
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -12,6 +17,11 @@ public static class ExprColumns
         return names;
     }
 
+    /// <summary>
+    /// Adds every schema column referenced by a bound expression tree to the destination set.
+    /// </summary>
+    /// <param name="node">The bound expression node to traverse.</param>
+    /// <param name="into">The set that receives canonical column names.</param>
     private static void Collect(ExprNode node, HashSet<string> into)
     {
         switch (node)

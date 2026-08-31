@@ -1,9 +1,8 @@
-// Table-authoring dialogs: Group By, Pivot, and Chart. Each authors a named
-// table containing the corresponding shape composable, while view switching
-// changes only activeTable. Editing a spec preserves the table's later
-// composables (per-view columns, labels, formats, computed, sorts,
-// highlights); metrics keep their stable ids across edits when their column and
-// function survive, so per-metric state never silently re-attaches elsewhere.
+// Named-table shape editors for Group By, Pivot, and Chart. Each authors a named table
+// containing the corresponding shape composable, while view switching changes only activeTable.
+// Editing a spec preserves the table's later composables (per-view columns, labels, formats,
+// computed, sorts, highlights); metrics keep their stable ids across edits when their column
+// and function survive, so per-metric state never silently re-attaches elsewhere.
 
 import { el, labeled, sel } from "../../core/dom.js";
 import { openDialog } from "../../core/dialog.js";
@@ -31,16 +30,40 @@ import {
 } from "./parts.js";
 import { fnLabel } from "../render/format.js";
 
-/// Open the configuration dialog for a non-grid view mode. Toolbar switches and
-/// the view chip both land here.
+/**
+ * Open the configuration dialog for a non-grid view mode. Toolbar switches and the view chip both land
+ * here.
+ *
+ * @param {object} w - The report controller whose named-table graph and dialogs will be used.
+ * @param {'groupBy'|'pivot'|'chart'} mode - The shape editor to open.
+ * @returns {void} No value.
+ *
+ * Side effects: resolves an editable target and opens the selected shape dialog or displays a resolution error.
+ */
 export function openViewDialog(w, mode) {
     if (mode === "groupBy") groupByDialog(w);
     else if (mode === "pivot") pivotDialog(w);
     else chartDialog(w);
 }
 
+/**
+ * Returns the localized name of a report view mode.
+ *
+ * @param {object} w - The report controller providing localization.
+ * @param {string} mode - The canonical view mode.
+ * @returns {string} The mode name.
+ */
 const modeName = (w, mode) => w.t(mode === "groupBy" ? "group.label" : `toolbar.${mode}`);
 
+/**
+ * Resolves the shape location and creation point edited by a view dialog.
+ *
+ * @param {object} w - The report controller containing the named-table graph and error surface.
+ * @param {'groupBy'|'pivot'|'chart'} mode - The shape family being edited or created.
+ * @returns {{location: object|null, baseTableId: string|null}|null} An existing shape location or unambiguous creation base; `null` after displaying an error.
+ *
+ * Side effects: may display an ambiguity, read-only, or unavailable-base error.
+ */
 function shapeTarget(w, mode) {
     const resolution = resolveView(w.doc, mode);
     if (resolution.status === "ambiguous") {
@@ -81,8 +104,16 @@ function shapeTarget(w, mode) {
     };
 }
 
-// --- Group By / Pivot --------------------------------------------------------
-
+/**
+ * Builds an editable list of dimension-column selectors.
+ *
+ * @param {object} w - The report controller providing localization.
+ * @param {Array<string>|null|undefined} initial - Existing ordered dimension names.
+ * @param {{addLabel: string, max: number, columns: Array<object>}} options - Row label, maximum dimension count, and input columns.
+ * @returns {{container: HTMLDivElement, list: object}} The row container and add/read controller.
+ *
+ * Side effects: creates detached repeatable-row controls and their handlers.
+ */
 function dimList(w, initial, { addLabel, max, columns }) {
     const container = el("div", {});
     const list = rowList(container, (initial ?? []).map(c => ({ col: c })), (row, item) => {
@@ -93,17 +124,43 @@ function dimList(w, initial, { addLabel, max, columns }) {
     return { container, list };
 }
 
+/**
+ * Builds an editable list of aggregate value selectors.
+ *
+ * @param {object} w - The report controller providing aggregate capabilities and localization.
+ * @param {Array<object>|null|undefined} initial - Existing metric rules.
+ * @param {Array<object>} columns - Columns available before the shape.
+ * @returns {{container: HTMLDivElement, list: object}} The aggregate row container and add/read controller.
+ */
 function valueList(w, initial, columns) {
     return aggregateRowList(w, initial, { addLabel: w.t("common.value"), columns });
 }
 
-/// Retired dims and metrics take dependent terminal-table state with them —
-/// the same coarse rule as deleting a computed column.
+/**
+ * Retired dimensions and metrics take dependent terminal-table state with them, using the same coarse rule as
+ * deleting a computed column.
+ *
+ * @param {object} d - The report-state document whose retired table references are removed.
+ * @param {string} tableId - The case-insensitive composable-table identifier.
+ * @param {Array<string>} retiredMetricIds - The metric identifiers removed from the prior shape.
+ * @param {Array<string>} retiredDims - The dimension identifiers removed from the prior shape.
+ * @returns {void} No value.
+ *
+ * Side effects: mutates the supplied document by removing dependent references to retired outputs.
+ */
 function pruneRetiredTableState(d, tableId, retiredMetricIds, retiredDims) {
     pruneRetiredMetrics(d, tableId, retiredMetricIds);
     for (const dim of retiredDims) removeTerminalComputedColumn(d, dim, tableId);
 }
 
+/**
+ * Opens the Group By editor for an existing shape or a new table derived from an unambiguous base.
+ *
+ * @param {object} w - The report controller containing the table graph, schema caches, metrics, and apply pipeline.
+ * @returns {void} No value.
+ *
+ * Side effects: may display a target-resolution error or open a dialog; applying creates/replaces the shape, activates its table, prunes retired dependencies, and runs the report.
+ */
 export function groupByDialog(w) {
     const target = shapeTarget(w, "groupBy");
     if (!target) return;
@@ -141,6 +198,14 @@ export function groupByDialog(w) {
     });
 }
 
+/**
+ * Opens the Pivot editor for an existing shape or a new table derived from an unambiguous base.
+ *
+ * @param {object} w - The report controller containing the table graph, schema caches, metrics, and apply pipeline.
+ * @returns {void} No value.
+ *
+ * Side effects: may display a target-resolution error or open a dialog; applying creates/replaces the shape, activates its table, prunes retired pivot outputs, and runs the report.
+ */
 export function pivotDialog(w) {
     const target = shapeTarget(w, "pivot");
     if (!target) return;
@@ -185,14 +250,21 @@ export function pivotDialog(w) {
     });
 }
 
-// --- Chart -------------------------------------------------------------------
-
+/**
+ * Opens the Chart editor for an existing shape or a new table derived from an unambiguous base.
+ *
+ * @param {object} w - The report controller containing the table graph, chart capabilities, schema caches, and apply pipeline.
+ * @returns {void} No value.
+ *
+ * Side effects: may display a target-resolution error or open a dialog; applying creates/replaces the chart, activates its table, prunes retired chart outputs, and runs the report.
+ */
 export function chartDialog(w) {
     const target = shapeTarget(w, "chart");
     if (!target) return;
     const active = target.location?.composable;
     const inputColumns = shapeInputColumns(w, target.location, target.baseTableId);
     const chartable = inputColumns.filter(c => c.type !== "other");
+    // Resolves the selected value column's protocol type for chart-function choices.
     const inputType = name => inputColumns.find(column => sameColumn(column.name, name))?.type ?? "other";
 
     const typeSel = sel([
@@ -212,10 +284,11 @@ export function chartDialog(w) {
         ...inputColumns.map(c => ({ value: c.name, label: c.computed ? `ƒ ${c.label}` : c.label })),
     ], active?.value ?? "");
 
-    // The chart's function select is not fnSelectFor: count-alone is legal (no
-    // value column), the catalog is the stricter chartAggregateFunctions, and
-    // numeric columns offer "Each Row" (no aggregation at all).
+    // The chart's function select is not fnSelectFor: count-alone is legal (no value column),
+    // the catalog is the stricter chartAggregateFunctions, and numeric columns offer "Each Row"
+    // (no aggregation at all).
     const fnSel = el("select", { class: "ir-select" });
+    // Rebuilds function choices for the current value column while retaining a still-valid selection.
     const refreshFns = keep => {
         const options = [];
         if (!valueSel.value) {

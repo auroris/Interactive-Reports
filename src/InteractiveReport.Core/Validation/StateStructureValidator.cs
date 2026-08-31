@@ -2,26 +2,35 @@ using InteractiveReport.Core.Model;
 
 namespace InteractiveReport.Core.Validation;
 
-/// <summary>Rejects structural nulls before document resolution and schema binding.</summary>
+/// <summary>
+/// Performs the schema-independent first validation pass over a report-state document.
+/// It rejects structural nulls and excessive collection sizes before resolution, canonicalization,
+/// parsing, or schema binding can allocate work from untrusted input.
+/// </summary>
 internal static class StateStructureValidator
 {
-    // These are document-complexity ceilings, not UI conventions. They bound ancestry
-    // validation and the number of null schema caches one submission can ask the server
-    // to refresh while leaving ample room for externally authored alternatives.
+    // These are document-complexity ceilings, not UI conventions. They bound
+    // ancestry validation and the number of null schema caches one submission can ask the
+    // server to refresh while leaving ample room for externally authored alternatives.
     internal const int MaxTables = 64;
     internal const int MaxComposables = 512;
     internal const int MaxTableDepth = 64;
 
     // Nested collections must be bounded before canonicalization copies, sorts, or
-    // parses their members. Keep the rule-specific ceilings aligned with their
-    // existing semantic budgets. The generic ceiling matches the completed-relation
-    // width guard and applies to collections without a tighter semantic budget.
+    // parses their members. Keep the rule-specific ceilings aligned with their existing
+    // semantic budgets. The generic ceiling matches the completed-relation width guard and
+    // applies to collections without a tighter semantic budget.
     internal const int MaxComputedRules = 20;
     internal const int MaxFilterRules = 50;
     internal const int MaxHighlightRules = 50;
     internal const int MaxShapeMetrics = 256;
     internal const int MaxNestedCollectionEntries = 900;
 
+    /// <summary>
+    /// Collects structural errors for table identities, ancestry inputs, composables, and nested rule values.
+    /// </summary>
+    /// <param name="state">The deserialized report-state document to inspect without schema access.</param>
+    /// <returns>All structural errors discovered in deterministic document order.</returns>
     public static List<ValidationError> Collect(ReportState state)
     {
         var errors = new List<ValidationError>();
@@ -122,6 +131,17 @@ internal static class StateStructureValidator
         return errors;
     }
 
+    /// <summary>
+    /// Validates the size and non-null elements of one rule collection, then delegates rule-specific checks.
+    /// </summary>
+    /// <typeparam name="T">The reference type stored by the JSON collection.</typeparam>
+    /// <param name="rules">The optional collection to validate.</param>
+    /// <param name="path">The collection's report-state validation path.</param>
+    /// <param name="errors">Receives collection and element errors.</param>
+    /// <param name="check">Validates one non-null element with its indexed path.</param>
+    /// <param name="maxCount">The largest accepted collection size.</param>
+    /// <param name="limitMessage">The message emitted when <paramref name="maxCount"/> is exceeded.</param>
+    /// <remarks>An oversized collection produces one error and its elements are not traversed.</remarks>
     private static void CollectRules<T>(
         List<T>? rules,
         string path,
@@ -149,6 +169,12 @@ internal static class StateStructureValidator
         }
     }
 
+    /// <summary>
+    /// Validates the generic size ceiling and non-null elements of an optional string list.
+    /// </summary>
+    /// <param name="values">The optional JSON string list.</param>
+    /// <param name="path">The list's report-state validation path.</param>
+    /// <param name="errors">Receives size and null-element errors.</param>
     private static void CollectStrings(List<string>? values, string path, List<ValidationError> errors)
     {
         if (values is null) return;
@@ -162,6 +188,14 @@ internal static class StateStructureValidator
                 errors.Add(new ValidationError($"{path}[{index}]", "list elements must not be null"));
     }
 
+    /// <summary>
+    /// Applies the generic size ceiling to an optional dictionary.
+    /// </summary>
+    /// <typeparam name="TKey">The dictionary key type.</typeparam>
+    /// <typeparam name="TValue">The dictionary value type.</typeparam>
+    /// <param name="values">The optional dictionary to bound.</param>
+    /// <param name="path">The dictionary's report-state validation path.</param>
+    /// <param name="errors">Receives the size error, if any.</param>
     private static void CheckCollection<TKey, TValue>(
         Dictionary<TKey, TValue>? values,
         string path,
@@ -172,6 +206,12 @@ internal static class StateStructureValidator
             errors.Add(new ValidationError(path, GenericCollectionLimitMessage));
     }
 
+    /// <summary>
+    /// Bounds the format map and every nested CSS class-token list.
+    /// </summary>
+    /// <param name="formats">The optional column-format map to inspect.</param>
+    /// <param name="path">The map's report-state validation path.</param>
+    /// <param name="errors">Receives map and nested-list size errors.</param>
     private static void CollectFormats(
         Dictionary<string, ColumnFormat>? formats,
         string path,
@@ -189,9 +229,16 @@ internal static class StateStructureValidator
                 CollectStrings(format.Classes, $"{path}.{column}.classes", errors);
     }
 
+    /// <summary>Gets the common validation message for collections without a tighter semantic budget.</summary>
     private static string GenericCollectionLimitMessage =>
         $"a collection may contain at most {MaxNestedCollectionEntries} entries";
 
+    /// <summary>
+    /// Adds a required-value error when a deserialized JSON string property is null.
+    /// </summary>
+    /// <param name="value">The deserialized string value to test.</param>
+    /// <param name="path">The property's report-state validation path.</param>
+    /// <param name="errors">Receives the missing-value error.</param>
     private static void RequireValue(string? value, string path, List<ValidationError> errors)
     {
         if (value is null)

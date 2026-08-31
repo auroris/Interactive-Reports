@@ -5,12 +5,21 @@ using InteractiveReport.Core.Schema;
 namespace InteractiveReport.Core.Validation;
 
 /// <summary>
-/// Schema-binds the domain values carried by canonical Group, Pivot, and Chart
+/// Schema-binds the domain values carried by canonical group, pivot, and chart
 /// transformations. Relation construction remains the responsibility of the canonical
 /// table compiler.
 /// </summary>
 internal static class ShapeBindingRules
 {
+    /// <summary>
+    /// Resolves group or pivot metrics, validates their ids and aggregate compatibility, and removes invalid entries.
+    /// </summary>
+    /// <param name="rules">The canonical metrics in deterministic source order.</param>
+    /// <param name="effectiveSchema">The relation schema at the shape boundary.</param>
+    /// <param name="errors">The validation list that receives identifier and aggregate/type errors.</param>
+    /// <param name="ignored">The diagnostics list that receives metrics with unknown source columns.</param>
+    /// <returns>Valid metrics in source order.</returns>
+    /// <remarks>Appends identity and type failures to <paramref name="errors"/> and unknown columns to <paramref name="ignored"/>.</remarks>
     internal static List<ValidMetric> BindMetrics(
         IReadOnlyList<CanonicalMetric> rules,
         ReportSchema effectiveSchema,
@@ -64,9 +73,14 @@ internal static class ShapeBindingRules
     }
 
     /// <summary>
-    /// Chart validation is stricter than grid aggregation: the metric must be numeric,
-    /// while a bare value column must itself be numeric.
+    /// Applies stricter rules than grid aggregation: the metric must be numeric, while a bare value column
+    /// must itself be numeric.
     /// </summary>
+    /// <param name="shape">The canonical chart declaration and its source path.</param>
+    /// <param name="columns">The source relation columns available to the chart.</param>
+    /// <param name="errors">The validation list that receives invalid chart type, role, column, and aggregation errors.</param>
+    /// <returns>The fully bound chart, or <see langword="null"/> when any chart property is invalid.</returns>
+    /// <remarks>Appends all independently detectable chart errors before returning.</remarks>
     internal static ValidChart? BindChart(
         CanonicalChartShape shape,
         IReadOnlyDictionary<string, ColumnModel> columns,
@@ -170,6 +184,15 @@ internal static class ShapeBindingRules
             NormalizeTitle(shape.ValueAxisTitle));
     }
 
+    /// <summary>
+    /// Resolves distinct dimension names against the current schema and ignores unknown entries.
+    /// </summary>
+    /// <param name="names">The authored dimension names, or <see langword="null"/>.</param>
+    /// <param name="description">The dimension role used in ignored-item diagnostics.</param>
+    /// <param name="columns">The source relation columns available to the shape.</param>
+    /// <param name="ignored">The collection that receives non-fatal ignored-item diagnostics.</param>
+    /// <returns>Distinct resolved columns in authored order.</returns>
+    /// <remarks>Appends unknown-column diagnostics to <paramref name="ignored"/>.</remarks>
     internal static List<ColumnModel> BindDimensions(
         IEnumerable<string>? names,
         string description,
@@ -192,9 +215,19 @@ internal static class ShapeBindingRules
         return result;
     }
 
+    /// <summary>
+    /// Returns the canonical aggregate-function name.
+    /// </summary>
+    /// <param name="function">The aggregate function to serialize.</param>
+    /// <returns>The canonical function name.</returns>
     private static string FunctionName(AggregateFn function)
         => System.Text.Json.JsonNamingPolicy.CamelCase.ConvertName(function.ToString());
 
+    /// <summary>
+    /// Trims an optional axis title and collapses blank text to <see langword="null"/>.
+    /// </summary>
+    /// <param name="title">The authored axis title.</param>
+    /// <returns>The trimmed title, or <see langword="null"/> when blank.</returns>
     private static string? NormalizeTitle(string? title)
         => string.IsNullOrWhiteSpace(title) ? null : title.Trim();
 }

@@ -1,6 +1,6 @@
 namespace InteractiveReport.Core.Model;
 
-/// <summary>Response shape for a report query.</summary>
+/// <summary>Contains the public data and metadata returned by one report query.</summary>
 public sealed class ReportResult
 {
     /// <summary>
@@ -9,47 +9,56 @@ public sealed class ReportResult
     /// </summary>
     public ReportState? Document { get; set; }
 
-    /// <summary>Every terminal-table column available to subsequent UI actions.</summary>
+    /// <summary>Gets every terminal-table column available to subsequent UI actions, including currently hidden columns.</summary>
     public required IReadOnlyList<ColumnInfo> AvailableColumns { get; init; }
 
+    /// <summary>Gets the visible result columns in wire order.</summary>
     public required IReadOnlyList<ColumnInfo> Columns { get; init; }
 
-    /// <summary>Rows as objects keyed by column name — page-granularity size cost is negligible, ergonomics win.</summary>
+    /// <summary>Gets the current page as row objects keyed by column name.</summary>
     public required IReadOnlyList<IReadOnlyDictionary<string, object?>> Rows { get; init; }
 
+    /// <summary>Gets the effective one-based page index and page size.</summary>
     public required PageRequest Page { get; init; }
 
-    /// <summary>Total rows in the whole filtered set (never just the visible page).</summary>
+    /// <summary>Gets the total rows in the whole filtered set, never just the visible page.</summary>
     public required long TotalRows { get; init; }
 
-    /// <summary>Column → aggregate-fn → value, computed over the whole filtered set.</summary>
+    /// <summary>Gets whole-filtered-set aggregates keyed by column and then aggregate function.</summary>
     public IReadOnlyDictionary<string, IReadOnlyDictionary<string, object?>> Aggregates { get; init; }
         = new Dictionary<string, IReadOnlyDictionary<string, object?>>();
 
-    /// <summary>One entry per break group, ordered like the page rows.</summary>
+    /// <summary>Gets one subtotal entry per control-break group, ordered like the page rows.</summary>
     public IReadOnlyList<BreakTotal> BreakTotals { get; init; } = [];
 
     /// <summary>
-    /// True when the final visible row's control-break group continues into the next
+    /// Gets whether the final visible row's control-break group continues into the next
     /// page. Clients must defer that group's subtotal until its logical end.
     /// </summary>
     public bool BreakContinues { get; init; }
 
+    /// <summary>Gets the row and cell highlight rules matched by the returned page.</summary>
     public IReadOnlyList<HighlightHit> Highlights { get; init; } = [];
 
     /// <summary>
-    /// State elements referencing columns that no longer exist (or features not yet
+    /// Gets state elements that referenced columns that no longer exist or unsupported features. Such elements
     /// implemented) are dropped and reported here — saved reports degrade, never 500.
     /// </summary>
     public required IReadOnlyList<IgnoredItem> Ignored { get; init; }
 
+    /// <summary>Gets the measured query execution time in milliseconds.</summary>
     public long ElapsedMs { get; init; }
 }
 
+/// <summary>Describes one public result column and its presentation lineage.</summary>
+/// <param name="Name">The case-insensitive logical column identifier.</param>
+/// <param name="Label">The display label.</param>
+/// <param name="Type">The protocol type name.</param>
+/// <param name="Computed">Whether the column was authored as a computed expression.</param>
 public sealed record ColumnInfo(string Name, string Label, string Type, bool Computed)
 {
     /// <summary>
-    /// Immediate input column whose inherited presentation mask applies to this
+    /// Gets the immediate input column whose inherited presentation mask applies to this
     /// result column. Null means <see cref="Name"/>. Each shape boundary advances
     /// this identity one output at a time, so sibling columns that share an original
     /// source cannot exchange masks.
@@ -57,19 +66,29 @@ public sealed record ColumnInfo(string Name, string Label, string Type, bool Com
     public string? FormatSource { get; init; }
 
     /// <summary>
-    /// Stable metric identity for a data-derived Pivot cell. Explicit Pivot metrics
+    /// Gets the stable metric identity for a data-derived pivot cell. Explicit pivot metrics
     /// use their authored value id; implicit count cells use <c>__count</c>. This is
     /// advisory result/schema metadata, not authored composable state.
     /// </summary>
     public string? PivotMetricId { get; init; }
 }
 
-/// <summary>Totals for one control-break group: the break-column values, row count, and per-column aggregates.</summary>
+/// <summary>Captures one control-break group's key values, row count, and per-column aggregates.</summary>
+/// <param name="Key">The break-column values identifying the group.</param>
+/// <param name="Rows">The number of rows in the group.</param>
+/// <param name="Aggregates">The group's aggregates keyed by column and function.</param>
 public sealed record BreakTotal(
     IReadOnlyDictionary<string, object?> Key,
     long Rows,
     IReadOnlyDictionary<string, IReadOnlyDictionary<string, object?>> Aggregates);
 
+/// <summary>Identifies one matched highlight rule for a returned row or cell.</summary>
+/// <param name="Row">The zero-based row index within the returned page.</param>
+/// <param name="Id">The stable highlight-rule identifier.</param>
+/// <param name="Col">The target column for a cell highlight, or <see langword="null"/> for a row highlight.</param>
 public sealed record HighlightHit(int Row, string Id, string? Col);
 
+/// <summary>Explains one non-fatal report-state element omitted during validation or execution.</summary>
+/// <param name="Kind">The protocol category of the omitted element.</param>
+/// <param name="Detail">The client-facing reason it was omitted.</param>
 public sealed record IgnoredItem(string Kind, string Detail);

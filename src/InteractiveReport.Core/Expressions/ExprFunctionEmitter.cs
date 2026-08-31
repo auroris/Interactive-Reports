@@ -9,6 +9,13 @@ namespace InteractiveReport.Core.Expressions;
 /// </summary>
 internal static class ExprFunctionEmitter
 {
+    /// <summary>
+    /// Emits a direct function call whose arguments need no special rewriting.
+    /// </summary>
+    /// <param name="context">The mutable SQL and binding accumulator.</param>
+    /// <param name="name">The trusted dialect function name supplied by the registry.</param>
+    /// <param name="arguments">Bound arguments emitted in call order.</param>
+    /// <remarks>Appends SQL and nested bindings to <paramref name="context"/>.</remarks>
     public static void EmitPlain(EmitContext context, string name, IReadOnlyList<ExprNode> arguments)
     {
         context.Append(name).Append('(');
@@ -20,12 +27,18 @@ internal static class ExprFunctionEmitter
         context.Append(')');
     }
 
-    /// <summary>Concatenation treats NULL as empty across all supported dialects.</summary>
+    /// <summary>
+    /// Renders concatenation with NULL treated as empty on every supported dialect.
+    /// </summary>
+    /// <param name="context">The mutable SQL and binding accumulator.</param>
+    /// <param name="arguments">Two or more bound text arguments.</param>
+    /// <remarks>Appends SQL and nested bindings to <paramref name="context"/>.</remarks>
     public static void EmitConcat(EmitContext context, IReadOnlyList<ExprNode> arguments)
     {
         if (context.Dialect == ReportDialect.Oracle)
         {
-            // Oracle CONCAT is two-argument only; native || already treats NULL as empty.
+            // Oracle CONCAT is two-argument only; native || already treats
+            // NULL as empty.
             context.Append('(');
             for (var i = 0; i < arguments.Count; i++)
             {
@@ -39,6 +52,12 @@ internal static class ExprFunctionEmitter
         EmitPlain(context, "CONCAT", arguments);
     }
 
+    /// <summary>
+    /// Emits ROUND with the validated numeric and precision arguments.
+    /// </summary>
+    /// <param name="context">The mutable SQL and binding accumulator.</param>
+    /// <param name="arguments">The bound number and optional integer precision.</param>
+    /// <remarks>PostgreSQL casts both two-argument operands to signatures accepted by <c>ROUND</c>.</remarks>
     public static void EmitRound(EmitContext context, IReadOnlyList<ExprNode> arguments)
     {
         if (context.Dialect == ReportDialect.Postgres && arguments.Count == 2)
@@ -54,6 +73,12 @@ internal static class ExprFunctionEmitter
         EmitPlain(context, "ROUND", arguments);
     }
 
+    /// <summary>
+    /// Emits the dialect-specific substring function.
+    /// </summary>
+    /// <param name="context">The mutable SQL and binding accumulator.</param>
+    /// <param name="arguments">Text, one-based start, and optional length.</param>
+    /// <remarks>SQL Server synthesizes an omitted length with <c>LEN</c>; other dialects use <c>SUBSTR</c>.</remarks>
     public static void EmitSubstr(EmitContext context, IReadOnlyList<ExprNode> arguments)
     {
         if (context.Dialect != ReportDialect.SqlServer)
@@ -80,7 +105,13 @@ internal static class ExprFunctionEmitter
         context.Append(')');
     }
 
-    /// <summary>Portable case-insensitive LIKE predicates with bound wildcard pieces.</summary>
+    /// <summary>
+    /// Emits a portable case-insensitive LIKE predicate with wildcard pieces represented as bound literals.
+    /// </summary>
+    /// <param name="context">The mutable SQL and binding accumulator.</param>
+    /// <param name="arguments">The bound candidate text and search text.</param>
+    /// <param name="leadingWildcard">Indicates whether the generated pattern starts with a wildcard.</param>
+    /// <param name="trailingWildcard">Indicates whether the generated pattern ends with a wildcard.</param>
     public static void EmitTextMatch(
         EmitContext context,
         IReadOnlyList<ExprNode> arguments,
@@ -99,6 +130,11 @@ internal static class ExprFunctionEmitter
         context.Append("))");
     }
 
+    /// <summary>
+    /// Emits an IN-list predicate from one candidate followed by one or more values.
+    /// </summary>
+    /// <param name="context">The mutable SQL and binding accumulator.</param>
+    /// <param name="arguments">The candidate expression followed by list values.</param>
     public static void EmitInList(EmitContext context, IReadOnlyList<ExprNode> arguments)
     {
         context.Append('(');
@@ -112,12 +148,22 @@ internal static class ExprFunctionEmitter
         context.Append("))");
     }
 
+    /// <summary>
+    /// Emits the fixed request timestamp as a bound value.
+    /// </summary>
+    /// <param name="context">The mutable SQL and binding accumulator containing the normalized request time.</param>
+    /// <param name="arguments">The validated empty argument list; it is unused during emission.</param>
     public static void EmitNow(EmitContext context, IReadOnlyList<ExprNode> arguments)
-        // NOW is a request value, not an engine/session clock. Binding the one UTC
-        // instant carried by the bound plan also keeps repeated occurrences and
+        // NOW is a request value, not an engine or session clock. Binding the
+        // one UTC instant carried by the bound plan also keeps repeated occurrences and
         // separate terminal statements coherent.
         => context.AppendBinding(context.EvaluationUtcNow);
 
+    /// <summary>
+    /// Emits dialect-specific text-to-date conversion.
+    /// </summary>
+    /// <param name="context">The mutable SQL and binding accumulator.</param>
+    /// <param name="arguments">The single bound text, date, or null value.</param>
     public static void EmitToDate(EmitContext context, IReadOnlyList<ExprNode> arguments)
     {
         var argument = arguments[0];
@@ -160,6 +206,11 @@ internal static class ExprFunctionEmitter
         }
     }
 
+    /// <summary>
+    /// Emits dialect-specific date truncation.
+    /// </summary>
+    /// <param name="context">The mutable SQL and binding accumulator.</param>
+    /// <param name="arguments">A validated truncation-unit literal followed by a bound date.</param>
     public static void EmitDateTrunc(EmitContext context, IReadOnlyList<ExprNode> arguments)
     {
         var unit = ExprDateRules.TruncUnit(arguments[0]);
@@ -198,6 +249,11 @@ internal static class ExprFunctionEmitter
         }
     }
 
+    /// <summary>
+    /// Emits dialect-specific date or value formatting.
+    /// </summary>
+    /// <param name="context">The mutable SQL and binding accumulator.</param>
+    /// <param name="arguments">A bound date/value and optional validated date-format literal.</param>
     public static void EmitToString(EmitContext context, IReadOnlyList<ExprNode> arguments)
     {
         var date = arguments[0];
@@ -238,6 +294,11 @@ internal static class ExprFunctionEmitter
         }
     }
 
+    /// <summary>
+    /// Emits dialect-specific date arithmetic.
+    /// </summary>
+    /// <param name="context">The mutable SQL and binding accumulator.</param>
+    /// <param name="node">The bound date, day-count, and plus/minus operation.</param>
     public static void EmitDateAdd(EmitContext context, DateAdd node)
     {
         var subtract = node.Op == "-";
@@ -278,6 +339,14 @@ internal static class ExprFunctionEmitter
         }
     }
 
+    /// <summary>
+    /// Emits dialect-specific date-part extraction.
+    /// </summary>
+    /// <param name="context">The mutable SQL and binding accumulator.</param>
+    /// <param name="part">The trusted SQL date-part keyword selected by the function registry.</param>
+    /// <param name="sqliteFormat">The trusted <c>strftime</c> directive for the same date part.</param>
+    /// <param name="arguments">The single bound date or textual date argument.</param>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="context"/> carries an unsupported dialect.</exception>
     public static void EmitDatePart(
         EmitContext context,
         string part,
@@ -330,6 +399,12 @@ internal static class ExprFunctionEmitter
         }
     }
 
+    /// <summary>
+    /// Emits SQL Server date truncation without relying on version-specific <c>DATETRUNC</c> support.
+    /// </summary>
+    /// <param name="context">The mutable SQL and binding accumulator.</param>
+    /// <param name="unit">The validated <c>DAY</c>, <c>MONTH</c>, or <c>YEAR</c> token.</param>
+    /// <param name="date">The bound date expression to truncate.</param>
     private static void EmitSqlServerDateTrunc(EmitContext context, string unit, ExprNode date)
     {
         switch (unit)
@@ -354,6 +429,10 @@ internal static class ExprFunctionEmitter
         }
     }
 
+    /// <summary>
+    /// Emits a typed null expression suitable for date context.
+    /// </summary>
+    /// <param name="context">The mutable SQL accumulator whose dialect selects the typed null.</param>
     private static void EmitDateNull(EmitContext context)
         => context.Append(context.Dialect switch
         {
@@ -363,6 +442,10 @@ internal static class ExprFunctionEmitter
             _ => "NULL",
         });
 
+    /// <summary>
+    /// Emits a typed null expression suitable for text context.
+    /// </summary>
+    /// <param name="context">The mutable SQL accumulator whose dialect selects the typed null.</param>
     private static void EmitTextNull(EmitContext context)
         => context.Append(context.Dialect switch
         {

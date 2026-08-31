@@ -1,13 +1,10 @@
-// <interactive-report-admin></interactive-report-admin>
-//
-// Bundle entry for the saved-report administration widget. The admin element
-// embeds an <interactive-report> pointed at the built-in "__saved-reports"
-// listing, so this bundle registers the report element too — an admin page
-// needs no second script tag.
-//
-// Attributes:
-//   api-base — API prefix; defaults to the prefix this script was served from
-//   base     — compatibility alias for api-base
+// Administration bundle entrypoint: registers the saved-report administration element and the
+// report element it embeds. It shares core widget infrastructure while keeping administration
+// workflows out of the ordinary report-viewer entrypoint.
+
+// Protocol contract: <interactive-report-admin> embeds <interactive-report> against the built-in
+// "__saved-reports" listing, so this entry registers both elements and requires only one script.
+// `api-base` selects the API prefix, with `base` retained as its compatibility alias.
 
 import { InteractiveReportAdminElement } from "./admin/element.js";
 import { InteractiveReportElement } from "./report/element.js";

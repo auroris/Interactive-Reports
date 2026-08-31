@@ -7,6 +7,7 @@ namespace InteractiveReport.Core.Model;
 /// </summary>
 public sealed class ReportDocumentFile
 {
+    /// <summary>Gets or sets the initial display title; the synchronizer falls back to the configured report name when omitted.</summary>
     public string? Title { get; set; }
 
     /// <summary>
@@ -16,5 +17,6 @@ public sealed class ReportDocumentFile
     /// </summary>
     public bool Primary { get; set; }
 
+    /// <summary>Gets or sets the versioned report-state document to publish.</summary>
     public ReportState? State { get; set; }
 }

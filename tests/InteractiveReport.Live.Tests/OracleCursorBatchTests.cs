@@ -6,6 +6,7 @@ using InteractiveReport.Core.Planning;
 using InteractiveReport.Core.Schema;
 using InteractiveReport.Core.Validation;
 using Oracle.ManagedDataAccess.Client;
+using SqlKata;
 using static InteractiveReport.Core.Tests.TestFixtures;
 
 namespace InteractiveReport.Core.Tests;
@@ -17,6 +18,28 @@ namespace InteractiveReport.Core.Tests;
 /// </summary>
 public sealed class OracleCursorBatchTests
 {
+    [Fact]
+    public void Standard_command_enables_named_binding_and_adds_every_compiler_parameter()
+    {
+        var definition = OrdersDefinition(ReportDialect.Oracle);
+        var compiled = DialectSupport.GetCompiler(ReportDialect.Oracle).Compile(
+            new Query("source")
+                .Where("STATUS", "SHIPPED")
+                .Where("AMOUNT", ">=", 5000m));
+
+        using var connection = new OracleConnection();
+        using var command = Assert.IsType<OracleCommand>(CommandBuilder.Build(
+            connection,
+            compiled,
+            new Dictionary<string, object?>(),
+            definition));
+
+        Assert.True(command.BindByName);
+        Assert.Equal(
+            compiled.NamedBindings.Keys.Select(name => name.TrimStart('@', ':')),
+            command.Parameters.Cast<OracleParameter>().Select(parameter => parameter.ParameterName));
+    }
+
     [Fact]
     public void Batch_uses_ordered_ref_cursor_outputs_and_deduplicated_named_inputs()
     {

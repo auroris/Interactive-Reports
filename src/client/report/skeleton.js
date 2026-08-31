@@ -1,7 +1,7 @@
-// The widget's static frame: toolbar (search, view buttons, Actions, and the
-// saved-report select), notice slots, chip strip, table, chart container, and
-// pager. Builds w.els — the fixed set of mount points every renderer targets —
-// and wires toolbar events to the widget and its feature modules.
+// Report widget shell: toolbar (search, view buttons, Actions, and the saved-report
+// select), notice slots, chip strip, table, chart container, and pager. It builds `w.els`, the
+// fixed set of mount points every renderer targets, and wires toolbar events to the widget and
+// its feature modules.
 
 import { el, icon } from "../core/dom.js";
 import { featureEnabled } from "./schema.js";
@@ -9,6 +9,14 @@ import { doSearch, openSearchScopeMenu } from "./search.js";
 import { actionsMenuItems, openActionsMenu } from "./menus.js";
 import { loadSavedById, refreshSavedSelect, resetToPrimary } from "./saved.js";
 
+/**
+ * Creates the report widget's persistent toolbar, banner, content, and paging regions.
+ *
+ * @param {object} w - The report element whose mount point, localization, actions, and `els` registry are used.
+ * @returns {void} No value.
+ *
+ * Side effects: replaces the widget surface, assigns `w.els`, and registers toolbar handlers.
+ */
 export function buildSkeleton(w) {
     const scopeBtn = el("button", {
         type: "button", class: "ir-btn ir-search-scope",
@@ -75,11 +83,18 @@ export function buildSkeleton(w) {
         w.els.pager);
 }
 
-/// Fit the toolbar to the report's feature whitelist, once the schema has
-/// delivered it. The skeleton builds full-width (features are unknown until
-/// then); this pares it down: search bar, per-mode view buttons (the whole
-/// group goes when grid is the only choice left), the Actions button when no
-/// menu entry survives, and the saved-report select.
+// Invariant: fit the toolbar to the report's feature whitelist, once the schema has delivered
+// it. The skeleton builds full-width (features are unknown until then); this pares it down:
+// search bar, per-mode view buttons (the whole group goes when grid is the only choice left),
+// the Actions button when no menu entry survives, and the saved-report select.
+/**
+ * Shows or hides report controls according to the active schema capabilities.
+ *
+ * @param {object} w - The loaded report controller whose schema features and saved reports drive visibility.
+ * @returns {void} No value.
+ *
+ * Side effects: changes toolbar control visibility and refreshes saved-report selector options.
+ */
 export function applyFeatureChrome(w) {
     w.els.searchWrap.hidden = !featureEnabled(w, "search");
     let anyAlternateView = false;

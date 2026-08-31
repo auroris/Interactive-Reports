@@ -1,7 +1,7 @@
-// Popup menus anchored to a toolbar button or column-header button. Native auto
-// popovers own top-layer display, light dismiss, and close requests. CSS anchor
-// positioning owns placement where available; the small geometry fallback keeps
-// older hosts usable. Menu-specific arrow-key focus remains application behavior.
+// Popup-menu coordinator for toolbar and column-header controls. Native auto
+// popovers own top-layer display, light dismiss, and close requests. CSS anchor positioning
+// owns placement where available; the small geometry fallback keeps older hosts usable.
+// Menu-specific arrow-key focus remains application behavior.
 
 import { el } from "./dom.js";
 import { hidePopover, showPopover } from "./popover.js";
@@ -10,6 +10,13 @@ let activePopup = null;
 let activePopupOwner = null;
 let popupSequence = 0;
 
+/**
+ * Closes the one globally active popup, if present, and clears its ownership record.
+ *
+ * @returns {void} No value.
+ *
+ * Side effects: invokes the active popup's cleanup callback, which removes DOM and listeners.
+ */
 export function closePopups() {
     const close = activePopup;
     activePopup = null;
@@ -17,11 +24,24 @@ export function closePopups() {
     close?.();
 }
 
-/// Widget teardown: close the menu only if this host opened it.
+// Invariant: widget teardown: close the menu only if this host opened it.
+/**
+ * Closes the menu owned by the supplied widget host.
+ *
+ * @param {Element} host - The custom-element host whose menu should close.
+ * @returns {void} No value.
+ *
+ * Side effects: closes and removes the active menu only when its recorded owner is `host`.
+ */
 export function closeMenuOwnedBy(host) {
     if (activePopupOwner === host) closePopups();
 }
 
+/**
+ * Determines whether the browser supports CSS anchor positioning.
+ *
+ * @returns {boolean} Whether the three CSS features required by the anchored menu layout are supported.
+ */
 const anchorPositioningAvailable = () =>
     window.CSS?.supports?.("position-anchor: --ir-popup-anchor") === true
     && window.CSS.supports("position-area: bottom span-right")
@@ -30,10 +50,15 @@ const anchorPositioningAvailable = () =>
 const VIEWPORT_MARGIN = 8;
 const ANCHOR_GAP = 2;
 
-/// Legacy geometry path: cap the menu to the larger space above or below its
-/// anchor. A menu taller than either side becomes a scroll container instead
-/// of extending beyond the viewport. Modern browsers get this sizing from the
-/// CSS position area.
+/**
+ * Legacy geometry path: cap the menu to the larger space above or below its anchor. A menu taller than
+ * either side becomes a scroll container instead of extending beyond the viewport. Modern browsers get
+ * this sizing from the CSS position area.
+ *
+ * @param {HTMLElement} menu - The fallback menu whose maximum height will be set.
+ * @param {Element} anchor - The element used to measure space above and below.
+ * @returns {void} No value.
+ */
 function constrainFallbackHeight(menu, anchor) {
     const a = anchor.getBoundingClientRect();
     const below = window.innerHeight - VIEWPORT_MARGIN - a.bottom - ANCHOR_GAP;
@@ -41,6 +66,13 @@ function constrainFallbackHeight(menu, anchor) {
     menu.style.maxHeight = `${Math.max(0, below, above)}px`;
 }
 
+/**
+ * Positions a compatibility menu within the viewport beside its anchor.
+ *
+ * @param {HTMLElement} menu - The mounted fallback menu to position.
+ * @param {Element} anchor - The element whose viewport rectangle anchors the menu.
+ * @returns {void} No value.
+ */
 function placeFallback(menu, anchor) {
     const a = anchor.getBoundingClientRect();
     const m = menu.getBoundingClientRect();
@@ -53,12 +85,13 @@ function placeFallback(menu, anchor) {
 }
 
 /**
- * Open a popup menu anchored to an element.
- * items: array of
- *   { label, onPick, disabled?, checked?, hint? }  — an actionable entry
- *   { heading }                                    — a non-interactive section label
- *   { note }                                       — non-interactive wrapping text (column help)
- *   "-"                                            — a separator
+ * Opens one popup menu anchored to an element. Items may be actions, headings, notes, or the `"-"` separator token.
+ *
+ * @param {HTMLElement} anchor - The toolbar or column-header control that owns focus and ARIA state.
+ * @param {Array<object|string>} items - Action definitions (`label`, `onPick`, `disabled`, `checked`, `hint`), `{heading}`, `{note}`, or `"-"`.
+ * @returns {HTMLDivElement} The mounted menu element.
+ *
+ * Side effects: closes any previous popup, mounts the menu, changes anchor styles and ARIA attributes, registers abortable listeners, and focuses the first enabled item.
  */
 export function popupMenu(anchor, items) {
     closePopups();
@@ -77,8 +110,8 @@ export function popupMenu(anchor, items) {
             continue;
         }
         if (item.note !== undefined) {
-            // Announced as a disabled item; the arrow-key cycle skips it because
-            // the focus query targets .ir-menu-item only.
+            // Invariant: announced as a disabled item; the arrow-key cycle skips it because the
+            // focus query targets .ir-menu-item only.
             menu.append(el("div", {
                 class: "ir-menu-note", role: "menuitem", "aria-disabled": "true",
             }, item.note));
@@ -115,7 +148,7 @@ export function popupMenu(anchor, items) {
         const path = event.composedPath?.() ?? [event.target];
         if (!path.includes(menu) && !path.includes(anchor)) closePopups();
     };
-    // Scrolling the newly constrained menu is expected. Scrolling an ancestor
+    // Interaction rule: scrolling the newly constrained menu is expected. Scrolling an ancestor
     // invalidates fallback coordinates and closes it as before.
     const onScroll = event => {
         if (event?.target === menu) return;
@@ -149,8 +182,8 @@ export function popupMenu(anchor, items) {
             return;
         }
         if (event.key === "Tab") {
-            // Menus are not a tab stop: close, and let the un-prevented Tab
-            // continue from the anchor to its natural neighbor.
+            // Menus are not a tab stop: close, and let the un-prevented Tab continue from the
+            // anchor to its natural neighbor.
             closePopups();
             anchor.focus?.();
             return;

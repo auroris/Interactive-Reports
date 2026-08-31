@@ -1,10 +1,20 @@
-// DOM primitives shared by every widget: element builder, inline icons, notice
-// banners, and small form helpers. Everything renders through createElement and
-// textContent — report data never passes through innerHTML (the only innerHTML
-// below is our own static icon markup).
+// DOM primitives shared by every widget: element construction, bundled icons, notice
+// banners, and small form helpers. Everything renders through createElement and textContent;
+// report data never passes through innerHTML (the only innerHTML below is our own static icon
+// markup).
 
 import { translate } from "./localization.js";
 
+/**
+ * Creates a DOM element, applies its properties, and appends its children.
+ *
+ * @param {string} tag - The HTML tag name of the element to create.
+ * @param {object} [props={}] - Properties, attributes, dataset entries, styles, and `on*` handlers to assign.
+ * @param {...(Node|string|number|Array<Node|string|number>|null|undefined|false)} children - Nested child values; nullish values and `false` are omitted.
+ * @returns {HTMLElement} A detached element containing the supplied children.
+ *
+ * Side effects: creates DOM nodes and attaches supplied event handlers; it does not mount the result.
+ */
 export function el(tag, props = {}, ...children) {
     const node = document.createElement(tag);
     for (const [k, v] of Object.entries(props)) {
@@ -33,13 +43,29 @@ const ICONS = {
     pencil: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M11.2 2.1 13.9 4.8 5.6 13.1 2.2 13.8 2.9 10.4z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M9.9 3.4 12.6 6.1" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>',
 };
 
+/**
+ * Creates the decorative icon element for a named bundled symbol.
+ *
+ * @param {string} name - A key in the bundled icon catalog.
+ * @returns {HTMLSpanElement} A detached, aria-hidden icon container; unknown names produce an empty container.
+ *
+ * Side effects: creates a detached element and assigns trusted static SVG markup.
+ */
 export function icon(name) {
     const span = el("span", { class: "ir-icon", "aria-hidden": "true" });
     span.innerHTML = ICONS[name] ?? "";
     return span;
 }
 
-/// Notice banner: kinds error | warn | ok. Pass onDismiss for a close button.
+/**
+ * Creates a notice banner and adds a localized close control when dismissal is supported.
+ *
+ * @param {'error'|'warn'|'ok'|string} kind - The visual status appended to the banner class name.
+ * @param {string} text - The already-safe display text.
+ * @param {Function|null} onDismiss - The optional close-button callback.
+ * @param {Element|object|string|null} [context=null] - The localization context for the dismiss label.
+ * @returns {HTMLDivElement} A detached banner element.
+ */
 export function banner(kind, text, onDismiss, context = null) {
     return el("div", { class: `ir-banner ir-banner-${kind}` },
         el("span", { class: "ir-banner-text" }, text),
@@ -48,9 +74,20 @@ export function banner(kind, text, onDismiss, context = null) {
         }, icon("close")) : null);
 }
 
-/// Append a short-lived status message to a persistent live region. Keeping the
-/// role on the slot (rather than on a node inserted with its text already filled)
-/// gives assistive technology a stable region to observe.
+/**
+ * Append a short-lived status message to a persistent live region. Keeping the role on the slot
+ * (rather than on a node inserted with its text already filled) gives assistive technology a stable
+ * region to observe.
+ *
+ * @param {Element} slot - The persistent live region that receives the message.
+ * @param {string} kind - The banner status class suffix.
+ * @param {string} text - The already-safe display text.
+ * @param {number} [timeout=4000] - The number of milliseconds before the transient banner is dismissed.
+ * @param {Element|object|string|null} [context=null] - The localization context for banner controls.
+ * @returns {Function} A dismissal function that clears the timer and removes the message immediately.
+ *
+ * Side effects: appends a banner, schedules its removal, and removes it when the returned callback runs.
+ */
 export function transientBanner(slot, kind, text, timeout = 4000, context = null) {
     const node = banner(kind, text, null, context);
     slot.append(node);
@@ -58,12 +95,28 @@ export function transientBanner(slot, kind, text, timeout = 4000, context = null
     return () => { clearTimeout(timer); node.remove(); };
 }
 
+/**
+ * Wraps a form control with its visible and accessible label.
+ *
+ * @param {string} text - The visible field label.
+ * @param {Element} control - The form control nested inside the label.
+ * @param {{inline?: boolean}} [opts={}] - Whether to use the inline field layout.
+ * @returns {HTMLLabelElement} A detached label containing its caption and control.
+ */
 export function labeled(text, control, opts = {}) {
     return el("label", { class: "ir-field" + (opts.inline ? " ir-field-inline" : "") },
         el("span", { class: "ir-field-label" }, text), control);
 }
 
-/// options: array of strings or {value, label}; groups: [{label, options}] also allowed.
+/**
+ * Options: array of strings or {value, label}; groups: [{label, options}] also allowed.
+ *
+ * @param {Array<string|{value: string, label: string}|{label: string, options: Array<string|{value: string, label: string}>}>} options - Flat options or labeled option groups.
+ * @param {unknown} value - The initial selected value; nullish values leave browser selection unchanged.
+ * @returns {HTMLSelectElement} A detached select populated in source order.
+ *
+ * Side effects: creates option and optgroup DOM nodes; it does not mount the select.
+ */
 export function sel(options, value) {
     const node = el("select", { class: "ir-select" });
     const opt = o => typeof o === "string" ? new Option(o, o) : new Option(o.label, o.value);

@@ -1,7 +1,7 @@
 namespace InteractiveReport.Core.Model;
 
 /// <summary>
-/// The edit link's {COLUMN} placeholder syntax, shared by definition validation,
+/// Implements the edit link's {COLUMN} placeholder syntax, shared by definition validation,
 /// schema delivery, and query-time projection so all three read one grammar.
 /// Deliberately minimal: no escape syntax — a literal brace has no place in an
 /// edit URL, and rejecting it keeps every template unambiguous.
@@ -9,10 +9,12 @@ namespace InteractiveReport.Core.Model;
 public static class EditLinkTemplate
 {
     /// <summary>
-    /// Extracts placeholder names in order of first appearance (deduplicated
-    /// case-insensitively). Returns null and an error message for unmatched,
-    /// empty, or nested braces.
+    /// Extracts placeholder names in order of first appearance, deduplicated case-insensitively.
+    /// Returns null and an error message for unmatched, empty, or nested braces.
     /// </summary>
+    /// <param name="template">The edit URL template to parse.</param>
+    /// <param name="error">Receives a position-aware syntax error, or <see langword="null"/> on success.</param>
+    /// <returns>The distinct placeholder names, or <see langword="null"/> when the template is malformed.</returns>
     public static IReadOnlyList<string>? Parse(string template, out string? error)
     {
         var names = new List<string>();
@@ -53,9 +55,12 @@ public static class EditLinkTemplate
     }
 
     /// <summary>
-    /// Rewrites each placeholder through <paramref name="map"/> (e.g. to the schema's
-    /// canonical column casing). Call only on templates <see cref="Parse"/> accepted.
+    /// Rewrites each placeholder through <paramref name="map"/>, for example to apply the schema's canonical column
+    /// casing). Call only on templates <see cref="Parse"/> accepted.
     /// </summary>
+    /// <param name="template">A template previously accepted by <see cref="Parse"/>.</param>
+    /// <param name="map">The callback that maps each template token to replacement text.</param>
+    /// <returns>The template with each placeholder name replaced and its braces preserved.</returns>
     public static string Rewrite(string template, Func<string, string> map)
     {
         var result = new System.Text.StringBuilder(template.Length);

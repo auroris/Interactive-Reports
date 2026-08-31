@@ -5,7 +5,7 @@ using Microsoft.Net.Http.Headers;
 namespace InteractiveReport.AspNetCore;
 
 /// <summary>
-/// Serves the packaged UI bundles (ir.js, ir-admin.js, ir-chart.js, and source maps) from embedded resources at
+/// Serves the packaged UI bundles and source maps from embedded resources at
 /// {prefix}/ui/{file}. The asset endpoint is anonymous by design: the files are public
 /// code shipped in the package (anyone can read them on a feed — no data, no secrets),
 /// and a session-expired page that cannot even load the script cannot tell the user to
@@ -15,8 +15,8 @@ internal static class UiEndpoints
 {
     private const string ResourcePrefix = "InteractiveReport.AspNetCore.Ui.";
 
-    // ETags hash the content — an assembly-version tag would serve stale 304s across
-    // rebuilds of the same version (bitten during development, would bite ops too).
+    // ETags hash the content — an assembly-version tag would serve stale 304s across rebuilds
+    // of the same version (bitten during development, would bite ops too).
     private static readonly Dictionary<string, (string ResourceName, string ETag)> Resources =
         typeof(UiEndpoints).Assembly.GetManifestResourceNames()
             .Where(n => n.StartsWith(ResourcePrefix, StringComparison.Ordinal))
@@ -25,15 +25,28 @@ internal static class UiEndpoints
                 n => (n, ComputeETag(n)),
                 StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Computes a stable content hash for one embedded asset.
+    /// </summary>
+    /// <param name="resourceName">The assembly manifest resource name.</param>
+    /// <returns>A quoted ETag derived from the embedded resource content.</returns>
+    /// <remarks>Reads and disposes the embedded resource stream.</remarks>
     private static string ComputeETag(string resourceName)
     {
         using var stream = typeof(UiEndpoints).Assembly.GetManifestResourceStream(resourceName)!;
         return $"\"{Convert.ToHexString(SHA256.HashData(stream))[..16]}\"";
     }
 
+    /// <summary>
+    /// Serves one known embedded asset with conditional-request and content-type handling.
+    /// </summary>
+    /// <param name="file">The route-relative embedded asset name.</param>
+    /// <param name="ctx">The current HTTP request and response context.</param>
+    /// <returns>The HTTP result to send to the client.</returns>
+    /// <remarks>Writes cache validators to the response and opens an embedded stream when the asset is returned.</remarks>
     internal static IResult Serve(string file, HttpContext ctx)
     {
-        // Pure dictionary lookup — the route value never touches the filesystem.
+        // Invariant: pure dictionary lookup — the route value never touches the filesystem.
         if (!Resources.TryGetValue(file, out var entry))
             return Results.NotFound();
 
@@ -46,6 +59,11 @@ internal static class UiEndpoints
         return Results.Stream(stream, ContentType(file));
     }
 
+    /// <summary>
+    /// Maps an embedded asset extension to its HTTP content type.
+    /// </summary>
+    /// <param name="file">The asset name whose extension determines the media type.</param>
+    /// <returns>The HTTP content type for the requested asset.</returns>
     private static string ContentType(string file) => Path.GetExtension(file).ToLowerInvariant() switch
     {
         ".js" => "text/javascript; charset=utf-8",

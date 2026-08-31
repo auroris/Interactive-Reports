@@ -12,7 +12,7 @@ using Microsoft.Extensions.Options;
 namespace InteractiveReport.AspNetCore;
 
 /// <summary>
-/// Identity + saved-report endpoints.
+/// Implements identity, saved-report, report-document, and authorization-user HTTP operations.
 ///
 /// Authorization matrix:
 ///   owner                    → read, update title/state, delete
@@ -24,8 +24,15 @@ namespace InteractiveReport.AspNetCore;
 /// </summary>
 internal static class SavedReportEndpoints
 {
-    // --- whoami --------------------------------------------------------------
+    // Identity bootstrap.
 
+    /// <summary>
+    /// Returns the exact identity and administrator sources Interactive Reports sees for the current caller.
+    /// </summary>
+    /// <param name="ctx">The current HTTP request and response context.</param>
+    /// <param name="ct">Cancels database administrator lookup.</param>
+    /// <returns>Identity diagnostics as JSON, a disabled-endpoint 404, or a sanitized lookup failure.</returns>
+    /// <remarks>May read administrator persistence; it does not mutate identity or authorization state.</remarks>
     internal static async Task<IResult> Whoami(HttpContext ctx, CancellationToken ct)
     {
         var opts = Options(ctx);
@@ -62,7 +69,7 @@ internal static class SavedReportEndpoints
             .Any();
         return Results.Json(new InteractiveReportIdentity(
             Authenticated: ctx.User.Identity?.IsAuthenticated == true,
-            // The exact value to put in InteractiveReport:Administrators.
+            // Expose the exact value an operator would place in InteractiveReport:Administrators.
             Identity: identity,
             IsAdministrator: configuredAdministrator || database.UserGranted,
             ConfiguredAdministrator: configuredAdministrator,
@@ -75,8 +82,15 @@ internal static class SavedReportEndpoints
             IrJson.Options);
     }
 
-    // --- administration user directory -------------------------------------
+    // Application-provided authorization user directory.
 
+    /// <summary>
+    /// Returns application-provided identity choices after administrator authorization.
+    /// </summary>
+    /// <param name="ctx">The current HTTP request and response context.</param>
+    /// <param name="ct">Cancels authorization and user-provider lookup.</param>
+    /// <returns>A normalized JSON user list, a hidden-denial result, or a sanitized provider failure.</returns>
+    /// <remarks>Invokes the optional host user provider and rejects blank or duplicate identity values.</remarks>
     internal static async Task<IResult> AdminListUsers(
         HttpContext ctx,
         CancellationToken ct)
@@ -136,8 +150,16 @@ internal static class SavedReportEndpoints
         }
     }
 
-    // --- user surface --------------------------------------------------------
+    // End-user saved-report surface.
 
+    /// <summary>
+    /// Lists saved reports visible to the caller for one authorized report definition.
+    /// </summary>
+    /// <param name="name">The case-insensitive configured report name from the route.</param>
+    /// <param name="ctx">The current HTTP request and response context.</param>
+    /// <param name="ct">Cancels authorization, document synchronization, and persistence reads.</param>
+    /// <returns>A JSON array containing configured documents first, followed by non-shadowed user reports.</returns>
+    /// <remarks>Synchronizes configured documents before listing. Configured titles suppress same-titled user rows from the end-user selector.</remarks>
     internal static async Task<IResult> ListForReport(string name, HttpContext ctx, CancellationToken ct)
     {
         var access = await Access(ctx).Authorize(new ReportAccessRequest
@@ -155,9 +177,9 @@ internal static class SavedReportEndpoints
         var configuredTitles = configured.Select(report => report.Title)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        // A checked-in document is authoritative for its title. Existing database
-        // rows remain available to administrators for rename/delete, but do not make
-        // the end-user selector ambiguous.
+        // A checked-in document is authoritative for its title. Existing database rows remain
+        // available to administrators for rename/delete, but do not make the end-user selector
+        // ambiguous.
         return Results.Json(
             configured.Select(report => Summary(report, identity)).Concat(
                 visible.Where(report => report.Origin == SavedReportOrigin.User
@@ -166,6 +188,14 @@ internal static class SavedReportEndpoints
             IrJson.Options);
     }
 
+    /// <summary>
+    /// Validates and creates a private, global, or primary saved report owned by the current caller.
+    /// </summary>
+    /// <param name="name">The case-insensitive configured report name from the route.</param>
+    /// <param name="ctx">The current HTTP request and response context.</param>
+    /// <param name="ct">Cancels authorization, request-body reading, state validation, synchronization, and persistence.</param>
+    /// <returns>The created summary with HTTP 201, or an authentication, access, validation, or title-conflict result.</returns>
+    /// <remarks>Consumes the JSON request body, may refresh schema caches in the submitted state, synchronizes configured documents, and inserts one saved-report row.</remarks>
     internal static async Task<IResult> Save(string name, HttpContext ctx, CancellationToken ct)
     {
         var identity = Identity(ctx);
@@ -178,7 +208,7 @@ internal static class SavedReportEndpoints
             DenialDetail = "Publishing a global or primary report requires authorization.",
             PrepareResource = async (definition, token) =>
             {
-                // Enforced at creation only: existing saved reports stay governed by
+                // Enforce the feature at creation only. Existing saved reports stay governed by
                 // the ownership matrix, so a config change never strands rows.
                 if (Access(ctx).RequireFeature(definition, ReportFeatures.SavedReports) is { } disabled)
                     return new ReportAccessResourcePreparation(null, disabled);
@@ -258,6 +288,14 @@ internal static class SavedReportEndpoints
         return Results.Json(Summary(report, identity), IrJson.Options, statusCode: StatusCodes.Status201Created);
     }
 
+    /// <summary>
+    /// Loads one visible saved report and returns its metadata plus raw report-state document.
+    /// </summary>
+    /// <param name="id">The case-sensitive saved-report identifier from the route.</param>
+    /// <param name="ctx">The current HTTP request and response context.</param>
+    /// <param name="ct">Cancels synchronization, persistence reads, and authorization.</param>
+    /// <returns>The saved-report document JSON, or a hidden not-found/access result.</returns>
+    /// <remarks>Synchronizes configured documents and reads persistence; it does not mutate the saved report.</remarks>
     internal static async Task<IResult> Load(string id, HttpContext ctx, CancellationToken ct)
     {
         await Synchronizer(ctx).EnsureSynced(ct);
@@ -284,6 +322,14 @@ internal static class SavedReportEndpoints
             IrJson.Options);
     }
 
+    /// <summary>
+    /// Applies a partial update to a user report, or an explicit primary-flag update to a configured document.
+    /// </summary>
+    /// <param name="id">The case-sensitive saved-report identifier from the route.</param>
+    /// <param name="ctx">The current HTTP request and response context.</param>
+    /// <param name="ct">Cancels synchronization, body reading, authorization, validation, and persistence.</param>
+    /// <returns>The updated summary, or a not-found, read-only, validation, denial, or title-conflict result.</returns>
+    /// <remarks>Consumes the JSON request body and conditionally updates persistence. State changes are rebound and receive refreshed schema caches before storage.</remarks>
     internal static async Task<IResult> Update(string id, HttpContext ctx, CancellationToken ct)
     {
         await Synchronizer(ctx).EnsureSynced(ct);
@@ -389,6 +435,14 @@ internal static class SavedReportEndpoints
         }
     }
 
+    /// <summary>
+    /// Deletes an authorized user-authored saved report.
+    /// </summary>
+    /// <param name="id">The case-sensitive saved-report identifier from the route.</param>
+    /// <param name="ctx">The current HTTP request and response context.</param>
+    /// <param name="ct">Cancels synchronization, persistence reads, authorization, and deletion.</param>
+    /// <returns>No content on deletion, or a hidden not-found, denial, or configured-read-only result.</returns>
+    /// <remarks>Synchronizes configured documents and deletes one persistence row when it still matches the loaded version.</remarks>
     internal static async Task<IResult> Delete(string id, HttpContext ctx, CancellationToken ct)
     {
         await Synchronizer(ctx).EnsureSynced(ct);
@@ -418,14 +472,18 @@ internal static class SavedReportEndpoints
             : EndpointExtensions.SavedReportNotFound();
     }
 
-    // --- administrator surface -----------------------------------------------
+    // Administrator report-document interchange.
 
     /// <summary>
     /// Downloads the canonical source-controlled envelope, not the endpoint's
-    /// summary/state response wrapper. The resulting file can be placed directly in a
-    /// report definition's documentFiles collection after the operator chooses whether
-    /// it should be primary.
+    /// summary/state response wrapper. The resulting file can be placed directly in a report definition's
+    /// documentFiles collection after the operator chooses whether it should be primary.
     /// </summary>
+    /// <param name="id">The case-sensitive saved-report identifier from the route.</param>
+    /// <param name="ctx">The current HTTP request and response context.</param>
+    /// <param name="ct">Cancels synchronization, persistence reads, and administrator authorization.</param>
+    /// <returns>An indented JSON file result, or an authentication, hidden-denial, not-found, or server-error result.</returns>
+    /// <remarks>Reads and deserializes the stored state; it does not mutate the saved report.</remarks>
     internal static async Task<IResult> AdminDownloadDocument(
         string id,
         HttpContext ctx,
@@ -481,12 +539,16 @@ internal static class SavedReportEndpoints
     }
 
     /// <summary>
-    /// Imports a canonical report-document file as a private saved report owned by the
-    /// administrator. This deliberately bypasses the end-user savedReports feature
-    /// flag, but not report authorization or document validation. The imported copy is
-    /// a convenient live test surface; its primary flag becomes stored publication
-    /// metadata controlled by the administrator.
+    /// Imports a canonical report-document file as a private saved report owned by
+    /// the administrator. This deliberately bypasses the end-user savedReports feature flag, but not report
+    /// authorization or document validation. The imported copy is a convenient live test surface; its
+    /// primary flag becomes stored publication metadata controlled by the administrator.
     /// </summary>
+    /// <param name="name">The case-insensitive configured report name from the route.</param>
+    /// <param name="ctx">The current HTTP request and response context.</param>
+    /// <param name="ct">Cancels body reading, administrator authorization, validation, synchronization, and persistence.</param>
+    /// <returns>The imported summary with HTTP 201, or an authentication, hidden-denial, validation, title-conflict, or server-error result.</returns>
+    /// <remarks>Consumes the JSON body, refreshes schema caches in the imported state, and inserts a user-origin saved-report row.</remarks>
     internal static async Task<IResult> AdminUploadDocument(
         string name,
         HttpContext ctx,
@@ -589,26 +651,57 @@ internal static class SavedReportEndpoints
             statusCode: StatusCodes.Status201Created);
     }
 
-    // --- helpers -------------------------------------------------------------
+    // Request-scoped services and protocol helpers.
 
+    /// <summary>
+    /// Returns the current Interactive Reports options from the request services.
+    /// </summary>
+    /// <param name="ctx">The current HTTP request and response context.</param>
+    /// <returns>The interactive report options.</returns>
     private static InteractiveReportOptions Options(HttpContext ctx)
         => ctx.RequestServices.GetRequiredService<IOptionsMonitor<InteractiveReportOptions>>().CurrentValue;
 
+    /// <summary>
+    /// Resolves the configured saved-report store from request services.
+    /// </summary>
+    /// <param name="ctx">The current HTTP request and response context.</param>
+    /// <returns>The configured saved-report store.</returns>
     private static ISavedReportStore SavedStore(HttpContext ctx)
         => ctx.RequestServices.GetRequiredService<ISavedReportStore>();
 
+    /// <summary>
+    /// Resolves the configured report-access service from request services.
+    /// </summary>
+    /// <param name="ctx">The current HTTP request and response context.</param>
+    /// <returns>The configured report access service.</returns>
     private static IReportAccessService Access(HttpContext ctx)
         => ctx.RequestServices.GetRequiredService<IReportAccessService>();
 
+    /// <summary>
+    /// Resolves the configured document synchronizer from request services.
+    /// </summary>
+    /// <param name="ctx">The current HTTP request and response context.</param>
+    /// <returns>The configured report document synchronizer.</returns>
     private static ConfiguredReportDocumentSynchronizer Synchronizer(HttpContext ctx)
         => ctx.RequestServices.GetRequiredService<ConfiguredReportDocumentSynchronizer>();
 
+    /// <summary>
+    /// Resolves the caller identity used for saved-report ownership checks.
+    /// </summary>
+    /// <param name="ctx">The current HTTP request and response context.</param>
+    /// <returns>The normalized identity selected by <c>IdentityClaim</c>, or <see langword="null"/> for an unauthenticated or unresolved caller.</returns>
     private static string? Identity(HttpContext ctx)
     {
         var opts = Options(ctx);
         return ReportIdentity.Resolve(ctx.User, opts.IdentityClaim);
     }
 
+    /// <summary>
+    /// Projects saved-report metadata into the public summary response.
+    /// </summary>
+    /// <param name="report">The metadata to expose.</param>
+    /// <param name="caller">The normalized caller identity used to compute the <c>Mine</c> flag.</param>
+    /// <returns>The public metadata projection, including ownership and configured-read-only flags.</returns>
     private static SavedReportSummary Summary(SavedReportMetadata report, string? caller) => new(
         report.Id,
         report.ReportName,
@@ -619,9 +712,22 @@ internal static class SavedReportEndpoints
         IsReadOnly: report.Origin == SavedReportOrigin.Configured,
         report.ModifiedUtc);
 
+    /// <summary>
+    /// Projects saved-report metadata into the public summary response.
+    /// </summary>
+    /// <param name="report">The persisted row whose metadata should be exposed.</param>
+    /// <param name="caller">The normalized caller identity used to compute the <c>Mine</c> flag.</param>
+    /// <returns>The public metadata projection, including ownership and configured-read-only flags.</returns>
     private static SavedReportSummary Summary(SavedReport report, string? caller)
         => Summary(report.Metadata(), caller);
 
+    /// <summary>
+    /// Yields the administrator-only actions implied by changes to publication or ownership.
+    /// </summary>
+    /// <param name="candidate">The proposed saved-report definition.</param>
+    /// <param name="current">The persisted metadata being updated, or <see langword="null"/> during creation.</param>
+    /// <param name="originalOwner">The caller who will own a newly created report.</param>
+    /// <returns>Zero or more publish-global, publish-primary, and change-owner actions in that order.</returns>
     private static IEnumerable<InteractiveReportAction> RequiredAdministratorActions(
         InteractiveReportDefinition candidate,
         SavedReportMetadata? current,
@@ -636,6 +742,16 @@ internal static class SavedReportEndpoints
             yield return InteractiveReportAction.ChangeSavedReportOwner;
     }
 
+    /// <summary>
+    /// Validates a changed state against the live report and replaces it with refreshed schema caches.
+    /// </summary>
+    /// <param name="reportDefinition">The authorized executable definition used for binding and schema discovery.</param>
+    /// <param name="candidate">The mutable saved-report candidate containing the submitted state.</param>
+    /// <param name="ctx">The current HTTP request and response context.</param>
+    /// <param name="operation">The diagnostic operation name used if validation fails unexpectedly.</param>
+    /// <param name="ct">Cancels context resolution and schema refresh.</param>
+    /// <returns><see langword="null"/> when unchanged or valid; otherwise, a validation or sanitized server-error result.</returns>
+    /// <remarks>When state changed, mutates <paramref name="candidate"/> by replacing its state with the canonical cache-refreshed document and may query database schema.</remarks>
     private static async Task<IResult?> ValidateSubmittedState(
         ReportDefinition reportDefinition,
         InteractiveReportDefinition candidate,
@@ -672,6 +788,13 @@ internal static class SavedReportEndpoints
         }
     }
 
+    /// <summary>
+    /// Builds the authorization resource passed to the host policy service.
+    /// </summary>
+    /// <param name="reportName">The canonical configured report name.</param>
+    /// <param name="report">Optional persisted metadata for read, update, or delete authorization.</param>
+    /// <param name="definition">Optional client-authored candidate for create or update authorization.</param>
+    /// <returns>A detached resource containing the supplied report and candidate projections.</returns>
     private static InteractiveReportAuthorizationResource Resource(
         string reportName,
         SavedReportMetadata? report = null,
@@ -692,9 +815,16 @@ internal static class SavedReportEndpoints
         };
 
     /// <summary>
-    /// Title uniqueness spans one report definition's rows of both origins — synced
+    /// Finds a same-title row across both configured and user origins. Title uniqueness spans one report
+    /// definition's rows and synced
     /// configured rows included, so callers must EnsureSynced first.
     /// </summary>
+    /// <param name="ctx">The current HTTP request and response context.</param>
+    /// <param name="reportName">The configured report name whose definition or saved reports are being addressed.</param>
+    /// <param name="title">The normalized saved-report title to compare or persist.</param>
+    /// <param name="exceptId">A saved-report identifier to exclude from the title-collision search; <see langword="null"/> excludes none.</param>
+    /// <param name="ct">Cancels persistence lookup.</param>
+    /// <returns>The conflicting row, or <see langword="null"/> when the title is available.</returns>
     private static async Task<SavedReport?> FindTitleCollision(
         HttpContext ctx,
         string reportName,
@@ -704,11 +834,15 @@ internal static class SavedReportEndpoints
         => await SavedStore(ctx).FindByTitle(reportName, title, exceptId, ct);
 
     /// <summary>
-    /// The store's unique index caught a save the advisory pre-check missed (a
-    /// concurrent writer). Re-reading the collision row recovers the precise 409
-    /// wording (configured versus user); when the winner vanished again in between,
-    /// the generic user-collision wording stands.
+    /// Translates a unique-index race after re-reading the winning row. The store's index caught a save the advisory pre-check missed, usually a
+    /// concurrent writer). Re-reading the collision row recovers the precise 409 wording (configured versus
+    /// user); when the winner vanished again in between, the generic user-collision wording stands.
     /// </summary>
+    /// <param name="ctx">The current HTTP request and response context.</param>
+    /// <param name="conflict">The conflicting saved-report title or store exception to translate.</param>
+    /// <param name="exceptId">A saved-report identifier to exclude from the title-collision search; <see langword="null"/> excludes none.</param>
+    /// <param name="ct">Cancels collision re-read.</param>
+    /// <returns>A configured- or user-specific HTTP 409 result.</returns>
     private static async Task<IResult> TitleConflictFromStore(
         HttpContext ctx,
         SavedReportTitleConflictException conflict,
@@ -724,6 +858,12 @@ internal static class SavedReportEndpoints
                 $"A saved report named '{conflict.Title.Trim()}' already exists. Replace it if it is available to you, or choose another title.");
     }
 
+    /// <summary>
+    /// Creates the conflict response for a duplicate saved-report title.
+    /// </summary>
+    /// <param name="collision">The persisted row already using the title.</param>
+    /// <param name="title">The requested title included in caller-safe detail.</param>
+    /// <returns>A coded HTTP 409 result that distinguishes configured read-only documents from user reports.</returns>
     private static IResult TitleConflict(SavedReport collision, string title)
         => collision.Origin == SavedReportOrigin.Configured
             ? EndpointExtensions.Error(
@@ -735,16 +875,33 @@ internal static class SavedReportEndpoints
                 StatusCodes.Status409Conflict,
                 $"A saved report named '{title.Trim()}' already exists. Replace it if it is available to you, or choose another title.");
 
+    /// <summary>
+    /// Creates the forbidden response returned when a configured document is modified through persistence APIs.
+    /// </summary>
+    /// <returns>The HTTP result to send to the client.</returns>
     private static IResult ReadOnlyConfiguredResult()
         => EndpointExtensions.Error(
             InteractiveReportErrorCodes.ConfiguredReportReadOnly,
             StatusCodes.Status403Forbidden);
 
+    /// <summary>
+    /// Validates a saved-report title and returns an error response when invalid.
+    /// </summary>
+    /// <param name="title">The optional title to validate after trimming.</param>
+    /// <param name="code">The request-specific error code to use when invalid.</param>
+    /// <returns><see langword="null"/> for a title of 1 to 200 characters; otherwise, a coded HTTP 400 result.</returns>
     private static IResult? TitleError(string? title, string code)
         => string.IsNullOrWhiteSpace(title) || title.Trim().Length > 200
             ? BadRequest(code)
             : null;
 
+    /// <summary>
+    /// Validates a client-authored saved-report candidate independently of live schema binding.
+    /// </summary>
+    /// <param name="definition">The candidate assembled from create or update input.</param>
+    /// <param name="titleCode">The error code for a missing or invalid title.</param>
+    /// <param name="stateCode">The error code for an explicitly changed but missing state.</param>
+    /// <returns><see langword="null"/> when structurally valid; otherwise, the first coded HTTP 400 result.</returns>
     private static IResult? DefinitionError(
         InteractiveReportDefinition definition,
         string titleCode,
@@ -759,6 +916,12 @@ internal static class SavedReportEndpoints
         return null;
     }
 
+    /// <summary>
+    /// Creates a standardized validation-error response.
+    /// </summary>
+    /// <param name="code">The stable protocol or diagnostic code to return.</param>
+    /// <param name="details">Optional caller-safe request details.</param>
+    /// <returns>A JSON HTTP 400 result using the shared error catalog.</returns>
     private static IResult BadRequest(
         string code,
         string? details = null)
@@ -767,6 +930,12 @@ internal static class SavedReportEndpoints
             StatusCodes.Status400BadRequest,
             details);
 
+    /// <summary>
+    /// Builds a filesystem-neutral JSON download name from a report name and title.
+    /// </summary>
+    /// <param name="reportName">The canonical configured report name.</param>
+    /// <param name="title">The saved-report display title.</param>
+    /// <returns>A sanitized filename suitable for Content-Disposition.</returns>
     private static string DownloadFileName(string reportName, string title)
     {
         var stem = $"{reportName}.{title}";

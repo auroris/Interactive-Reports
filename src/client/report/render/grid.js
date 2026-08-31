@@ -1,6 +1,5 @@
-// The grid: header with sort indicators and per-column menus, data rows with
-// control-break groups and per-group aggregate rows, highlights, grand totals.
-// Pure DOM out of the widget's state — no fetching in here.
+// Grid renderer: builds headers with sort indicators and column menus, data rows with control-break
+// groups, per-group aggregates, highlights, and grand totals. It reads controller state but performs no fetching.
 
 import { el } from "../../core/dom.js";
 import { translate } from "../../core/localization.js";
@@ -14,13 +13,22 @@ import { headerMenuAvailable, openHeaderMenu } from "../menus.js";
 import { columnClasses } from "../classes.js";
 import { alignmentStyle, presentationStyle } from "./presentation.js";
 
+/**
+ * Rebuilds the result table from the latest query response and active presentation instructions.
+ *
+ * @param {object} w - The report controller containing state, schema, formats, localization, and the latest result.
+ * @param {HTMLTableElement} table - The mounted result table whose head and body will be replaced.
+ * @returns {void} No value.
+ *
+ * Side effects: replaces table contents and creates handlers for column menus, edit links, and row actions.
+ */
 export function renderGrid(w, table) {
     const result = w.lastResult;
     if (!result) { table.replaceChildren(); return; }
     const ctx = tableContext(w);
     const mode = ctx.mode;
-    // The definition's edit pencil leads every grid row. One synthetic cell in
-    // front of the data columns — every index/colSpan below carries the offset.
+    // The definition's edit pencil leads every grid row. One synthetic cell in front of the
+    // data columns. Every index and colSpan below carries the offset.
     const editLink = activeEditLink(w, mode);
     const cellOffset = editLink ? 1 : 0;
     const requestedBreaks = ctx.node(w.doc, "break")?.breaks ?? [];
@@ -32,23 +40,23 @@ export function renderGrid(w, table) {
         ? result.columns.filter(column => !breakNames.has(column.name))
         : result.columns;
 
-    // Per-column display settings from the doc's formats map. Styles go inline on
-    // the cells; highlights are applied later and deliberately win over them.
+    // Per-column display settings from the doc's formats map. Styles go inline on the cells;
+    // highlights are applied later and deliberately win over them.
     const formatFor = col => formatForColumn(w, col);
     const classesFor = (col, ...builtIn) => [...builtIn, ...columnClasses(formatFor(col)?.classes)]
         .filter(Boolean).join(" ") || undefined;
     const alignStyle = col => alignmentStyle(formatFor(col));
 
-    // Labels resolve client-side: the active table's universe already layered
-    // its own labels over source labels and rebuilt synthetic metric captions,
-    // so the response's neutral label is only the last resort.
+    // Protocol contract: labels resolve client-side: the active table's universe already
+    // layered its own labels over source labels and rebuilt synthetic metric captions, so the
+    // response's neutral label is only the last resort.
     const tableColumnByName = new Map(ctx.columns.map(c => [c.name.toLowerCase(), c]));
     const displayLabel = col =>
         tableColumnByName.get(col.name.toLowerCase())?.label ?? col.label;
 
-    // Header. Sort indicators come from the active table's terminal Sort node. A sort the
-    // server strips (definition-restricted column in a stale document) must not
-    // draw its glyph, so restricted entries drop out of the indicator map.
+    // Protocol contract: header. Sort indicators come from the active table's terminal Sort
+    // node. A sort the server strips (definition-restricted column in a stale document) must
+    // not draw its glyph, so restricted entries drop out of the indicator map.
     const activeSorts = (ctx.node(w.doc, "sort")?.sorts ?? [])
         .filter(s => columnSortable(w, s.col));
     const sortOrd = new Map(activeSorts.map((s, i) => [s.col.toLowerCase(), { dir: s.dir ?? "asc", ord: i + 1 }]));
@@ -59,8 +67,8 @@ export function renderGrid(w, table) {
     for (const col of columns) {
         const interactive = menuAvailable;
         const s = sortOrd.get(col.name.toLowerCase());
-        // hideLabel: no visible header text, accessible name preserved on the
-        // interactive element (menus and dialogs keep showing the real label).
+        // HideLabel: no visible header text, accessible name preserved on the interactive
+        // element (menus and dialogs keep showing the real label).
         const hideLabel = headerLabelHidden(w, col.name);
         const inner = el("span", { class: "ir-th-inner" }, hideLabel ? null : displayLabel(col));
         if (s) {
@@ -95,15 +103,15 @@ export function renderGrid(w, table) {
     const keyOf = source => JSON.stringify(breaks.map(b => source[b] ?? null));
     const totalsByKey = new Map((result.breakTotals ?? []).map(bt => [keyOf(bt.key), bt]));
 
-    // Columns whose page values include fractions format uniformly as decimals.
-    // Derived over the full response so break columns share the page-wide rule.
+    // Protocol contract: columns whose page values include fractions format uniformly as
+    // decimals. Derived over the full response so break columns share the page-wide rule.
     const decimalCols = new Set(result.columns
         .filter(c => c.type === "number"
             && result.rows.some(r => hasFraction(r[c.name])))
         .map(c => c.name));
 
-    // Break headings carry the group's value, so it formats exactly like a cell
-    // of that column would — same mask, same decimal rule.
+    // Break headings carry the group's value, so it formats exactly like a cell of that column
+    // would, with the same mask and decimal rule.
     const breakColumns = new Map(result.columns.map(c => [c.name, c]));
     const breakText = (row, name) => {
         const value = row[name];
@@ -114,10 +122,10 @@ export function renderGrid(w, table) {
             : String(value);
     };
 
-    // Repeated Highlight nodes form one semantic priority set. Normalize every
-    // declaration first so disabled rules retain their stable slots, then exclude
-    // them from execution. Sorting returned hits here makes visual precedence
-    // independent of both composable storage order and response order.
+    // Protocol contract: repeated Highlight nodes form one semantic priority set. Normalize
+    // every declaration first so disabled rules retain their stable slots, then exclude them
+    // from execution. Sorting returned hits here makes visual precedence independent of both
+    // composable storage order and response order.
     const highlightRules = composableLocations(w.doc)
         .filter(location => location.participates
             && String(location.composable?.kind ?? "").trim().toLowerCase() === "highlight")
@@ -211,8 +219,8 @@ export function renderGrid(w, table) {
         for (const { hit, rule } of orderedHits) {
             const style = rule.style;
             if (!hit.col) {
-                // On the cells, not the tr: a column format's inline background
-                // would beat a tr-level style, and highlights deliberately win.
+                // On the cells, not the tr: a column format's inline background would beat a
+                // tr-level style, and highlights deliberately win.
                 for (const cell of tr.children) {
                     if (style.bg) cell.style.background = style.bg;
                     if (style.fg) cell.style.color = style.fg;
@@ -229,7 +237,7 @@ export function renderGrid(w, table) {
     }
     if (!result.breakContinues) closeGroup();
 
-    // Report-level aggregates describe the whole filtered set, so render them only
+    // Invariant: report-level aggregates describe the whole filtered set, so render them only
     // where that set logically ends, never at the end of an intermediate page.
     const total = parseReportNumber(result.totalRows) ?? parseReportNumber(0);
     const { index = 1, size = 0 } = result.page ?? {};

@@ -1,3 +1,6 @@
+// Canadian French localization catalog. `errors` maps stable server codes to title/detail
+// pairs; `messages` supplies the keyed UI text consumed by the localization service.
+
 export const errors = {
     "IR-1000": ["Authentification requise", "Connectez-vous pour effectuer cette opération."],
     "IR-1001": ["Rapport introuvable", "Le rapport est introuvable ou vous n’êtes pas autorisé à y accéder."],

@@ -1,11 +1,13 @@
-# Builds the browser bundles, runs the fast test layers, and packs the three
-# distributable projects into artifacts\packages. The release workflow performs
-# the same sequence; this script is the local/manual equivalent.
+# Local packaging pipeline: installs and builds the browser client, runs the fast test suites,
+# and packs all three distributable projects into artifacts\packages. It mirrors the release
+# workflow closely enough to validate package contents before publishing.
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
+# Runs one named pipeline stage and turns a nonzero native-process exit code into a terminating
+# error. `description` is printed for progress; `step` is invoked synchronously and returns no value.
 function Invoke-Step([string]$description, [scriptblock]$step) {
     Write-Host "==> $description" -ForegroundColor Cyan
     & $step

@@ -1,3 +1,7 @@
+// GraphQL adapter entrypoint: registration installs the schema, execution services, validation
+// rule, and JSON transport; endpoint mapping then constrains the transport to one non-batched
+// query over GET or POST. Report authorization remains inside each resolver.
+
 using GraphQL;
 using GraphQL.Server.Transports.AspNetCore;
 using GraphQL.Types;
@@ -10,10 +14,16 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace InteractiveReport.GraphQL;
 
-/// <summary>Registration and endpoint mapping for the optional GraphQL adapter.</summary>
+/// <summary>Registers and maps the optional GraphQL transport for Interactive Reports.</summary>
 public static class InteractiveReportGraphQLExtensions
 {
-    /// <summary>Adds the Interactive Reports GraphQL schema and HTTP transport.</summary>
+    /// <summary>
+    /// Registers the GraphQL schema, graph types, executor, validation rule, and JSON serializer.
+    /// </summary>
+    /// <param name="services">The service collection in which to register Interactive Reports dependencies.</param>
+    /// <returns>The service collection for further registrations.</returns>
+    /// <remarks>Mutates <paramref name="services"/> by adding the adapter's dependencies.</remarks>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="services"/> is <see langword="null"/>.</exception>
     public static IServiceCollection AddInteractiveReportGraphQL(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
@@ -41,9 +51,14 @@ public static class InteractiveReportGraphQLExtensions
     }
 
     /// <summary>
-    /// Maps the query-only GraphQL endpoint. Authentication remains the host's
-    /// responsibility; each report resolver applies Interactive Reports authorization.
+    /// Maps the query-only GraphQL endpoint. Authentication remains the
+    /// host's responsibility; each report resolver applies Interactive Reports authorization.
     /// </summary>
+    /// <param name="endpoints">The endpoint route builder on which to register the report routes.</param>
+    /// <param name="path">The route pattern for the endpoint; defaults to <c>"/graphql"</c>.</param>
+    /// <returns>The endpoint convention builder for further route customization.</returns>
+    /// <remarks>Adds route metadata and filters to <paramref name="endpoints"/>. Each request disables caching and rejects unsupported methods, WebSockets, and batching.</remarks>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="endpoints"/> is <see langword="null"/>.</exception>
     public static IEndpointConventionBuilder MapInteractiveReportGraphQL(
         this IEndpointRouteBuilder endpoints,
         string path = "/graphql")

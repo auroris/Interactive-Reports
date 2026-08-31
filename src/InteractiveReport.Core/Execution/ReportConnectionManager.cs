@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 namespace InteractiveReport.Core.Execution;
 
 /// <summary>
-/// Owns the connection lifecycle and per-session configuration required by report
+/// Owns connection creation and per-session configuration required by report
 /// execution. Callers receive an open, prepared connection and remain responsible for
 /// disposing it.
 /// </summary>
@@ -14,6 +14,13 @@ internal sealed class ReportConnectionManager(
     IReportConnectionFactory connections,
     ILogger? logger = null)
 {
+    /// <summary>
+    /// Creates, opens, and applies the configured session time zone to a report connection.
+    /// </summary>
+    /// <param name="definition">The resolved definition supplying the connection name, dialect, timeout, and optional time zone.</param>
+    /// <param name="ct">Signals that the operation should be canceled.</param>
+    /// <returns>A task whose result is the open database connection.</returns>
+    /// <remarks>Opens a new connection and disposes it if opening or session configuration fails. The caller owns a successful result.</remarks>
     public async Task<DbConnection> Open(ReportDefinition definition, CancellationToken ct)
     {
         var connection = connections.CreateConnection(definition.Connection);
@@ -32,11 +39,16 @@ internal sealed class ReportConnectionManager(
 
     /// <summary>
     /// Opens the exact consistency scope requested by the definition. A configured
-    /// guarantee is either established or the request fails; there is no implicit
-    /// downgrade. Oracle's READ ONLY transaction is issued directly because ADO.NET
-    /// has no read-only isolation level and mapping it to Serializable loses the
-    /// provider's more precise, writer-friendly semantics.
+    /// guarantee is either established or the request fails; there is no implicit downgrade. Oracle's READ
+    /// ONLY transaction is issued directly because ADO.NET has no read-only isolation level and mapping it
+    /// to Serializable loses the provider's more precise, writer-friendly semantics.
     /// </summary>
+    /// <param name="connection">The open report connection on which every scoped query will execute.</param>
+    /// <param name="definition">The definition supplying consistency, dialect, name, and command timeout.</param>
+    /// <param name="ct">Signals that the operation should be canceled.</param>
+    /// <returns>A task containing a no-op scope for independent statements or an owned transaction scope for snapshot reads.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when snapshot consistency reaches an unknown dialect.</exception>
+    /// <exception cref="InvalidOperationException">Thrown for an unsupported consistency strategy or disabled SQL Server snapshot isolation.</exception>
     public async Task<ReportReadScope> BeginReadScope(
         DbConnection connection,
         ReportDefinition definition,
@@ -52,11 +64,11 @@ internal sealed class ReportConnectionManager(
         var dialect = definition.GetEffectiveDialect();
         if (dialect == ReportDialect.Oracle)
         {
-            // ODP.NET auto-commits commands executed outside an explicit local
-            // transaction. Start one first so SET TRANSACTION remains in force for
-            // every cursor opened by this report scope. READ COMMITTED is only the
-            // provider API's bootstrap mode; the first SQL statement changes the
-            // Oracle transaction itself to READ ONLY.
+            // Provider constraint: ODP.NET auto-commits commands executed outside an explicit
+            // local transaction. Start one first so SET TRANSACTION remains in force for every
+            // cursor opened by this report scope. READ COMMITTED is only the provider API's
+            // bootstrap mode; the first SQL statement changes the Oracle transaction itself to
+            // READ ONLY.
             var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
             var scope = ReportReadScope.FromTransaction(transaction, logger);
             try
@@ -94,6 +106,13 @@ internal sealed class ReportConnectionManager(
         return ReportReadScope.FromTransaction(readTransaction, logger);
     }
 
+    /// <summary>
+    /// Reads whether SQL Server snapshot isolation is enabled for the current database.
+    /// </summary>
+    /// <param name="connection">The open SQL Server connection to inspect.</param>
+    /// <param name="definition">The definition supplying the command timeout.</param>
+    /// <param name="ct">Signals that the operation should be canceled.</param>
+    /// <returns>A task whose result is <see langword="true"/> when snapshot isolation is enabled; otherwise, <see langword="false"/>.</returns>
     private async Task<bool> SqlServerSnapshotEnabled(
         DbConnection connection,
         ReportDefinition definition,
@@ -107,6 +126,15 @@ internal sealed class ReportConnectionManager(
         return Convert.ToInt32(await command.ExecuteScalarAsync(ct) ?? 0) == 1;
     }
 
+    /// <summary>
+    /// Executes one session or transaction control statement with the report command timeout.
+    /// </summary>
+    /// <param name="connection">The open connection receiving the statement.</param>
+    /// <param name="definition">The definition supplying the command timeout.</param>
+    /// <param name="sql">The trusted control statement to execute.</param>
+    /// <param name="ct">Signals that the operation should be canceled.</param>
+    /// <param name="transaction">The transaction in which to execute, or <see langword="null"/> for session-level control.</param>
+    /// <returns>A task that completes after the provider accepts the statement.</returns>
     private async Task ExecuteControlStatement(
         DbConnection connection,
         ReportDefinition definition,
@@ -123,10 +151,14 @@ internal sealed class ReportConnectionManager(
     }
 
     /// <summary>
-    /// Only Oracle and Postgres expose a session timezone. The configured value has the
-    /// same trust level as the report SQL. These statements do not accept parameters, so
-    /// the value is escaped before it is placed in the statement.
+    /// Applies the configured session time zone for Oracle or PostgreSQL. The configured value has
+    /// the same trust level as the report SQL. These statements do not accept parameters, so the value is
+    /// escaped before it is placed in the statement.
     /// </summary>
+    /// <param name="connection">The newly opened report connection.</param>
+    /// <param name="definition">The definition supplying the optional time zone, dialect, and timeout.</param>
+    /// <param name="ct">Signals that the operation should be canceled.</param>
+    /// <returns>A task that completes after configuration, or immediately when no supported time-zone statement is needed.</returns>
     private async Task ApplySessionTimeZone(
         DbConnection connection,
         ReportDefinition definition,

@@ -1,16 +1,17 @@
 <#
 .SYNOPSIS
-    Runs the live-dialect test battery against the SQL Server, Oracle, and PostgreSQL test VM.
+    Executes the live provider suite against the SQL Server, Oracle, and PostgreSQL test VM.
 .DESCRIPTION
-    Sets all three IR_TEST_* variables for this process only, probes their
-    ports so a down VM fails fast with one clear message, then runs the dedicated
-    live-test project (see docs/TESTING.md).
+    Defines all three IR_TEST_* variables for this process, verifies that each
+    database port is reachable, and then starts the dedicated live-test project
+    described in docs/TESTING.md. A stopped VM therefore produces one direct error.
 
-    The embedded credential targets a throwaway VM on the VirtualBox host-only
-    network (192.168.56.x is unreachable from outside this machine).
+    The embedded credentials belong to a disposable VM on VirtualBox's host-only
+    network; addresses in 192.168.56.x are not reachable outside this machine.
 .PARAMETER Filter
-    Optional dotnet test --filter expression. Empty runs the full live battery,
-    including server-level persistence and the saved-report corpus on all dialects.
+    Accepts an optional dotnet test --filter expression. An empty value runs every
+    live test, including server-level persistence and the saved-report corpus for
+    each dialect.
 #>
 [CmdletBinding()]
 param(

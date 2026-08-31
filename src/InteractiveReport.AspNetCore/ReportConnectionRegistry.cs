@@ -10,7 +10,7 @@ using Microsoft.Extensions.Configuration;
 namespace InteractiveReport.AspNetCore;
 
 /// <summary>
-/// Resolves every connection a definition can name and the dialect each one implies.
+/// Report connection registry: resolves every connection a definition can name and the dialect each one implies.
 /// Two populations share the namespace: code-registered factories (AddConnection —
 /// the dictionaries are captured by reference, so late registrations still work) and
 /// synthesized entries minted from report dataSource values. Dialects are derived,
@@ -32,6 +32,13 @@ internal sealed class ReportConnectionRegistry : IReportConnectionFactory
     private readonly ConcurrentDictionary<string, SyntheticEntry> _synthetic = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ReportDialect> _sniffed = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Initializes the registry over the live code-registration dictionaries and application configuration.
+    /// </summary>
+    /// <param name="codeFactories">Connection factories keyed by their report-facing names.</param>
+    /// <param name="declaredDialects">The dialects explicitly associated with registered connections.</param>
+    /// <param name="services">The service provider passed to code-registered connection factories.</param>
+    /// <param name="configuration">The application configuration containing named connection strings.</param>
     public ReportConnectionRegistry(
         IReadOnlyDictionary<string, Func<IServiceProvider, DbConnection>> codeFactories,
         IReadOnlyDictionary<string, ReportDialect> declaredDialects,
@@ -44,6 +51,12 @@ internal sealed class ReportConnectionRegistry : IReportConnectionFactory
         _configuration = configuration;
     }
 
+    /// <summary>
+    /// Creates an unopened report connection from the resolved provider configuration.
+    /// </summary>
+    /// <param name="name">The registered or synthesized connection name.</param>
+    /// <returns>A new unopened connection owned by the caller.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when <paramref name="name"/> is unknown.</exception>
     public DbConnection CreateConnection(string name)
     {
         if (_codeFactories.TryGetValue(name, out var factory))
@@ -54,10 +67,15 @@ internal sealed class ReportConnectionRegistry : IReportConnectionFactory
     }
 
     /// <summary>
-    /// Resolves a definition's dataSource to a registered connection name plus its
-    /// dialect. <paramref name="owner"/> names the config surface in every error
-    /// ("Report 'orders'", "SavedReports").
+    /// Resolves a definition's data source to a synthesized connection name plus its dialect.
+    /// <paramref name="owner"/> names the config surface in every error ("Report 'orders'", "SavedReports").
     /// </summary>
+    /// <param name="owner">The configuration surface named in validation errors, such as a report name or <c>SavedReports</c>.</param>
+    /// <param name="dataSource">A <c>ConnectionStrings</c> key or literal ADO.NET connection string.</param>
+    /// <param name="provider">An optional provider token; required unless it can be inferred from named-connection metadata.</param>
+    /// <returns>The content-addressed synthetic connection name and its SQL dialect.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when the connection string or provider configuration cannot be resolved.</exception>
+    /// <remarks>Caches the resolved connection material under the returned synthetic name; it does not open a connection.</remarks>
     public (string ConnectionName, ReportDialect Dialect) ResolveDataSource(string owner, string dataSource, string? provider)
     {
         var value = dataSource.Trim();
@@ -65,7 +83,7 @@ internal sealed class ReportConnectionRegistry : IReportConnectionFactory
         string? connectionStringName = null;
         if (!value.Contains('='))
         {
-            // A bare name references ConnectionStrings — never silently a literal.
+            // Invariant: a bare name references ConnectionStrings — never silently a literal.
             connectionStringName = value;
             connectionString = _configuration.GetConnectionString(connectionStringName)
                 ?? throw new InvalidOperationException(
@@ -86,7 +104,14 @@ internal sealed class ReportConnectionRegistry : IReportConnectionFactory
         return (name, dialect);
     }
 
-    /// <summary>Declared at AddConnection → implied by the dataSource token → sniffed from the factory's connection type.</summary>
+    /// <summary>
+    /// Resolves a dialect declared at registration, implied by a data-source provider, or sniffed from the
+    /// factory's connection type.
+    /// </summary>
+    /// <param name="name">The registered or synthesized connection name.</param>
+    /// <returns>The SQL dialect used to compile reports for the connection.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when the connection is unknown or its provider type is unsupported.</exception>
+    /// <remarks>The first sniff of a code-registered factory creates and disposes one unopened connection, then caches the result.</remarks>
     public ReportDialect ResolveDialect(string name)
     {
         if (_declaredDialects.TryGetValue(name, out var declared))
@@ -99,10 +124,14 @@ internal sealed class ReportConnectionRegistry : IReportConnectionFactory
     }
 
     /// <summary>
-    /// The one mapping from SavedReports options to a concrete store target. The
-    /// store, the configured-document synchronizer, and the built-in saved-reports
-    /// listing definition must all agree on it. The dialect is always derived.
+    /// Maps saved-report options to the single concrete store target used by persistence, synchronization,
+    /// and the built-in listing report. The
+    /// store, the configured-document synchronizer, and the built-in saved-reports listing definition must
+    /// all agree on it. The dialect is always derived.
     /// </summary>
+    /// <param name="saved">The saved-report storage options to validate and resolve.</param>
+    /// <returns>The connection name, derived dialect, auto-create policy, and validated table name.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when storage is missing, contradictory, or uses invalid provider/table configuration.</exception>
     public SavedReportStoreConfig ResolveStoreConfig(SavedReportsOptions saved)
     {
         var hasDataSource = !string.IsNullOrWhiteSpace(saved.DataSource);
@@ -139,10 +168,22 @@ internal sealed class ReportConnectionRegistry : IReportConnectionFactory
             + "InteractiveReport:SavedReports:Connection to a database registered with AddConnection.");
     }
 
+    /// <summary>
+    /// Determines whether saved-report persistence has enough configuration to be enabled.
+    /// </summary>
+    /// <param name="saved">The saved-report storage options to inspect.</param>
+    /// <returns><see langword="true"/> when a persistence store is configured; otherwise, <see langword="false"/>.</returns>
     internal static bool IsStoreConfigured(SavedReportsOptions saved)
         => !string.IsNullOrWhiteSpace(saved.DataSource)
             || !string.IsNullOrWhiteSpace(saved.Connection);
 
+    /// <summary>
+    /// Applies the configured table prefix and validates the resulting SQL identifier.
+    /// </summary>
+    /// <param name="saved">The options supplying the optional table prefix.</param>
+    /// <param name="baseName">The unprefixed table name.</param>
+    /// <returns>The prefixed, validated table identifier.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when the base or combined table name is unsafe.</exception>
     internal static string ResolveTableName(SavedReportsOptions saved, string baseName)
     {
         if (string.IsNullOrWhiteSpace(baseName))
@@ -151,6 +192,14 @@ internal sealed class ReportConnectionRegistry : IReportConnectionFactory
         return SavedReportStoreConfig.EnsureValidTableName(prefix + baseName);
     }
 
+    /// <summary>
+    /// Resolves an explicit provider or named-connection provider invariant to a canonical token.
+    /// </summary>
+    /// <param name="owner">The configuration surface named in validation errors.</param>
+    /// <param name="provider">The optional explicit provider token.</param>
+    /// <param name="connectionStringName">The optional <c>ConnectionStrings</c> key used to find provider metadata.</param>
+    /// <returns>The canonical provider token.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when no provider is available or the supplied provider is unsupported.</exception>
     private string ResolveProviderToken(string owner, string? provider, string? connectionStringName)
     {
         if (!string.IsNullOrWhiteSpace(provider))
@@ -178,6 +227,14 @@ internal sealed class ReportConnectionRegistry : IReportConnectionFactory
                 : "."));
     }
 
+    /// <summary>
+    /// Detects a dialect from the concrete connection type produced by a code-registered factory.
+    /// </summary>
+    /// <param name="name">The registered name used in diagnostic messages.</param>
+    /// <param name="factory">The factory from which to obtain one connection for type inspection.</param>
+    /// <returns>The dialect mapped from the connection's runtime type.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when the factory fails or the connection type is unsupported.</exception>
+    /// <remarks>Creates and disposes one connection without opening it.</remarks>
     private ReportDialect SniffDialect(string name, Func<IServiceProvider, DbConnection> factory)
     {
         DbConnection connection;
@@ -199,6 +256,11 @@ internal sealed class ReportConnectionRegistry : IReportConnectionFactory
         }
     }
 
+    /// <summary>
+    /// Creates the configuration error for an unregistered report connection.
+    /// </summary>
+    /// <param name="name">The unregistered connection name included in the message.</param>
+    /// <returns>An exception explaining how to register or replace the missing connection.</returns>
     private static InvalidOperationException UnknownConnection(string name) => new(
         $"No connection named '{name}' is registered. Register it with "
         + $"AddInteractiveReports(...).AddConnection(\"{name}\", ...), or give the report a dataSource instead.");

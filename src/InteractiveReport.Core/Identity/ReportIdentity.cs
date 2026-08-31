@@ -10,9 +10,12 @@ namespace InteractiveReport.Core.Identity;
 public static class ReportIdentity
 {
     /// <summary>
-    /// Explicit claim type wins when configured; otherwise NameIdentifier → "sub" →
-    /// Identity.Name. Null when unauthenticated or no usable claim exists.
+    /// Resolves an explicit claim type when configured; otherwise uses NameIdentifier → "sub" → Identity.Name.
+    /// Null when unauthenticated or no usable claim exists.
     /// </summary>
+    /// <param name="user">The principal whose stable identity is required.</param>
+    /// <param name="identityClaim">The configured claim type from which to resolve the report identity.</param>
+    /// <returns>The resolved stable identity, or <see langword="null"/> when none is available.</returns>
     public static string? Resolve(ClaimsPrincipal? user, string? identityClaim)
     {
         if (user?.Identity?.IsAuthenticated != true) return null;
@@ -26,9 +29,13 @@ public static class ReportIdentity
     }
 
     /// <summary>
-    /// Ordinal exact match. Identity-provider subject values are opaque identifiers;
+    /// Determines whether the resolved identity exactly matches a configured administrator. Identity-provider subject values are opaque identifiers;
     /// changing their case can identify a different principal.
     /// </summary>
+    /// <param name="user">The principal whose stable identity is required.</param>
+    /// <param name="identityClaim">The configured claim type from which to resolve the report identity.</param>
+    /// <param name="administrators">The configured administrator identity values.</param>
+    /// <returns><see langword="true"/> when the resolved identity exactly matches a configured value; otherwise, <see langword="false"/>.</returns>
     public static bool IsAdministrator(ClaimsPrincipal? user, string? identityClaim, IReadOnlyCollection<string> administrators)
     {
         if (administrators.Count == 0) return false;
@@ -37,5 +44,10 @@ public static class ReportIdentity
             candidate?.Trim(), identity, StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// Normalizes a value to the non-empty identifier required by stable report identity.
+    /// </summary>
+    /// <param name="value">The optional identity text to trim and test for content.</param>
+    /// <returns>The trimmed value, or <see langword="null"/> when it is empty.</returns>
     private static string? NonEmpty(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
 }

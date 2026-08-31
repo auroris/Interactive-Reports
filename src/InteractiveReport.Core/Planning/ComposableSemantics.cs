@@ -21,7 +21,7 @@ internal enum ComposableKind
 }
 
 /// <summary>
-/// Natural binding order. The report document may list composables in any order;
+/// Natural binding order for composables. The report document may list them in any order;
 /// lowering consumes the canonical phases in this order instead.
 /// </summary>
 internal enum ComposablePhase
@@ -38,20 +38,20 @@ internal enum ComposableEffect
 {
     None = 0,
 
-    /// <summary>The operation changes the row relation inherited by a child table.</summary>
+    /// <summary>Exported relation: the operation changes the row relation inherited by a child table.</summary>
     ExportedRelation = 1 << 0,
 
-    /// <summary>The operation changes the public column contract inherited by a child.</summary>
+    /// <summary>Exported schema: the operation changes the public column contract inherited by a child.</summary>
     ExportedSchema = 1 << 1,
 
-    /// <summary>The operation changes descriptive metadata inherited by a child.</summary>
+    /// <summary>Exported metadata: the operation changes descriptive metadata inherited by a child.</summary>
     ExportedMetadata = 1 << 2,
 
-    /// <summary>The operation contributes only to the declaring table's result.</summary>
+    /// <summary>Table local: the operation contributes only to the declaring table's result.</summary>
     TableLocal = 1 << 3,
 }
 
-/// <summary>How declarations of the same semantic category combine.</summary>
+/// <summary>Specifies how declarations of the same semantic category combine.</summary>
 internal enum ComposableMerge
 {
     SingleShape,
@@ -74,6 +74,13 @@ internal enum ComposableOrderingHint
     ScopeThenSequenceAscending,
 }
 
+/// <summary>Describes the canonical phase, propagation, merge, and ordering behavior of one composable kind.</summary>
+/// <param name="Kind">The internal canonical kind.</param>
+/// <param name="DocumentKind">The case-insensitive token used by report-state JSON.</param>
+/// <param name="Phase">The phase in which the planner binds the operation.</param>
+/// <param name="Effect">The relation, schema, metadata, or table-local surfaces changed by the operation.</param>
+/// <param name="Merge">How multiple declarations of the same category combine.</param>
+/// <param name="OrderingHint">Any observable member precedence within the category.</param>
 internal sealed record ComposableSemantics(
     ComposableKind Kind,
     string DocumentKind,
@@ -82,16 +89,18 @@ internal sealed record ComposableSemantics(
     ComposableMerge Merge,
     ComposableOrderingHint OrderingHint = ComposableOrderingHint.None)
 {
+    /// <summary>Gets whether any part of the operation crosses a child table's <c>from</c> edge.</summary>
     public bool IsInherited => (Effect & (
         ComposableEffect.ExportedRelation
         | ComposableEffect.ExportedSchema
         | ComposableEffect.ExportedMetadata)) != 0;
 
+    /// <summary>Gets whether the operation contributes to the declaring table's terminal result.</summary>
     public bool IsTableLocal => Effect.HasFlag(ComposableEffect.TableLocal);
 }
 
 /// <summary>
-/// Exhaustive semantics for report composables. Adding document syntax requires an
+/// Provides exhaustive semantics for report composables. Adding document syntax requires an
 /// entry here, which keeps propagation and ordering decisions out of the DTO.
 /// </summary>
 internal static class ComposableSemanticsCatalog
@@ -102,8 +111,15 @@ internal static class ComposableSemanticsCatalog
     private static readonly IReadOnlyDictionary<ComposableKind, ComposableSemantics> ByKind =
         ByDocumentKind.Values.ToDictionary(value => value.Kind);
 
+    /// <summary>Gets all registered semantics in canonical kind order.</summary>
     public static IReadOnlyCollection<ComposableSemantics> All { get; } = ByKind.Values.ToArray();
 
+    /// <summary>
+    /// Attempts to resolve a document kind to its canonical composable semantics.
+    /// </summary>
+    /// <param name="documentKind">The authored composable token, with surrounding whitespace permitted.</param>
+    /// <param name="semantics">Receives the canonical semantics when recognized.</param>
+    /// <returns><see langword="true"/> when the document kind names a supported composable and its semantics were returned; otherwise, <see langword="false"/>.</returns>
     public static bool TryResolve(string? documentKind, out ComposableSemantics semantics)
     {
         var normalized = documentKind?.Trim();
@@ -118,8 +134,17 @@ internal static class ComposableSemanticsCatalog
         return false;
     }
 
+    /// <summary>
+    /// Returns the registered semantics for a canonical composable kind.
+    /// </summary>
+    /// <param name="kind">The canonical composable kind to resolve.</param>
+    /// <returns>The composable semantics.</returns>
     public static ComposableSemantics Get(ComposableKind kind) => ByKind[kind];
 
+    /// <summary>
+    /// Defines the closed composable vocabulary, phases, effects, and merge rules used by the planner.
+    /// </summary>
+    /// <returns>All supported composable semantics in protocol order.</returns>
     private static ComposableSemantics[] Create() =>
     [
         new(

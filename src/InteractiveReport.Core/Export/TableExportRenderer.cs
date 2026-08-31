@@ -14,6 +14,17 @@ namespace InteractiveReport.Core.Export;
 /// </summary>
 internal static class TableExportRenderer
 {
+    /// <summary>
+    /// Shapes a terminal result into ordered export columns and display-formatted rows.
+    /// </summary>
+    /// <param name="availableColumns">All projected columns, including hidden renderer dependencies.</param>
+    /// <param name="columns">Visible export columns in final order.</param>
+    /// <param name="rows">Raw projected provider rows.</param>
+    /// <param name="schema">The terminal schema used to recover kinds and source columns.</param>
+    /// <param name="formats">Formats owned by the terminal table.</param>
+    /// <param name="labels">Effective labels keyed by logical column name.</param>
+    /// <param name="inheritedFormats">Optional parent masks keyed by their source logical ids.</param>
+    /// <returns>Relabeled visible columns and rows containing raw scalars or browser-equivalent link/image HTML.</returns>
     public static RenderedExportTable Render(
         IReadOnlyList<ColumnInfo> availableColumns,
         IReadOnlyList<ColumnInfo> columns,
@@ -63,6 +74,19 @@ internal static class TableExportRenderer
         return new RenderedExportTable(renderedColumns, result);
     }
 
+    /// <summary>
+    /// Renders one link, image, or action cell; ordinary cells remain raw for the file serializer.
+    /// </summary>
+    /// <param name="schema">The terminal schema used to resolve renderer source columns.</param>
+    /// <param name="metadata">Available result-column metadata keyed by logical name.</param>
+    /// <param name="formats">Terminal-table formats.</param>
+    /// <param name="inheritedFormats">Parent masks keyed by format-source logical id.</param>
+    /// <param name="row">The raw projected row, including hidden dependencies.</param>
+    /// <param name="column">The visible column being rendered.</param>
+    /// <param name="value">The provider value to format for the exported column.</param>
+    /// <param name="format">The effective display format for <paramref name="column"/>.</param>
+    /// <param name="decimalColumn">Whether any row proves the visible numeric column has fractional values.</param>
+    /// <returns>A raw scalar for ordinary/action cells, or safe HTML/text for link and image cells.</returns>
     private static object? RenderValue(
         ReportSchema schema,
         IReadOnlyDictionary<string, ColumnInfo> metadata,
@@ -75,8 +99,8 @@ internal static class TableExportRenderer
         bool decimalColumn)
     {
         var renderer = format?.DisplayAs?.Trim();
-        // A command button has no CSV shape: the label (the cell's own value)
-        // exports as plain text, and a NULL label stays an empty field.
+        // A command button has no CSV shape: the label (the cell's own value) exports as plain
+        // text, and a NULL label stays an empty field.
         if (string.Equals(renderer, "action", StringComparison.OrdinalIgnoreCase))
             return value;
         if (!string.Equals(renderer, "link", StringComparison.OrdinalIgnoreCase)
@@ -114,6 +138,13 @@ internal static class TableExportRenderer
         return $"<a class=\"ir-cell-link\" href=\"{WebUtility.HtmlEncode(url)}\">{WebUtility.HtmlEncode(text)}</a>";
     }
 
+    /// <summary>
+    /// Resolves the final format inherited by an exported column.
+    /// </summary>
+    /// <param name="column">The result column carrying an optional inherited format source.</param>
+    /// <param name="formats">Terminal-table formats, which take precedence.</param>
+    /// <param name="inheritedFormats">Parent masks keyed by source logical id.</param>
+    /// <returns>The terminal format, inherited format, or <see langword="null"/>.</returns>
     private static ColumnFormat? EffectiveFormat(
         ColumnInfo column,
         IReadOnlyDictionary<string, ColumnFormat> formats,
@@ -124,15 +155,22 @@ internal static class TableExportRenderer
         return inheritedFormats.TryGetValue(inheritedName, out format) ? format : null;
     }
 
+    /// <summary>
+    /// Resolves a renderer's URL or text source column, preserving an absent authored name as a null-valued placeholder.
+    /// </summary>
+    /// <param name="schema">The terminal schema used for case-insensitive lookup.</param>
+    /// <param name="requested">The optional authored source-column name.</param>
+    /// <param name="fallback">The displayed column used when no source is configured.</param>
+    /// <returns>The live source column, fallback, or an object-typed placeholder for a stale inherited source.</returns>
     private static ColumnModel SourceColumn(ReportSchema schema, string? requested, ColumnModel fallback)
     {
         if (string.IsNullOrWhiteSpace(requested)) return fallback;
         if (schema.TryGetValue(requested, out var source)) return source;
 
-        // An inherited source-table renderer can name a column that does not exist in
-        // shaped output. Browser rendering reads that absent row key and falls back to
-        // text; substituting the displayed metric here would turn its numeric value
-        // into a spurious relative URL.
+        // An inherited source-table renderer can name a column that does not exist in shaped
+        // output. Browser rendering reads that absent row key and falls back to text;
+        // substituting the displayed metric here would turn its numeric value into a spurious
+        // relative URL.
         return new ColumnModel
         {
             Name = requested.Trim(),
@@ -141,6 +179,12 @@ internal static class TableExportRenderer
         };
     }
 
+    /// <summary>
+    /// Resolves the schema model associated with an exported column.
+    /// </summary>
+    /// <param name="schema">The terminal schema used for case-insensitive lookup.</param>
+    /// <param name="column">The exported result-column metadata.</param>
+    /// <returns>The live model or a conservative object-typed fallback.</returns>
     private static ColumnModel Model(ReportSchema schema, ColumnInfo column)
         => schema.TryGetValue(column.Name, out var model)
             ? model
@@ -152,12 +196,24 @@ internal static class TableExportRenderer
                 IsComputed = column.Computed,
             };
 
+    /// <summary>
+    /// Converts discovered schema metadata into the result-column contract used by export rendering.
+    /// </summary>
+    /// <param name="column">The schema model to project.</param>
+    /// <returns>Name, label, portable type name, and computed flag.</returns>
     private static ColumnInfo ToInfo(ColumnModel column)
         => new(column.Name, column.Label, column.KindName, column.IsComputed);
 
+    /// <summary>Shared immutable-by-convention empty format lookup used when no inherited map is supplied.</summary>
     private static readonly IReadOnlyDictionary<string, ColumnFormat> NoFormats
         = new Dictionary<string, ColumnFormat>();
 
+    /// <summary>
+    /// Determines whether a URL uses a scheme that server-side export may emit.
+    /// </summary>
+    /// <param name="value">The raw absolute or relative URL.</param>
+    /// <param name="image">Indicates whether the rendered value is an image URL.</param>
+    /// <returns><see langword="true"/> for valid relative URLs, HTTP(S), and non-image mail/tel URLs; otherwise, <see langword="false"/>.</returns>
     private static bool IsAllowedUrl(string value, bool image)
     {
         if (value.Length == 0 || value.Any(char.IsControl)) return false;
@@ -181,9 +237,14 @@ internal static class TableExportRenderer
     }
 
     /// <summary>
-    /// Server counterpart of the browser's base text renderer. CSV only invokes it
-    /// when a Display As cell needs text inside HTML; ordinary CSV scalars remain raw.
+    /// Implements the server counterpart of the browser's base text renderer. CSV only invokes it when a
+    /// Display As cell needs text inside HTML; ordinary CSV scalars remain raw.
     /// </summary>
+    /// <param name="value">The provider value to render with the selected display mask.</param>
+    /// <param name="column">The source column supplying kind information.</param>
+    /// <param name="decimalColumn">Whether unmasked numeric output should retain two fractional places.</param>
+    /// <param name="mask">The optional display mask to apply.</param>
+    /// <returns>The rendered display text.</returns>
     private static string RenderText(
         object? value,
         ColumnModel column,
@@ -228,6 +289,12 @@ internal static class TableExportRenderer
         };
     }
 
+    /// <summary>
+    /// Applies one supported numeric display mask.
+    /// </summary>
+    /// <param name="number">The decimal value to round and format.</param>
+    /// <param name="mask">An optional integer, decimal, plain, currency, or percent mask.</param>
+    /// <returns>Invariant formatted text, or <see langword="null"/> when the mask is absent, unsupported, or overflows.</returns>
     private static string? FormatNumberMask(decimal number, string? mask)
     {
         var digits = mask switch
@@ -286,6 +353,11 @@ internal static class TableExportRenderer
         return null;
     }
 
+    /// <summary>
+    /// Converts a provider value to invariant raw text before display formatting.
+    /// </summary>
+    /// <param name="value">The provider value to convert to invariant raw text.</param>
+    /// <returns>The decoded raw string literal.</returns>
     private static string RawString(object? value) => value switch
     {
         null => "",
@@ -295,9 +367,20 @@ internal static class TableExportRenderer
         _ => value.ToString() ?? "",
     };
 
+    /// <summary>
+    /// Determines whether a numeric value contains a fractional component.
+    /// </summary>
+    /// <param name="value">The numeric provider value to inspect.</param>
+    /// <returns><see langword="true"/> when the numeric value contains a fractional component; otherwise, <see langword="false"/>.</returns>
     private static bool HasFraction(object? value)
         => TryDecimal(value, out var number) && decimal.Truncate(number) != number;
 
+    /// <summary>
+    /// Attempts to convert a provider value to a decimal without throwing for unsupported types.
+    /// </summary>
+    /// <param name="value">The provider value to convert to a decimal.</param>
+    /// <param name="number">Receives the converted decimal on success, or zero on failure.</param>
+    /// <returns><see langword="true"/> when the provider value can be converted to a decimal; otherwise, <see langword="false"/>.</returns>
     private static bool TryDecimal(object? value, out decimal number)
     {
         try
@@ -312,6 +395,12 @@ internal static class TableExportRenderer
         }
     }
 
+    /// <summary>
+    /// Attempts to convert a provider value to a date and time without throwing for unsupported types.
+    /// </summary>
+    /// <param name="value">The provider value to convert to a date and time.</param>
+    /// <param name="date">Receives the converted wall-clock date/time.</param>
+    /// <returns><see langword="true"/> when the provider value can be converted to a date and time; otherwise, <see langword="false"/>.</returns>
     private static bool TryDate(object value, out DateTime date)
     {
         if (value is DateTime typed)
@@ -321,8 +410,8 @@ internal static class TableExportRenderer
         }
         if (value is DateTimeOffset offset)
         {
-            // Match the browser formatter: display the session-local wall-clock
-            // components carried in the value, not the server process timezone.
+            // Match the browser formatter by displaying the session-local
+            // wall-clock components carried in the value, not the server process timezone.
             date = offset.DateTime;
             return true;
         }
@@ -339,6 +428,7 @@ internal static class TableExportRenderer
     }
 }
 
+/// <summary>Contains visible export columns and fully projected/rendered rows.</summary>
 internal sealed record RenderedExportTable(
     IReadOnlyList<ColumnInfo> Columns,
     IReadOnlyList<IReadOnlyDictionary<string, object?>> Rows);

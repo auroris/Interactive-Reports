@@ -5,8 +5,8 @@ using InteractiveReport.Core.Model;
 namespace InteractiveReport.Core.Export;
 
 /// <summary>
-/// RFC 4180 CSV: CRLF row endings, fields quoted when they contain comma/quote/CR/LF,
-/// quotes doubled. UTF-8 with BOM so Excel detects the encoding. Headers are column
+/// Writes RFC 4180 output with CRLF row endings. Fields containing commas, quotes, CR, or LF are
+/// quoted, with embedded quotes doubled. Output is UTF-8 with a BOM so Excel detects the encoding. Headers are column
 /// labels (what the user sees), not internal names.
 ///
 /// The default cell policy neutralizes spreadsheet formula injection: RFC 4180
@@ -20,6 +20,13 @@ namespace InteractiveReport.Core.Export;
 /// </summary>
 public static class CsvWriter
 {
+    /// <summary>
+    /// Serializes protocol columns and rows as a UTF-8 CSV document with a byte-order mark.
+    /// </summary>
+    /// <param name="columns">The columns whose labels form the header and whose names select row values.</param>
+    /// <param name="rows">The result rows to serialize in their existing order.</param>
+    /// <param name="policy">The spreadsheet-injection policy for text cells; defaults to <c>CsvCellPolicy.SafeText</c>.</param>
+    /// <returns>The complete UTF-8 CSV payload, including its byte-order mark.</returns>
     public static byte[] Write(
         IReadOnlyList<ColumnInfo> columns,
         IReadOnlyList<IReadOnlyDictionary<string, object?>> rows,
@@ -46,6 +53,11 @@ public static class CsvWriter
         return result;
     }
 
+    /// <summary>
+    /// Appends one RFC 4180 row and its CRLF terminator.
+    /// </summary>
+    /// <param name="sb">The text builder that receives generated output.</param>
+    /// <param name="fields">The ordered field values written as one CSV row.</param>
     private static void AppendRow(StringBuilder sb, IEnumerable<string> fields)
     {
         var first = true;
@@ -58,6 +70,11 @@ public static class CsvWriter
         sb.Append("\r\n");
     }
 
+    /// <summary>
+    /// Appends one field, quoting and escaping it when RFC 4180 requires it.
+    /// </summary>
+    /// <param name="sb">The text builder that receives generated output.</param>
+    /// <param name="field">The already formatted field text.</param>
     private static void AppendField(StringBuilder sb, string field)
     {
         if (field.AsSpan().IndexOfAny(',', '"', '\r') < 0 && !field.Contains('\n'))
@@ -68,6 +85,11 @@ public static class CsvWriter
         sb.Append('"').Append(field.Replace("\"", "\"\"")).Append('"');
     }
 
+    /// <summary>
+    /// Converts a provider value to invariant text before CSV escaping.
+    /// </summary>
+    /// <param name="value">The provider value to format.</param>
+    /// <returns>The invariant CSV field text.</returns>
     private static string Format(object? value) => value switch
     {
         null => "",
@@ -77,6 +99,13 @@ public static class CsvWriter
         _ => value.ToString() ?? "",
     };
 
+    /// <summary>
+    /// Applies the configured spreadsheet-formula injection policy to a formatted field.
+    /// </summary>
+    /// <param name="field">The formatted field text.</param>
+    /// <param name="fromText">Indicates whether the value originated as text and must preserve spreadsheet-safe quoting.</param>
+    /// <param name="policy">The spreadsheet-injection policy to apply.</param>
+    /// <returns>The value after applying the configured spreadsheet-injection policy.</returns>
     private static string Sanitize(string field, bool fromText, CsvCellPolicy policy)
         => policy == CsvCellPolicy.SafeText
            && fromText
@@ -86,12 +115,12 @@ public static class CsvWriter
             : field;
 }
 
-/// <summary>How <see cref="CsvWriter"/> treats text cells a spreadsheet would evaluate.</summary>
+/// <summary>Specifies how <see cref="CsvWriter"/> treats text cells a spreadsheet would evaluate.</summary>
 public enum CsvCellPolicy
 {
-    /// <summary>Prefix formula-triggering text cells with an apostrophe (the default).</summary>
+    /// <summary>Prefixes formula-triggering text cells with an apostrophe; this is the default.</summary>
     SafeText,
 
-    /// <summary>Emit text exactly as stored; only choose this for non-spreadsheet consumers.</summary>
+    /// <summary>Emits text exactly as stored; use only for non-spreadsheet consumers.</summary>
     Verbatim,
 }

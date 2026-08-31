@@ -1,25 +1,26 @@
 namespace InteractiveReport.Core.Model;
 
 /// <summary>
-/// A developer-owned report definition. Lives server-side (configuration in v1),
+/// Defines a developer-owned report that lives server-side and is referenced by friendly name.
 /// referenced by friendly name; the base SQL never crosses the network.
 /// </summary>
 public sealed class ReportDefinition
 {
-    /// <summary>Set by the definition store from its key; not part of the config payload.</summary>
+    /// <summary>Gets or sets the canonical name assigned by the definition store; it is not part of the configuration payload.</summary>
     public string Name { get; set; } = "";
 
+    /// <summary>Gets or sets the optional display title; clients prettify <see cref="Name"/> when absent.</summary>
     public string? Title { get; set; }
 
     /// <summary>
-    /// Named connection resolved through IReportConnectionFactory. Registered in code
+    /// Gets or sets the named connection resolved through <c>IReportConnectionFactory</c>. It is registered in code
     /// (AddConnection) — the programmatic alternative to <see cref="DataSource"/>;
     /// a definition sets exactly one of the two.
     /// </summary>
     public string Connection { get; set; } = "";
 
     /// <summary>
-    /// The report's data source: a value containing '=' is a literal ADO.NET
+    /// Gets or sets the report's data source. A value containing '=' is a literal ADO.NET
     /// connection string; a value without '=' is the name of an entry under the
     /// standard ConnectionStrings configuration section (a missing name is a
     /// configuration error — it is never treated as a literal).
@@ -27,47 +28,51 @@ public sealed class ReportDefinition
     public string? DataSource { get; set; }
 
     /// <summary>
-    /// ADO.NET provider token for <see cref="DataSource"/>: sqlite, sqlServer,
-    /// postgres, or oracle. Optional when the data source is a ConnectionStrings
+    /// Gets or sets the ADO.NET provider token for <see cref="DataSource"/>: SQLite, sqlServer,
+    /// PostgreSQL, or oracle. Optional when the data source is a ConnectionStrings
     /// name with a {name}_ProviderName companion entry (the Umbraco/legacy
     /// convention); required for literal connection strings.
     /// </summary>
     public string? Provider { get; set; }
 
     /// <summary>
-    /// The SQL dialect. Derived from the data source or connection — the definition
+    /// Gets or sets the SQL dialect derived from the data source or connection. The definition
     /// store stamps it before execution, superseding any configured value (dialect is
     /// a property of the connection, not a per-report choice). Hosts that resolve
     /// definitions themselves must assign it before execution.
     /// </summary>
     public ReportDialect? Dialect { get; set; }
 
-    /// <summary>The resolved dialect; execution surfaces call this, never the raw property.</summary>
+    /// <summary>
+    /// Returns the resolved dialect required by execution surfaces.
+    /// </summary>
+    /// <returns>The non-null dialect assigned during definition resolution.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when the definition has not been resolved against a connection.</exception>
     public ReportDialect GetEffectiveDialect()
         => Dialect ?? throw new InvalidOperationException(
             $"Report '{Name}': dialect is unresolved — resolve it from the report's connection before execution.");
 
     /// <summary>
-    /// Optional session timezone (a region name like "Pacific/Auckland" or an offset
+    /// Gets or sets an optional session timezone, such as <c>Pacific/Auckland</c> or <c>+13:00</c>,
     /// like "+13:00"), pinned when the connection opens on engines that have session
-    /// timezones — Oracle (ALTER SESSION) and Postgres (SET TIME ZONE). This affects
+    /// timezones — Oracle (ALTER SESSION) and PostgreSQL (SET TIME ZONE). This affects
     /// developer SQL and database conversions; portable-expression NOW() is instead
-    /// one request-scoped UTC value. Deliberately ignored on SqlServer and Sqlite.
+    /// one request-scoped UTC value. Deliberately ignored on SqlServer and SQLite.
     /// Null means the server's setting. Note Oracle pools keep session state:
     /// definitions sharing a named connection should agree on this value.
     /// </summary>
     public string? TimeZone { get; set; }
 
     /// <summary>
-    /// The base SELECT. Composed as a derived table (ir_base), so it must not end with
+    /// Gets or sets the base SELECT. It is composed as a derived table (<c>ir_base</c>), so it must not end with
     /// ORDER BY. Context parameter placeholders use the dialect's native style
-    /// (@name on SqlServer/Sqlite, :name on Oracle). Placeholder names matching
+    /// (@name on SqlServer/SQLite, :name on Oracle). Placeholder names matching
     /// p0/p1/... are reserved for the composer.
     /// </summary>
     public string Sql { get; set; } = "";
 
     /// <summary>
-    /// Column name → friendly display label, for base queries whose column names are
+    /// Gets or sets base-column friendly labels for queries whose column names are
     /// not presentable. Never applied to the engine's schema or query results: it is
     /// delivered to the client as the labels of the default report the schema endpoint
     /// sends down (an effective Default state with its own labels wins), and it plays
@@ -78,16 +83,17 @@ public sealed class ReportDefinition
     public Dictionary<string, string>? ColumnLabels { get; set; }
 
     /// <summary>
-    /// Server-resolved parameters (claims by default). Client-supplied values can never
+    /// Gets or sets server-resolved parameters, claims by default. Client-supplied values can never
     /// bind to these — they are a separate parameter class from filter values. This is
     /// the row-level security mechanism (the :APP_USER pattern).
     /// </summary>
     public Dictionary<string, ContextParamSpec>? ContextParams { get; set; }
 
+    /// <summary>Gets or sets report-level authentication, policy, administrator, restriction, and configured-user rules.</summary>
     public ReportAuthorization? Authorization { get; set; }
 
     /// <summary>
-    /// Whitelist of end-user features (tokens in <see cref="ReportFeatures"/>). Null —
+    /// Gets or sets the whitelist of end-user feature tokens from <see cref="ReportFeatures"/>. Null
     /// the default — enables everything. When present, only the listed features exist:
     /// the client hides the rest of its chrome, and the server refuses the two that
     /// persist or egress data (download at the export endpoint, savedReports at
@@ -100,29 +106,32 @@ public sealed class ReportDefinition
     public List<string>? Features { get; set; }
 
     /// <summary>
-    /// Hard row cap for unpaged grid/group queries and exports, and an upper bound
+    /// Gets or sets the hard row cap for unpaged grid/group queries and exports, and an upper bound
     /// for numeric page-size configuration. Zero or a negative value means unlimited.
     /// </summary>
     public int MaxRows { get; set; } = 100_000;
 
+    /// <summary>Gets or sets the positive page size used when a request does not supply paging.</summary>
     public int DefaultPageSize { get; set; } = 50;
 
+    /// <summary>Gets or sets the largest positive page size a request may select.</summary>
     public int MaxPageSize { get; set; } = 1000;
 
-    /// <summary>Cap on distinct pivot-column combinations the pivot view may produce.</summary>
+    /// <summary>Gets or sets the cap on distinct pivot-column combinations a pivot view may produce.</summary>
     public int MaxPivotColumns { get; set; } = 60;
 
     /// <summary>
-    /// Cap on points the chart view may draw. Exceeding it is a precise validation
+    /// Gets or sets the cap on points a chart view may draw. Exceeding it is a precise validation
     /// error, never truncation — a silently truncated chart (a pie especially)
     /// misrepresents the data it claims to show.
     /// </summary>
     public int MaxChartPoints { get; set; } = 1000;
 
+    /// <summary>Gets or sets the positive timeout applied to every database command, in seconds.</summary>
     public int CommandTimeoutSeconds { get; set; } = 30;
 
     /// <summary>
-    /// Consistency policy for report paths that require more than one query. None is
+    /// Consistency selects the read policy for report paths that require more than one query. None is
     /// the default and performs no transaction setup. Snapshot asks the provider for
     /// a stable view and fails explicitly when that guarantee is not available; it
     /// never silently falls back to independent statements or a different strategy.
@@ -130,13 +139,13 @@ public sealed class ReportDefinition
     public ReportConsistency Consistency { get; set; } = ReportConsistency.None;
 
     /// <summary>
-    /// The developer's generated Default view. An administrator-controlled primary
+    /// Gets or sets the developer's generated default view. An administrator-controlled primary
     /// saved report titled "Default" replaces it until that report is unflagged.
     /// </summary>
     public ReportState? DefaultState { get; set; }
 
     /// <summary>
-    /// Report-document JSON files, resolved relative to the host content root unless
+    /// Gets or sets report-document JSON files, resolved relative to the host content root unless
     /// absolute. Files are exposed as global, read-only saved reports. Their primary
     /// value seeds the stored administrator-controlled flag on first synchronization;
     /// configured documents take precedence over database reports with the same title.
@@ -144,7 +153,7 @@ public sealed class ReportDefinition
     public List<string>? DocumentFiles { get; set; }
 
     /// <summary>
-    /// Optional application-controlled stylesheet URL. The report component places a
+    /// Gets or sets an optional application-controlled stylesheet URL. The report component places a
     /// link to it inside its shadow root, after the packaged styles, so report-specific
     /// rules can reach the component without accepting CSS from report documents.
     /// Relative URLs resolve against the host page.
@@ -152,14 +161,14 @@ public sealed class ReportDefinition
     public string? StyleSheet { get; set; }
 
     /// <summary>
-    /// APEX-style per-row edit pencil, rendered by the client as a leading synthetic
+    /// Gets or sets an APEX-style per-row edit pencil, rendered by the client as a leading synthetic
     /// grid column. Definition chrome like styleSheet — not report state and not a
     /// feature token; configuring it is what enables it.
     /// </summary>
     public ReportEditLink? EditLink { get; set; }
 
     /// <summary>
-    /// Per-column presentation and behavior overrides, keyed by base column name
+    /// Gets or sets per-column presentation and behavior overrides, keyed by base column name
     /// (case-insensitive). Unknown names are tolerated like columnLabels (schema
     /// drift); labels here supersede columnLabels, and configuring the same column's
     /// label in both maps is rejected at load.
@@ -167,9 +176,10 @@ public sealed class ReportDefinition
     public Dictionary<string, ReportColumnOverride>? Columns { get; set; }
 
     /// <summary>
-    /// columnLabels overlaid with columns[*].label (overrides win). Null when neither
-    /// map contributes a label — callers keep their existing null-means-absent paths.
+    /// Merges <see cref="ColumnLabels"/> with <see cref="Columns"/> labels, with column overrides winning.
+    /// neither map contributes a label — callers keep their existing null-means-absent paths.
     /// </summary>
+    /// <returns>A detached case-insensitive label map, or <see langword="null"/> when neither source contributes a label.</returns>
     public Dictionary<string, string>? GetEffectiveColumnLabels()
     {
         Dictionary<string, string>? merged = null;
@@ -189,84 +199,87 @@ public sealed class ReportDefinition
 }
 
 /// <summary>
-/// The definition's edit pencil. The URL template's {COLUMN} placeholders reference
+/// Defines the report's per-row edit pencil. URL-template <c>{COLUMN}</c> placeholders reference
 /// definition-schema columns; the referenced values are projected as hidden row data and
 /// substituted client-side with URL encoding, so no markup ever crosses the wire.
 /// </summary>
 public sealed class ReportEditLink
 {
     /// <summary>
-    /// URL template, e.g. "/orders/{ORDER_ID}/edit". At least one placeholder is
+    /// Gets or sets the URL template, for example <c>/orders/{ORDER_ID}/edit</c>. At least one placeholder is
     /// required; a row whose placeholder value is null renders no pencil.
     /// </summary>
     public string UrlTemplate { get; set; } = "";
 
-    /// <summary>Accessible name and tooltip of the pencil. Default "Edit".</summary>
+    /// <summary>Gets or sets the accessible name and tooltip; the client defaults it to <c>Edit</c>.</summary>
     public string? Label { get; set; }
 
-    /// <summary>"_self" (default) or "_blank" (the client adds rel="noopener").</summary>
+    /// <summary>Gets or sets <c>_self</c> by default or <c>_blank</c>; the client adds <c>rel="noopener"</c>.</summary>
     public string? Target { get; set; }
 }
 
-/// <summary>One column's developer-set overrides. Absent properties change nothing.</summary>
+/// <summary>Contains developer-set overrides for one base column; absent properties change nothing.</summary>
 public sealed class ReportColumnOverride
 {
-    /// <summary>Display-name override; supersedes columnLabels. Blank is rejected.</summary>
+    /// <summary>Gets or sets a nonblank display-name override that supersedes <c>columnLabels</c>.</summary>
     public string? Label { get; set; }
 
     /// <summary>
-    /// Render the table header cell without visible text (the accessible name and
+    /// Gets or sets whether to render the table header cell without visible text. The accessible name and
     /// every menu, dialog, and picker keep the real label) — the APEX empty-heading
     /// pattern without the ambiguity of a report full of unnameable columns.
     /// </summary>
     public bool? HideLabel { get; set; }
 
     /// <summary>
-    /// False removes the column's sort controls (and control breaks, which imply
+    /// Gets or sets whether the column may be sorted. False removes sort controls and control breaks, which imply
     /// sorting); the server strips violating state into ignored[]. Null = allowed.
     /// </summary>
     public bool? Sortable { get; set; }
 
     /// <summary>
-    /// False removes the column's filter controls; filter rules referencing the
+    /// Gets or sets whether the column may be filtered. False removes filter controls, and rules referencing the
     /// column are stripped into ignored[]. Null = allowed.
     /// </summary>
     public bool? Filterable { get; set; }
 
-    /// <summary>Shown as a note at the bottom of the column's header menu.</summary>
+    /// <summary>Gets or sets optional help text shown at the bottom of the column's header menu.</summary>
     public string? HelpText { get; set; }
 }
 
+/// <summary>Defines how one server-owned base-query context parameter is resolved.</summary>
 public sealed class ContextParamSpec
 {
-    /// <summary>Claim type to resolve from the authenticated user.</summary>
+    /// <summary>Gets or sets the authenticated-user claim type resolved for this context parameter.</summary>
     public string? Claim { get; set; }
 }
 
 /// <summary>
-/// Default-deny: absent block ⇒ authenticated users only. Anonymous access requires
+/// Defines report-level access. An absent block still requires authentication; anonymous access requires
 /// the explicit opt-in. The lazy path is the safe path.
 /// </summary>
 public sealed class ReportAuthorization
 {
+    /// <summary>Gets or sets an optional ASP.NET Core authorization policy that must also succeed.</summary>
     public string? Policy { get; set; }
+    /// <summary>Gets or sets whether this report explicitly permits unauthenticated callers.</summary>
     public bool AllowAnonymous { get; set; }
 
     /// <summary>
-    /// Restricts this report to explicitly granted identities. Configuration grants
+    /// Gets or sets whether this report is limited to explicitly granted identities. Configuration grants
     /// in <see cref="Users"/> and database grants made in the administration center
     /// are additive. A database restriction marker can also enable this gate.
     /// </summary>
     public bool Restricted { get; set; }
 
     /// <summary>
-    /// Canonical identity values granted access when the report is restricted. These
+    /// Gets or sets canonical identity values granted access when the report is restricted. These
     /// source-controlled grants are additive with administration-center grants.
     /// </summary>
     public List<string> Users { get; set; } = [];
 
     /// <summary>
-    /// Restricts the report to configured or database administrators;
+    /// Gets or sets whether the report is restricted to configured or database administrators;
     /// non-administrators receive 404, matching the saved-report admin surface. If
     /// both administrator stores are empty, the application operation authorizer must
     /// affirmatively grant each request. A policy may stack on top. Contradicts

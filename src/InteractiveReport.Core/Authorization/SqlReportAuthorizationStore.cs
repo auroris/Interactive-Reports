@@ -11,7 +11,11 @@ using SqlKata;
 
 namespace InteractiveReport.Core.Authorization;
 
-/// <summary>Portable authorization store on the saved-report database connection.</summary>
+/// <summary>
+/// Persists administrator grants, report restrictions, and report-user grants through provider-neutral SQL
+/// on the saved-report database connection. Entry ids are content-addressed, report names compare
+/// case-insensitively, identities compare ordinally, and optional table creation is serialized per target.
+/// </summary>
 public sealed class SqlReportAuthorizationStore : IReportAuthorizationStore
 {
     private const int TimeoutSeconds = 30;
@@ -24,6 +28,11 @@ public sealed class SqlReportAuthorizationStore : IReportAuthorizationStore
     private readonly SemaphoreSlim _createLock = new(1, 1);
     private readonly HashSet<StoreTarget> _createdTargets = [];
 
+    /// <summary>
+    /// Initializes the store without SQL diagnostic logging.
+    /// </summary>
+    /// <param name="config">The authorization-store connection, dialect, and table configuration.</param>
+    /// <param name="connections">Creates unopened connections by configured name.</param>
     public SqlReportAuthorizationStore(
         Func<ReportAuthorizationStoreConfig> config,
         IReportConnectionFactory connections)
@@ -31,6 +40,13 @@ public sealed class SqlReportAuthorizationStore : IReportAuthorizationStore
     {
     }
 
+    /// <summary>
+    /// Initializes the store with optional SQL diagnostic logging.
+    /// </summary>
+    /// <param name="config">The authorization-store connection, dialect, and table configuration.</param>
+    /// <param name="connections">Creates unopened connections by configured name.</param>
+    /// <param name="logger">The host-provided logger that receives diagnostic events; <see langword="null"/> disables logging.</param>
+    /// <remarks>The configuration callback is evaluated for each operation so option reloads can redirect the store.</remarks>
     public SqlReportAuthorizationStore(
         Func<ReportAuthorizationStoreConfig> config,
         IReportConnectionFactory connections,
@@ -41,12 +57,23 @@ public sealed class SqlReportAuthorizationStore : IReportAuthorizationStore
         _logger = logger;
     }
 
+    /// <summary>
+    /// Lists every persisted authorization entry, including restricted-report settings.
+    /// </summary>
+    /// <param name="ct">Cancels connection opening, optional table creation, query execution, and reading.</param>
+    /// <returns>Detached entries ordered by kind, normalized report key, then identity key.</returns>
     public Task<IReadOnlyList<ReportAuthorizationEntry>> ListAll(CancellationToken ct = default)
         => Select(query => query
             .OrderBy("ENTRY_KIND")
             .OrderBy("REPORT_KEY")
             .OrderBy("IDENTITY_KEY"), ct);
 
+    /// <summary>
+    /// Loads a database-administrator grant by identity.
+    /// </summary>
+    /// <param name="identity">The optional canonical caller identity compared ordinally.</param>
+    /// <param name="ct">Cancels persistence access.</param>
+    /// <returns>Whether any database administrator is configured and whether this identity is granted.</returns>
     public async Task<DatabaseAdministratorAccess> GetAdministratorAccess(
         string? identity,
         CancellationToken ct = default)
@@ -59,17 +86,35 @@ public sealed class SqlReportAuthorizationStore : IReportAuthorizationStore
                 string.Equals(row.Identity, identity, StringComparison.Ordinal)));
     }
 
+    /// <summary>
+    /// Determines whether any database administrators are configured for report authorization.
+    /// </summary>
+    /// <param name="ct">Cancels persistence access.</param>
+    /// <returns>A task whose result is <see langword="true"/> when any database administrators are configured; otherwise, <see langword="false"/>.</returns>
     public async Task<bool> HasAdministrators(CancellationToken ct = default)
         => (await Select(query => query
             .Where("ENTRY_KIND", KindText(ReportAuthorizationEntryKind.Administrator))
             .Limit(1), ct)).Count != 0;
 
+    /// <summary>
+    /// Determines whether the identity is a database administrator for report authorization.
+    /// </summary>
+    /// <param name="identity">The canonical identity to compare ordinally.</param>
+    /// <param name="ct">Cancels persistence access.</param>
+    /// <returns>A task whose result is <see langword="true"/> when the identity is a database administrator; otherwise, <see langword="false"/>.</returns>
     public async Task<bool> IsAdministrator(string identity, CancellationToken ct = default)
         => (await Select(query => query
                 .Where("ID", EntryId(ReportAuthorizationEntryKind.Administrator, null, identity))
                 .Limit(1), ct))
             .Any(row => string.Equals(row.Identity, identity, StringComparison.Ordinal));
 
+    /// <summary>
+    /// Loads a report-user grant by report and identity.
+    /// </summary>
+    /// <param name="reportName">The configured report name compared through its case-insensitive key.</param>
+    /// <param name="identity">The optional canonical caller identity compared ordinally.</param>
+    /// <param name="ct">Cancels persistence access.</param>
+    /// <returns>Whether the report is database-restricted and whether this identity has a database grant.</returns>
     public async Task<DatabaseReportAccess> GetReportAccess(
         string reportName,
         string? identity,
@@ -89,12 +134,31 @@ public sealed class SqlReportAuthorizationStore : IReportAuthorizationStore
                 && string.Equals(row.Identity, identity, StringComparison.Ordinal)));
     }
 
+    /// <summary>
+    /// Creates or refreshes a database administrator grant.
+    /// </summary>
+    /// <param name="identity">The canonical identity to grant.</param>
+    /// <param name="ct">Cancels persistence.</param>
+    /// <returns>A task that completes after the grant is inserted or updated.</returns>
     public Task GrantAdministrator(string identity, CancellationToken ct = default)
         => Put(ReportAuthorizationEntryKind.Administrator, reportName: null, identity, ct);
 
+    /// <summary>
+    /// Deletes a database administrator grant when present.
+    /// </summary>
+    /// <param name="identity">The canonical identity to revoke.</param>
+    /// <param name="ct">Cancels persistence.</param>
+    /// <returns>A task whose result is <see langword="true"/> when an administrator grant was removed; otherwise, <see langword="false"/>.</returns>
     public Task<bool> RevokeAdministrator(string identity, CancellationToken ct = default)
         => Delete(EntryId(ReportAuthorizationEntryKind.Administrator, null, identity), ct);
 
+    /// <summary>
+    /// Creates or removes the database restriction marker for one report.
+    /// </summary>
+    /// <param name="reportName">The canonical configured report name.</param>
+    /// <param name="restricted">True to upsert a marker; false to delete it.</param>
+    /// <param name="ct">Cancels persistence.</param>
+    /// <returns>A task that completes after the marker reaches the requested state.</returns>
     public async Task SetReportRestricted(
         string reportName,
         bool restricted,
@@ -106,18 +170,41 @@ public sealed class SqlReportAuthorizationStore : IReportAuthorizationStore
             await Delete(EntryId(ReportAuthorizationEntryKind.ReportRestriction, reportName, null), ct);
     }
 
+    /// <summary>
+    /// Creates or refreshes a database user grant for one report.
+    /// </summary>
+    /// <param name="reportName">The canonical configured report name.</param>
+    /// <param name="identity">The canonical identity to grant.</param>
+    /// <param name="ct">Cancels persistence.</param>
+    /// <returns>A task that completes after the grant is inserted or updated.</returns>
     public Task GrantReportUser(
         string reportName,
         string identity,
         CancellationToken ct = default)
         => Put(ReportAuthorizationEntryKind.ReportUser, reportName, identity, ct);
 
+    /// <summary>
+    /// Deletes a database user grant for one report when present.
+    /// </summary>
+    /// <param name="reportName">The canonical configured report name.</param>
+    /// <param name="identity">The canonical identity to revoke.</param>
+    /// <param name="ct">Cancels persistence.</param>
+    /// <returns>A task whose result is <see langword="true"/> when a report-user grant was removed; otherwise, <see langword="false"/>.</returns>
     public Task<bool> RevokeReportUser(
         string reportName,
         string identity,
         CancellationToken ct = default)
         => Delete(EntryId(ReportAuthorizationEntryKind.ReportUser, reportName, identity), ct);
 
+    /// <summary>
+    /// Upserts one deterministic authorization row, recovering from a concurrent insert race.
+    /// </summary>
+    /// <param name="kind">The authorization-entry kind to persist.</param>
+    /// <param name="reportName">The report name required by report-scoped kinds; otherwise null.</param>
+    /// <param name="identity">The identity required by administrator/user kinds; otherwise null.</param>
+    /// <param name="ct">Cancels persistence.</param>
+    /// <returns>A task that completes after update or insert commits.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when a unique-key race occurs but the winning row cannot be updated.</exception>
     private async Task Put(
         ReportAuthorizationEntryKind kind,
         string? reportName,
@@ -157,9 +244,22 @@ public sealed class SqlReportAuthorizationStore : IReportAuthorizationStore
         }
     }
 
+    /// <summary>
+    /// Deletes one deterministic authorization row by id.
+    /// </summary>
+    /// <param name="id">The exact content-addressed entry id.</param>
+    /// <param name="ct">Cancels persistence.</param>
+    /// <returns>A task whose result is <see langword="true"/> when the requested row was deleted; otherwise, <see langword="false"/>.</returns>
     private async Task<bool> Delete(string id, CancellationToken ct)
         => await Execute(config => new Query(config.TableName).Where("ID", id).AsDelete(), ct) == 1;
 
+    /// <summary>
+    /// Builds the authorization query for the supplied report and identity filters.
+    /// </summary>
+    /// <param name="shape">Adds filters, limits, or ordering to the base authorization-table projection.</param>
+    /// <param name="ct">Cancels connection opening, optional table creation, execution, and reading.</param>
+    /// <returns>Detached entries in query order.</returns>
+    /// <remarks>Opens and disposes one connection, command, and reader.</remarks>
     private async Task<IReadOnlyList<ReportAuthorizationEntry>> Select(
         Func<Query, Query> shape,
         CancellationToken ct)
@@ -189,6 +289,13 @@ public sealed class SqlReportAuthorizationStore : IReportAuthorizationStore
         return result;
     }
 
+    /// <summary>
+    /// Compiles and executes one non-query authorization-table statement.
+    /// </summary>
+    /// <param name="build">Builds the SQLKata mutation from validated current configuration.</param>
+    /// <param name="ct">Cancels connection opening, optional table creation, and execution.</param>
+    /// <returns>The provider's affected-row count.</returns>
+    /// <remarks>Opens and disposes one connection and command.</remarks>
     private async Task<int> Execute(
         Func<ReportAuthorizationStoreConfig, Query> build,
         CancellationToken ct)
@@ -202,6 +309,13 @@ public sealed class SqlReportAuthorizationStore : IReportAuthorizationStore
         return await command.ExecuteNonQueryAsync(ct);
     }
 
+    /// <summary>
+    /// Creates and opens a connection, optionally ensuring the configured table exists.
+    /// </summary>
+    /// <param name="config">The authorization-store connection, dialect, and table configuration.</param>
+    /// <param name="ct">Cancels opening and table creation.</param>
+    /// <returns>An open connection owned by the caller.</returns>
+    /// <remarks>Disposes the connection before rethrowing when preparation fails.</remarks>
     private async Task<DbConnection> OpenConnection(
         ReportAuthorizationStoreConfig config,
         CancellationToken ct)
@@ -220,6 +334,14 @@ public sealed class SqlReportAuthorizationStore : IReportAuthorizationStore
         }
     }
 
+    /// <summary>
+    /// Creates the authorization table once per process and configured store target.
+    /// </summary>
+    /// <param name="connection">The already-open target connection.</param>
+    /// <param name="config">The authorization-store connection, dialect, and table configuration.</param>
+    /// <param name="ct">Cancels lock acquisition and DDL execution.</param>
+    /// <returns>A task that completes when the target is known to exist.</returns>
+    /// <remarks>Serializes DDL, executes it at most once per target in this store instance, and records successful targets in memory.</remarks>
     private async Task EnsureCreated(
         DbConnection connection,
         ReportAuthorizationStoreConfig config,
@@ -243,12 +365,23 @@ public sealed class SqlReportAuthorizationStore : IReportAuthorizationStore
         }
     }
 
+    /// <summary>
+    /// Validates and returns the current report-authorization store configuration.
+    /// </summary>
+    /// <param name="config">The authorization-store connection, dialect, and table configuration.</param>
+    /// <returns>The report authorization store config.</returns>
     private static ReportAuthorizationStoreConfig Validated(ReportAuthorizationStoreConfig config)
     {
         SavedReportStoreConfig.EnsureValidTableName(config.TableName);
         return config;
     }
 
+    /// <summary>
+    /// Builds idempotent provider-specific authorization-table DDL.
+    /// </summary>
+    /// <param name="config">The authorization-store connection, dialect, and table configuration.</param>
+    /// <returns>A CREATE TABLE statement or block for the configured dialect.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when the dialect is unsupported.</exception>
     private static string CreateTableSql(ReportAuthorizationStoreConfig config)
         => config.Dialect switch
         {
@@ -304,6 +437,13 @@ public sealed class SqlReportAuthorizationStore : IReportAuthorizationStore
             _ => throw new ArgumentOutOfRangeException(nameof(config), config.Dialect, null),
         };
 
+    /// <summary>
+    /// Builds the stable identifier for one authorization entry.
+    /// </summary>
+    /// <param name="kind">The authorization-entry kind included in the identifier.</param>
+    /// <param name="reportName">The optional report name component.</param>
+    /// <param name="identity">The optional identity component.</param>
+    /// <returns>An <c>auth_</c>-prefixed lowercase SHA-256 identity over normalized components.</returns>
     private static string EntryId(
         ReportAuthorizationEntryKind kind,
         string? reportName,
@@ -314,9 +454,25 @@ public sealed class SqlReportAuthorizationStore : IReportAuthorizationStore
             SHA256.HashData(Encoding.UTF8.GetBytes(source))).ToLowerInvariant();
     }
 
+    /// <summary>
+    /// Normalizes a report name into its comparison key.
+    /// </summary>
+    /// <param name="value">The report name to normalize for persistence comparisons.</param>
+    /// <returns>The normalized key used to identify the report.</returns>
     private static string ReportKey(string value) => value.Trim().ToUpperInvariant();
+    /// <summary>
+    /// Normalizes an identity into its comparison key.
+    /// </summary>
+    /// <param name="value">The identity to normalize for persistence comparisons.</param>
+    /// <returns>The normalized key used for identity comparisons.</returns>
     private static string IdentityKey(string value) => value.Trim();
 
+    /// <summary>
+    /// Serializes an authorization-entry kind to its persistence token.
+    /// </summary>
+    /// <param name="kind">The authorization-entry kind to serialize.</param>
+    /// <returns>The persisted authorization-entry kind token.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="kind"/> is unsupported.</exception>
     private static string KindText(ReportAuthorizationEntryKind kind) => kind switch
     {
         ReportAuthorizationEntryKind.Administrator => "administrator",
@@ -325,6 +481,12 @@ public sealed class SqlReportAuthorizationStore : IReportAuthorizationStore
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
     };
 
+    /// <summary>
+    /// Parses the persisted authorization kind token into the protocol enum.
+    /// </summary>
+    /// <param name="value">The persisted authorization-kind token to parse.</param>
+    /// <returns>The report authorization entry kind.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when persistence contains an unknown token.</exception>
     private static ReportAuthorizationEntryKind KindFrom(string value) => value switch
     {
         "administrator" => ReportAuthorizationEntryKind.Administrator,
@@ -334,6 +496,7 @@ public sealed class SqlReportAuthorizationStore : IReportAuthorizationStore
             $"Authorization table contains unknown entry kind '{value}'."),
     };
 
+    /// <summary>Identifies one physical table whose successful creation is cached by this store instance.</summary>
     private sealed record StoreTarget(
         string ConnectionName,
         ReportDialect Dialect,

@@ -12,6 +12,12 @@ namespace InteractiveReport.Core.Execution;
 /// </summary>
 internal static class HighlightEvaluator
 {
+    /// <summary>
+    /// Evaluates ordered highlight markers for every returned row.
+    /// </summary>
+    /// <param name="rules">The compiled rules whose private marker projections are present in each row.</param>
+    /// <param name="rows">The execution rows containing public values and private highlight markers.</param>
+    /// <returns>Matched row highlights followed by cell highlights, each ordered by rule sequence within its scope.</returns>
     internal static List<HighlightHit> Evaluate(
         IReadOnlyList<CompiledRule<HighlightEffect>> rules,
         IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)
@@ -36,6 +42,12 @@ internal static class HighlightEvaluator
         return hits;
     }
 
+    /// <summary>
+    /// Interprets a projected highlight marker using the supported provider value representations.
+    /// </summary>
+    /// <param name="row">The execution row containing the marker projection.</param>
+    /// <param name="projectionName">The private marker column name.</param>
+    /// <returns><see langword="true"/> when the marker exists and represents a true value; otherwise, <see langword="false"/>.</returns>
     private static bool MarkerIsTrue(
         IReadOnlyDictionary<string, object?> row,
         string projectionName)

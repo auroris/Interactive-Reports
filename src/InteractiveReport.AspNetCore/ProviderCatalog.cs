@@ -5,7 +5,7 @@ using Microsoft.Data.Sqlite;
 namespace InteractiveReport.AspNetCore;
 
 /// <summary>
-/// The one home for provider-token, connection-type, and dialect knowledge. SQLite is
+/// Centralizes provider-token, connection-type, and dialect knowledge. SQLite is
 /// a bundled provider; every other provider loads by reflection from the host's own
 /// dependency graph, so the package
 /// carries no provider references and a missing driver fails fast naming the exact
@@ -39,7 +39,7 @@ internal static class ProviderCatalog
     private static readonly Dictionary<string, Provider> ByToken =
         Providers.ToDictionary(p => p.Token, StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>ADO.NET provider invariant names (the ConnectionStrings {name}_ProviderName convention).</summary>
+    /// <summary>Maps ADO.NET invariant names from the ConnectionStrings <c>{name}_ProviderName</c> convention to provider tokens.</summary>
     private static readonly Dictionary<string, string> TokenByInvariantName = new(StringComparer.OrdinalIgnoreCase)
     {
         ["Microsoft.Data.Sqlite"] = "sqlite",
@@ -49,7 +49,7 @@ internal static class ProviderCatalog
         ["Oracle.ManagedDataAccess.Client"] = "oracle",
     };
 
-    /// <summary>Connection-type full name → dialect, for sniffing code-registered factories.</summary>
+    /// <summary>Maps connection type names to dialects for code-registered factory inspection.</summary>
     private static readonly Dictionary<string, ReportDialect> DialectByTypeFullName = new(StringComparer.Ordinal)
     {
         ["Microsoft.Data.SqlClient.SqlConnection"] = ReportDialect.SqlServer,
@@ -61,8 +61,15 @@ internal static class ProviderCatalog
         ["System.Data.SQLite.SQLiteConnection"] = ReportDialect.Sqlite,
     };
 
+    /// <summary>Gets the supported provider tokens as a comma-separated diagnostic list.</summary>
     public static string TokenList => string.Join(", ", Providers.Select(p => p.Token));
 
+    /// <summary>
+    /// Attempts to resolve a configured provider token to its report dialect.
+    /// </summary>
+    /// <param name="token">The configured provider token to resolve.</param>
+    /// <param name="dialect">Receives the token's fixed dialect when recognized.</param>
+    /// <returns><see langword="true"/> when the token names a supported provider; otherwise, <see langword="false"/>.</returns>
     public static bool TryGetDialect(string token, out ReportDialect dialect)
     {
         if (ByToken.TryGetValue(token, out var provider))
@@ -74,20 +81,34 @@ internal static class ProviderCatalog
         return false;
     }
 
-    /// <summary>The token's canonical casing, or null when unknown.</summary>
+    /// <summary>
+    /// Returns a provider token in canonical casing.
+    /// </summary>
+    /// <param name="token">The configured provider token to canonicalize.</param>
+    /// <returns>The canonical token, or <see langword="null"/> when unknown.</returns>
     public static string? CanonicalToken(string token)
         => ByToken.TryGetValue(token, out var provider) ? provider.Token : null;
 
-    /// <summary>Provider token for an ADO.NET invariant name, or null when unrecognized.</summary>
+    /// <summary>
+    /// Resolves an ADO.NET invariant name to its provider token.
+    /// </summary>
+    /// <param name="invariantName">The ADO.NET provider invariant name.</param>
+    /// <returns>The provider token, or <see langword="null"/> when the invariant name is unrecognized.</returns>
     public static string? TokenForInvariantName(string invariantName)
         => TokenByInvariantName.TryGetValue(invariantName.Trim(), out var token) ? token : null;
 
+    /// <summary>Gets recognized ADO.NET invariant names as a comma-separated diagnostic list.</summary>
     public static string SupportedInvariantNames => string.Join(", ", TokenByInvariantName.Keys);
 
     /// <summary>
     /// Creates an unopened connection for a provider token. <paramref name="owner"/>
     /// names the config surface ("Report 'orders'", "SavedReports") in every error.
     /// </summary>
+    /// <param name="token">The configured provider token.</param>
+    /// <param name="connectionString">The connection string assigned to the new connection.</param>
+    /// <param name="owner">The configuration owner named in validation errors.</param>
+    /// <returns>A new unopened database connection owned by the caller.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when the token is unknown, the provider assembly is unavailable, or the provider rejects the connection string.</exception>
     public static DbConnection CreateConnection(string token, string connectionString, string owner)
     {
         if (!ByToken.TryGetValue(token, out var provider))
@@ -113,10 +134,12 @@ internal static class ProviderCatalog
     }
 
     /// <summary>
-    /// The dialect a connection instance implies, walking the inheritance chain so
-    /// provider subclasses still match. Null when the type is not a recognized
-    /// ADO.NET provider connection (wrappers, custom types).
+    /// Returns the dialect a connection type implies, walking the inheritance chain so
+    /// provider subclasses still match. Null when the type is not a recognized ADO.NET provider connection
+    /// (wrappers, custom types).
     /// </summary>
+    /// <param name="type">The concrete ADO.NET connection type to inspect.</param>
+    /// <returns>The implied dialect, or <see langword="null"/> for an unrecognized wrapper or custom type.</returns>
     public static ReportDialect? FromConnectionType(Type type)
     {
         for (var candidate = type; candidate is not null && candidate != typeof(DbConnection); candidate = candidate.BaseType)
@@ -127,7 +150,11 @@ internal static class ProviderCatalog
         return null;
     }
 
-    /// <summary>Test hook: the type-name table without needing the provider assemblies.</summary>
+    /// <summary>
+    /// Looks up the connection-type table without loading provider assemblies; used by focused tests.
+    /// </summary>
+    /// <param name="fullName">The namespace-qualified connection type name to match.</param>
+    /// <returns>The mapped dialect, or <see langword="null"/> when unrecognized.</returns>
     internal static ReportDialect? FromTypeFullName(string fullName)
         => DialectByTypeFullName.TryGetValue(fullName, out var dialect) ? dialect : null;
 }

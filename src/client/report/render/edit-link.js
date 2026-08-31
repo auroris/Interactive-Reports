@@ -1,25 +1,37 @@
-// The definition's per-row edit pencil: a leading synthetic grid column built
-// from the schema payload's editLink (urlTemplate/label/target). Definition
-// chrome, not a ColumnFormat renderer — it exists independent of the document's
-// column selection, using template columns the server projects as hidden row
-// data. Substituted values are URL-encoded and the result still passes the
-// renderer protocol allowlist, so row data can never smuggle a scheme.
+// Definition-owned per-row edit links: a leading synthetic grid column
+// built from the schema payload's editLink (urlTemplate/label/target). Definition chrome, not a
+// ColumnFormat renderer. It exists independent of the document's column selection and uses
+// template columns the server projects as hidden row data. Substituted values are URL-encoded
+// and the result still passes the renderer protocol allowlist, so row data can never smuggle a
+// scheme.
 
 import { el, icon } from "../../core/dom.js";
 import { translate } from "../../core/localization.js";
 import { safeRendererUrl } from "./column-renderers.js";
 
-/// The active edit link, or null. The pencil is a grid-row affordance: grouped,
-/// pivoted, and charted rows have no single source row to edit.
+/**
+ * The active edit link, or null. The pencil is a grid-row affordance: grouped, pivoted, and charted
+ * rows have no single source row to edit.
+ *
+ * @param {object} w - The report controller whose schema may declare an edit link.
+ * @param {string} mode - The active terminal mode.
+ * @returns {object|null} The active grid edit-link definition, or null outside grid mode.
+ */
 export function activeEditLink(w, mode) {
     return mode === "grid" ? (w.schema?.editLink ?? null) : null;
 }
 
-/// Substitutes {COLUMN} placeholders with the row's URL-encoded values. Returns
-/// null when any referenced value is null or missing — the row renders no
-/// pencil, mirroring the action renderer's blank-label convention. Placeholders
-/// arrive canonical-cased from the server; the case-insensitive fallback keeps
-/// hand-written hosts working.
+// Protocol contract: substitutes {COLUMN} placeholders with the row's URL-encoded values.
+// Returns null when any referenced value is null or missing; the row renders no pencil,
+// mirroring the action renderer's blank-label convention. Placeholders arrive canonical-cased
+// from the server; the case-insensitive fallback keeps hand-written hosts working.
+/**
+ * Replaces edit-link placeholders with encoded values from the result row.
+ *
+ * @param {string} template - The edit URL template containing row-value placeholders.
+ * @param {object} row - The result row supplying placeholder values, matched with a case-insensitive fallback.
+ * @returns {string|null} The substituted URL, or null when a required row value is absent.
+ */
 export function substituteEditUrl(template, row) {
     let missing = false;
     const url = String(template).replace(/\{([^{}]+)\}/g, (_, name) => {
@@ -38,9 +50,17 @@ export function substituteEditUrl(template, row) {
     return missing ? null : url;
 }
 
-/// The cell content for one row: an anchor with the pencil icon, or "" when the
-/// row withholds its link. A real href with no click handler, so middle-click,
-/// ctrl-click, and open-in-new-tab behave natively.
+/**
+ * The cell content for one row: an anchor with the pencil icon, or "" when the row withholds its link.
+ * A real href with no click handler, so middle-click, ctrl-click, and open-in-new-tab behave natively.
+ *
+ * @param {object} editLink - The edit-link definition used to build the row-specific anchor.
+ * @param {object} row - The result row supplying URL-template values.
+ * @param {Element|object|string|null} [context=null] - The localization context for the default edit label.
+ * @returns {string|HTMLAnchorElement} A detached pencil link, or an empty string when substitution or protocol validation fails.
+ *
+ * Side effects: creates a detached anchor and icon when a safe link is available.
+ */
 export function renderEditCell(editLink, row, context = null) {
     const url = substituteEditUrl(editLink.urlTemplate, row);
     const href = url === null ? null : safeRendererUrl(url, "link");

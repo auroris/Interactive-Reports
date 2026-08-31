@@ -27,6 +27,16 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
     private readonly IDisposable? _reloadSubscription;
     private string? _applied;
 
+    /// <summary>
+    /// Initializes a synchronizer and watches option reloads so the next request
+    /// reconciles the newly configured document set.
+    /// </summary>
+    /// <param name="documents">The configured document source to mirror.</param>
+    /// <param name="store">The saved-report store that receives configured rows.</param>
+    /// <param name="options">The monitored options that select the store and documents.</param>
+    /// <param name="registry">Resolves the concrete saved-report store target.</param>
+    /// <param name="logger">Receives synchronization diagnostics; <see langword="null"/> disables logging.</param>
+    /// <remarks>Subscribes to option changes. Dispose the synchronizer to release that subscription.</remarks>
     internal ConfiguredReportDocumentSynchronizer(
         ConfiguredReportDocumentStore documents,
         ISavedReportStore store,
@@ -43,12 +53,14 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
     }
 
     /// <summary>
-    /// Brings the store's configured rows up to date with the document files. Cheap
-    /// when nothing changed: one file stat per document plus an in-memory signature
-    /// compare. The first pass per process also triggers the store's lazy table
-    /// creation, so callers (including built-in definition resolution) need no
-    /// separate readiness step. Failures propagate and retry on the next request.
+    /// Brings the store's configured rows up to date with the document files. It is cheap when
+    /// nothing changed: one file stat per document plus an in-memory signature compare. The first pass per
+    /// process also triggers the store's lazy table creation, so callers (including built-in definition
+    /// resolution) need no separate readiness step. Failures propagate and retry on the next request.
     /// </summary>
+    /// <param name="ct">Cancels lock acquisition and database operations.</param>
+    /// <returns>A task that completes after all configured rows and orphans have been reconciled.</returns>
+    /// <remarks>May insert, update, or delete saved-report rows and emit diagnostic log events.</remarks>
     public async Task EnsureSynced(CancellationToken ct = default)
     {
         if (Signature() == Volatile.Read(ref _applied))
@@ -60,8 +72,8 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
         await _lock.WaitAsync(ct);
         try
         {
-            // Recompute under the lock: another request may have applied it, and the
-            // files may have changed again while we waited.
+            // Recompute under the lock because another request may have applied it,
+            // and the files may have changed again while we waited.
             var signature = Signature();
             if (signature == _applied) return;
 
@@ -98,9 +110,9 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
                         break;
                     }
 
-                    // Re-evaluate the administrator-owned primary bit after a
-                    // concurrent mutation instead of applying the stale value that
-                    // ListAll observed at the start of synchronization.
+                    // Re-evaluate the administrator-owned primary bit after a concurrent
+                    // mutation instead of applying the stale value that ListAll observed at the
+                    // start of synchronization.
                     current = await _store.Get(document.Id, ct);
                 }
             }
@@ -128,10 +140,12 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
     }
 
     /// <summary>
-    /// The store target plus every document's (id, mtime) pair. The
-    /// document store caches parses by length + mtime, so computing this costs one
-    /// FileInfo stat per document and uses the same invalidation boundary.
+    /// Builds a signature from the store target and every document's identity, length, and modification time.
+    /// The document store caches parses
+    /// by length + mtime, so computing this costs one FileInfo stat per document and uses the same
+    /// invalidation boundary.
     /// </summary>
+    /// <returns>A deterministic string that changes when the target store or a configured file changes.</returns>
     private string Signature()
     {
         var cfg = _registry.ResolveStoreConfig(_options.CurrentValue.SavedReports);
@@ -141,6 +155,12 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
         return $"{cfg.ConnectionName}|{cfg.Dialect}|{cfg.TableName}|{string.Join(";", parts)}";
     }
 
+    /// <summary>
+    /// Determines whether synchronization must replace an existing configured row.
+    /// </summary>
+    /// <param name="current">The row currently stored in the database.</param>
+    /// <param name="desired">The row derived from the current configured document.</param>
+    /// <returns><see langword="true"/> when persisted fields differ from the configured document; otherwise, <see langword="false"/>.</returns>
     private static bool Differs(SavedReport current, SavedReport desired)
         => current.Origin != desired.Origin
             || !current.IsGlobal
@@ -150,6 +170,9 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
             || !string.Equals(current.Title, desired.Title, StringComparison.Ordinal)
             || !string.Equals(current.StateJson, desired.StateJson, StringComparison.Ordinal);
 
+    /// <summary>
+    /// Releases the options-reload subscription and synchronization lock.
+    /// </summary>
     public void Dispose()
     {
         _reloadSubscription?.Dispose();

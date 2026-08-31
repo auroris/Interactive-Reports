@@ -3,7 +3,7 @@ using InteractiveReport.Core.Model;
 namespace InteractiveReport.Core.Expressions;
 
 /// <summary>
-/// Stage 2: bind the untyped syntax tree against the discovered schema and the
+/// Stage 2 of the portable expression pipeline: binds an untyped syntax tree against the discovered schema and
 /// function registry, producing the typed AST. Every rejection is a message about
 /// the client's own input, carrying the source position where it helps.
 ///
@@ -19,6 +19,14 @@ namespace InteractiveReport.Core.Expressions;
 /// </summary>
 internal static class ExprBinder
 {
+    /// <summary>
+    /// Recursively binds names, functions, operators, and CASE branches into a typed AST.
+    /// </summary>
+    /// <param name="syntax">The parsed syntax tree to bind.</param>
+    /// <param name="schema">Case-insensitive columns visible at this transformation stage.</param>
+    /// <returns>The typed AST node corresponding to <paramref name="syntax"/>.</returns>
+    /// <exception cref="ExprError">Thrown when names, arity, operands, or result types violate the portable contract.</exception>
+    /// <exception cref="InvalidOperationException">Thrown when no binder exists for the syntax-node type.</exception>
     public static ExprNode Bind(SyntaxNode syntax, IReadOnlyDictionary<string, ColumnModel> schema)
         => syntax switch
         {
@@ -35,11 +43,25 @@ internal static class ExprBinder
             _ => throw new InvalidOperationException($"unhandled syntax node {syntax.GetType().Name}"),
         };
 
+    /// <summary>
+    /// Resolves a name as a column visible in the current schema.
+    /// </summary>
+    /// <param name="name">The parsed name and source position.</param>
+    /// <param name="schema">The columns visible at this stage.</param>
+    /// <returns>A column-reference node retaining discovered metadata.</returns>
+    /// <exception cref="ExprError">Thrown when no column matches.</exception>
     private static ExprNode BindName(NameSyntax name, IReadOnlyDictionary<string, ColumnModel> schema)
         => schema.TryGetValue(name.Name, out var column)
             ? new ColumnRef(column)
             : throw new ExprError($"unknown column '{name.Name}' at this transformation stage");
 
+    /// <summary>
+    /// Resolves a function, validates arity and argument categories, and infers its result kind.
+    /// </summary>
+    /// <param name="call">The parsed function-call syntax to bind.</param>
+    /// <param name="schema">The columns visible to nested argument expressions.</param>
+    /// <returns>A typed function-call node using the registry's canonical function name.</returns>
+    /// <exception cref="ExprError">Thrown for an unknown function, invalid arity, condition argument, or function-specific type error.</exception>
     private static ExprNode BindCall(CallSyntax call, IReadOnlyDictionary<string, ColumnModel> schema)
     {
         if (!ExprFunctions.TryGet(call.Name, out var fn))
@@ -61,6 +83,13 @@ internal static class ExprBinder
         return new FuncCall(fn.Name, args, resultKind);
     }
 
+    /// <summary>
+    /// Binds logical NOT or numeric negation and validates its operand category.
+    /// </summary>
+    /// <param name="u">The parsed unary-expression syntax to bind.</param>
+    /// <param name="schema">The columns visible to the operand.</param>
+    /// <returns>A typed NOT or unary-minus node.</returns>
+    /// <exception cref="ExprError">Thrown when NOT receives a value or negation receives a non-number.</exception>
     private static ExprNode BindUnary(UnarySyntax u, IReadOnlyDictionary<string, ColumnModel> schema)
     {
         var operand = Bind(u.Operand, schema);
@@ -76,10 +105,22 @@ internal static class ExprBinder
         return new UnaryMinus(operand);
     }
 
-    /// <summary>NULL joins arithmetic the way it joins every other context: as a value of the needed type.</summary>
+    /// <summary>
+    /// Determines whether a node can participate in numeric context. NULL joins arithmetic as a value of the
+    /// needed type.
+    /// </summary>
+    /// <param name="node">The bound operand to classify.</param>
+    /// <returns><see langword="true"/> when the node is numeric or null-compatible with numeric context; otherwise, <see langword="false"/>.</returns>
     private static bool NumberContextAccepts(ExprNode node)
         => node is NullLit || node.Kind == ColumnKind.Number;
 
+    /// <summary>
+    /// Binds logical, comparison, concatenation, date, or numeric binary syntax.
+    /// </summary>
+    /// <param name="b">The parsed operator and operands.</param>
+    /// <param name="schema">The columns visible to both operands.</param>
+    /// <returns>The operator-specific typed AST node.</returns>
+    /// <exception cref="ExprError">Thrown when operand categories or comparison types are incompatible.</exception>
     private static ExprNode BindBinary(BinarySyntax b, IReadOnlyDictionary<string, ColumnModel> schema)
     {
         var left = Bind(b.Left, schema);
@@ -112,10 +153,15 @@ internal static class ExprBinder
     }
 
     /// <summary>
-    /// date ± days, whole calendar days only. The date stands on the left; the offset
-    /// is a number whose integrality can be established — anything provably fractional
-    /// or merely unprovable is rejected rather than silently truncated per dialect.
+    /// Binds date ± days using whole calendar days only. The date stands on the left; the offset
+    /// is a number whose integrality can be established — anything provably fractional or merely unprovable
+    /// is rejected rather than silently truncated per dialect.
     /// </summary>
+    /// <param name="b">The parsed plus/minus syntax and source position.</param>
+    /// <param name="left">The bound date operand.</param>
+    /// <param name="right">The bound day-count operand.</param>
+    /// <returns>A typed date-add node.</returns>
+    /// <exception cref="ExprError">Thrown for date/date operations, a right-side date, nonnumeric offset, or an offset not provably integral.</exception>
     private static ExprNode BindDateArithmetic(BinarySyntax b, ExprNode left, ExprNode right)
     {
         if (left.Kind == ColumnKind.Date && right.Kind == ColumnKind.Date)
@@ -134,11 +180,14 @@ internal static class ExprBinder
     }
 
     /// <summary>
-    /// Establish that a day-offset expression is whole: integer literals, integer-typed
-    /// columns, integer-valued functions, and +/-/* combinations of those. Division —
-    /// and anything else whose integrality cannot be established — is rejected.
-    /// NULL passes: a NULL offset yields a NULL date on every dialect.
+    /// Establishes that a day-offset expression is whole: integer literals, integer-typed
+    /// columns, integer-valued functions, and +/-/* combinations of those. Division — and anything else
+    /// whose integrality cannot be established — is rejected. NULL passes: a NULL offset yields a NULL date
+    /// on every dialect.
     /// </summary>
+    /// <param name="node">The bound numeric offset expression to prove integral.</param>
+    /// <param name="pos">The zero-based operator position used in diagnostics.</param>
+    /// <exception cref="ExprError">Thrown when the value is fractional or integrality cannot be established structurally.</exception>
     private static void RequireWholeDays(ExprNode node, int pos)
     {
         switch (node)
@@ -177,6 +226,11 @@ internal static class ExprBinder
         }
     }
 
+    /// <summary>
+    /// Determines whether a CLR type is one of the supported integer types.
+    /// </summary>
+    /// <param name="t">The CLR type to classify into a portable column kind.</param>
+    /// <returns><see langword="true"/> when the CLR type represents an integer; otherwise, <see langword="false"/>.</returns>
     private static bool IsIntegerClrType(Type t)
     {
         t = Nullable.GetUnderlyingType(t) ?? t;
@@ -184,6 +238,14 @@ internal static class ExprBinder
             || t == typeof(int) || t == typeof(uint) || t == typeof(long) || t == typeof(ulong);
     }
 
+    /// <summary>
+    /// Binds a comparison after rejecting conditions, NULL equality, and incompatible value kinds.
+    /// </summary>
+    /// <param name="b">The parsed comparison operator and source position.</param>
+    /// <param name="left">The bound left value.</param>
+    /// <param name="right">The bound right value.</param>
+    /// <returns>A typed comparison, with provider-unknown columns contextualized when possible.</returns>
+    /// <exception cref="ExprError">Thrown for condition operands, NULL equality, or incompatible types.</exception>
     private static ExprNode BindComparison(BinarySyntax b, ExprNode left, ExprNode right)
     {
         if (left.Kind == ColumnKind.Bool || right.Kind == ColumnKind.Bool)
@@ -202,6 +264,13 @@ internal static class ExprBinder
         return new Comparison(b.Op, operands[0], operands[1]);
     }
 
+    /// <summary>
+    /// Binds an inclusive BETWEEN predicate and unifies the value and bound types.
+    /// </summary>
+    /// <param name="b">The parsed value, lower bound, upper bound, and source position.</param>
+    /// <param name="schema">The columns visible to all three expressions.</param>
+    /// <returns>A typed BETWEEN node, with provider-unknown columns contextualized when possible.</returns>
+    /// <exception cref="ExprError">Thrown for conditions, NULL values, or incompatible types.</exception>
     private static ExprNode BindBetween(BetweenSyntax b, IReadOnlyDictionary<string, ColumnModel> schema)
     {
         var operand = Bind(b.Operand, schema);
@@ -224,6 +293,13 @@ internal static class ExprBinder
         return new Between(operands[0], operands[1], operands[2]);
     }
 
+    /// <summary>
+    /// Binds IS NULL or IS NOT NULL over a value expression.
+    /// </summary>
+    /// <param name="t">The parsed operand, negation flag, and source position.</param>
+    /// <param name="schema">The columns visible to the operand.</param>
+    /// <returns>A typed null-test predicate.</returns>
+    /// <exception cref="ExprError">Thrown when the operand is a condition or the literal NULL itself.</exception>
     private static ExprNode BindNullTest(NullTestSyntax t, IReadOnlyDictionary<string, ColumnModel> schema)
     {
         var operand = Bind(t.Operand, schema);
@@ -234,6 +310,13 @@ internal static class ExprBinder
         return new NullTest(operand, t.Negated);
     }
 
+    /// <summary>
+    /// Binds simple or searched CASE syntax and unifies comparison and result types.
+    /// </summary>
+    /// <param name="c">The parsed CASE operand, branches, optional else, and source position.</param>
+    /// <param name="schema">The columns visible to every CASE expression.</param>
+    /// <returns>A typed CASE node whose result kind is shared by all non-null branches.</returns>
+    /// <exception cref="ExprError">Thrown for invalid WHEN categories, incompatible comparison/results, or an all-NULL result.</exception>
     private static ExprNode BindCase(CaseSyntax c, IReadOnlyDictionary<string, ColumnModel> schema)
     {
         var operand = c.Operand is null ? null : Bind(c.Operand, schema);
@@ -313,11 +396,16 @@ internal static class ExprBinder
     }
 
     /// <summary>
-    /// Unifies values which SQL will compare. A provider-unknown source column is a
-    /// type variable, not a concrete Other value: the first concrete operand gives
-    /// it comparison context. Concrete non-portable Other values remain strict and
-    /// therefore cannot be compared to text, numbers, or dates accidentally.
+    /// Tries to unify values that SQL will compare. A provider-unknown source
+    /// column is a type variable, not a concrete Other value: the first concrete operand gives it comparison
+    /// context. Concrete non-portable Other values remain strict and therefore cannot be compared to text,
+    /// numbers, or dates accidentally.
     /// </summary>
+    /// <param name="values">The non-empty bound values participating in one comparison family.</param>
+    /// <param name="contextualValues">Receives copies in which provider-unknown columns assume the concrete anchor kind.</param>
+    /// <param name="expectedKind">The concrete column kind required by contextual binding.</param>
+    /// <param name="mismatch">Receives the first concrete value that disagrees with the anchor kind.</param>
+    /// <returns><see langword="true"/> when the values can share one comparison type; otherwise, <see langword="false"/>.</returns>
     private static bool TryContextualizeComparableValues(
         IReadOnlyList<ExprNode> values,
         out ExprNode[] contextualValues,
@@ -351,22 +439,38 @@ internal static class ExprBinder
         return true;
     }
 
+    /// <summary>
+    /// Determines whether a provider value lacks enough type information for binding.
+    /// </summary>
+    /// <param name="node">The bound value to inspect.</param>
+    /// <returns><see langword="true"/> for an uncontextualized column whose provider type was not recognized; otherwise, <see langword="false"/>.</returns>
     private static bool IsProviderUnknown(ExprNode node)
         => node is ColumnRef { AssumedKind: null, Column.HasKnownType: false };
 
+    /// <summary>
+    /// Requires a value that can be concatenated portably without session-dependent conversion.
+    /// </summary>
+    /// <param name="node">The bound concatenation operand.</param>
+    /// <param name="where">The expression location included in type-validation diagnostics.</param>
+    /// <exception cref="ExprError">Thrown for dates, conditions, Boolean values, or other unsupported kinds.</exception>
     private static void RequireConcatable(ExprNode node, string where)
     {
-        if (node is NullLit) return; // NULL concatenates as empty on every dialect
+        if (node is NullLit) return; // NULL concatenates as empty on every supported dialect.
         if (node.Kind == ColumnKind.Date)
-            // Implicit date-to-text follows engine settings (session language,
-            // NLS_DATE_FORMAT, DateStyle) — the one place they would leak into
-            // output, so conversion stays explicit.
+            // Implicit date-to-text follows engine settings (session language, NLS_DATE_FORMAT,
+            // DateStyle) — the one place they would leak into output, so conversion stays
+            // explicit.
             throw new ExprError(
                 $"{where}: convert the date with TO_STRING(…) first — a bare date renders engine-dependent text");
         if (node.Kind is not (ColumnKind.Text or ColumnKind.Number))
             throw new ExprError($"{where}: cannot concatenate a {KindName(node)} value");
     }
 
+    /// <summary>
+    /// Returns the diagnostic name of a bound expression kind.
+    /// </summary>
+    /// <param name="node">The bound expression whose kind should be named.</param>
+    /// <returns>The canonical column-kind name.</returns>
     private static string KindName(ExprNode node) => node switch
     {
         NullLit => "null",

@@ -1,8 +1,7 @@
-// Column presentation dialogs: which columns display and in what order
-// (Select Columns shuttle), what a column's heading says (Rename), and the
-// per-column settings dialog (visibility, alignment, format mask, styling).
-// All three follow the active table's terminal context. A shape composable does
-// not select a different presentation implementation.
+// Column presentation dialogs: which columns display and in what order (Select Columns
+// shuttle), what a column's heading says (Rename), and the per-column settings dialog
+// (visibility, alignment, format mask, styling). All three follow the active table's terminal
+// context. A shape composable does not select a different presentation implementation.
 
 import { el, labeled, sel } from "../../core/dom.js";
 import { openDialog } from "../../core/dialog.js";
@@ -15,6 +14,14 @@ import { formatForColumn, renderColumnValue } from "../render/column-renderers.j
 import { columnClasses } from "../classes.js";
 import { presentationStyle } from "../render/presentation.js";
 
+/**
+ * Opens the active table's two-list visibility and display-order editor.
+ *
+ * @param {object} w - The report controller whose active table supplies terminal columns and selection state.
+ * @returns {void} No value.
+ *
+ * Side effects: opens a dialog; its shuttle controls move option nodes, and applying stores the ordered visible names and runs the report.
+ */
 export function columnsDialog(w) {
     const ctx = tableContext(w);
     if (!ctx.caps.columns) return;
@@ -24,15 +31,18 @@ export function columnsDialog(w) {
     const displayedNames = visible.filter(n => byName.has(n));
     const hiddenNames = universe.map(c => c.name).filter(n => !displayedNames.includes(n));
 
+    // Builds one side of the shuttle from canonical column names.
     const listbox = names => el("select", { multiple: true, size: 12, class: "ir-shuttle-list" },
         ...names.map(n => new Option(byName.get(n).computed ? `ƒ ${byName.get(n).label}` : byName.get(n).label, n)));
     const hidden = listbox(hiddenNames);
     const shown = listbox(displayedNames);
 
+    // Moves selected or all option nodes between shuttle lists without recreating them.
     const move = (from, to, all) => {
         const picked = all ? [...from.options] : [...from.selectedOptions];
         for (const o of picked) to.append(o);
     };
+    // Moves selected visible options one slot while preserving their relative order.
     const nudge = delta => {
         const opts = [...shown.selectedOptions];
         if (delta > 0) opts.reverse();
@@ -42,6 +52,7 @@ export function columnsDialog(w) {
             delta < 0 ? sibling.before(o) : sibling.after(o);
         }
     };
+    // Creates one shuttle command button with visible shorthand and an explanatory title.
     const btn = (label, title, onclick) =>
         el("button", { type: "button", class: "ir-btn", title, onclick }, label);
 
@@ -69,21 +80,30 @@ export function columnsDialog(w) {
     });
 }
 
-/// Per-column settings: visibility, alignment, format mask, and constrained inline
-/// styling. Nothing here is a second source of truth — the Visible checkbox writes
-/// the same Select node the shuttle owns (re-shown columns append to the
-/// end), and everything else lives in the table's terminal Formats node, one compact entry
-/// per column. Edits buffer per column, so several columns can be configured in
-/// one visit.
+/**
+ * Per-column settings: visibility, alignment, format mask, and constrained inline styling. Nothing
+ * here is a second source of truth. The Visible checkbox writes the same Select node the shuttle owns
+ * (re-shown columns append to the end), and everything else lives in the table's terminal Formats
+ * node, one compact entry per column. Edits buffer per column, so several columns can be configured in
+ * one visit.
+ *
+ * @param {object} w - The report controller whose active columns, formats, selection, data samples, and apply pipeline are used.
+ * @param {string|undefined} initialCol - The column to preselect, or the first visible/available column by default.
+ * @returns {void} No value.
+ *
+ * Side effects: opens a dialog, registers staged-preview handlers, and on apply may replace format and selection entries and run the report.
+ */
 export function columnSettingsDialog(w, initialCol) {
     const ctx = tableContext(w);
     if (!ctx.caps.columnSettings) return;
     const universe = ctx.columns;
     const byName = new Map(universe.map(c => [c.name, c]));
+    // Resolves terminal column types before falling back to the definition-input schema.
     const columnType = name => byName.get(name)?.type ?? typeOf(w, name);
     const originallyVisible = visibleTableColumnNames(ctx, w);
     const canHide = ctx.caps.visibility && featureEnabled(w, "columns");
     const withDisplayAs = ctx.caps.displayAs;
+    // Reads the active table's owner-local format map from a particular document snapshot.
     const formatsOf = d => ctx.node(d, "formats")?.formats ?? {};
     const staged = new Map();
 
@@ -129,6 +149,7 @@ export function columnSettingsDialog(w, initialCol) {
         [maskSel, w.t("columns.formatMask")],
     ]) control.setAttribute("aria-label", label);
 
+    // Captures every control into one staged settings value for the currently active column.
     const read = () => ({
         visible: canHide ? visChk.checked : undefined,
         action: settingsFor(active).action,
@@ -144,22 +165,23 @@ export function columnSettingsDialog(w, initialCol) {
         classes: classesInp.value.trim(),
     });
 
-    // Saved documents may key formats or source columns under different casing
-    // than the live schema; resolve everything to canonical names so the staged
-    // edits and the final write land on one entry.
+    // Saved documents may key formats or source columns under different casing than the live
+    // schema; resolve everything to canonical names so the staged edits and the final write
+    // land on one entry.
     const canonicalName = value => universe.find(c => sameColumn(c.name, value))?.name;
+    // Returns a staged value or seeds one from owner-local format, safe inherited mask, and visibility.
     const settingsFor = name => {
         if (staged.has(name)) return staged.get(name);
-        // Seed a new local entry from the effective composed format. Otherwise
-        // toggling one style on a synthetic metric would replace and silently
-        // discard its inherited scalar mask. Renderer/style state is owner-local.
+        // Inheritance rule: seed a new local entry from the effective composed format. Otherwise
+        // toggling one style on a synthetic metric would replace and silently discard its
+        // inherited scalar mask. Renderer/style state is owner-local.
         const fmt = lookupValue(formatsOf(w.doc), name)
             ?? formatForColumn(w, byName.get(name) ?? { name })
             ?? {};
         const displayAs = typeof fmt.displayAs === "string" ? fmt.displayAs.toLowerCase() : "";
         return {
             visible: originallyVisible.includes(name),
-            // Definition-authored action renderers are not editable here (the select
+            // Invariant: definition-authored action renderers are not editable here (the select
             // offers Text/Link/Image), but they must survive an unrelated restyle.
             action: displayAs === "action" ? { command: fmt.command, keyColumn: fmt.keyColumn } : null,
             displayAs: withDisplayAs && ["link", "image"].includes(displayAs) ? displayAs : null,
@@ -175,6 +197,7 @@ export function columnSettingsDialog(w, initialCol) {
         };
     };
 
+    // Chooses a non-null result value or a type-appropriate fallback for live preview.
     const sampleFor = (name, type) => {
         const fromData = w.lastResult?.rows?.map(r => r[name]).find(v => v !== null && v !== undefined);
         if (fromData !== undefined) return fromData;
@@ -184,6 +207,7 @@ export function columnSettingsDialog(w, initialCol) {
             : w.t("columns.sampleText");
     };
 
+    // Re-renders the sample cell and shows mask controls only when they can affect visible text.
     const updatePreview = () => {
         const name = colSel.value;
         const type = columnType(name);
@@ -207,6 +231,7 @@ export function columnSettingsDialog(w, initialCol) {
     };
 
     let active = colSel.value;
+    // Loads one column's staged or effective settings into controls and refreshes the preview.
     const load = name => {
         const s = settingsFor(name);
         visChk.checked = s.visible !== false;
@@ -302,9 +327,18 @@ export function columnSettingsDialog(w, initialCol) {
     });
 }
 
-/// Column headings only. A computed column owned by the active editor node keeps
-/// its heading on that rule; every other heading writes the same terminal labels
-/// composable, regardless of the shape that produced the table.
+// Invariant: column headings only. A computed column owned by the active editor node keeps its
+// heading on that rule; every other heading writes the same terminal labels composable,
+// regardless of the shape that produced the table.
+/**
+ * Opens the editor that changes a column's report-specific display label.
+ *
+ * @param {object} w - The report controller whose active table and label channels will be edited.
+ * @param {string} col - The terminal column identifier to rename.
+ * @returns {void} No value.
+ *
+ * Side effects: opens a dialog; applying updates a computed rule label or terminal label-map entry and runs the report.
+ */
 export function renameDialog(w, col) {
     const ctx = tableContext(w);
     const computedRule = (ctx.node(w.doc, "compute")?.computed ?? [])

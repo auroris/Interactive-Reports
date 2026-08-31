@@ -22,6 +22,12 @@ internal sealed class InteractiveReportStartupValidator(
     ReportConnectionRegistry registry,
     InteractiveReportLogging logging) : IHostedService
 {
+    /// <summary>
+    /// Validates the initial options snapshot and logs startup success or failure.
+    /// </summary>
+    /// <param name="cancellationToken">Accepted by the hosted-service contract; validation is synchronous.</param>
+    /// <returns>A completed task when validation succeeds.</returns>
+    /// <remarks>Instantiates and disposes connections synthesized from configured data sources, but does not open them.</remarks>
     public Task StartAsync(CancellationToken cancellationToken)
     {
         logging.Logger?.LogInformation("Interactive Reports startup validation started");
@@ -40,6 +46,10 @@ internal sealed class InteractiveReportStartupValidator(
         }
     }
 
+    /// <summary>
+    /// Validates the current Interactive Reports configuration before serving requests.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Thrown when identities, definitions, connections, dialects, or effective persistence table names are invalid.</exception>
     private void Validate()
     {
         var current = options.CurrentValue;
@@ -70,9 +80,17 @@ internal sealed class InteractiveReportStartupValidator(
                 "The effective authorization table name must differ from the saved-report table name.");
     }
 
+    /// <summary>
+    /// Completes immediately because the startup validator owns no background work.
+    /// </summary>
+    /// <param name="cancellationToken">Accepted by the hosted-service contract and otherwise ignored.</param>
+    /// <returns>A completed task.</returns>
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-    /// <summary>Instantiate-and-dispose dataSource connections only; host factories stay untouched.</summary>
+    /// <summary>
+    /// Instantiates and disposes data-source-derived connections to verify provider activation; host factories stay untouched.
+    /// </summary>
+    /// <param name="connectionName">The resolved registry name, including the internal data-source prefix when applicable.</param>
     private void ActivationCheck(string connectionName)
     {
         if (connectionName.StartsWith("__ir:ds:", StringComparison.Ordinal))

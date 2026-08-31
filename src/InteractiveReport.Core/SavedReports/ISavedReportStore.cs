@@ -3,34 +3,50 @@ using System.Text.RegularExpressions;
 namespace InteractiveReport.Core.SavedReports;
 
 /// <summary>
-/// Persistence for saved report state documents. The store is storage and retrieval
+/// Defines persistence for saved report state documents. The store is storage and retrieval
 /// only — who may see or mutate what is decided at the endpoint layer.
 /// </summary>
 public interface ISavedReportStore
 {
     /// <summary>
-    /// Returns one detached, coherent version of the complete row. Metadata and
-    /// StateJson must come from the same authoritative version, and later store
-    /// mutations must not mutate the returned instance. Authorization paths rely on
-    /// this snapshot boundary before they inspect metadata and consume the state.
+    /// Returns one detached, coherent version of the complete row. Metadata and <c>StateJson</c> must come
+    /// from the same authoritative version, and later store mutations must not mutate the returned instance.
+    /// Authorization paths rely on this snapshot boundary before they inspect metadata and consume the
+    /// state.
     /// </summary>
+    /// <param name="id">The case-sensitive saved-report identifier.</param>
+    /// <param name="ct">Cancels persistence access.</param>
+    /// <returns>The detached row, or <see langword="null"/> when no id matches.</returns>
     Task<SavedReport?> Get(string id, CancellationToken ct = default);
 
     /// <summary>
-    /// Reads only authorization and presentation metadata. Implementations should
-    /// avoid fetching the state document; the default preserves compatibility for
-    /// custom stores that have not added a projection yet.
+    /// Reads only authorization and presentation metadata. Implementations should avoid
+    /// fetching the state document; the default preserves compatibility for custom stores that have not
+    /// added a projection yet.
     /// </summary>
+    /// <param name="id">The case-sensitive saved-report identifier.</param>
+    /// <param name="ct">Cancels persistence access.</param>
+    /// <returns>The detached metadata, or <see langword="null"/> when no id matches.</returns>
     async Task<SavedReportMetadata?> GetMetadata(string id, CancellationToken ct = default)
         => (await Get(id, ct))?.Metadata();
 
     /// <summary>
-    /// Saved reports for one report definition visible to an identity: primary and
-    /// global ones plus their own.
+    /// Lists saved reports for one report definition visible to an identity: primary and global rows
+    /// plus their own.
     /// </summary>
+    /// <param name="reportName">The canonical report name that scopes the rows.</param>
+    /// <param name="identity">The optional canonical caller identity used for ownership visibility.</param>
+    /// <param name="ct">Cancels persistence access.</param>
+    /// <returns>Detached visible rows in the store's defined listing order.</returns>
     Task<IReadOnlyList<SavedReport>> ListVisible(string reportName, string? identity, CancellationToken ct = default);
 
-    /// <summary>Metadata-only counterpart to <see cref="ListVisible"/>.</summary>
+    /// <summary>
+    /// Returns the metadata-only counterpart to <see cref="ListVisible"/>.
+    /// </summary>
+    /// <param name="reportName">The canonical report name that scopes the rows.</param>
+    /// <param name="identity">The optional canonical caller identity used for ownership visibility.</param>
+    /// <param name="ct">Cancels persistence access.</param>
+    /// <returns>Detached visible metadata in the store's defined listing order.</returns>
     async Task<IReadOnlyList<SavedReportMetadata>> ListVisibleMetadata(
         string reportName,
         string? identity,
@@ -38,9 +54,12 @@ public interface ISavedReportStore
         => (await ListVisible(reportName, identity, ct)).Select(report => report.Metadata()).ToList();
 
     /// <summary>
-    /// The primary report titled Default that overrides a configured definition.
+    /// Finds the primary report titled <c>Default</c> that overrides a configured definition.
     /// User-origin rows win an externally introduced configured-title collision.
     /// </summary>
+    /// <param name="reportName">The canonical report name that scopes the search.</param>
+    /// <param name="ct">Cancels persistence access.</param>
+    /// <returns>The preferred primary default, or <see langword="null"/> when none exists.</returns>
     async Task<SavedReport?> FindPrimaryDefault(string reportName, CancellationToken ct = default)
         => (await ListVisible(reportName, identity: null, ct))
             .Where(report => report.IsPrimary
@@ -50,10 +69,14 @@ public interface ISavedReportStore
             .FirstOrDefault();
 
     /// <summary>
-    /// Finds a title collision within one already-authorized report definition. The
-    /// scoped lookup prevents endpoint uniqueness checks from loading unrelated saved
-    /// reports into memory.
+    /// Finds a title collision within one already-authorized report definition. The scoped
+    /// lookup prevents endpoint uniqueness checks from loading unrelated saved reports into memory.
     /// </summary>
+    /// <param name="reportName">The canonical report name that scopes title uniqueness.</param>
+    /// <param name="title">The title to trim and compare case-insensitively.</param>
+    /// <param name="exceptId">A saved-report identifier to exclude from the title-collision search; <see langword="null"/> excludes none; defaults to <c>null</c>.</param>
+    /// <param name="ct">Cancels persistence access.</param>
+    /// <returns>The configured row first, otherwise a user row, or <see langword="null"/> when available.</returns>
     async Task<SavedReport?> FindByTitle(
         string reportName,
         string title,
@@ -66,102 +89,139 @@ public interface ISavedReportStore
             .OrderBy(report => report.Origin == SavedReportOrigin.Configured ? 0 : 1)
             .FirstOrDefault();
 
-    /// <summary>Every saved-report row in the system, across reports and origins.</summary>
+    /// <summary>
+    /// Lists every saved-report row in the system across report definitions and origins.
+    /// </summary>
+    /// <param name="ct">Cancels persistence access.</param>
+    /// <returns>Detached rows in the store's defined listing order.</returns>
     Task<IReadOnlyList<SavedReport>> ListAll(CancellationToken ct = default);
 
+    /// <summary>
+    /// Inserts a new saved report and assigns its committed modification timestamp.
+    /// </summary>
+    /// <param name="report">The new row; its modification timestamp is replaced with the committed revision.</param>
+    /// <param name="ct">Cancels persistence.</param>
+    /// <returns>A task that completes after the insert commits.</returns>
+    /// <exception cref="SavedReportTitleConflictException">Thrown when another row in the report already owns the title.</exception>
     Task Create(SavedReport report, CancellationToken ct = default);
 
     /// <summary>
-    /// Atomically replaces <paramref name="expected"/> with <paramref name="report"/>
-    /// when its authorization fields and ModifiedUtc concurrency version still match
-    /// the authoritative snapshot. Returns false when the row was deleted or changed
-    /// after it was read. Successful updates refresh both the stored ModifiedUtc and
-    /// <paramref name="report"/>'s value so callers can return the committed revision.
-    /// Snapshot string fields use ordinal equality, never the storage collation.
+    /// Atomically replaces <paramref name="expected"/> with <paramref name="report"/> when its
+    /// authorization fields and ModifiedUtc concurrency version still match the authoritative snapshot.
+    /// Returns false when the row was deleted or changed after it was read. Successful updates refresh both
+    /// the stored ModifiedUtc and <paramref name="report"/>'s value so callers can return the committed
+    /// revision. Snapshot string fields use ordinal equality, never the storage collation.
     /// </summary>
+    /// <param name="report">The desired replacement; success updates its modification timestamp to the committed revision.</param>
+    /// <param name="expected">The detached authoritative snapshot used for compare-and-swap.</param>
+    /// <param name="ct">Cancels persistence.</param>
+    /// <returns>A task whose result is <see langword="true"/> when the expected snapshot was current and the update committed; otherwise, <see langword="false"/>.</returns>
     Task<bool> Update(
         SavedReport report,
         SavedReport expected,
         CancellationToken ct = default);
 
     /// <summary>
-    /// Insert-or-update convenience operation. Inserts preserve the supplied
-    /// ModifiedUtc. Every replacement advances ModifiedUtc beyond the stored version,
-    /// even when the supplied value is unchanged or older, so it remains a valid CAS
-    /// revision. Implementations must retry conditional conflicts without applying a
-    /// stale replacement to a newer row.
+    /// Inserts or replaces a row with internal compare-and-swap retries. Inserts preserve the supplied <c>ModifiedUtc</c>. Every
+    /// replacement advances ModifiedUtc beyond the stored version, even when the supplied value is unchanged
+    /// or older, so it remains a valid CAS revision. Implementations must retry conditional conflicts
+    /// without applying a stale replacement to a newer row.
     /// </summary>
+    /// <param name="report">The desired row; replacement updates its modification timestamp to the committed revision.</param>
+    /// <param name="ct">Cancels persistence and retries.</param>
+    /// <returns>A task that completes after an insert or replacement commits.</returns>
     Task Put(SavedReport report, CancellationToken ct = default);
 
     /// <summary>
-    /// Atomically inserts <paramref name="report"/> when <paramref name="expected"/>
-    /// is null and the id is absent, or replaces the row when it still equals the
-    /// detached <paramref name="expected"/> snapshot. A replacement advances
-    /// ModifiedUtc in storage and on <paramref name="report"/>. Returns false on a
-    /// concurrent insert, update, or delete. Snapshot strings use ordinal equality.
+    /// Atomically inserts <paramref name="report"/> when <paramref name="expected"/> is null and the id
+    /// is absent, or replaces the row when it still equals the detached <paramref name="expected"/>
+    /// snapshot. A replacement advances ModifiedUtc in storage and on <paramref name="report"/>. Returns
+    /// false on a concurrent insert, update, or delete. Snapshot strings use ordinal equality.
     /// </summary>
+    /// <param name="report">The desired row; replacement updates its modification timestamp to the committed revision.</param>
+    /// <param name="expected">The expected detached row, or <see langword="null"/> to require an absent id.</param>
+    /// <param name="ct">Cancels persistence.</param>
+    /// <returns>A task whose result is <see langword="true"/> when the create or replacement committed against the expected snapshot; otherwise, <see langword="false"/>.</returns>
     Task<bool> Put(
         SavedReport report,
         SavedReport? expected,
         CancellationToken ct = default);
 
     /// <summary>
-    /// Atomically deletes a row only when its authorization fields and ModifiedUtc
-    /// concurrency version still match the authoritative snapshot. Returns false when
-    /// the row was deleted or changed. Endpoint authorization paths use this overload
-    /// so a decision can never be applied to a different version of the resource.
-    /// Snapshot string fields use ordinal equality, never the storage collation.
+    /// Atomically deletes a row only when its authorization fields and <c>ModifiedUtc</c> concurrency
+    /// version still match the authoritative snapshot. Returns false when the row was deleted or changed.
+    /// Endpoint authorization paths use this overload so a decision can never be applied to a different
+    /// version of the resource. Snapshot string fields use ordinal equality, never the storage collation.
     /// </summary>
+    /// <param name="expected">The detached authoritative snapshot used for compare-and-delete.</param>
+    /// <param name="ct">Cancels persistence.</param>
+    /// <returns>A task whose result is <see langword="true"/> when the requested row was deleted; otherwise, <see langword="false"/>.</returns>
     Task<bool> Delete(SavedReport expected, CancellationToken ct = default);
 
     /// <summary>
-    /// Unconditional delete by id for internal reconciliation, where the configured
-    /// manifest is authoritative and deliberately removes an orphan regardless of its
-    /// stored contents.
+    /// Deletes unconditionally by id for internal reconciliation, where the configured manifest is
+    /// authoritative and deliberately removes an orphan regardless of its stored contents.
     /// </summary>
+    /// <param name="id">The exact saved-report identifier to remove.</param>
+    /// <param name="ct">Cancels persistence.</param>
+    /// <returns>A task whose result is <see langword="true"/> when the requested row was deleted; otherwise, <see langword="false"/>.</returns>
     Task<bool> Delete(string id, CancellationToken ct = default);
 }
 
-/// <summary>Where a saved-report row comes from; the server refuses to mutate configured rows.</summary>
+/// <summary>Identifies where a saved-report row originates; public persistence APIs treat configured rows as read-only.</summary>
 public enum SavedReportOrigin
 {
-    /// <summary>Created through the saved-report endpoints by a user or administrator.</summary>
+    /// <summary>Created through saved-report or report-document endpoints by a user or administrator.</summary>
     User,
 
-    /// <summary>Synced from a definition's configured document files; read-only.</summary>
+    /// <summary>Mirrored from a definition's configured document files.</summary>
     Configured,
 }
 
 /// <summary>
-/// One saved report: a named state document belonging to a report definition.
+/// Represents one named state document belonging to a report definition.
 /// Owner is the canonical identity value (see ReportIdentity); global reports keep the
 /// owner who published them. Configured rows have no owner.
 /// </summary>
 public sealed record SavedReport
 {
+    /// <summary>Gets the stable row identifier.</summary>
     public required string Id { get; init; }
+    /// <summary>Gets the canonical report definition name.</summary>
     public required string ReportName { get; init; }
+    /// <summary>Gets or sets the unique display title within the report definition.</summary>
     public required string Title { get; set; }
+    /// <summary>Gets or sets the canonical owner identity; configured rows have no owner.</summary>
     public required string? Owner { get; set; }
+    /// <summary>Gets or sets whether all callers authorized for the report may load this row.</summary>
     public bool IsGlobal { get; set; }
     /// <summary>
-    /// Administrator-controlled publication flag. Primary reports are visible to
+    /// Gets or sets the administrator-controlled publication flag. Primary reports are visible to
     /// everyone who can access their underlying report definition. A primary report
     /// titled "Default" replaces that definition's generated default state.
     /// </summary>
     public bool IsPrimary { get; set; }
-    /// <summary>The state document, stored verbatim as JSON text.</summary>
+    /// <summary>Gets or sets the state document stored as JSON text.</summary>
     public required string StateJson { get; set; }
     /// <summary>
-    /// Persisted optimistic-concurrency revision. Create uses the current UTC time;
+    /// Gets or sets the persisted optimistic-concurrency revision. Create uses the current UTC time;
     /// configured-row inserts may seed it from a file mtime, but every subsequent
     /// replacement must advance it even when that source timestamp is unchanged.
     /// </summary>
     public DateTime ModifiedUtc { get; set; }
+    /// <summary>Gets or sets whether the row was authored by a user or mirrored from configuration.</summary>
     public SavedReportOrigin Origin { get; set; } = SavedReportOrigin.User;
 
+    /// <summary>
+    /// Generates a new stable saved-report identifier.
+    /// </summary>
+    /// <returns>A lowercase 32-character GUID without separators.</returns>
     public static string NewId() => Guid.NewGuid().ToString("n");
 
+    /// <summary>
+    /// Projects a complete saved report into its metadata-only representation.
+    /// </summary>
+    /// <returns>A detached value containing every field except <see cref="StateJson"/>.</returns>
     public SavedReportMetadata Metadata() => new(
         Id,
         ReportName,
@@ -173,7 +233,7 @@ public sealed record SavedReport
         Origin);
 }
 
-/// <summary>Saved-report fields needed for access checks and summaries, without state JSON.</summary>
+/// <summary>Contains saved-report fields needed for access checks and summaries, without state JSON.</summary>
 public sealed record SavedReportMetadata(
     string Id,
     string ReportName,
@@ -184,7 +244,7 @@ public sealed record SavedReportMetadata(
     DateTime ModifiedUtc,
     SavedReportOrigin Origin);
 
-/// <summary>Storage configuration; connection is a named IReportConnectionFactory entry.</summary>
+/// <summary>Defines saved-report storage; the connection name resolves through <c>IReportConnectionFactory</c>.</summary>
 public sealed partial record SavedReportStoreConfig(
     string ConnectionName,
     Model.ReportDialect Dialect,
@@ -192,10 +252,12 @@ public sealed partial record SavedReportStoreConfig(
     string TableName = "IR_SAVED_REPORTS")
 {
     /// <summary>
-    /// The plain-identifier rule for table names. Anything embedding the name in SQL
-    /// text (the store's DDL, the built-in listing definition) validates through this
-    /// one gate.
+    /// Applies the plain-identifier rule for table names. Anything embedding the name in
+    /// SQL text (the store's DDL, the built-in listing definition) validates through this one gate.
     /// </summary>
+    /// <param name="tableName">The configured physical table name to validate.</param>
+    /// <returns><paramref name="tableName"/> unchanged when it is a safe unquoted identifier.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when the name is blank, starts with a digit, or contains non-identifier characters.</exception>
     public static string EnsureValidTableName(string tableName)
     {
         if (!TableNamePattern().IsMatch(tableName))
@@ -203,6 +265,10 @@ public sealed partial record SavedReportStoreConfig(
         return tableName;
     }
 
+    /// <summary>
+    /// Builds the compiled validation pattern for safe unquoted persistence table names.
+    /// </summary>
+    /// <returns>The compiled regular expression.</returns>
     [GeneratedRegex("^[A-Za-z_][A-Za-z0-9_]*$")]
     private static partial Regex TableNamePattern();
 }

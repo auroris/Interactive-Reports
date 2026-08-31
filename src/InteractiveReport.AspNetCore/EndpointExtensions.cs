@@ -1,3 +1,8 @@
+// HTTP module entrypoint: registers the Interactive Reports REST surface and connects
+// transport concerns to the engine. Endpoint handlers resolve identity, authorization,
+// configured definitions, context parameters, and coded errors before invoking shared
+// execution services.
+
 using System.Text.Json;
 using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Export;
@@ -12,12 +17,21 @@ using Microsoft.Extensions.Logging;
 
 namespace InteractiveReport.AspNetCore;
 
+/// <summary>Provides the host entrypoint that maps the Interactive Reports HTTP surface.</summary>
 public static class EndpointExtensions
 {
     private const string ReportsTag = "Interactive Reports";
     private const string SavedReportsTag = "Interactive Reports - Saved Reports";
     private const string AdministrationTag = "Interactive Reports - Administration";
 
+    /// <summary>Executes an already authorized and parsed report-state operation.</summary>
+    /// <param name="context">The active HTTP exchange.</param>
+    /// <param name="definition">The authorized report definition.</param>
+    /// <param name="executor">The scoped report executor.</param>
+    /// <param name="state">The deserialized request state.</param>
+    /// <param name="contextParameters">Application values resolved for the definition's context parameters.</param>
+    /// <param name="ct">Cancels execution.</param>
+    /// <returns>The HTTP result produced by the operation.</returns>
     private delegate Task<IResult> StateOperation(
         HttpContext context,
         ReportDefinition definition,
@@ -27,22 +41,31 @@ public static class EndpointExtensions
         CancellationToken ct);
 
     /// <summary>
-    /// Mounts the report endpoints. Returns the group so hosts can chain standard
-    /// conventions — .RequireAuthorization(...), antiforgery/CSRF filters for
-    /// cookie-auth hosts, rate limiting, etc. The engine deliberately has no
-    /// authentication mechanism of its own. Every data and security-administration
-    /// endpoint enters IReportAccessService. The opt-in whoami bootstrap diagnostic
+    /// Mounts the report endpoints and returns their group so hosts can chain standard conventions —
+    /// .RequireAuthorization(...), antiforgery/CSRF filters for cookie-auth hosts, rate limiting, etc. The
+    /// engine deliberately has no authentication mechanism of its own. Every data and
+    /// security-administration endpoint enters IReportAccessService. The opt-in whoami bootstrap diagnostic
     /// and packaged HTML/CSS/JS delivery are the deliberate exceptions.
     /// </summary>
+    /// <param name="endpoints">The endpoint route builder on which to register the report routes.</param>
+    /// <param name="prefix">The URL prefix under which to map the report routes; defaults to <c>"/api/reports"</c>.</param>
+    /// <returns>The mapped route group, which the host can configure further.</returns>
+    /// <remarks>Adds routes and endpoint filters to <paramref name="endpoints"/>.</remarks>
     public static RouteGroupBuilder MapInteractiveReports(
         this IEndpointRouteBuilder endpoints,
         string prefix = "/api/reports")
         => MapInteractiveReportsCore(endpoints, prefix, logger: null);
 
     /// <summary>
-    /// Mounts the report endpoints and sends all package logging to the supplied
+    /// Mounts the endpoints and sends package logging to the supplied
     /// host-owned logger. The package does not create or configure logging providers.
     /// </summary>
+    /// <param name="endpoints">The endpoint route builder on which to register the report routes.</param>
+    /// <param name="prefix">The URL prefix under which to map the report routes.</param>
+    /// <param name="logger">The required host-provided logger that receives package diagnostic events.</param>
+    /// <returns>The mapped route group, which the host can configure further.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when a required argument is <see langword="null"/>.</exception>
+    /// <remarks>Adds routes and endpoint filters and installs <paramref name="logger"/> as the package logger.</remarks>
     public static RouteGroupBuilder MapInteractiveReports(
         this IEndpointRouteBuilder endpoints,
         string prefix,
@@ -52,6 +75,15 @@ public static class EndpointExtensions
         return MapInteractiveReportsCore(endpoints, prefix, logger);
     }
 
+    /// <summary>
+    /// Maps the complete REST, administration, viewer, and packaged-asset route surface.
+    /// </summary>
+    /// <param name="endpoints">The endpoint route builder on which to register the report routes.</param>
+    /// <param name="prefix">The URL prefix under which to map the report routes.</param>
+    /// <param name="logger">The host-provided logger that receives diagnostic events; <see langword="null"/> disables logging.</param>
+    /// <returns>The mapped route group, which the host can configure further.</returns>
+    /// <remarks>Adds route handlers, metadata, and filters to <paramref name="endpoints"/> and optionally replaces the package logger.</remarks>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="endpoints"/> is <see langword="null"/>.</exception>
     private static RouteGroupBuilder MapInteractiveReportsCore(
         IEndpointRouteBuilder endpoints,
         string prefix,
@@ -65,9 +97,9 @@ public static class EndpointExtensions
         group.AddEndpointFilter(InteractiveReportLogging.LogRequest);
         group.AddEndpointFilter(static async (invocation, next) =>
         {
-            // Data and identity responses are request-specific. Handlers may replace
-            // this policy when their output is deliberately cacheable (the packaged
-            // UI assets do so with no-cache + ETag).
+            // Data and identity responses are request-specific. Handlers may
+            // replace this policy when their output is deliberately cacheable (the packaged UI
+            // assets do so with no-cache + ETag).
             invocation.HttpContext.Response.Headers.CacheControl = "no-store";
             return await next(invocation);
         });
@@ -99,11 +131,11 @@ public static class EndpointExtensions
             .AllowAnonymous()
             .ExcludeFromDescription();
 
-        // Packaged pages: anonymous shells like the assets — identical for any name
-        // (no existence disclosure; the element's schema call is the gate). Disabled
-        // via InteractiveReport:ViewerPagesEnabled. Literal-first routing means the
-        // existing /ui and /saved segments shadow reports with those names at /view,
-        // as they already do on the data routes.
+        // Packaged pages: anonymous shells like the assets — identical for any name (no
+        // existence disclosure; the element's schema call is the gate). Disabled via
+        // InteractiveReport:ViewerPagesEnabled. Literal-first routing means the existing /ui
+        // and /saved segments shadow reports with those names at /view, as they already do on
+        // the data routes.
         group.MapGet("/{name}/view", ViewerPageEndpoints.Report)
             .AllowAnonymous()
             .ExcludeFromDescription();
@@ -230,10 +262,13 @@ public static class EndpointExtensions
     }
 
     /// <summary>
-    /// Saved-report handlers predate the optional store and contain deliberate
-    /// domain-level exception translations. This outer boundary handles only errors
-    /// that escape those translations, including a missing or unreachable store.
+    /// Wraps a saved-report endpoint with the outer storage-error boundary. Handlers retain their
+    /// domain-level exception translations. This outer boundary handles only errors that escape those
+    /// translations, including a missing or unreachable store.
     /// </summary>
+    /// <param name="endpoint">The saved-report route handler to wrap.</param>
+    /// <returns>The same builder for further endpoint metadata configuration.</returns>
+    /// <remarks>Adds an endpoint filter that preserves request cancellation and sanitizes otherwise unhandled storage failures.</remarks>
     private static RouteHandlerBuilder WithStorageErrors(RouteHandlerBuilder endpoint)
     {
         endpoint.AddEndpointFilter(async (invocation, next) =>
@@ -261,6 +296,15 @@ public static class EndpointExtensions
         return endpoint;
     }
 
+    /// <summary>
+    /// Adds OpenAPI tags, summary, and description metadata to a report endpoint.
+    /// </summary>
+    /// <param name="endpoint">The route handler to describe.</param>
+    /// <param name="tag">The endpoint metadata tag used to group generated API documentation.</param>
+    /// <param name="summary">The short operation summary exposed through OpenAPI.</param>
+    /// <param name="description">The human-readable description exposed through endpoint metadata.</param>
+    /// <returns>The same builder with OpenAPI metadata attached.</returns>
+    /// <remarks>Mutates endpoint metadata.</remarks>
     private static RouteHandlerBuilder Api(
         RouteHandlerBuilder endpoint,
         string tag,
@@ -271,6 +315,15 @@ public static class EndpointExtensions
             .WithSummary(summary)
             .WithDescription(description);
 
+    /// <summary>
+    /// Adds standard authentication and server-error response metadata to a protected report endpoint.
+    /// </summary>
+    /// <param name="endpoint">The protected route handler to describe.</param>
+    /// <param name="tag">The endpoint metadata tag used to group generated API documentation.</param>
+    /// <param name="summary">The short operation summary exposed through OpenAPI.</param>
+    /// <param name="description">The human-readable description exposed through endpoint metadata.</param>
+    /// <returns>The same builder with descriptive and common protected-error metadata attached.</returns>
+    /// <remarks>Mutates endpoint metadata; it does not itself enforce authorization.</remarks>
     private static RouteHandlerBuilder ProtectedApi(
         RouteHandlerBuilder endpoint,
         string tag,
@@ -282,6 +335,14 @@ public static class EndpointExtensions
             .Produces<InteractiveReportError>(StatusCodes.Status404NotFound)
             .Produces<InteractiveReportError>(StatusCodes.Status500InternalServerError);
 
+    /// <summary>
+    /// Discovers and returns the authorized schema for a report definition.
+    /// </summary>
+    /// <param name="name">The report name to resolve.</param>
+    /// <param name="ctx">The current HTTP request and response context.</param>
+    /// <param name="ct">Cancels authorization, context resolution, or schema discovery.</param>
+    /// <returns>The schema JSON, an access result, or a sanitized server-error result.</returns>
+    /// <remarks>Performs authorization, may query the database for schema metadata, and writes the selected HTTP response.</remarks>
     private static async Task<IResult> GetSchema(string name, HttpContext ctx, CancellationToken ct)
     {
         var accessService = Access(ctx);
@@ -314,16 +375,17 @@ public static class EndpointExtensions
                     ExpressionLanguageCatalog.Functions,
                     AggregateCatalog.FunctionsByColumnType,
                     AggregateCatalog.ChartFunctionsByColumnType),
-                // Always the resolved effective set (canonical casing/order), so the
-                // client never needs its own copy of the catalog to interpret it.
+                // Return the resolved effective set in canonical casing and order so the
+                // casing/order), so the client never needs its own copy of the catalog to
+                // interpret it.
                 Features: ReportFeatures.Resolve(def),
                 Limits: new InteractiveReportLimits(
                     def.DefaultPageSize,
                     def.MaxPageSize,
                     def.MaxRows,
                     def.MaxChartPoints),
-                // A presentation hint, not a grant. Every mutation is still
-                // evaluated against its concrete action and resource.
+                // A presentation hint, not a grant. Every mutation is still evaluated against
+                // its concrete action and resource.
                 Authorization: new InteractiveReportAuthorizationHint(
                     await accessService.MayRequestAdministration(ctx, ct))),
                 IrJson.Options);
@@ -339,12 +401,16 @@ public static class EndpointExtensions
     }
 
     /// <summary>
-    /// Delivers the definition's edit link with placeholders rewritten to canonical
-    /// schema casing (so client row lookups hit row keys directly) and defaults
-    /// resolved. An unresolvable template disables the edit column for this schema —
-    /// omitted from the payload, with the problem logged; the query path surfaces the
-    /// same binding failure to users through ignored[].
+    /// Resolves the definition's edit link with placeholders rewritten to canonical
+    /// schema casing (so client row lookups hit row keys directly) and defaults resolved. An unresolvable
+    /// template disables the edit column for this schema — omitted from the payload, with the problem
+    /// logged; the query path surfaces the same binding failure to users through ignored[].
     /// </summary>
+    /// <param name="def">The definition containing the optional edit-link template.</param>
+    /// <param name="schema">The live schema used to bind placeholder names.</param>
+    /// <param name="ctx">The request context used to obtain the package logger.</param>
+    /// <returns>The client-ready edit-link contract, or <see langword="null"/> when absent or unbindable.</returns>
+    /// <remarks>Logs a warning when an invalid or schema-stale template disables the edit column.</remarks>
     private static InteractiveReportEditLink? ResolveEditLink(
         ReportDefinition def,
         Core.Schema.ReportSchema schema,
@@ -374,11 +440,14 @@ public static class EndpointExtensions
     }
 
     /// <summary>
-    /// Per-column behavior flags for the client, filtered to live schema columns and
-    /// keyed by canonical name. Labels are deliberately absent — they ride the default
-    /// report's labels channel like columnLabels always has — so this map only exists
-    /// when a column carries behavior the client must gate on.
+    /// Resolves per-column behavior flags for the client, filtered to live schema columns
+    /// and keyed by canonical name. Labels are deliberately absent — they ride the default report's labels
+    /// channel like columnLabels always has — so this map only exists when a column carries behavior the
+    /// client must gate on.
     /// </summary>
+    /// <param name="def">The definition containing optional column overrides.</param>
+    /// <param name="schema">The live schema used to canonicalize and filter column names.</param>
+    /// <returns>Overrides keyed by canonical column name, or <see langword="null"/> when none affect client behavior.</returns>
     private static IReadOnlyDictionary<string, InteractiveReportColumnOptions>? ResolveColumnOverrides(
         ReportDefinition def,
         Core.Schema.ReportSchema schema)
@@ -402,18 +471,19 @@ public static class EndpointExtensions
     }
 
     /// <summary>
-    /// The default report the schema endpoint sends down — always complete, never null.
-    /// An unconfigured effective Default synthesizes to an empty state (every schema
-    /// column in database order), and the definition's labels (columnLabels overlaid
-    /// with columns[*].label) become the default report's labels unless the effective
-    /// state carries its own. Query responses never apply labels; the document
-    /// ingestion pipeline mirrors this same layering so exports render what an
+    /// Builds the complete default report state sent by the schema endpoint. The result is never
+    /// null. An unconfigured effective Default synthesizes to an empty state (every schema column in
+    /// database order), and the definition's labels (columnLabels overlaid with columns[*].label) become the
+    /// default report's labels unless the effective state carries its own. Query responses never apply
+    /// labels; the document ingestion pipeline mirrors this same layering so exports render what an
     /// equivalent client displays.
     /// </summary>
+    /// <param name="def">The definition supplying the effective default state and definition-level labels.</param>
+    /// <returns>A detached, complete state with a definition-input table and layered default labels.</returns>
     internal static ReportState SchemaDefaultState(ReportDefinition def)
     {
-        // Resolve against an empty request to get a detached copy — the store's
-        // definition (and its DefaultState) must not be mutated by response shaping.
+        // Resolve against an empty request to get a detached copy; the
+        // store's definition (and its DefaultState) must not be mutated by response shaping.
         var state = ReportStateResolver.Resolve(def.DefaultState, new ReportState());
         if (state.Tables is not { Count: > 0 })
         {
@@ -442,19 +512,32 @@ public static class EndpointExtensions
         return state;
     }
 
+    /// <summary>
+    /// Determines whether a composable changes the table shape and therefore requires schema recompilation.
+    /// </summary>
+    /// <param name="composable">The composable to classify.</param>
+    /// <returns><see langword="true"/> when the composable changes result shape; otherwise, <see langword="false"/>.</returns>
     private static bool IsShapeComposable(TableComposable composable)
         => IsComposableKind(composable, "group")
             || IsComposableKind(composable, "pivot")
             || IsComposableKind(composable, "chart");
 
+    /// <summary>
+    /// Determines whether a composable has the requested kind, ignoring casing and surrounding whitespace.
+    /// </summary>
+    /// <param name="composable">The composable whose kind should be tested.</param>
+    /// <param name="kind">The canonical operation name to compare.</param>
+    /// <returns><see langword="true"/> when the operation names match; otherwise, <see langword="false"/>.</returns>
     private static bool IsComposableKind(TableComposable composable, string kind)
         => string.Equals(composable.Kind?.Trim(), kind, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Follow the selected table's explicit ancestry to its definition input. This
-    /// deliberately ignores dictionary enumeration order: a document may contain
-    /// several independent roots and table identifiers carry no semantic role.
+    /// Follows the selected table's explicit ancestry to its definition input. This
+    /// deliberately ignores dictionary enumeration order: a document may contain several independent roots
+    /// and table identifiers carry no semantic role.
     /// </summary>
+    /// <param name="state">The complete state whose active-table ancestry should be followed.</param>
+    /// <returns>The table that reads from <c>definition</c>, or <see langword="null"/> when the ancestry is missing, broken, or cyclic.</returns>
     private static ReportTable? DefinitionInputTable(ReportState state)
     {
         if (state.Tables is not { Count: > 0 } tables
@@ -477,6 +560,14 @@ public static class EndpointExtensions
         return null;
     }
 
+    /// <summary>
+    /// Executes a posted report query through the shared request pipeline.
+    /// </summary>
+    /// <param name="name">The configured or built-in report name from the route.</param>
+    /// <param name="ctx">The current HTTP request and response context.</param>
+    /// <param name="ct">Cancels authorization, body reading, context resolution, and query execution.</param>
+    /// <returns>The report-result JSON or a standardized access, validation, or server-error result.</returns>
+    /// <remarks>Consumes the JSON request body and may execute database commands.</remarks>
     private static Task<IResult> PostQuery(string name, HttpContext ctx, CancellationToken ct)
         => ExecuteStateOperation(
             name,
@@ -492,11 +583,16 @@ public static class EndpointExtensions
             ct);
 
     /// <summary>
-    /// Same state document, same gate, no paging: rows are capped when the definition's
-    /// MaxRows is positive, with truncation signaled via X-IR-Truncated.
-    /// Download is one of the two server-enforced features because it creates an
-    /// external artifact; hiding the menu client-side is not enough.
+    /// Exports the posted state through the same authorization and validation pipeline as a query, without paging.
+    /// Rows are capped when the definition's MaxRows
+    /// is positive, with truncation signaled via X-IR-Truncated. Download is one of the two server-enforced
+    /// features because it creates an external artifact; hiding the menu client-side is not enough.
     /// </summary>
+    /// <param name="name">The configured or built-in report name from the route.</param>
+    /// <param name="ctx">The current HTTP request and response context.</param>
+    /// <param name="ct">Cancels authorization, body reading, context resolution, query execution, and rendering.</param>
+    /// <returns>The requested file result or a standardized feature, format, access, validation, or server-error result.</returns>
+    /// <remarks>Consumes the JSON request body, may execute database commands, and sets <c>X-IR-Truncated</c> on successful exports.</remarks>
     private static Task<IResult> PostExport(string name, HttpContext ctx, CancellationToken ct)
         => ExecuteStateOperation(
             name,
@@ -529,10 +625,19 @@ public static class EndpointExtensions
             ct);
 
     /// <summary>
-    /// Shared report-state request pipeline. Definition lookup and authorization happen
-    /// before body parsing, then both query and export receive identical context
-    /// resolution, validation error shaping, cancellation, and sanitization behavior.
+    /// Runs the shared report-state request pipeline. Definition lookup and authorization
+    /// happen before body parsing, then both query and export receive identical context resolution,
+    /// validation error shaping, cancellation, and sanitization behavior.
     /// </summary>
+    /// <param name="name">The configured or built-in report name from the route.</param>
+    /// <param name="ctx">The current HTTP request and response context.</param>
+    /// <param name="operationName">A diagnostic operation name used when logging unexpected failures.</param>
+    /// <param name="action">The report action required from the caller.</param>
+    /// <param name="preflight">An optional authorized-definition check performed before reading the body.</param>
+    /// <param name="operation">The query or export callback invoked after parsing and context resolution.</param>
+    /// <param name="ct">Cancels authorization, body reading, context resolution, and execution.</param>
+    /// <returns>The operation result or the first access, preflight, parse, validation, or server-error result.</returns>
+    /// <remarks>Consumes the request body after authorization and may execute whatever side effects <paramref name="operation"/> defines.</remarks>
     private static async Task<IResult> ExecuteStateOperation(
         string name,
         HttpContext ctx,
@@ -566,7 +671,7 @@ public static class EndpointExtensions
         }
         catch (JsonException ex)
         {
-            // Precise by design: the message only references the caller's input.
+            // Returning the parser message is safe here because it references only caller-supplied JSON.
             return Error(
                 InteractiveReportErrorCodes.MalformedReportState,
                 StatusCodes.Status400BadRequest,
@@ -594,10 +699,10 @@ public static class EndpointExtensions
     }
 
     /// <summary>
-    /// Everything that isn't a validation error is sanitized: full details (including
-    /// provider messages that may embed SQL fragments) go to the server log under a
-    /// correlation id; the client gets a generic coded error carrying that id.
+    /// Converts structured report-state validation errors into the public HTTP 400 error shape.
     /// </summary>
+    /// <param name="ex">The validation exception whose path-aware errors should be flattened.</param>
+    /// <returns>A coded JSON result containing one line per validation error.</returns>
     internal static IResult ValidationProblem(ReportValidationException ex)
     {
         var details = string.Join(
@@ -611,7 +716,14 @@ public static class EndpointExtensions
             details);
     }
 
-    /// <summary>Builds every Interactive Reports HTTP error with the same wire type.</summary>
+    /// <summary>
+    /// Builds an Interactive Reports HTTP error using the shared catalog and wire type.
+    /// </summary>
+    /// <param name="code">The stable protocol or diagnostic code to return.</param>
+    /// <param name="statusCode">The HTTP status code to attach to the JSON result.</param>
+    /// <param name="details">Optional request-specific details safe to expose to the caller.</param>
+    /// <param name="traceId">Optional correlation id for server-side diagnostics.</param>
+    /// <returns>A JSON result containing the stable code and catalog fallback text.</returns>
     internal static IResult Error(
         string code,
         int statusCode,
@@ -625,28 +737,46 @@ public static class EndpointExtensions
             statusCode: statusCode);
     }
 
+    /// <summary>
+    /// Creates the standardized authentication-required response.
+    /// </summary>
+    /// <returns>The HTTP result to send to the client.</returns>
     internal static IResult AuthenticationRequired()
         => Error(
             InteractiveReportErrorCodes.AuthenticationRequired,
             StatusCodes.Status401Unauthorized);
 
+    /// <summary>
+    /// Creates the standardized report-not-found response.
+    /// </summary>
+    /// <returns>The HTTP result to send to the client.</returns>
     internal static IResult ReportNotFound()
         => Error(
             InteractiveReportErrorCodes.ReportNotFound,
             StatusCodes.Status404NotFound);
 
+    /// <summary>
+    /// Creates the standardized saved-report-not-found response.
+    /// </summary>
+    /// <returns>The HTTP result to send to the client.</returns>
     internal static IResult SavedReportNotFound()
         => Error(
             InteractiveReportErrorCodes.SavedReportNotFound,
             StatusCodes.Status404NotFound);
 
     /// <summary>
-    /// Definition resolution behind error shaping. Find validates configuration and
-    /// synchronizes configured documents, so a mistake introduced by a live config
-    /// reload must surface as the standard sanitized coded error rather than an
-    /// unhandled 500. (Startup-time mistakes fail the host before traffic — see
-    /// InteractiveReportStartupValidator.)
+    /// Logs an unexpected exception with the request trace id and returns a sanitized server error.
+    /// Definition resolution sits behind this error shaping because it validates configuration and
+    /// synchronizes configured documents, so a mistake introduced by a live config reload must surface as
+    /// the standard sanitized coded error rather than an unhandled 500. (Startup-time mistakes fail the host
+    /// before traffic — see InteractiveReportStartupValidator.).
     /// </summary>
+    /// <param name="ctx">The current HTTP request and response context.</param>
+    /// <param name="reportName">The configured report name whose definition or saved reports are being addressed.</param>
+    /// <param name="operation">The human-readable operation included in the server log.</param>
+    /// <param name="ex">The full exception retained in server diagnostics.</param>
+    /// <returns>A generic HTTP 500 JSON result containing only the request trace id.</returns>
+    /// <remarks>Emits an error log when package logging is enabled.</remarks>
     internal static IResult ServerError(HttpContext ctx, string reportName, string operation, Exception ex)
     {
         Log(ctx)?.LogError(ex, "Report {Report}: {Operation} failed (traceId {TraceId})",
@@ -658,9 +788,19 @@ public static class EndpointExtensions
             traceId: ctx.TraceIdentifier);
     }
 
+    /// <summary>
+    /// Resolves the configured report-access service from request services.
+    /// </summary>
+    /// <param name="context">The current HTTP request and response context.</param>
+    /// <returns>The configured report access service.</returns>
     private static IReportAccessService Access(HttpContext context)
         => context.RequestServices.GetRequiredService<IReportAccessService>();
 
+    /// <summary>
+    /// Resolves the optional package logger associated with the current application.
+    /// </summary>
+    /// <param name="context">The current HTTP request and response context.</param>
+    /// <returns>The configured host-owned logger, or <see langword="null"/> when package logging is disabled.</returns>
     internal static ILogger? Log(HttpContext context)
         => context.RequestServices.GetRequiredService<InteractiveReportLogging>().Logger;
 }

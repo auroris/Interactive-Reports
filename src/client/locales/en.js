@@ -1,3 +1,6 @@
+// English localization catalog. `errors` maps stable server codes to title/detail pairs;
+// `messages` supplies the keyed UI text consumed by the localization service.
+
 export const errors = {
     "IR-1000": ["Authentication required", "Sign in to perform this operation."],
     "IR-1001": ["Report not found", "The report was not found or you are not allowed to access it."],

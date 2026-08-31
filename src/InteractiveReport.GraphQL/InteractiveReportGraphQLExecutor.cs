@@ -1,3 +1,7 @@
+// GraphQL execution entrypoint: resolves saved reports and reuses the HTTP layer's
+// authorization, context, validation, and execution policies. The transport changes the
+// response shape, not the engine's trust boundary.
+
 using System.Text.Json;
 using GraphQL;
 using InteractiveReport.AspNetCore;
@@ -12,6 +16,10 @@ using Microsoft.Extensions.Options;
 
 namespace InteractiveReport.GraphQL;
 
+/// <summary>
+/// Executes one saved report for the GraphQL resolver while preserving the HTTP adapter's
+/// synchronization, authorization, context-parameter, validation, and error-sanitization boundaries.
+/// </summary>
 internal sealed class InteractiveReportGraphQLExecutor(
     IHttpContextAccessor httpContextAccessor,
     ConfiguredReportDocumentSynchronizer synchronizer,
@@ -21,6 +29,17 @@ internal sealed class InteractiveReportGraphQLExecutor(
     IOptionsMonitor<InteractiveReportOptions> options,
     InteractiveReportLogging logging)
 {
+    /// <summary>
+    /// Loads, authorizes, optionally repages, and executes a saved report for the active HTTP request.
+    /// </summary>
+    /// <param name="id">The saved-report identifier.</param>
+    /// <param name="page">The requested one-based page number; <see langword="null"/> preserves the saved value.</param>
+    /// <param name="pageSize">The requested page size; <see langword="null"/> preserves the saved value.</param>
+    /// <param name="ct">Signals that the operation should be canceled.</param>
+    /// <returns>A task containing the executed report result.</returns>
+    /// <remarks>Synchronizes configured documents, reads persistence, may query the report database, and logs unexpected failures. Transport failures are returned as sanitized <see cref="ExecutionError"/> instances.</remarks>
+    /// <exception cref="ExecutionError">Thrown for invalid arguments, missing or denied reports, invalid saved state, and sanitized execution failures.</exception>
+    /// <exception cref="InvalidOperationException">Thrown when no active HTTP request is available.</exception>
     public async Task<ReportResult?> Query(
         string id,
         int? page,
@@ -113,6 +132,12 @@ internal sealed class InteractiveReportGraphQLExecutor(
         }
     }
 
+    /// <summary>
+    /// Creates a GraphQL error for a denied authorization decision.
+    /// </summary>
+    /// <param name="denied">The authorization result that explains why access was denied.</param>
+    /// <param name="context">The current HTTP request and response context.</param>
+    /// <returns>The execution error.</returns>
     private static ExecutionError AuthorizationError(IResult denied, HttpContext context)
     {
         var statusCode = (denied as IStatusCodeHttpResult)?.StatusCode;
@@ -125,6 +150,11 @@ internal sealed class InteractiveReportGraphQLExecutor(
         };
     }
 
+    /// <summary>
+    /// Creates the GraphQL error used when authorization fails unexpectedly.
+    /// </summary>
+    /// <param name="context">The current HTTP request and response context.</param>
+    /// <returns>The execution error.</returns>
     private static ExecutionError InternalAuthorizationError(HttpContext context)
     {
         var error = Error("Report authorization failed.", "INTERNAL_SERVER_ERROR");
@@ -132,9 +162,19 @@ internal sealed class InteractiveReportGraphQLExecutor(
         return error;
     }
 
+    /// <summary>
+    /// Creates the GraphQL error for an unknown report.
+    /// </summary>
+    /// <returns>The execution error.</returns>
     private static ExecutionError NotFound()
         => Error("The saved report was not found.", "NOT_FOUND");
 
+    /// <summary>
+    /// Creates a GraphQL execution error with the supplied protocol code.
+    /// </summary>
+    /// <param name="message">The client-safe GraphQL error message.</param>
+    /// <param name="code">The stable protocol or diagnostic code to return.</param>
+    /// <returns>The execution error.</returns>
     private static ExecutionError Error(string message, string code)
         => new(message) { Code = code };
 }

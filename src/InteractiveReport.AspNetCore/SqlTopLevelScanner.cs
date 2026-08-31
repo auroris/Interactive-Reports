@@ -1,21 +1,22 @@
 namespace InteractiveReport.AspNetCore;
 
 /// <summary>
-/// A minimal SQL text scanner for configuration lint: it tracks comments (line and
+/// A minimal SQL text scanner for configuration lint. It tracks line and
 /// nested block), string literals, quoted identifiers ("..." and [...]), and
 /// parenthesis depth without parsing SQL. Block comments nest per the most permissive
-/// dialects (Postgres and T-SQL nest; Oracle and SQLite do not) — the permissive
+/// dialects (PostgreSQL and T-SQL nest; Oracle and SQLite do not) — the permissive
 /// reading only ever accepts more, and a genuinely malformed query still fails
 /// loudly at schema discovery.
 /// </summary>
 internal static class SqlTopLevelScanner
 {
     /// <summary>
-    /// True when an ORDER BY clause exists at parenthesis depth 0 — the position that
-    /// breaks the derived-table wrap. ORDER BY inside strings, comments, quoted
-    /// identifiers, or subqueries never matches, and a comment between ORDER and BY
-    /// does not split the clause.
+    /// Determines whether an ORDER BY clause exists at parenthesis depth zero, the position
+    /// that breaks the derived-table wrap. ORDER BY inside strings, comments, quoted identifiers, or
+    /// subqueries never matches, and a comment between ORDER and BY does not split the clause.
     /// </summary>
+    /// <param name="sql">The configured SQL statement to inspect.</param>
+    /// <returns><see langword="true"/> when the SQL contains a top-level ORDER BY clause; otherwise, <see langword="false"/>.</returns>
     public static bool HasTopLevelOrderBy(string sql)
     {
         var depth = 0;
@@ -82,14 +83,32 @@ internal static class SqlTopLevelScanner
         return false;
     }
 
+    /// <summary>
+    /// Returns the character at a scanner position without advancing it.
+    /// </summary>
+    /// <param name="sql">The SQL text being scanned.</param>
+    /// <param name="index">The zero-based position to inspect.</param>
+    /// <returns>The character at the requested position, or a null character at end of input.</returns>
     private static char Peek(string sql, int index) => index < sql.Length ? sql[index] : '\0';
 
+    /// <summary>
+    /// Advances past a line comment or to the end of input.
+    /// </summary>
+    /// <param name="sql">The SQL text being scanned.</param>
+    /// <param name="i">The first position after the opening <c>--</c>.</param>
+    /// <returns>The newline position or the input length.</returns>
     private static int SkipLineComment(string sql, int i)
     {
         while (i < sql.Length && sql[i] != '\n') i++;
         return i;
     }
 
+    /// <summary>
+    /// Advances past a possibly nested block comment or to the end of input.
+    /// </summary>
+    /// <param name="sql">The SQL text being scanned.</param>
+    /// <param name="i">The first position after the opening <c>/*</c>.</param>
+    /// <returns>The first position after the balanced comment, or the input length.</returns>
     private static int SkipBlockComment(string sql, int i)
     {
         var nesting = 1;
@@ -112,7 +131,13 @@ internal static class SqlTopLevelScanner
         return i;
     }
 
-    /// <summary>Doubled closers ('' "" ]]) are escapes on every supported dialect.</summary>
+    /// <summary>
+    /// Advances past a quoted string or identifier. Doubled closers are treated as escapes.
+    /// </summary>
+    /// <param name="sql">The SQL text being scanned.</param>
+    /// <param name="i">The first position after the opening delimiter.</param>
+    /// <param name="closer">The closing delimiter for the quoted SQL identifier or string.</param>
+    /// <returns>The first position after the closing delimiter, or the input length.</returns>
     private static int SkipQuoted(string sql, int i, char closer)
     {
         while (i < sql.Length)

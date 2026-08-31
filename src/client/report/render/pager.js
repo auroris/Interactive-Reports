@@ -1,15 +1,33 @@
-// The pagination bar: prev/next, the row range, and elapsed time. Page size lives
-// in Actions → Pagination so the report document has one authoritative control.
-// Page moves go through w.apply like every other state change; a page move is
-// the one mutation that must not reset the page index back to 1.
+// Pagination renderer for previous/next controls, the visible row range, and elapsed time. Page
+// size lives in Actions → Pagination so the report document has one authoritative control. Page moves go
+// through w.apply like every other state change; a page move is the one mutation that must not
+// reset the page index back to 1.
 
 import { el } from "../../core/dom.js";
 import { translate } from "../../core/localization.js";
 import { modeOf } from "../state.js";
 import { formatInteger, parseReportNumber } from "./format.js";
 
+/**
+ * Updates the requested page and runs the resulting report query.
+ *
+ * @param {object} w - The report controller whose state and active query will be updated.
+ * @param {number} index - The one-based page index to request.
+ * @returns {Promise<void>} The controller's apply operation, which settles after the page query completes.
+ *
+ * Side effects: updates `doc.page.index` without resetting it and runs the report.
+ */
 const gotoPage = (w, index) => w.applyOrBanner(d => { d.page.index = index; }, { resetPage: false });
 
+/**
+ * Replaces the pager container with localized navigation, range, total, and elapsed-time controls.
+ *
+ * @param {object} w - The report controller providing the last result, state, and localized actions.
+ * @param {Element} container - The pager region to replace.
+ * @returns {void} No value.
+ *
+ * Side effects: replaces the container's children and wires page buttons to execute new queries.
+ */
 export function renderPager(w, container) {
     const result = w.lastResult;
     if (!result) { container.replaceChildren(); return; }

@@ -1,20 +1,39 @@
-// Saved-report management: the saved-report select, loading and resetting the
-// working copy, and create/update/delete against the saved-report endpoints.
-// The server enforces the authorization matrix; canManageCurrentSaved only
-// decides which controls are worth offering.
+// Saved-report controller for selector data, working-copy loads and resets, and create/update/delete
+// operations against the saved-report endpoints. The server
+// enforces the authorization matrix; canManageCurrentSaved only decides which controls are
+// worth offering.
 
 import { api, apiUrl } from "../core/api.js";
 import { el } from "../core/dom.js";
 import { confirmDialog } from "../core/dialog.js";
 import { featureEnabled } from "./schema.js";
 
+/**
+ * Compares saved-report titles without case differences while retaining accent distinctions.
+ *
+ * @param {unknown} left - The first candidate title.
+ * @param {unknown} right - The second candidate title.
+ * @returns {boolean} Whether the compared values have the same title.
+ */
 export const sameTitle = (left, right) => typeof left === "string" && typeof right === "string"
     && left.localeCompare(right, undefined, { sensitivity: "accent" }) === 0;
 
+/**
+ * Determines whether the current saved report may be overwritten or deleted.
+ *
+ * @param {object} w - The report controller containing identity and current saved-report metadata.
+ * @returns {boolean} Whether the current saved report is writable and either owned or administratively manageable.
+ */
 export function canManageCurrentSaved(w) {
     return canManageSaved(w, w.currentSaved);
 }
 
+/**
+ * Computes the client-side hint for whether the current identity may request report administration.
+ *
+ * @param {object} w - The report controller containing identity and schema authorization hints.
+ * @returns {boolean} Whether any explicit or bootstrap administration path may be available; the server remains authoritative.
+ */
 export function canRequestAdministration(w) {
     return !!w.whoami?.isAdministrator
         || !!w.schema?.authorization?.mayRequestAdministration
@@ -23,11 +42,26 @@ export function canRequestAdministration(w) {
             && !!w.whoami?.applicationAuthorizationConfigured);
 }
 
+/**
+ * Determines whether the current identity may manage the supplied saved report.
+ *
+ * @param {object} w - The report controller containing current identity hints.
+ * @param {object|null} s - The saved-report summary to evaluate.
+ * @returns {boolean} Whether the summary is writable and either owned by the caller or eligible for an administration request.
+ */
 export function canManageSaved(w, s) {
     if (!s) return false;
     return !s.isReadOnly && (canRequestAdministration(w) || s.mine);
 }
 
+/**
+ * Rebuilds the saved-report selector while preserving the current selection when possible.
+ *
+ * @param {object} w - The report controller containing cached summaries, current selection, localization, and selector elements.
+ * @returns {void} No value.
+ *
+ * Side effects: replaces selector options, restores the best available selection, and updates wrapper visibility.
+ */
 export function refreshSavedSelect(w) {
     const { savedSel, savedWrap } = w.els;
     const defaultSaved = (w.savedList ?? []).find(s => s.isPrimary && sameTitle(s.title, "Default"));
@@ -45,6 +79,14 @@ export function refreshSavedSelect(w) {
     savedWrap.hidden = w.savedList.length === 0 || !featureEnabled(w, "savedReports");
 }
 
+/**
+ * Loads visible saved-report summaries when the initiating report context is still current.
+ *
+ * @param {object} w - The report controller whose report name, request sequence, and summary cache are used.
+ * @returns {Promise<void>} Resolves after the cache is updated, the optional feature is marked absent, or a failure notification is shown.
+ *
+ * Side effects: performs a network request, may replace `savedList`, and may show a warning. It does not rebuild the selector.
+ */
 async function loadSavedList(w) {
     const sequence = w._seq;
     const reportName = w.reportName;
@@ -53,16 +95,25 @@ async function loadSavedList(w) {
         const saved = await api(w.reportUrl("saved"));
         if (stillCurrent()) w.savedList = saved;
     } catch (err) {
-        // A save/delete refresh can finish after the element has switched reports.
-        // Its response and errors belong to the old report context.
+        // Protocol contract: a save/delete refresh can finish after the element has switched
+        // reports. Its response and errors belong to the old report context.
         if (!stillCurrent()) return;
-        // 404 = the feature is off. A real failure keeps the list we have —
+        // Protocol contract: 404 means the feature is off. A real failure keeps the list we have;
         // wiping it would present a server problem as "no saved reports".
         if (err.status === 404) { w.savedList = []; return; }
         w.notify(w.t("saved.listRefreshFailed", { message: err.message }), "warn");
     }
 }
 
+/**
+ * Adds or replaces a saved-report summary in the controller's cached list.
+ *
+ * @param {object} w - The report controller whose `savedList` cache will be updated immutably.
+ * @param {object} summary - The saved-report metadata returned by a successful write.
+ * @returns {void} No value.
+ *
+ * Side effects: replaces `w.savedList` with an inserted or updated summary array.
+ */
 function upsertSavedSummary(w, summary) {
     const index = w.savedList.findIndex(saved => saved.id === summary.id);
     if (index < 0) {
@@ -72,26 +123,44 @@ function upsertSavedSummary(w, summary) {
     w.savedList = w.savedList.map((saved, i) => i === index ? summary : saved);
 }
 
+/**
+ * Removes a saved-report summary from the controller's cached list.
+ *
+ * @param {object} w - The report controller whose summary cache will be filtered.
+ * @param {string} id - The saved-report identifier to remove.
+ * @returns {void} No value.
+ *
+ * Side effects: replaces `w.savedList` with a filtered array.
+ */
 function removeSavedSummary(w, id) {
     w.savedList = w.savedList.filter(saved => saved.id !== id);
 }
 
+/**
+ * Loads one saved report and adopts its document as the working state.
+ *
+ * @param {object} w - The report controller that will adopt, execute, or roll back the loaded state.
+ * @param {string} id - The visible saved-report identifier to load.
+ * @returns {Promise<void>} Resolves after the state query succeeds, a stale response is ignored, or failure recovery completes.
+ *
+ * Side effects: performs network requests, changes saved selection and working state, runs a query, and may restore state or display an error.
+ */
 export async function loadSavedById(w, id) {
     const transition = w.beginStateTransition();
     try {
         const docResponse = await api(apiUrl(w.base, "saved", id));
         if (!w.isCurrentStateTransition(transition)) return;
         w.currentSaved = docResponse.summary;
-        // Liberal acceptance: the document is adopted as-is and the server
-        // judges it on query — a rejection lands in the catch and rolls back.
+        // Protocol contract: liberal acceptance: the document is adopted as-is and the server
+        // judges it on query. A rejection lands in the catch and rolls back.
         w.adoptState(docResponse.state);
         refreshSavedSelect(w);
         await w.runQuery({ quiet: true });
     } catch (err) {
         if (!w.isCurrentStateTransition(transition)) return;
-        // Nothing validated: put doc, selection, and search back on the last
-        // validated state so Save/Delete cannot target the wrong report while
-        // the previous grid is still on screen.
+        // Invariant: nothing validated: put doc, selection, and search back on the last
+        // validated state so Save/Delete cannot target the wrong report while the previous grid
+        // is still on screen.
         w.restoreLastGood();
         if (err.status === 404) {
             w.showError(new Error(w.t("saved.unavailable")));
@@ -103,6 +172,14 @@ export async function loadSavedById(w, id) {
     }
 }
 
+/**
+ * Restores the report definition's primary state.
+ *
+ * @param {object} w - The report controller whose primary summary and schema default will be adopted.
+ * @returns {Promise<void>} Resolves after the default query succeeds or the previous validated state is restored.
+ *
+ * Side effects: changes saved selection and working state, refreshes the selector, runs a query, and may roll back.
+ */
 export async function resetToPrimary(w) {
     const transition = w.beginStateTransition();
     w.currentSaved = (w.savedList ?? []).find(s => s.isPrimary && sameTitle(s.title, "Default")) ?? null;
@@ -115,6 +192,14 @@ export async function resetToPrimary(w) {
     }
 }
 
+/**
+ * Restores the last validated saved or primary document as the working copy.
+ *
+ * @param {object} w - The report controller whose current saved or primary state will be restored.
+ * @returns {Promise<void>} Resolves after cancellation or after the chosen state has been loaded and queried.
+ *
+ * Side effects: opens a confirmation dialog and may perform the load/reset state transition.
+ */
 export async function resetWorkingCopy(w) {
     const target = w.currentSaved ? `“${w.currentSaved.title}”` : w.t("saved.resetTarget");
     if (!await confirmDialog(
@@ -126,6 +211,16 @@ export async function resetWorkingCopy(w) {
     else await resetToPrimary(w);
 }
 
+/**
+ * Creates or updates a saved report and adopts the server-returned summary.
+ *
+ * @param {object} w - The report controller providing serialized state, identity hints, caches, and notifications.
+ * @param {{title: string, isGlobal: boolean, isPrimary: boolean, asNew: boolean, target?: object|null}} options - Publication fields, create/update mode, and optional replacement summary.
+ * @returns {Promise<void>} Resolves after the write, best-effort list refresh, selector rebuild, and success notification.
+ *
+ * Side effects: performs network requests, updates saved-report caches and association state, rebuilds the selector, and notifies the user.
+ * @throws {Error} When update mode has no replacement target or a network request fails.
+ */
 export async function saveReport(w, { title, isGlobal, isPrimary, asNew, target = null }) {
     const state = w.serialize();
     const revision = w.stateRevision;
@@ -146,9 +241,9 @@ export async function saveReport(w, { title, isGlobal, isPrimary, asNew, target 
             method: "PUT", body,
         });
     }
-    // Keep the known successful mutation in the local cache even if the
-    // following list refresh fails. Saving does not validate a rendered query,
-    // so it may update the saved association but never the rollback document.
+    // Cache policy: keep the known successful mutation in the local cache even if the following
+    // list refresh fails. Saving does not validate a rendered query, so it may update the saved
+    // association but never the rollback document.
     upsertSavedSummary(w, savedSummary);
     w.recordSaved(savedSummary, revision);
     await loadSavedList(w);
@@ -156,6 +251,14 @@ export async function saveReport(w, { title, isGlobal, isPrimary, asNew, target 
     w.notify(w.t("saved.saved"));
 }
 
+/**
+ * Confirms and deletes the current saved report, then reconciles cached and working state.
+ *
+ * @param {object} w - The report controller containing the current summary, state revision, caches, and UI services.
+ * @returns {Promise<void>} Resolves after no-op, cancellation, successful reconciliation, or displayed failure.
+ *
+ * Side effects: opens a confirmation dialog, performs delete/list requests, updates caches and selection, may reset to primary state, and shows a notification or error.
+ */
 export async function deleteCurrentSaved(w) {
     const s = w.currentSaved;
     if (!s) return;
@@ -168,9 +271,9 @@ export async function deleteCurrentSaved(w) {
         w.forgetSaved(s.id);
         removeSavedSummary(w, s.id);
         await loadSavedList(w);
-        // Do not replace a document changed after the delete began. The deleted
-        // association is cleared either way; only a still-current deletion
-        // resets the working document to Default.
+        // Invariant: do not replace a document changed after the delete began. The deleted
+        // association is cleared either way; only a still-current deletion resets the working
+        // document to Default.
         if (deletedCurrent && w.isCurrentStateTransition(revision)) await resetToPrimary(w);
         else refreshSavedSelect(w);
         w.notify(w.t("saved.deleted"));

@@ -1,3 +1,7 @@
+// Browser build entrypoint: bundles the viewer, administration, and optional chart entries with
+// identical ESM and asset-loading rules. A one-shot build serves packaging and CI; watch mode
+// keeps shared esbuild contexts alive and disposes all of them during shutdown.
+
 import { build, context } from "esbuild";
 
 const options = {

@@ -14,6 +14,18 @@ namespace InteractiveReport.Core.Validation;
 /// </summary>
 internal static class CanonicalLocalResultBinder
 {
+    /// <summary>
+    /// Binds terminal selection, ordering, highlights, breaks, and aggregates against a completed relation schema.
+    /// </summary>
+    /// <param name="local">The immutable owner-local specification.</param>
+    /// <param name="schema">The completed relation schema used to bind all column references.</param>
+    /// <param name="policy">The definition-level sort and filter restrictions.</param>
+    /// <param name="errors">Receives fatal expression, aggregate, and highlight errors.</param>
+    /// <param name="ignored">Receives stale, duplicate, or policy-restricted rules that can be dropped safely.</param>
+    /// <param name="sharedContext">Optional document-wide aggregate/highlight budgets and identities; a fresh context is used when omitted.</param>
+    /// <returns>The immutable terminal execution contract. Labels and formats remain empty because metadata is bound separately.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when a required argument is <see langword="null"/>.</exception>
+    /// <remarks>Appends diagnostics to <paramref name="errors"/> and <paramref name="ignored"/> and advances counters in <paramref name="sharedContext"/>.</remarks>
     public static BoundLocalResult Bind(
         CanonicalLocalResult local,
         ReportSchema schema,
@@ -66,6 +78,13 @@ internal static class CanonicalLocalResultBinder
             Formats: ImmutableDictionary.Create<string, ColumnFormat>(StringComparer.OrdinalIgnoreCase));
     }
 
+    /// <summary>
+    /// Binds terminal visible columns, dropping unknown and duplicate names.
+    /// </summary>
+    /// <param name="selection">The optional canonical select declaration.</param>
+    /// <param name="schema">The completed schema that supplies canonical names and default order.</param>
+    /// <param name="ignored">Receives unknown-column diagnostics.</param>
+    /// <returns>Selected columns in authored order, or every schema column when selection is absent, select-all, empty, or entirely stale.</returns>
     private static List<ColumnModel> BindSelection(
         CanonicalSelection? selection,
         ReportSchema schema,
@@ -86,11 +105,19 @@ internal static class CanonicalLocalResultBinder
             if (seen.Add(column.Name)) result.Add(column);
         }
 
-        // The existing terminal validator treats an entirely stale selection as
+        // Treat an entirely stale selection as
         // select-all so a saved report cannot accidentally render a zero-column grid.
         return result.Count > 0 ? result : schema.Columns.ToList();
     }
 
+    /// <summary>
+    /// Binds terminal ordering, dropping unknown, restricted, and duplicate columns.
+    /// </summary>
+    /// <param name="ordering">The optional canonical sort declaration.</param>
+    /// <param name="schema">The completed schema used to canonicalize names.</param>
+    /// <param name="policy">Determines which schema columns remain sortable.</param>
+    /// <param name="ignored">Receives dropped sort diagnostics.</param>
+    /// <returns>Valid distinct sorts in authored order.</returns>
     private static List<ValidSort> BindOrdering(
         CanonicalOrdering? ordering,
         ReportSchema schema,
@@ -119,6 +146,16 @@ internal static class CanonicalLocalResultBinder
         return result;
     }
 
+    /// <summary>
+    /// Reserves document-wide highlight identities and precedence, then binds enabled effects and predicates.
+    /// </summary>
+    /// <param name="rules">Canonical highlight nodes in deterministic order.</param>
+    /// <param name="population">Authored-rule count and source paths, including disabled rules.</param>
+    /// <param name="columns">The completed schema lookup used by targets and expressions.</param>
+    /// <param name="errors">Receives identity, precedence, style, and expression errors.</param>
+    /// <param name="ignored">Receives non-fatal target diagnostics.</param>
+    /// <param name="context">Document-wide highlight counters and reserved identities.</param>
+    /// <returns>Compiled enabled highlight rules in canonical order.</returns>
     private static List<CompiledRule<HighlightEffect>> BindHighlights(
         ImmutableArray<CanonicalHighlight> rules,
         CanonicalRulePopulation population,
@@ -149,8 +186,8 @@ internal static class CanonicalLocalResultBinder
                     errors,
                     path,
                     out var sequence)) continue;
-            // Disabled highlights reserve identity, precedence, and projection slots,
-            // but their expression and presentation effect are never bound or run.
+            // Disabled highlights reserve identity, precedence, and projection
+            // slots, but their expression and presentation effect are never bound or run.
             if (!rule.Enabled) continue;
             var effect = HighlightRuleValidator.PrepareEffect(
                 rule.Id,
@@ -183,6 +220,14 @@ internal static class CanonicalLocalResultBinder
         return result;
     }
 
+    /// <summary>
+    /// Binds control-break columns, dropping unknown, restricted, and duplicate names.
+    /// </summary>
+    /// <param name="breaks">The optional ordered break declaration.</param>
+    /// <param name="schema">The completed schema used to canonicalize names.</param>
+    /// <param name="policy">Determines which columns may participate because breaks imply sorting.</param>
+    /// <param name="ignored">Receives dropped break diagnostics.</param>
+    /// <returns>Valid distinct break columns in authored order.</returns>
     private static List<ColumnModel> BindBreaks(
         CanonicalBreaks? breaks,
         ReportSchema schema,
@@ -212,6 +257,15 @@ internal static class CanonicalLocalResultBinder
         return result;
     }
 
+    /// <summary>
+    /// Binds terminal aggregates against the completed schema and document-wide aggregate budget.
+    /// </summary>
+    /// <param name="rules">Canonical aggregate declarations in deterministic order.</param>
+    /// <param name="columns">The completed schema lookup used to bind input columns.</param>
+    /// <param name="errors">Receives invalid aggregate errors.</param>
+    /// <param name="ignored">Receives stale or duplicate aggregate diagnostics.</param>
+    /// <param name="context">Document-wide aggregate count and identity state.</param>
+    /// <returns>Valid aggregates in canonical order.</returns>
     private static List<ValidAggregate> BindAggregates(
         ImmutableArray<CanonicalAggregate> rules,
         IReadOnlyDictionary<string, ColumnModel> columns,
@@ -240,11 +294,13 @@ internal static class CanonicalLocalResultBinder
 }
 
 /// <summary>
-/// Carries document-wide identity and complexity counters across local-result binds.
+/// Local result binding context: carries document-wide identity and complexity counters across local-result binds.
 /// It contains no relation or presentation state of its own.
 /// </summary>
 internal sealed class LocalResultBindingContext
 {
+    /// <summary>Gets document-wide aggregate validation state shared by all table binds.</summary>
     internal AggregateRuleValidator.Context Aggregates { get; } = new();
+    /// <summary>Gets document-wide highlight validation state shared by all table binds.</summary>
     internal HighlightRuleValidator.Context Highlights { get; } = new();
 }

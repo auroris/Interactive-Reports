@@ -3,11 +3,17 @@ using InteractiveReport.Core.Model;
 namespace InteractiveReport.Core.Definitions;
 
 /// <summary>
-/// Source of report definitions. Config-backed in v1; the interface exists so a
+/// Supplies executable report definitions. The built-in implementation is configuration-backed; this
 /// database-backed store (runtime-editable reports) can arrive without touching the engine.
 /// </summary>
 public interface IReportDefinitionStore
 {
+    /// <summary>
+    /// Finds an executable report definition by its case-insensitive name.
+    /// </summary>
+    /// <param name="name">The report name to resolve.</param>
+    /// <param name="ct">Signals that the operation should be canceled; defaults to <c>default</c>.</param>
+    /// <returns>A task containing a detached definition, or <see langword="null"/> when no report has that name.</returns>
     ValueTask<ReportDefinition?> Find(string name, CancellationToken ct = default);
 }
 
@@ -19,12 +25,20 @@ public interface IReportDefinitionStore
 /// </summary>
 public interface IReportDefinitionAuthorizationStore
 {
+    /// <summary>
+    /// Finds the authorization envelope for a report without loading its executable definition.
+    /// </summary>
+    /// <param name="name">The report name to resolve.</param>
+    /// <param name="ct">Signals that the operation should be canceled; defaults to <c>default</c>.</param>
+    /// <returns>A task containing the authorization envelope, or <see langword="null"/> when no report has that name.</returns>
     ValueTask<ReportDefinitionAuthorization?> FindAuthorization(
         string name,
         CancellationToken ct = default);
 }
 
-/// <summary>The report metadata required by the report-level authorization gate.</summary>
+/// <summary>Contains the report metadata required by the report-level authorization gate.</summary>
+/// <param name="Name">The canonical configured report name.</param>
+/// <param name="Authorization">The definition's optional authentication and identity restrictions.</param>
 public sealed record ReportDefinitionAuthorization(
     string Name,
     ReportAuthorization? Authorization);

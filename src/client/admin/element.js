@@ -1,10 +1,9 @@
-// The <interactive-report-admin> element: a thin shell around an embedded
-// <interactive-report> pointed at the built-in "__saved-reports" listing. The
-// listing IS a report — search, sort, pagination, column tools, and CSV export
-// all come from the report widget; this wrapper contributes only what a report
-// cannot: the admin actions its ir-action events request (publish/unpublish,
-// reassign, view state, download, delete), the Upload JSON… dialog, and the
-// identity line. The server enforces the authorization matrix; the embedded
+// Protocol contract: the <interactive-report-admin> element: a thin shell around an embedded
+// <interactive-report> pointed at the built-in "__saved-reports" listing. The listing is itself a
+// report: search, sort, pagination, column tools, and CSV export all come from the report
+// widget; this wrapper contributes only what a report cannot: the admin actions its ir-action
+// events request (publish/unpublish, reassign, view state, download, delete), the Upload JSON…
+// dialog, and the identity line. The server enforces the authorization matrix; the embedded
 // report simply has no data (404) for non-administrators.
 
 import { api, apiUrl, downloadFile, saveBlob } from "../core/api.js";
@@ -18,15 +17,46 @@ const LISTING_REPORT = "__saved-reports";
 export class InteractiveReportAdminElement extends WidgetElement {
     static observedAttributes = ["api-base", "base", "lang"];
 
+    /**
+     * Marks the custom element connected and starts administration initialization.
+     *
+     * @returns {void} No value.
+     *
+     * Side effects: sets the connection flag, rebuilds the UI, and starts identity loading.
+     */
     connectedCallback() { this._connected = true; this.init(); }
+    /**
+     * Marks the custom element disconnected and releases inherited widget resources.
+     *
+     * @returns {void} No value.
+     *
+     * Side effects: clears the connection flag and advances the inherited lifecycle sequence.
+     */
     disconnectedCallback() {
         this._connected = false;
         super.disconnectedCallback();
     }
+    /**
+     * Reinitializes component state when a watched host attribute changes.
+     *
+     * @param {string} _name - The changed observed attribute name; its identity is not otherwise needed.
+     * @param {string|null} oldValue - The attribute's previous serialized value.
+     * @param {string|null} newValue - The attribute's new serialized value.
+     * @returns {void} No value.
+     *
+     * Side effects: reinitializes a connected element when the serialized value changes.
+     */
     attributeChangedCallback(_name, oldValue, newValue) {
         if (this._connected && oldValue !== newValue) this.init();
     }
 
+    /**
+     * Rebuilds the administration shell, embeds the saved-report listing, and resolves identity guidance.
+     *
+     * @returns {Promise<void>} Resolves after identity guidance is rendered or the initialization is superseded.
+     *
+     * Side effects: replaces the rendered DOM, registers action listeners, starts the embedded report, fetches identity, and may render access guidance.
+     */
     async init() {
         const seq = ++this._seq;
         this.whoami = null;
@@ -61,10 +91,9 @@ export class InteractiveReportAdminElement extends WidgetElement {
         this.whoami = identity.whoami;
         if (this.whoami?.identity)
             this.els.identity.textContent = this.t("admin.signedInAs", { identity: this.whoami.identity });
-        // The embedded report answers 404 for non-administrators; when whoami is
-        // available, replace that generic denial with precise guidance. When it is
-        // not (WhoamiEnabled is off — the default), say what this page needs instead
-        // of leaving a bare listing error.
+        // The embedded report answers 404 for non-administrators; when whoami is available,
+        // replace that generic denial with precise guidance. When it is not (WhoamiEnabled is
+        // off by default), say what this page needs instead of leaving a bare listing error.
         if (identity.error) {
             this.showError(identity.error);
         } else if (this.whoami === null) {
@@ -80,15 +109,26 @@ export class InteractiveReportAdminElement extends WidgetElement {
         }
     }
 
-    /// Refresh the embedded listing in place — after admin mutations and for the
-    /// toolbar button. runQuery is the report element's public query surface.
+    /**
+     * Reloads and rerenders the saved-report administration listing.
+     *
+     * @returns {void} No value.
+     *
+     * Side effects: starts a query on the embedded listing; its own renderer handles errors.
+     */
     refresh() {
         this.els.report.runQuery?.().catch(() => {});
     }
 
-    /// The listing's action cells dispatch { command, row }: the row carries the
-    /// hidden ID key plus the displayed columns (TITLE, OWNER, SCOPE, …) the
-    /// dialogs and confirmations need.
+    /**
+     * The listing's action cells dispatch { command, row }: the row carries the hidden ID key plus the
+     * displayed columns (TITLE, OWNER, SCOPE, …) the dialogs and confirmations need.
+     *
+     * @param {{command: string, row: object}} options - Action command and listing row emitted by the embedded report.
+     * @returns {Promise<void>} Resolves after the selected action finishes or its error is displayed.
+     *
+     * Side effects: dispatches the requested administrative action and may render an error.
+     */
     async onAction({ command, row }) {
         const id = row?.ID;
         if (!id) return;
@@ -106,6 +146,15 @@ export class InteractiveReportAdminElement extends WidgetElement {
         }
     }
 
+    /**
+     * Updates whether a saved report is visible to all users.
+     *
+     * @param {string} id - The saved-report identifier to update.
+     * @param {object} row - Listing row containing the current scope, title, and owner.
+     * @returns {Promise<void>} Resolves after the visibility update and listing refresh are started.
+     *
+     * Side effects: sends a saved-report update, displays a confirmation notice, and refreshes the listing.
+     */
     async toggleGlobal(id, row) {
         const makeGlobal = row.SCOPE !== "Global";
         await api(apiUrl(this.base, "saved", id), { method: "PUT", body: { isGlobal: makeGlobal } });
@@ -116,6 +165,15 @@ export class InteractiveReportAdminElement extends WidgetElement {
         this.refresh();
     }
 
+    /**
+     * Updates whether a saved report is the primary default.
+     *
+     * @param {string} id - The saved-report identifier to update.
+     * @param {object} row - Listing row containing the current primary status and title.
+     * @returns {Promise<void>} Resolves after the primary-status update and listing refresh are started.
+     *
+     * Side effects: sends a saved-report update, displays a confirmation notice, and refreshes the listing.
+     */
     async togglePrimary(id, row) {
         const makePrimary = row.PRIMARY_STATUS !== "Yes";
         await api(apiUrl(this.base, "saved", id), { method: "PUT", body: { isPrimary: makePrimary } });
@@ -125,6 +183,16 @@ export class InteractiveReportAdminElement extends WidgetElement {
         this.refresh();
     }
 
+    /**
+     * Opens an owner picker and reassigns a saved report to the selected user.
+     *
+     * @param {string} id - The saved-report identifier to reassign.
+     * @param {object} row - Listing row containing the current owner and report labels.
+     * @returns {Promise<void>} Resolves after owner choices load and the reassignment dialog opens.
+     *
+     * Side effects: fetches the user directory and opens a dialog whose apply handler updates the owner, notifies the user, and refreshes the listing.
+     * @throws {Error} When loading the user directory fails for a reason other than an unsupported endpoint.
+     */
     async reassign(id, row) {
         const users = await this.loadUserDirectory();
 
@@ -164,18 +232,32 @@ export class InteractiveReportAdminElement extends WidgetElement {
         });
     }
 
+    /**
+     * Loads and caches the users eligible to own saved reports.
+     *
+     * @returns {Promise<Array<object>>} Directory entries, or an empty array when the provider route is unavailable or returns a non-array value.
+     *
+     * Side effects: may perform network I/O.
+     */
     async loadUserDirectory() {
         try {
             const supplied = await api(apiUrl(this.base, "admin", "users"));
             return Array.isArray(supplied) ? supplied : [];
         } catch (err) {
-            // A separately hosted older API has no lookup route. Its behavior is the
-            // same as an application that did not register a provider.
+            // Provider constraint: a separately hosted older API has no lookup route. Its
+            // behavior is the same as an application that did not register a provider.
             if (err?.status === 404) return [];
             throw err;
         }
     }
 
+    /**
+     * Loads authorization and directory data, then opens the administrator and report-access editor.
+     *
+     * @returns {Promise<void>} Resolves after authorization data and users load and the editor opens.
+     *
+     * Side effects: fetches authorization data and users, then opens a dialog whose controls perform and reload authorization mutations.
+     */
     async authorizationDialog() {
         let [authorization, users] = await Promise.all([
             api(apiUrl(this.base, "admin", "authorization")),
@@ -333,6 +415,15 @@ export class InteractiveReportAdminElement extends WidgetElement {
         });
     }
 
+    /**
+     * Loads a saved report and opens its raw document in a read-only dialog.
+     *
+     * @param {string} id - The saved-report identifier to load.
+     * @param {object} row - Listing row supplying the saved-report title.
+     * @returns {Promise<void>} Resolves after the document is loaded and its dialog opens.
+     *
+     * Side effects: fetches the saved report and opens a read-only JSON dialog.
+     */
     async viewState(id, row) {
         const doc = await api(apiUrl(this.base, "saved", id));
         openDialog({
@@ -344,14 +435,30 @@ export class InteractiveReportAdminElement extends WidgetElement {
         });
     }
 
+    /**
+     * Downloads the supplied saved report as a JSON document.
+     *
+     * @param {string} id - The saved-report identifier to download.
+     * @param {object} row - Listing row supplying the fallback report name.
+     * @returns {Promise<void>} Resolves after the file is fetched and handed to the browser.
+     *
+     * Side effects: performs a network request and initiates a browser download.
+     */
     async downloadDocument(id, row) {
         const file = await downloadFile(apiUrl(this.base, "admin", "saved", id, "document"));
         saveBlob(file.blob, file.filename ?? `${row.REPORT_NAME}.report.json`);
     }
 
-    // Not named `remove`: that would shadow Element.remove() and turn a host's
-    // ordinary element removal into a phantom delete action (found by a test that
-    // unmounted the element).
+    /**
+     * Confirms and deletes the supplied saved report without shadowing the host element's remove
+     * method.
+     *
+     * @param {string} id - The saved-report identifier to delete.
+     * @param {object} row - Listing row supplying scope, owner, and title for confirmation text.
+     * @returns {Promise<void>} Resolves after cancellation or after deletion and refresh.
+     *
+     * Side effects: opens a confirmation dialog and, when confirmed, deletes the saved report, displays a notice, and refreshes the listing.
+     */
     async deleteSavedReport(id, row) {
         const scope = row.SCOPE === "Global"
             ? this.t("admin.globalReport")
@@ -365,6 +472,13 @@ export class InteractiveReportAdminElement extends WidgetElement {
         this.refresh();
     }
 
+    /**
+     * Prompts for a JSON document and imports it as a saved report.
+     *
+     * @returns {void} No value.
+     *
+     * Side effects: opens an upload dialog whose apply handler reads and parses the selected file, imports it, displays a notice, and refreshes the listing.
+     */
     uploadDocument() {
         const reportInp = el("input", {
             class: "ir-input", type: "text", placeholder: this.t("admin.reportNamePlaceholder"),

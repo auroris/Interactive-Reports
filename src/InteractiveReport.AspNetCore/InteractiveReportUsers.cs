@@ -16,6 +16,12 @@ public sealed record InteractiveReportUser(string Display, string Value);
 /// </summary>
 public interface IInteractiveReportUserProvider
 {
+    /// <summary>
+    /// Lists the application accounts an administrator may select in authorization controls.
+    /// </summary>
+    /// <param name="administrator">The authenticated administrator requesting the directory.</param>
+    /// <param name="cancellationToken">Signals that the operation should be canceled; defaults to <c>default</c>.</param>
+    /// <returns>A task containing available accounts, or <see langword="null"/> to keep free-form identity entry.</returns>
     ValueTask<IReadOnlyCollection<InteractiveReportUser>?> GetUsers(
         ClaimsPrincipal administrator,
         CancellationToken cancellationToken = default);

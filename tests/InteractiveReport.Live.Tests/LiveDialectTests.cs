@@ -65,6 +65,29 @@ public class LiveDialectTests
         await IdentifierTortureCorpus.AssertRoundTrip(live.Executor, definition);
     }
 
+    [SkippableFact]
+    public async Task Oracle_binding_parser_misreads_double_dash_inside_a_quoted_identifier()
+    {
+        var live = LiveDb.For(ReportDialect.Oracle);
+        await using var connection = live.CreateConnection("live");
+        await connection.OpenAsync();
+        const string parameterizedSql =
+            "SELECT COUNT(*) FROM (SELECT NOTES AS \"semi--name\" FROM IR_TEST_ORDERS) ir WHERE :probe = 1";
+
+        await using var parameterized = Assert.IsType<OracleCommand>(connection.CreateCommand());
+        parameterized.BindByName = true;
+        parameterized.CommandText = parameterizedSql;
+        parameterized.Parameters.Add(new OracleParameter("probe", 1));
+
+        var exception = await Assert.ThrowsAsync<OracleException>(
+            () => parameterized.ExecuteScalarAsync());
+        Assert.Equal(1008, exception.Number);
+
+        await using var inlined = connection.CreateCommand();
+        inlined.CommandText = parameterizedSql.Replace(":probe", "1", StringComparison.Ordinal);
+        Assert.Equal(10, Convert.ToInt32(await inlined.ExecuteScalarAsync()));
+    }
+
     [SkippableTheory]
     [MemberData(nameof(Dialects))]
     public async Task Filter_sort_page(ReportDialect dialect)

@@ -13,15 +13,31 @@ namespace Workbench;
 /// </summary>
 public sealed class DevAuthHandler : AuthenticationHandler<AuthenticationSchemeOptions>
 {
+    /// <summary>The authentication scheme registered by the workbench.</summary>
     public const string SchemeName = "WorkbenchDev";
+
+    /// <summary>The request header used to choose the simulated identity.</summary>
     public const string UserHeader = "X-Workbench-User";
+
+    /// <summary>The identity used when the request omits <see cref="UserHeader"/>.</summary>
     public const string DefaultUser = "workbench-dev";
 
+    /// <summary>
+    /// Creates the workbench authentication handler with the services required by ASP.NET Core.
+    /// </summary>
+    /// <param name="options">The monitor that supplies authentication scheme options.</param>
+    /// <param name="logger">The factory used by the base authentication handler to create its logger.</param>
+    /// <param name="encoder">The URL encoder required by the ASP.NET Core authentication handler.</param>
     public DevAuthHandler(IOptionsMonitor<AuthenticationSchemeOptions> options, ILoggerFactory logger, UrlEncoder encoder)
         : base(options, logger, encoder)
     {
     }
 
+    /// <summary>
+    /// Creates a successful authentication ticket from <see cref="UserHeader"/> or <see cref="DefaultUser"/>.
+    /// </summary>
+    /// <returns>A completed task containing the workbench authentication ticket.</returns>
+    /// <remarks>Reads the current request headers but does not validate credentials.</remarks>
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
     {
         var user = Request.Headers[UserHeader].FirstOrDefault();

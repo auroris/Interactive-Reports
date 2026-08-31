@@ -3,6 +3,10 @@ using InteractiveReport.Core.Model;
 
 namespace InteractiveReport.AspNetCore;
 
+// These transport models form the JSON contract shared by the built-in HTTP endpoints and client.
+// They expose report metadata, mutable document requests, caller identity, and stable error identities;
+// none of the authorization hints in these DTOs replace server-side authorization checks.
+
 /// <summary>
 /// The single error shape returned by Interactive Reports JSON API endpoints. Code is
 /// a stable, language-independent identifier; description and title are English
@@ -10,6 +14,11 @@ namespace InteractiveReport.AspNetCore;
 /// contextual text that is not a localization key. TraceId is present only when the
 /// corresponding server log entry can provide additional diagnostic detail.
 /// </summary>
+/// <param name="Code">Stable, language-independent error identity.</param>
+/// <param name="Description">English fallback description suitable for display.</param>
+/// <param name="Title">Optional English fallback title.</param>
+/// <param name="Details">Optional request-specific context that is not a localization key.</param>
+/// <param name="TraceId">Optional server trace identifier for correlating diagnostic logs.</param>
 public sealed record InteractiveReportError(
     string Code,
     string Description,
@@ -17,7 +26,7 @@ public sealed record InteractiveReportError(
     string? Details = null,
     string? TraceId = null);
 
-/// <summary>Stable message identities used by <see cref="InteractiveReportError"/>.</summary>
+/// <summary>Defines the stable message identities used by <see cref="InteractiveReportError"/>.</summary>
 public static class InteractiveReportErrorCodes
 {
     public const string AuthenticationRequired = "IR-1000";
@@ -58,6 +67,12 @@ public static class InteractiveReportErrorCodes
 
 internal static class InteractiveReportErrorCatalog
 {
+    /// <summary>
+    /// Maps a stable protocol error code to its public title and description.
+    /// </summary>
+    /// <param name="code">The stable protocol or diagnostic code to return.</param>
+    /// <returns>The client-facing title and description for the code.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="code"/> is not a registered protocol error.</exception>
     internal static (string Title, string Description) Find(string code) => code switch
     {
         InteractiveReportErrorCodes.AuthenticationRequired =>
@@ -122,7 +137,7 @@ internal static class InteractiveReportErrorCatalog
     };
 }
 
-/// <summary>The discoverable definition and client capabilities of one report.</summary>
+/// <summary>Describes one report's discoverable schema, defaults, presentation, limits, and client capabilities.</summary>
 public sealed record InteractiveReportSchema(
     string Name,
     string Title,
@@ -136,23 +151,23 @@ public sealed record InteractiveReportSchema(
     InteractiveReportLimits Limits,
     InteractiveReportAuthorizationHint Authorization);
 
-/// <summary>An application-owned edit link resolved against the report schema.</summary>
+/// <summary>Describes an application-owned edit link resolved against the report schema.</summary>
 public sealed record InteractiveReportEditLink(string UrlTemplate, string Label, string Target);
 
-/// <summary>Presentation behavior applied to one report column.</summary>
+/// <summary>Describes presentation behavior applied to one report column.</summary>
 public sealed record InteractiveReportColumnOptions(
     bool? HideLabel,
     bool? Sortable,
     bool? Filterable,
     string? HelpText);
 
-/// <summary>Expression and aggregate functions supported by this server.</summary>
+/// <summary>Lists expression, aggregate, and chart functions supported by this server.</summary>
 public sealed record InteractiveReportCapabilities(
     IReadOnlyList<string> ExpressionFunctions,
     IReadOnlyDictionary<string, IReadOnlyList<string>> AggregateFunctions,
     IReadOnlyDictionary<string, IReadOnlyList<string>> ChartAggregateFunctions);
 
-/// <summary>Server-side limits for one report definition.</summary>
+/// <summary>Reports server-side paging, row, and chart limits for one definition.</summary>
 public sealed record InteractiveReportLimits(
     int DefaultPageSize,
     int MaxPageSize,
@@ -165,7 +180,7 @@ public sealed record InteractiveReportLimits(
 /// </summary>
 public sealed record InteractiveReportAuthorizationHint(bool MayRequestAdministration);
 
-/// <summary>The current caller identity and authorization bootstrap diagnostics.</summary>
+/// <summary>Reports the current caller identity and authorization bootstrap diagnostics.</summary>
 public sealed record InteractiveReportIdentity(
     bool Authenticated,
     string? Identity,
@@ -178,29 +193,38 @@ public sealed record InteractiveReportIdentity(
     string? AuthenticationType,
     IReadOnlyList<InteractiveReportClaim> Claims);
 
-/// <summary>One claim attached to the current caller.</summary>
+/// <summary>Represents one claim attached to the current caller.</summary>
 public sealed record InteractiveReportClaim(string Type, string Value);
 
-/// <summary>Creates a saved report for a configured report definition.</summary>
+/// <summary>Supplies the title, state, and sharing policy for a new saved report.</summary>
 public sealed class SaveReportRequest
 {
+    /// <summary>Gets or sets the required display title.</summary>
     public string? Title { get; set; }
+    /// <summary>Gets or sets the required report-state document to persist.</summary>
     public ReportState? State { get; set; }
+    /// <summary>Gets or sets whether all authorized report users may load the saved report.</summary>
     public bool IsGlobal { get; set; }
+    /// <summary>Gets or sets whether this saved report should become the report's primary default.</summary>
     public bool IsPrimary { get; set; }
 }
 
-/// <summary>Changes selected properties of an existing saved report.</summary>
+/// <summary>Supplies a partial update for an existing saved report; null properties remain unchanged.</summary>
 public sealed class UpdateSavedReportRequest
 {
+    /// <summary>Gets or sets a replacement display title.</summary>
     public string? Title { get; set; }
+    /// <summary>Gets or sets a replacement report-state document.</summary>
     public ReportState? State { get; set; }
+    /// <summary>Gets or sets a replacement global-sharing flag.</summary>
     public bool? IsGlobal { get; set; }
+    /// <summary>Gets or sets a replacement primary-report flag.</summary>
     public bool? IsPrimary { get; set; }
+    /// <summary>Gets or sets a replacement owner identity for an administrative reassignment.</summary>
     public string? Owner { get; set; }
 }
 
-/// <summary>Saved-report metadata visible to the current caller.</summary>
+/// <summary>Contains saved-report metadata visible to the current caller.</summary>
 public sealed record SavedReportSummary(
     string Id,
     string ReportName,
@@ -211,28 +235,30 @@ public sealed record SavedReportSummary(
     bool IsReadOnly,
     DateTime ModifiedUtc);
 
-/// <summary>A saved report's metadata and versioned report-state document.</summary>
+/// <summary>Contains a saved report's metadata and report-state document.</summary>
 public sealed record SavedReportDocument(SavedReportSummary Summary, JsonElement State);
 
-/// <summary>An identity used by administrator and per-report authorization grants.</summary>
+/// <summary>Supplies an identity for an administrator or per-report authorization grant.</summary>
 public sealed class AuthorizationIdentityRequest
 {
+    /// <summary>Gets or sets the normalized application identity to add or remove.</summary>
     public string? Identity { get; set; }
 }
 
 /// <summary>Changes whether a report requires an explicit per-user grant.</summary>
 public sealed class ReportRestrictionRequest
 {
+    /// <summary>Gets or sets the required restricted state.</summary>
     public bool? Restricted { get; set; }
 }
 
-/// <summary>The configured and database-authored authorization state.</summary>
+/// <summary>Combines configured and database-authored authorization state for administration.</summary>
 public sealed record InteractiveReportAuthorizationState(
     IReadOnlyList<string> ConfiguredAdministrators,
     IReadOnlyList<string> DatabaseAdministrators,
     IReadOnlyList<InteractiveReportAuthorizationReport> Reports);
 
-/// <summary>Authorization settings and grants for one configured report.</summary>
+/// <summary>Combines authorization settings and grants for one configured report.</summary>
 public sealed record InteractiveReportAuthorizationReport(
     string Name,
     string Title,

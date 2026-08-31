@@ -7,9 +7,21 @@ using Microsoft.Extensions.Options;
 
 namespace InteractiveReport.AspNetCore;
 
-/// <summary>Administrator CRUD for database-authored administration and report grants.</summary>
+/// <summary>
+/// Implements administrator-only HTTP operations for database-authored administrators,
+/// report restrictions, and per-user grants. Every operation reauthorizes the caller,
+/// hides denied resources behind not-found responses, and translates persistence failures
+/// to the common Interactive Reports error contract.
+/// </summary>
 internal static class AuthorizationEndpoints
 {
+    /// <summary>
+    /// Lists configured and database-authored authorization state after verifying administrator access.
+    /// </summary>
+    /// <param name="context">The current HTTP request and response context.</param>
+    /// <param name="ct">Cancels authorization and database access.</param>
+    /// <returns>A JSON authorization snapshot, a hidden-denial response, or a standardized server error.</returns>
+    /// <remarks>Reads all authorization rows and writes the selected HTTP response; it does not mutate authorization state.</remarks>
     internal static async Task<IResult> List(HttpContext context, CancellationToken ct)
     {
         var denied = await AuthorizeAdministration(
@@ -78,6 +90,13 @@ internal static class AuthorizationEndpoints
             Reports: reports), IrJson.Options);
     }
 
+    /// <summary>
+    /// Grants database-authored administrator access to the identity in the request body.
+    /// </summary>
+    /// <param name="context">The current HTTP request and response context.</param>
+    /// <param name="ct">Cancels authorization, request-body reading, and persistence.</param>
+    /// <returns>No content on success, or a validation, denial, or server-error result.</returns>
+    /// <remarks>Inserts an administrator grant when the caller is authorized.</remarks>
     internal static Task<IResult> GrantAdministrator(HttpContext context, CancellationToken ct)
         => MutateIdentity(
             context,
@@ -85,6 +104,13 @@ internal static class AuthorizationEndpoints
             (store, identity, token) => store.GrantAdministrator(identity, token),
             ct);
 
+    /// <summary>
+    /// Revokes database-authored administrator access from the identity in the request body.
+    /// </summary>
+    /// <param name="context">The current HTTP request and response context.</param>
+    /// <param name="ct">Cancels authorization, request-body reading, and persistence.</param>
+    /// <returns>No content on success, or a validation, denial, or server-error result.</returns>
+    /// <remarks>Deletes an administrator grant when the caller is authorized.</remarks>
     internal static Task<IResult> RevokeAdministrator(HttpContext context, CancellationToken ct)
         => MutateIdentity(
             context,
@@ -95,6 +121,14 @@ internal static class AuthorizationEndpoints
             },
             ct);
 
+    /// <summary>
+    /// Enables or disables the database-authored restriction for one configured report.
+    /// </summary>
+    /// <param name="name">The case-insensitive configured report name from the route.</param>
+    /// <param name="context">The current HTTP request and response context.</param>
+    /// <param name="ct">Cancels authorization, request-body reading, and persistence.</param>
+    /// <returns>No content on success, or a not-found, validation, denial, or server-error result.</returns>
+    /// <remarks>Updates the report-restriction row after rejecting configurations that cannot use user grants.</remarks>
     internal static async Task<IResult> SetReportRestriction(
         string name,
         HttpContext context,
@@ -143,6 +177,14 @@ internal static class AuthorizationEndpoints
         }
     }
 
+    /// <summary>
+    /// Grants the request-body identity database-authored access to one configured report.
+    /// </summary>
+    /// <param name="name">The case-insensitive configured report name from the route.</param>
+    /// <param name="context">The current HTTP request and response context.</param>
+    /// <param name="ct">Cancels authorization, request-body reading, and persistence.</param>
+    /// <returns>No content on success, or a not-found, validation, denial, or server-error result.</returns>
+    /// <remarks>Inserts a per-report user grant when the report supports user restrictions.</remarks>
     internal static Task<IResult> GrantReportUser(
         string name,
         HttpContext context,
@@ -154,6 +196,14 @@ internal static class AuthorizationEndpoints
                 store.GrantReportUser(reportName, identity, token),
             ct);
 
+    /// <summary>
+    /// Revokes the request-body identity's database-authored access to one configured report.
+    /// </summary>
+    /// <param name="name">The case-insensitive configured report name from the route.</param>
+    /// <param name="context">The current HTTP request and response context.</param>
+    /// <param name="ct">Cancels authorization, request-body reading, and persistence.</param>
+    /// <returns>No content on success, or a not-found, validation, denial, or server-error result.</returns>
+    /// <remarks>Deletes a per-report user grant when the report supports user restrictions.</remarks>
     internal static Task<IResult> RevokeReportUser(
         string name,
         HttpContext context,
@@ -167,6 +217,15 @@ internal static class AuthorizationEndpoints
             },
             ct);
 
+    /// <summary>
+    /// Runs a validated administrator-identity mutation behind the common administration check.
+    /// </summary>
+    /// <param name="context">The current HTTP request and response context.</param>
+    /// <param name="resourceReportName">The report resource used for application authorization and error logging.</param>
+    /// <param name="mutation">The persistence operation to invoke with the trimmed identity.</param>
+    /// <param name="ct">Cancels authorization, request-body reading, and persistence.</param>
+    /// <returns>No content on success, or the first validation, denial, or server-error result.</returns>
+    /// <remarks>Consumes the JSON request body and may mutate the authorization store.</remarks>
     private static async Task<IResult> MutateIdentity(
         HttpContext context,
         string resourceReportName,
@@ -194,6 +253,15 @@ internal static class AuthorizationEndpoints
         }
     }
 
+    /// <summary>
+    /// Runs a validated per-report identity mutation for a configured report that supports user grants.
+    /// </summary>
+    /// <param name="name">The case-insensitive configured report name from the route.</param>
+    /// <param name="context">The current HTTP request and response context.</param>
+    /// <param name="mutation">The persistence operation to invoke with the canonical report name and trimmed identity.</param>
+    /// <param name="ct">Cancels authorization, request-body reading, and persistence.</param>
+    /// <returns>No content on success, or the first not-found, validation, denial, or server-error result.</returns>
+    /// <remarks>Consumes the JSON request body and may mutate the authorization store.</remarks>
     private static async Task<IResult> MutateReportIdentity(
         string name,
         HttpContext context,
@@ -228,6 +296,13 @@ internal static class AuthorizationEndpoints
         }
     }
 
+    /// <summary>
+    /// Reads and validates the identity supplied to an authorization endpoint.
+    /// </summary>
+    /// <param name="context">The current HTTP request and response context.</param>
+    /// <param name="ct">Cancels JSON deserialization.</param>
+    /// <returns>The trimmed identity and no error, or a null identity and a malformed/invalid request result.</returns>
+    /// <remarks>Consumes the request body. A valid identity contains 1 to 400 characters after trimming.</remarks>
     private static async Task<(string? Identity, IResult? Error)> ReadIdentity(
         HttpContext context,
         CancellationToken ct)
@@ -252,6 +327,13 @@ internal static class AuthorizationEndpoints
             : (identity, null);
     }
 
+    /// <summary>
+    /// Verifies report-administrator access for an authorization endpoint.
+    /// </summary>
+    /// <param name="context">The current HTTP request and response context.</param>
+    /// <param name="resourceReportName">The report name carried to application authorization as the protected resource.</param>
+    /// <param name="ct">Cancels application and database authorization checks.</param>
+    /// <returns><see langword="null"/> when access is granted; otherwise, the hidden-denial or authorization-error result.</returns>
     private static Task<IResult?> AuthorizeAdministration(
         HttpContext context,
         string resourceReportName,
@@ -268,6 +350,12 @@ internal static class AuthorizationEndpoints
                 HideDenied = true,
             }, context, ct);
 
+    /// <summary>
+    /// Finds a configured report case-insensitively while preserving its canonical configured name.
+    /// </summary>
+    /// <param name="context">The current HTTP request and response context.</param>
+    /// <param name="name">The report name from the route.</param>
+    /// <returns>The canonical name and definition, or <see langword="null"/> when no report matches.</returns>
     private static KeyValuePair<string, ReportDefinition>? FindConfiguredReport(
         HttpContext context,
         string name)
@@ -279,13 +367,29 @@ internal static class AuthorizationEndpoints
         return new KeyValuePair<string, ReportDefinition>(canonicalName, report);
     }
 
+    /// <summary>
+    /// Resolves the configured report-authorization store from request services.
+    /// </summary>
+    /// <param name="context">The current HTTP request and response context.</param>
+    /// <returns>The configured report-authorization store.</returns>
     private static IReportAuthorizationStore Store(HttpContext context)
         => context.RequestServices.GetRequiredService<IReportAuthorizationStore>();
 
+    /// <summary>
+    /// Resolves the current Interactive Reports options from request services.
+    /// </summary>
+    /// <param name="context">The current HTTP request and response context.</param>
+    /// <returns>The interactive report options.</returns>
     private static InteractiveReportOptions Options(HttpContext context)
         => context.RequestServices.GetRequiredService<IOptionsMonitor<InteractiveReportOptions>>()
             .CurrentValue;
 
+    /// <summary>
+    /// Creates a standardized validation-error response.
+    /// </summary>
+    /// <param name="code">The stable protocol or diagnostic code to return.</param>
+    /// <param name="details">Optional request-specific diagnostic context.</param>
+    /// <returns>A JSON HTTP 400 result using the catalog title and description for <paramref name="code"/>.</returns>
     private static IResult BadRequest(
         string code,
         string? details = null)

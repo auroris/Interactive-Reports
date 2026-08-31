@@ -4,10 +4,15 @@ using InteractiveReport.Core.Model;
 namespace InteractiveReport.Core.Expressions;
 
 /// <summary>
-/// The function registry: one entry per function in the portable subset, carrying
+/// One entry in the portable function registry, carrying
 /// arity, argument rules, result-kind inference, and the per-dialect emitter.
 /// Adding a function is adding a row here — no enum, no switches to grow.
 /// </summary>
+/// <param name="Name">The canonical function name.</param>
+/// <param name="MinArgs">The minimum accepted argument count.</param>
+/// <param name="MaxArgs">The maximum accepted argument count.</param>
+/// <param name="Bind">The callback that validates bound arguments and infers the result kind.</param>
+/// <param name="Emit">The callback that emits dialect-specific SQL.</param>
 internal sealed record FunctionDef(
     string Name,
     int MinArgs,
@@ -15,13 +20,23 @@ internal sealed record FunctionDef(
     Func<FunctionArgs, ColumnKind> Bind,
     Action<EmitContext, IReadOnlyList<ExprNode>> Emit);
 
-/// <summary>Bound, typed arguments handed to a function's Bind rule.</summary>
+/// <summary>Provides bound, typed arguments to a function's binding rule.</summary>
+/// <param name="name">The canonical function name used in diagnostics.</param>
+/// <param name="args">The bound call arguments.</param>
 internal readonly struct FunctionArgs(string name, IReadOnlyList<ExprNode> args)
 {
+    /// <summary>Gets the canonical function name.</summary>
     public string Name { get; } = name;
+    /// <summary>Gets the bound arguments in call order.</summary>
     public IReadOnlyList<ExprNode> Args { get; } = args;
 
-    /// <summary>NULL literals satisfy any requirement — NULL is a value of every type.</summary>
+    /// <summary>
+    /// Requires one argument to have an allowed kind. NULL literals satisfy every requirement.
+    /// </summary>
+    /// <param name="index">The zero-based argument index.</param>
+    /// <param name="what">The human-readable subject included in the validation message.</param>
+    /// <param name="kinds">The allowed column kinds against which to validate the value.</param>
+    /// <exception cref="ExprError">Thrown when the non-null argument has no allowed kind.</exception>
     public void Require(int index, string what, params ColumnKind[] kinds)
     {
         var arg = Args[index];
@@ -31,23 +46,48 @@ internal readonly struct FunctionArgs(string name, IReadOnlyList<ExprNode> args)
     }
 }
 
+/// <summary>Owns the closed portable function vocabulary and its binding and emission behavior.</summary>
 internal static class ExprFunctions
 {
+    /// <summary>Gets registered function names in case-insensitive alphabetical order.</summary>
     public static IReadOnlyList<string> Names { get; private set; }
 
+    /// <summary>
+    /// Attempts to resolve a portable expression function by its case-insensitive name.
+    /// </summary>
+    /// <param name="name">The case-insensitive function name.</param>
+    /// <param name="def">Receives the function definition when registered.</param>
+    /// <returns><see langword="true"/> when the function is registered and was returned; otherwise, <see langword="false"/>.</returns>
     public static bool TryGet(string name, out FunctionDef def) => Registry.TryGetValue(name, out def!);
 
+    /// <summary>
+    /// Returns a registered expression function by name.
+    /// </summary>
+    /// <param name="name">The case-insensitive registered function name.</param>
+    /// <returns>The resolved function definition.</returns>
     public static FunctionDef Get(string name) => Registry[name];
 
     private static readonly Dictionary<string, FunctionDef> Registry =
         new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Registers an expression function under its case-insensitive name.
+    /// </summary>
+    /// <param name="name">The canonical function name.</param>
+    /// <param name="min">The minimum accepted argument count.</param>
+    /// <param name="max">The maximum accepted argument count.</param>
+    /// <param name="bind">The callback that validates and binds function arguments.</param>
+    /// <param name="emit">The optional dialect emitter; omission uses a plain function call.</param>
+    /// <remarks>Replaces any existing entry with the same case-insensitive name.</remarks>
     private static void Add(string name, int min, int max,
         Func<FunctionArgs, ColumnKind> bind,
         Action<EmitContext, IReadOnlyList<ExprNode>>? emit = null)
         => Registry[name] = new FunctionDef(name, min, max, bind,
             emit ?? ((ctx, args) => ExprFunctionEmitter.EmitPlain(ctx, name, args)));
 
+    /// <summary>
+    /// Populates the portable expression-function registry and publishes its sorted name list.
+    /// </summary>
     static ExprFunctions()
     {
         Add("UPPER", 1, 1, a => { a.Require(0, "text", ColumnKind.Text); return ColumnKind.Text; });
@@ -137,8 +177,9 @@ internal static class ExprFunctions
             a =>
             {
                 a.Require(0, "text or a date", ColumnKind.Text, ColumnKind.Date);
-                // Literals are checkable right here; column contents are the ISO data
-                // contract (invalid rows become a provider error or NULL at runtime).
+                // Provider constraint: literals are checkable right here; column contents are
+                // the ISO data contract (invalid rows become a provider error or NULL at
+                // runtime).
                 if (a.Args[0] is StringLit s && !DateTime.TryParseExact(s.Value, "yyyy-MM-dd",
                         CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
                     throw new ExprError($"TO_DATE text must be ISO YYYY-MM-DD (got '{s.Value}')");
@@ -168,13 +209,24 @@ internal static class ExprFunctions
         Names = Array.AsReadOnly(Registry.Keys.Order(StringComparer.OrdinalIgnoreCase).ToArray());
     }
 
+    /// <summary>
+    /// Binds a date-part function call to its typed expression contract.
+    /// </summary>
+    /// <param name="name">The canonical function name used in diagnostics.</param>
+    /// <returns>A binder that accepts one date or ISO date-text argument and returns a number kind.</returns>
     private static Func<FunctionArgs, ColumnKind> DatePartBind(string name) => a =>
     {
-        // Text allowed: SQLite date columns discover as text (ISO strings).
+        // Provider constraint: text allowed: SQLite date columns discover as text (ISO
+        // strings).
         a.Require(0, "a date (or ISO date text)", ColumnKind.Date, ColumnKind.Text);
         return ColumnKind.Number;
     };
 
+    /// <summary>
+    /// Binds a text predicate call to its typed expression contract.
+    /// </summary>
+    /// <param name="name">The canonical function name used in diagnostics.</param>
+    /// <returns>A binder that requires two text arguments and returns a boolean kind.</returns>
     private static Func<FunctionArgs, ColumnKind> TextPredicateBind(string name) => a =>
     {
         a.Require(0, "text", ColumnKind.Text);

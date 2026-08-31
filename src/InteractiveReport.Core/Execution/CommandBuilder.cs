@@ -10,20 +10,33 @@ using SqlKata;
 
 namespace InteractiveReport.Core.Execution;
 
+/// <summary>
+/// Converts compiled provider-neutral SQL and resolved context values into executable ADO.NET commands.
+/// It owns parameter naming, provider-specific binding adjustments, the application parameter ceiling,
+/// Oracle REF CURSOR batching, and SQL-only diagnostic logging. Callers own and dispose returned commands.
+/// </summary>
 internal static class CommandBuilder
 {
-    // Keep a provider-independent application ceiling below SQL Server's 2100 hard
-    // limit. It also bounds deep Pivot chains and large expression lists before any
+    // Keep a provider-independent application ceiling below SQL Server's
+    // 2100 hard limit. It also bounds deep Pivot chains and large expression lists before any
     // supported provider receives an unexpectedly large command.
     internal const int MaxParameters = 2000;
     private static readonly ConcurrentDictionary<Type, Action<DbCommand>?> BindByNameSetters = new();
     private static readonly ConcurrentDictionary<Type, Action<DbParameter>?> RefCursorSetters = new();
     /// <summary>
-    /// Builds a DbCommand from a compiled SqlKata result plus server-resolved context
-    /// parameters. Composer bindings are named p0, p1, ... (context parameter names
-    /// matching that pattern are rejected at definition load); providers match parameter
-    /// names prefix-insensitively, so one code path serves @-style and :-style dialects.
+    /// Creates a command from a compiled SQLKata result using execution settings from the definition.
+    /// Composer bindings are named p0, p1, ... (context parameter names matching that pattern are rejected
+    /// at definition load); providers match parameter names prefix-insensitively, so one code path serves
+    /// @-style and :-style dialects.
     /// </summary>
+    /// <param name="connection">The connection that creates and will execute the command.</param>
+    /// <param name="compiled">The SQL text and composer-generated named bindings.</param>
+    /// <param name="contextParams">Request-scoped parameter values referenced by the report definition.</param>
+    /// <param name="def">Supplies the command timeout and effective SQL dialect.</param>
+    /// <param name="logger">Receives final SQL text; <see langword="null"/> disables logging.</param>
+    /// <returns>A configured, unexecuted command owned by the caller.</returns>
+    /// <exception cref="ReportValidationException">Thrown when compiled and context bindings exceed <see cref="MaxParameters"/>.</exception>
+    /// <remarks>Creates a command and parameters from <paramref name="connection"/> and may emit a debug log; it does not open the connection or execute SQL.</remarks>
     public static DbCommand Build(
         DbConnection connection,
         SqlResult compiled,
@@ -32,6 +45,18 @@ internal static class CommandBuilder
         ILogger? logger = null)
         => Build(connection, compiled, contextParams, def.CommandTimeoutSeconds, def.GetEffectiveDialect(), logger);
 
+    /// <summary>
+    /// Creates a provider command, binds compiled and context parameters, and applies the execution timeout.
+    /// </summary>
+    /// <param name="connection">The connection that creates and will execute the command.</param>
+    /// <param name="compiled">The compiled SQL and ordered parameter bindings.</param>
+    /// <param name="contextParams">Request-scoped parameter values referenced by the report definition.</param>
+    /// <param name="commandTimeoutSeconds">The positive command timeout in seconds.</param>
+    /// <param name="dialect">The database dialect whose SQL rules apply.</param>
+    /// <param name="logger">Receives final SQL text; <see langword="null"/> disables logging.</param>
+    /// <returns>A configured, unexecuted command owned by the caller.</returns>
+    /// <exception cref="ReportValidationException">Thrown when the report state violates the report contract.</exception>
+    /// <remarks>Creates a command and parameters from <paramref name="connection"/> and may emit a debug log; it does not open the connection or execute SQL.</remarks>
     public static DbCommand Build(
         DbConnection connection,
         SqlResult compiled,
@@ -50,10 +75,10 @@ internal static class CommandBuilder
         cmd.CommandText = compiled.Sql;
         cmd.CommandTimeout = commandTimeoutSeconds;
 
-        // ODP.NET binds by POSITION unless told otherwise. Context parameters appear
-        // first in the SQL text (inside the base subquery) but are added last here, so
-        // positional binding would silently misbind them. Set BindByName via reflection
-        // to avoid a hard Oracle provider dependency.
+        // ODP.NET binds by position unless told otherwise. Context
+        // parameters appear first in the SQL text (inside the base subquery) but are added last
+        // here, so positional binding would silently misbind them. Set BindByName via
+        // reflection to avoid a hard Oracle provider dependency.
         if (dialect == ReportDialect.Oracle)
             EnableBindByName(cmd);
 
@@ -69,11 +94,21 @@ internal static class CommandBuilder
     }
 
     /// <summary>
-    /// Builds one anonymous Oracle PL/SQL block whose ordered OUT REF CURSORs carry
-    /// several report datasets. Named composer bindings are shared when their names
-    /// and values agree; disagreement is an internal composition error rather than a
-    /// reason to submit a command with ambiguous parameter meaning.
+    /// Builds one anonymous Oracle PL/SQL block whose ordered OUT REF CURSORs
+    /// carry several report datasets. Named composer bindings are shared when their names and values agree;
+    /// disagreement is an internal composition error rather than a reason to submit a command with ambiguous
+    /// parameter meaning.
     /// </summary>
+    /// <param name="connection">The Oracle connection that creates and will execute the command.</param>
+    /// <param name="resultSets">The Oracle cursor result sets to combine into one executable batch.</param>
+    /// <param name="contextParams">Request-scoped parameter values referenced by the report definition.</param>
+    /// <param name="def">Supplies the required Oracle dialect and command timeout.</param>
+    /// <param name="logger">Receives final PL/SQL text; <see langword="null"/> disables logging.</param>
+    /// <returns>A configured, unexecuted Oracle command owned by the caller.</returns>
+    /// <exception cref="InvalidOperationException">Thrown for a non-Oracle definition or conflicting binding values across result sets.</exception>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="resultSets"/> is empty.</exception>
+    /// <exception cref="ReportValidationException">Thrown when input and output parameters exceed <see cref="MaxParameters"/>.</exception>
+    /// <remarks>Creates one command, input parameters, and ordered output cursor parameters; it does not open the connection or execute the batch.</remarks>
     public static DbCommand BuildOracleCursorBatch(
         DbConnection connection,
         IReadOnlyList<SqlResult> resultSets,
@@ -145,17 +180,25 @@ internal static class CommandBuilder
     }
 
     /// <summary>
-    /// Logs the final SQL text immediately before a caller submits a hand-built
-    /// command. Parameter values are deliberately excluded: they can contain user
-    /// filters, report documents, identities, and row-security context.
+    /// Records final SQL text immediately before a caller submits a hand-built command. Parameter
+    /// values are deliberately excluded: they can contain user filters, report documents, identities, and
+    /// row-security context.
     /// </summary>
+    /// <param name="command">The fully constructed command whose text will be logged.</param>
+    /// <param name="logger">Receives the debug event; <see langword="null"/> makes the method a no-op.</param>
+    /// <remarks>May emit a debug log. Parameter values are never logged.</remarks>
     internal static void Log(DbCommand command, ILogger? logger)
     {
-        // Use the command's final text so the log matches what Execute* submits to
-        // the provider. With no caller-supplied logger this is a true no-op.
+        // Use the command's final text so the log matches what Execute*
+        // submits to the provider. With no caller-supplied logger this is a true no-op.
         logger?.LogDebug("Executing report SQL:\n{Sql}", command.CommandText);
     }
 
+    /// <summary>
+    /// Enables an Oracle provider command's public <c>BindByName</c> property when available.
+    /// </summary>
+    /// <param name="cmd">The provider command to mutate.</param>
+    /// <remarks>Caches a reflection setter per command type and silently does nothing for providers without the property.</remarks>
     private static void EnableBindByName(DbCommand cmd)
     {
         var setter = BindByNameSetters.GetOrAdd(cmd.GetType(), static type =>
@@ -168,6 +211,13 @@ internal static class CommandBuilder
         setter?.Invoke(cmd);
     }
 
+    /// <summary>
+    /// Adds the Oracle output ref-cursor parameter required by a batch command.
+    /// </summary>
+    /// <param name="cmd">The Oracle command that will own the output parameter.</param>
+    /// <param name="name">The unique output binding name.</param>
+    /// <exception cref="InvalidOperationException">Thrown when the provider parameter type does not expose <c>OracleDbType.RefCursor</c>.</exception>
+    /// <remarks>Creates and appends one output parameter and caches its provider-specific type setter.</remarks>
     private static void AddRefCursorParameter(DbCommand cmd, string name)
     {
         var parameter = cmd.CreateParameter();
@@ -190,14 +240,27 @@ internal static class CommandBuilder
         cmd.Parameters.Add(parameter);
     }
 
+    /// <summary>
+    /// Removes SQLKata or dialect parameter prefixes from a binding name.
+    /// </summary>
+    /// <param name="name">The raw binding name, optionally starting with <c>@</c> or <c>:</c>.</param>
+    /// <returns>The parameter name without a provider prefix.</returns>
     private static string Normalize(string name) => name.TrimStart('@', ':');
 
+    /// <summary>
+    /// Creates and binds one provider parameter to the database command.
+    /// </summary>
+    /// <param name="cmd">The command that will own the parameter.</param>
+    /// <param name="name">The normalized parameter name without a provider prefix.</param>
+    /// <param name="value">The compiled binding value assigned to the parameter.</param>
+    /// <param name="dialect">Controls provider-specific value normalization.</param>
+    /// <remarks>Creates and appends one input parameter. SQLite decimal values are converted to its native floating-point representation.</remarks>
     private static void AddParameter(DbCommand cmd, string name, object? value, ReportDialect dialect)
     {
-        // Microsoft.Data.Sqlite binds decimal as TEXT; comparisons against affinity-less
-        // expressions (computed columns) then hit SQLite's REAL-always-<-TEXT cross-type
-        // rule and match nothing. Double is exactly SQLite's native numeric storage, so
-        // the conversion is faithful to the engine rather than lossy for it.
+        // Microsoft.Data.SQLite binds decimal as text; comparisons against
+        // affinity-less expressions (computed columns) then hit SQLite's REAL-always-<-TEXT
+        // cross-type rule and match nothing. Double is exactly SQLite's native numeric storage,
+        // so the conversion is faithful to the engine rather than lossy for it.
         if (dialect == ReportDialect.Sqlite && value is decimal dec)
             value = (double)dec;
 

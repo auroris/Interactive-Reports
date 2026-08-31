@@ -1,3 +1,8 @@
+// Named-table compilation entrypoint: recursively binds each table against the completed export
+// of its parent, memoizes shared ancestors, and produces provider-neutral execution contracts.
+// Structural normalization, schema binding, relation lowering, and terminal request overlays stay
+// separate so child tables inherit data semantics without inheriting a parent's presentation state.
+
 using System.Collections.Immutable;
 using System.Globalization;
 using System.Text.Encodings.Web;
@@ -13,10 +18,9 @@ using SqlKata;
 namespace InteractiveReport.Core.Execution;
 
 /// <summary>
-/// Compiles a named-table graph parent first. A table's <c>from</c> consumes the
-/// parent's completed relation and schema; terminal presentation never leaks into a
-/// child. SQL-backed shapes remain relations, including Pivot's data-derived wide
-/// output, so any later compositor can bind and compose normally.
+/// Compiles a report's named-table graph from parent to child. Each <c>from</c> edge consumes only
+/// the parent's bound export, while selection, sorting, highlighting, and other renderer state remain
+/// local to the declaring table. Group, chart, and data-derived pivot shapes remain composable relations.
 /// </summary>
 internal sealed class ComposableTableCompiler
 {
@@ -42,6 +46,14 @@ internal sealed class ComposableTableCompiler
         new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _visiting = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Creates a request-scoped compiler with a fixed clock and a callback for pivot-key discovery.
+    /// </summary>
+    /// <param name="definition">The authoritative report definition, SQL dialect, policies, and execution limits.</param>
+    /// <param name="document">The mutable report state containing the named-table graph and request overlay.</param>
+    /// <param name="definitionSchema">The schema exposed by the definition's base query.</param>
+    /// <param name="evaluationUtcNow">The UTC instant shared by every time-sensitive expression in this compilation.</param>
+    /// <param name="readPivotGroups">Executes the bounded grouping query used to discover dynamic pivot column keys.</param>
     public ComposableTableCompiler(
         ReportDefinition definition,
         ReportState document,
@@ -62,9 +74,20 @@ internal sealed class ComposableTableCompiler
             ReservedLogicalIds(document, definitionSchema));
     }
 
-    /// <summary>Completed plans are memoized by table id for shared ancestors.</summary>
+    /// <summary>
+    /// Gets the plans compiled so far, keyed case-insensitively by canonical table identifier.
+    /// The view grows as <see cref="Compile"/> completes additional tables.
+    /// </summary>
     public IReadOnlyDictionary<string, CompiledComposableTable> Completed => _memo;
 
+    /// <summary>
+    /// Compiles the definition source or one named table, recursively compiling and memoizing its ancestors first.
+    /// </summary>
+    /// <param name="tableId">The requested table identifier, or the reserved name <c>definition</c>.</param>
+    /// <param name="ct">Cancels recursive compilation and any pivot-discovery query.</param>
+    /// <returns>The compiled structural export and table-local instructions. Call <see cref="CompleteForTarget"/> before execution.</returns>
+    /// <remarks>Named-table compilation may normalize kind and <c>from</c> casing in the retained report document and invoke the pivot reader.</remarks>
+    /// <exception cref="ReportValidationException">Thrown for unknown tables, cycles, excessive depth or relation complexity, and invalid composables.</exception>
     public async Task<CompiledComposableTable> Compile(string tableId, CancellationToken ct)
     {
         var requested = tableId.Trim();
@@ -74,10 +97,13 @@ internal sealed class ComposableTableCompiler
     }
 
     /// <summary>
-    /// Applies the request-local search overlay to the completed active relation. It is
-    /// deliberately absent from memoized exports, so a child table never inherits a
-    /// presentation request made against its parent.
+    /// Completes a compiled table for the active request by applying search, binding table-local
+    /// renderer instructions, resolving projection support columns, and building terminal queries.
+    /// Request overlays are deliberately absent from memoized exports so descendants cannot inherit them.
     /// </summary>
+    /// <param name="plan">The structurally compiled table to finish for execution.</param>
+    /// <returns>A copy containing the active execution relation, terminal bindings, request overlay, and execution bundle.</returns>
+    /// <exception cref="ReportValidationException">Thrown when request search, pivot totals, terminal widths, or local instructions are incompatible.</exception>
     public CompiledComposableTable CompleteForTarget(CompiledComposableTable plan)
     {
         ValidatePivotTotalsCompatibility(plan);
@@ -161,6 +187,10 @@ internal sealed class ComposableTableCompiler
         };
     }
 
+    /// <summary>
+    /// Creates the root export for the report definition's opaque SQL and authoritative schema.
+    /// </summary>
+    /// <returns>A fresh, uncompleted compiled table with no named-table shapes or local presentation instructions.</returns>
     private CompiledComposableTable Definition()
     {
         var labels = ColumnBindingRules.ResolveLabels(_definition.GetEffectiveColumnLabels())
@@ -205,6 +235,16 @@ internal sealed class ComposableTableCompiler
             Ignored: []);
     }
 
+    /// <summary>
+    /// Resolves and compiles one named table, recursively importing only its parent's completed export.
+    /// </summary>
+    /// <param name="requestedId">The case-insensitive table identifier requested by the caller or child edge.</param>
+    /// <param name="depth">The one-based ancestry depth used to enforce the table nesting limit.</param>
+    /// <param name="incomingEdgePath">The source path to use when the identifier, depth, or edge is invalid.</param>
+    /// <param name="ct">Cancels recursive compilation and pivot-key discovery.</param>
+    /// <returns>The memoized compiled table containing a child-safe export and owner-local instructions.</returns>
+    /// <remarks>Canonicalizes composable kind names and <c>from</c> identifiers in the report document, invokes pivot discovery when needed, and updates the memo table on success.</remarks>
+    /// <exception cref="ReportValidationException">Thrown when the table graph, composables, schema bindings, or generated relation violate a report limit.</exception>
     private async Task<CompiledComposableTable> CompileTable(
         string requestedId,
         int depth,
@@ -402,6 +442,14 @@ internal sealed class ComposableTableCompiler
         }
     }
 
+    /// <summary>
+    /// Binds a group declaration against the current output and appends a bound aggregate relation when valid.
+    /// </summary>
+    /// <param name="source">The relation whose columns are available as dimensions and metric inputs.</param>
+    /// <param name="shape">The canonical group declaration to bind.</param>
+    /// <param name="errors">The validation list that receives missing dimensions and limit violations.</param>
+    /// <param name="ignored">The diagnostics list that receives policy-restricted or unknown columns.</param>
+    /// <returns>The new group relation and compiled shape, or the unchanged source and a null shape when binding adds errors.</returns>
     private (BoundRelationNode Relation, CompiledShape? Shape) ApplyGroup(
         BoundRelationNode source,
         CanonicalGroupShape shape,
@@ -447,6 +495,16 @@ internal sealed class ComposableTableCompiler
             CountName: countName));
     }
 
+    /// <summary>
+    /// Creates a bound grouping relation and derives the exact output contract for dimensions, count, and metrics.
+    /// </summary>
+    /// <param name="source">The relation to aggregate.</param>
+    /// <param name="outputName">The logical name for the grouped output contract.</param>
+    /// <param name="dimensions">The ordered pass-through grouping columns.</param>
+    /// <param name="metrics">The validated aggregate metrics.</param>
+    /// <param name="countName">The collision-free logical identifier for the generated row count.</param>
+    /// <param name="sourcePath">The group or pivot declaration path retained for diagnostics.</param>
+    /// <returns>A bound group node whose output carries aggregate lineage, labels, types, and inherited scalar formats.</returns>
     private static BoundGroupRelation CreateGroupNode(
         BoundRelationNode source,
         string outputName,
@@ -502,6 +560,14 @@ internal sealed class ComposableTableCompiler
             sourcePath);
     }
 
+    /// <summary>
+    /// Creates a chart relation with the fixed label/value roles expected by chart rendering.
+    /// </summary>
+    /// <param name="source">The relation containing the validated chart inputs.</param>
+    /// <param name="chart">The bound chart definition, including optional aggregation.</param>
+    /// <param name="outputName">The logical name for the chart output contract.</param>
+    /// <param name="sourcePath">The chart declaration path retained for diagnostics.</param>
+    /// <returns>A two-column bound chart relation with role lineage and applicable source formatting.</returns>
     private static BoundChartRelation CreateChartNode(
         BoundRelationNode source,
         ValidChart chart,
@@ -564,6 +630,13 @@ internal sealed class ComposableTableCompiler
             sourcePath);
     }
 
+    /// <summary>
+    /// Derives the public type and label of one grouped metric from its input column and aggregate function.
+    /// </summary>
+    /// <param name="id">The metric's authored logical identifier.</param>
+    /// <param name="input">The validated source column.</param>
+    /// <param name="function">The aggregate applied to the source column.</param>
+    /// <returns>A column model using the source type for min/max, <c>long</c> for counts, and <c>decimal</c> otherwise.</returns>
     private static ColumnModel MetricColumn(
         string id,
         ColumnModel input,
@@ -580,6 +653,19 @@ internal sealed class ComposableTableCompiler
             },
         };
 
+    /// <summary>
+    /// Binds a pivot, discovers its distinct column keys through a bounded query, and creates the wide bound relation.
+    /// </summary>
+    /// <param name="source">The relation whose columns supply pivot rows, keys, and metric inputs.</param>
+    /// <param name="shape">The canonical pivot declaration to bind.</param>
+    /// <param name="tableId">The owning table identifier used in generated output names and pivot-cell identities.</param>
+    /// <param name="shapeOrdinal">The one-based shape number across the inherited table chain.</param>
+    /// <param name="errors">The validation list that receives binding and width errors.</param>
+    /// <param name="ignored">The diagnostics list that receives policy-restricted or unknown columns.</param>
+    /// <param name="ct">Cancels pivot-key discovery.</param>
+    /// <returns>The resolved wide pivot relation and compiled shape, or the unchanged source and a null shape when initial binding adds errors.</returns>
+    /// <remarks>Executes the supplied pivot-reader callback and reserves stable generated column identifiers in the request-scoped registry.</remarks>
+    /// <exception cref="ReportValidationException">Thrown when discovery exceeds group, column, generated-width, or binding limits.</exception>
     private async Task<(BoundRelationNode Relation, CompiledShape? Shape)> ApplyPivot(
         BoundRelationNode source,
         CanonicalPivotShape shape,
@@ -806,6 +892,13 @@ internal sealed class ComposableTableCompiler
                 PivotKeys: keys));
     }
 
+    /// <summary>
+    /// Resolves a table identifier case-insensitively while preserving the document's canonical key spelling.
+    /// </summary>
+    /// <param name="requested">The table identifier supplied by the active target or a <c>from</c> edge.</param>
+    /// <param name="incomingEdgePath">The source path to report when the table does not exist.</param>
+    /// <returns>The stored identifier and its table definition.</returns>
+    /// <exception cref="ReportValidationException">Thrown when the document has no matching table.</exception>
     private (string Id, ReportTable Table) ResolveTable(string requested, string incomingEdgePath)
     {
         if (_document.Tables is not { Count: > 0 })
@@ -816,9 +909,19 @@ internal sealed class ComposableTableCompiler
         throw Validation(incomingEdgePath, $"unknown table '{requested}'");
     }
 
+    /// <summary>
+    /// Creates an empty owner-local renderer layer over an existing relation schema.
+    /// </summary>
+    /// <param name="schema">The relation schema the empty layer must preserve.</param>
+    /// <returns>A local result with no selection, ordering, highlights, breaks, or aggregates.</returns>
     private static BoundLocalResult EmptyLayer(ReportSchema schema)
         => BoundLocalResult.Empty(schema);
 
+    /// <summary>
+    /// Rejects request search or post-pivot relation operations that would make a pivot's separately compiled totals inconsistent.
+    /// </summary>
+    /// <param name="plan">The completed structural plan whose last shape may be a totals-enabled pivot.</param>
+    /// <exception cref="ReportValidationException">Thrown when totals precede a later compute, filter, or request search.</exception>
     private void ValidatePivotTotalsCompatibility(CompiledComposableTable plan)
     {
         if (plan.LastShape is not
@@ -840,6 +943,14 @@ internal sealed class ComposableTableCompiler
             throw new ReportValidationException(errors);
     }
 
+    /// <summary>
+    /// Rejects same-table computed columns, effective filters, or active request search before running pivot-key discovery.
+    /// </summary>
+    /// <param name="specification">The canonical operations declared on the pivot's table.</param>
+    /// <param name="pivot">The totals-enabled pivot being prepared.</param>
+    /// <param name="source">The pre-pivot output used to prove whether filter references are policy-restricted.</param>
+    /// <param name="tableId">The pivot's table identifier, used to determine whether request search targets it.</param>
+    /// <exception cref="ReportValidationException">Thrown when totals would be computed from a different relation than the displayed pivot.</exception>
     private void ValidatePivotTotalsBeforeDiscovery(
         CanonicalTableSpec specification,
         CanonicalPivotShape pivot,
@@ -866,6 +977,13 @@ internal sealed class ComposableTableCompiler
             throw new ReportValidationException(errors);
     }
 
+    /// <summary>
+    /// Determines whether every filter contains at least one column that policy makes non-filterable.
+    /// Such filters will be ignored by binding and therefore cannot invalidate pre-pivot totals.
+    /// </summary>
+    /// <param name="filters">The canonical filter expressions to inspect without executing them.</param>
+    /// <param name="source">The output contract used to resolve referenced column names.</param>
+    /// <returns><see langword="true"/> only when filter restrictions exist and every expression parses and references a restricted column.</returns>
     private bool AllFiltersAreStaticallyRestricted(
         ImmutableArray<CanonicalFilter> filters,
         BoundOutputContract source)
@@ -885,6 +1003,14 @@ internal sealed class ComposableTableCompiler
         return true;
     }
 
+    /// <summary>
+    /// Appends one actionable diagnostic for each operation that would run after a separately compiled pivot-totals relation.
+    /// </summary>
+    /// <param name="pivotPath">The pivot composable's source path.</param>
+    /// <param name="hasComputed">Whether computed columns would be applied after the pivot source is captured.</param>
+    /// <param name="hasFilters">Whether effective filters would be applied after the pivot source is captured.</param>
+    /// <param name="hasRequestSearch">Whether the active request adds a search overlay after the pivot source is captured.</param>
+    /// <param name="errors">The validation list to append to.</param>
     private static void AddPivotTotalsCompatibilityErrors(
         string pivotPath,
         bool hasComputed,
@@ -913,6 +1039,12 @@ internal sealed class ComposableTableCompiler
                 + "disable totals"));
     }
 
+    /// <summary>
+    /// Prevents footer aggregates from emitting the same response key as a pivot-total cell with the same function.
+    /// </summary>
+    /// <param name="plan">The active compiled plan whose last shape may provide pivot totals.</param>
+    /// <param name="terminal">The bound local result containing footer aggregates.</param>
+    /// <param name="errors">The validation list that receives response-key collision diagnostics.</param>
     private static void ValidatePivotFooterAggregateCompatibility(
         CompiledComposableTable plan,
         BoundLocalResult terminal,
@@ -960,6 +1092,12 @@ internal sealed class ComposableTableCompiler
         }
     }
 
+    /// <summary>
+    /// Removes a rule collection suffix from a rule path to recover the owning composable path.
+    /// </summary>
+    /// <param name="rulePath">A rule path such as <c>tables.x.composables[0].aggregates[1]</c>.</param>
+    /// <param name="property">The collection property name, without punctuation.</param>
+    /// <returns>The path before <c>.{property}[</c>, or the original path when that marker is absent.</returns>
     private static string OwningComposablePath(string rulePath, string property)
     {
         var marker = $".{property}[";
@@ -967,6 +1105,12 @@ internal sealed class ComposableTableCompiler
         return markerIndex < 0 ? rulePath : rulePath[..markerIndex];
     }
 
+    /// <summary>
+    /// Reports a shape whose authored metric count exceeds the compiler's bound.
+    /// </summary>
+    /// <param name="valueCount">The number of metric declarations on the shape.</param>
+    /// <param name="path">The shape composable's source path.</param>
+    /// <param name="errors">The validation list to append to.</param>
     private static void ValidateMetricCount(
         int valueCount,
         string path,
@@ -978,6 +1122,13 @@ internal sealed class ComposableTableCompiler
                 $"a shape may contain at most {MaxShapeMetrics} metrics"));
     }
 
+    /// <summary>
+    /// Reports a group or pivot-discovery projection that would exceed the generated-column bound.
+    /// </summary>
+    /// <param name="dimensionCount">The number of grouping dimensions projected unchanged.</param>
+    /// <param name="metricCount">The number of aggregate metrics projected alongside the generated count.</param>
+    /// <param name="path">The declaration path to use for the diagnostic.</param>
+    /// <param name="errors">The validation list to append to.</param>
     private void ValidateGroupedWidth(
         int dimensionCount,
         int metricCount,
@@ -991,6 +1142,12 @@ internal sealed class ComposableTableCompiler
                 $"a grouped relation may expose at most {MaxGeneratedColumns} columns"));
     }
 
+    /// <summary>
+    /// Validates footer-aggregate, control-break, and median helper projections before terminal SQL is built.
+    /// </summary>
+    /// <param name="plan">The compiled table used to recover exact declaration paths.</param>
+    /// <param name="terminal">The bound local result containing break columns and footer aggregates.</param>
+    /// <param name="errors">The validation list that receives width violations.</param>
     private void ValidateTerminalWidths(
         CompiledComposableTable plan,
         BoundLocalResult terminal,
@@ -1024,6 +1181,13 @@ internal sealed class ComposableTableCompiler
                 errors);
     }
 
+    /// <summary>
+    /// Validates the hidden ranking columns required by median metrics in a group or pivot.
+    /// </summary>
+    /// <param name="dimensions">The grouping columns that must be repeated in the ranked projection.</param>
+    /// <param name="metrics">The validated metrics whose median functions require two helper columns each.</param>
+    /// <param name="path">The declaration path to use for a width diagnostic.</param>
+    /// <param name="errors">The validation list to append to.</param>
     private static void ValidateMedianProjectionWidth(
         IEnumerable<ColumnModel> dimensions,
         IEnumerable<ValidMetric> metrics,
@@ -1035,6 +1199,13 @@ internal sealed class ComposableTableCompiler
             path,
             errors);
 
+    /// <summary>
+    /// Counts distinct projected inputs and two ranking helpers per median, then reports an excessive projection.
+    /// </summary>
+    /// <param name="dimensions">The grouping columns included in the ranked projection.</param>
+    /// <param name="metrics">Source-column and aggregate-function pairs included in the projection.</param>
+    /// <param name="path">The declaration path to use for a width diagnostic.</param>
+    /// <param name="errors">The validation list to append to.</param>
     private static void ValidateMedianProjectionWidth(
         IEnumerable<ColumnModel> dimensions,
         IEnumerable<(ColumnModel Column, AggregateFn Fn)> metrics,
@@ -1056,6 +1227,12 @@ internal sealed class ComposableTableCompiler
                 $"median ranking may expose at most {MaxGeneratedColumns} helper columns"));
     }
 
+    /// <summary>
+    /// Prefixes underscores until a generated logical identifier is unique under case-insensitive comparison.
+    /// </summary>
+    /// <param name="existing">Logical identifiers already present in the output.</param>
+    /// <param name="candidate">The preferred generated identifier.</param>
+    /// <returns>The candidate itself when available, otherwise the first underscore-prefixed variant not in <paramref name="existing"/>.</returns>
     private static string UniqueLogicalName(IEnumerable<string> existing, string candidate)
     {
         var used = new HashSet<string>(existing, StringComparer.OrdinalIgnoreCase);
@@ -1063,6 +1240,12 @@ internal sealed class ComposableTableCompiler
         return candidate;
     }
 
+    /// <summary>
+    /// Enumerates all authored identifiers that dynamic pivot columns must not claim.
+    /// </summary>
+    /// <param name="document">The report document containing computed-column and metric identifiers.</param>
+    /// <param name="definitionSchema">The base schema containing authoritative column names.</param>
+    /// <returns>Base column names followed by non-empty computed and metric identifiers in document order.</returns>
     private static IEnumerable<string> ReservedLogicalIds(
         ReportState document,
         ReportSchema definitionSchema)
@@ -1082,6 +1265,12 @@ internal sealed class ComposableTableCompiler
         }
     }
 
+    /// <summary>
+    /// Enforces dialect-specific relation nesting and cross-provider output-width limits.
+    /// </summary>
+    /// <param name="path">The operation path to use for a validation error.</param>
+    /// <param name="relation">The lowered relation whose nesting depth and schema width will be checked.</param>
+    /// <exception cref="ReportValidationException">Thrown when either complexity bound is exceeded.</exception>
     private void EnsureRelationComplexity(
         string path,
         ComposableSqlRelation relation)
@@ -1095,6 +1284,12 @@ internal sealed class ComposableTableCompiler
             throw Validation(path, $"a composed table may expose at most {MaxGeneratedColumns} columns");
     }
 
+    /// <summary>
+    /// Creates a single-error report validation exception for an exact document path.
+    /// </summary>
+    /// <param name="path">The invalid document location.</param>
+    /// <param name="message">The user-facing validation message.</param>
+    /// <returns>An exception containing one <see cref="ValidationError"/>.</returns>
     private static ReportValidationException Validation(string path, string message)
         => new([new ValidationError(path, message)]);
 
@@ -1103,14 +1298,30 @@ internal sealed class ComposableTableCompiler
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
+    /// <summary>
+    /// Serializes a provider-valued pivot key into the stable public identity used for generated columns.
+    /// </summary>
+    /// <param name="key">The ordered pivot-dimension values.</param>
+    /// <returns>A JSON array whose values use invariant, type-appropriate representations.</returns>
     internal static string PivotKeyName(object?[] key)
         => JsonSerializer.Serialize(
             key.Select(CanonicalPivotKeyPart),
             PivotKeyJson);
 
+    /// <summary>
+    /// Compares two pivot keys through the typed identity used by dynamic-column allocation.
+    /// </summary>
+    /// <param name="left">The first ordered provider-value array.</param>
+    /// <param name="right">The second ordered provider-value array.</param>
+    /// <returns><see langword="true"/> when both arrays have the same typed pivot identity; otherwise, <see langword="false"/>.</returns>
     internal static bool PivotKeysEqual(object?[] left, object?[] right)
         => PivotKeyComparer.Instance.Equals(left, right);
 
+    /// <summary>
+    /// Converts one provider value to the invariant scalar representation embedded in a public pivot-key name.
+    /// </summary>
+    /// <param name="value">The provider value to encode.</param>
+    /// <returns>An invariant string, base-64 byte representation, or <see langword="null"/> for a database null.</returns>
     private static string? CanonicalPivotKeyPart(object? value)
         => value switch
         {
@@ -1128,27 +1339,51 @@ internal sealed class ComposableTableCompiler
             _ => value.ToString(),
         };
 
+    /// <summary>
+    /// Formats one pivot-key value for a human-readable generated column label.
+    /// </summary>
+    /// <param name="value">The provider value to display.</param>
+    /// <returns><c>(blank)</c> for null; otherwise, the invariant string representation or an empty fallback.</returns>
     private static string FormatPivotKeyPart(object? value)
         => value is null ? "(blank)" : Convert.ToString(value, CultureInfo.InvariantCulture) ?? "";
 
+    /// <summary>Compares provider-value arrays through the pivot registry's typed-key identity.</summary>
     private sealed class PivotKeyComparer : IEqualityComparer<object?[]>
     {
         public static readonly PivotKeyComparer Instance = new();
 
+        /// <summary>
+        /// Determines whether two non-null arrays produce the same typed pivot key.
+        /// </summary>
+        /// <param name="left">The first pivot-key value array.</param>
+        /// <param name="right">The second pivot-key value array.</param>
+        /// <returns><see langword="true"/> when both non-null arrays have equal typed identities; otherwise, <see langword="false"/>.</returns>
         public bool Equals(object?[]? left, object?[]? right)
         {
             if (left is null || right is null || left.Length != right.Length) return false;
             return BoundPivotTypedKey.Create(left).Equals(BoundPivotTypedKey.Create(right));
         }
 
+        /// <summary>
+        /// Returns the typed pivot identity's hash code.
+        /// </summary>
+        /// <param name="key">The non-null provider-value array to hash.</param>
+        /// <returns>A hash code consistent with this comparer's typed-key equality.</returns>
         public int GetHashCode(object?[] key)
             => BoundPivotTypedKey.Create(key).GetHashCode();
     }
 
+    /// <summary>Provides a deterministic order for discovered pivot keys independent of provider row order.</summary>
     private sealed class PivotKeyOrdering : IComparer<object?[]>
     {
         public static readonly PivotKeyOrdering Instance = new();
 
+        /// <summary>
+        /// Compares arrays lexicographically by provider value, with null arrays first and array length as the final tie-breaker.
+        /// </summary>
+        /// <param name="left">The first pivot-key array.</param>
+        /// <param name="right">The second pivot-key array.</param>
+        /// <returns>A negative value when <paramref name="left"/> sorts first, zero when equivalent for ordering, or a positive value otherwise.</returns>
         public int Compare(object?[]? left, object?[]? right)
         {
             if (left is null || right is null) return (left is null).CompareTo(right is null);
@@ -1160,6 +1395,13 @@ internal sealed class ComposableTableCompiler
             return left.Length.CompareTo(right.Length);
         }
 
+        /// <summary>
+        /// Compares one key position using null, ordinal string, lexicographic byte, native comparable,
+        /// invariant-text, and runtime-type ordering in that sequence.
+        /// </summary>
+        /// <param name="left">The first provider value.</param>
+        /// <param name="right">The second provider value.</param>
+        /// <returns>A signed sort comparison with null values ordered first.</returns>
         private static int ComparePart(object? left, object? right)
         {
             if (left is null || right is null) return (left is not null).CompareTo(right is not null);
@@ -1196,6 +1438,11 @@ internal sealed class ComposableTableCompiler
 /// The only state a child table may consume. It contains the completed relational
 /// contract and inherited structural metadata, but no owner-local presentation.
 /// </summary>
+/// <param name="Bound">The immutable bound relation and output contract exported to descendants.</param>
+/// <param name="ShapeCount">The number of structural shapes applied across the ancestry.</param>
+/// <param name="RelationStages">The lowered relation depth recorded at compilation.</param>
+/// <param name="ComputedRuleCount">The cumulative number of authored computed-column rules.</param>
+/// <param name="FilterRuleCount">The cumulative number of authored filter rules.</param>
 internal sealed record CompiledTableExport(
     BoundTableExport Bound,
     int ShapeCount,
@@ -1203,7 +1450,7 @@ internal sealed record CompiledTableExport(
     int ComputedRuleCount,
     int FilterRuleCount)
 {
-    /// <summary>Inherited scalar metadata; every value contains only Mask.</summary>
+    /// <summary>Gets exported scalar format metadata keyed by logical column identifier.</summary>
     public IReadOnlyDictionary<string, ColumnFormat> Formats
         => BoundContractMaps.Formats(Bound.Output);
 }
@@ -1212,6 +1459,13 @@ internal sealed record CompiledTableExport(
 /// Instructions and renderer state owned by one named table. This value is reset at
 /// every <c>from</c> edge and is never part of a child's imported relation.
 /// </summary>
+/// <param name="ExecutionNode">The request-specific bound relation, or null before target completion.</param>
+/// <param name="ExecutionRelation">The lowered request-specific relation, or null before target completion.</param>
+/// <param name="ExecutionBundle">Terminal data and aggregate queries, or null before target completion.</param>
+/// <param name="RequestOverlay">Bound paging and search inputs, or null before target completion.</param>
+/// <param name="Shape">The last shape declared by this table, if any.</param>
+/// <param name="Terminal">The bound renderer instructions owned by this table.</param>
+/// <param name="Instructions">The canonical local declarations awaiting or used for terminal binding.</param>
 internal sealed record CompiledTableLocalResult(
     BoundRelationNode? ExecutionNode,
     ComposableSqlRelation? ExecutionRelation,
@@ -1221,6 +1475,14 @@ internal sealed record CompiledTableLocalResult(
     BoundLocalResult Terminal,
     CanonicalLocalResult Instructions);
 
+/// <summary>
+/// Combines the child-safe structural export with owner-local state and non-fatal binding diagnostics.
+/// Before SQL execution, <see cref="ComposableTableCompiler.CompleteForTarget"/> supplies the request-specific fields.
+/// </summary>
+/// <param name="Export">The relational contract descendants are allowed to consume.</param>
+/// <param name="Local">The declaring table's request and renderer state.</param>
+/// <param name="SearchApplied">Whether request search was added to the active execution relation.</param>
+/// <param name="Ignored">Non-fatal diagnostics for unknown or policy-restricted declarations.</param>
 internal sealed record CompiledComposableTable(
     CompiledTableExport Export,
     CompiledTableLocalResult Local,
@@ -1237,37 +1499,62 @@ internal sealed record CompiledComposableTable(
         => Local.ExecutionRelation
             ?? throw new InvalidOperationException(
                 "The table must be completed for an active target before SQL execution.");
+    /// <summary>Gets the number of group, pivot, or chart shapes in the inherited relation.</summary>
     public int ShapeCount => Export.ShapeCount;
+    /// <summary>Gets the relation depth recorded when the export was compiled.</summary>
     public int RelationStages => Export.RelationStages;
+    /// <summary>Gets the cumulative number of authored computed-column rules.</summary>
     public int ComputedRuleCount => Export.ComputedRuleCount;
+    /// <summary>Gets the cumulative number of authored filter rules.</summary>
     public int FilterRuleCount => Export.FilterRuleCount;
+    /// <summary>Gets effective labels keyed case-insensitively by logical output identifier.</summary>
     public IReadOnlyDictionary<string, string> Labels
         => BoundContractMaps.Labels(Export.Bound.Relation.Output);
-    /// <summary>Full effective formats owned by the active table.</summary>
+    /// <summary>Gets full effective formats declared on output columns owned by the active table.</summary>
     public IReadOnlyDictionary<string, ColumnFormat> Formats
         => BoundContractMaps.Formats(Export.Bound.Relation.Output);
+    /// <summary>Gets each output column's scalar format-lineage source, when one is inherited.</summary>
     public IReadOnlyDictionary<string, string?> FormatSources
         => BoundContractMaps.FormatSources(Export.Bound.Relation.Output);
+    /// <summary>Gets the last shape declared on this table, excluding inherited parent shapes.</summary>
     public CompiledShape? LastShape => Local.Shape;
+    /// <summary>Gets the active table's bound selection, ordering, highlighting, breaks, and footer aggregates.</summary>
     public BoundLocalResult Terminal => Local.Terminal;
+    /// <summary>Gets the terminal query bundle produced during target completion.</summary>
+    /// <exception cref="InvalidOperationException">Thrown before the table has been completed for an active target.</exception>
     public TerminalExecutionBundle ExecutionBundle
         => Local.ExecutionBundle
             ?? throw new InvalidOperationException(
                 "The table must be completed for an active target before execution.");
+    /// <summary>Gets the paging and search overlay bound during target completion.</summary>
+    /// <exception cref="InvalidOperationException">Thrown before the table has been completed for an active target.</exception>
     public BoundRequestOverlay RequestOverlay
         => Local.RequestOverlay
             ?? throw new InvalidOperationException(
                 "The table must be completed for an active target before execution.");
 }
 
+/// <summary>
+/// Projects immutable bound-column metadata into the dictionaries and mutable protocol models used by renderers.
+/// </summary>
 internal static class BoundContractMaps
 {
+    /// <summary>
+    /// Builds a case-insensitive map of logical output identifiers to effective labels.
+    /// </summary>
+    /// <param name="contract">The bound output whose columns supply identifiers and labels.</param>
+    /// <returns>An immutable label map containing every output column.</returns>
     public static IReadOnlyDictionary<string, string> Labels(BoundOutputContract contract)
         => contract.Columns.ToImmutableDictionary(
             column => column.LogicalId,
             column => column.EffectiveLabel,
             StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Builds a case-insensitive map of formats declared directly on output columns.
+    /// </summary>
+    /// <param name="contract">The bound output whose local formats will be projected.</param>
+    /// <returns>An immutable map containing only columns with a non-null local format.</returns>
     public static IReadOnlyDictionary<string, ColumnFormat> Formats(BoundOutputContract contract)
     {
         var result = ImmutableDictionary.CreateBuilder<string, ColumnFormat>(
@@ -1284,12 +1571,22 @@ internal static class BoundContractMaps
         return result.ToImmutable();
     }
 
+    /// <summary>
+    /// Builds a case-insensitive map from each output identifier to its inherited scalar-format source.
+    /// </summary>
+    /// <param name="contract">The bound output whose format lineage will be projected.</param>
+    /// <returns>An immutable map containing every output identifier and a possibly null source identifier.</returns>
     public static IReadOnlyDictionary<string, string?> FormatSources(BoundOutputContract contract)
         => contract.Columns.ToImmutableDictionary(
             column => column.LogicalId,
             column => column.FormatSourceLogicalId,
             StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Copies an immutable canonical format into the mutable model serialized to clients.
+    /// </summary>
+    /// <param name="value">The canonical format to copy.</param>
+    /// <returns>A new protocol format, including a mutable class list when classes are present.</returns>
     private static ColumnFormat ToColumnFormat(CanonicalColumnFormat value)
         => new()
         {
@@ -1308,6 +1605,21 @@ internal static class BoundContractMaps
         };
 }
 
+/// <summary>
+/// Captures the bound renderer metadata for the most recent group, pivot, or chart shape declared by a table.
+/// </summary>
+/// <param name="Kind">The shape family.</param>
+/// <param name="Path">The source path of the shape composable.</param>
+/// <param name="Dimensions">Bound group dimensions or pivot row dimensions.</param>
+/// <param name="Metrics">Bound aggregate metrics, if the shape defines them.</param>
+/// <param name="CountName">The collision-free count identifier generated for group or pivot aggregation.</param>
+/// <param name="PivotColumns">The bound dimensions whose values become pivot column groups.</param>
+/// <param name="PivotTotals">Whether the response should include the separately compiled pivot totals relation.</param>
+/// <param name="Chart">The validated chart roles and display options.</param>
+/// <param name="PivotTotalsRelation">The relation used to compute totals by pivot column key.</param>
+/// <param name="PivotKeys">The discovered keys and generated cell columns.</param>
+/// <param name="HasPostShapeComputed">Whether the owning table adds computed columns after the pivot.</param>
+/// <param name="HasPostShapeFilters">Whether the owning table adds effective filters after the pivot.</param>
 internal sealed record CompiledShape(
     ShapeKind Kind,
     string Path,
@@ -1322,9 +1634,13 @@ internal sealed record CompiledShape(
     bool HasPostShapeComputed = false,
     bool HasPostShapeFilters = false);
 
+/// <summary>Identifies the structural shape applied by a composable table.</summary>
 internal enum ShapeKind
 {
+    /// <summary>Groups rows by dimensions and produces count and metric columns.</summary>
     Group,
+    /// <summary>Turns distinct dimension values into dynamically generated metric columns.</summary>
     Pivot,
+    /// <summary>Projects data into the chart renderer's label and value roles.</summary>
     Chart,
 }

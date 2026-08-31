@@ -2,7 +2,7 @@ using Microsoft.Data.Sqlite;
 
 namespace Workbench;
 
-/// <summary>Deterministic sample data (seeded Random) so every checkout demos identically.</summary>
+/// <summary>Creates deterministic sample data so every workbench checkout demonstrates the same reports.</summary>
 public static class SampleData
 {
     private static readonly string[] Customers =
@@ -14,6 +14,11 @@ public static class SampleData
     private static readonly string[] Regions = ["NORTH", "SOUTH", "EAST", "WEST"];
     private static readonly string[] Statuses = ["NEW", "PENDING", "SHIPPED", "CANCELLED"];
 
+    /// <summary>
+    /// Creates the sample SQLite database and inserts 500 deterministic orders when the table is empty.
+    /// </summary>
+    /// <param name="dbPath">The SQLite database-file path to initialize.</param>
+    /// <remarks>Creates the parent directory and database file when absent. Existing non-empty order data is left unchanged.</remarks>
     public static void EnsureSeeded(string dbPath)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);

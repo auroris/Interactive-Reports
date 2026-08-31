@@ -8,7 +8,7 @@ using SqlKata;
 namespace InteractiveReport.Core.Composition;
 
 /// <summary>
-/// The only SQLKata backend for immutable bound relation nodes. The current physical
+/// Implements the only SQLKata backend for immutable bound relation nodes. The current physical
 /// alias allocator is deliberately retained; this visitor changes the logical
 /// boundary, not the alias scheme.
 /// </summary>
@@ -17,6 +17,11 @@ internal sealed class SqlKataRelationLowerer
     private readonly ReportDialect _dialect;
     private readonly DateTime _evaluationUtcNow;
 
+    /// <summary>
+    /// Initializes a lowering visitor for one dialect and one request-stable evaluation time.
+    /// </summary>
+    /// <param name="dialect">The database dialect whose SQL rules apply.</param>
+    /// <param name="evaluationUtcNow">The fixed UTC timestamp used to evaluate time-sensitive expressions consistently throughout the request.</param>
     public SqlKataRelationLowerer(
         ReportDialect dialect,
         DateTime evaluationUtcNow)
@@ -25,6 +30,13 @@ internal sealed class SqlKataRelationLowerer
         _evaluationUtcNow = evaluationUtcNow;
     }
 
+    /// <summary>
+    /// Lowers the bound plan into the query form used by provider-neutral SQL composition.
+    /// </summary>
+    /// <param name="node">The immutable logical relation root to visit recursively.</param>
+    /// <returns>A fresh SQLKata query tree, logical output contract, and physical-column mapping.</returns>
+    /// <exception cref="InvalidOperationException">Thrown for an unsupported node type or inconsistent physical output contract.</exception>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="node"/> is <see langword="null"/>.</exception>
     public LoweredRelation Lower(BoundRelationNode node)
     {
         ArgumentNullException.ThrowIfNull(node);
@@ -47,6 +59,12 @@ internal sealed class SqlKataRelationLowerer
         return lowered;
     }
 
+    /// <summary>
+    /// Starts lowering from an opaque configured SQL source and its bound output contract.
+    /// </summary>
+    /// <param name="node">The bound source carrying SQL, dialect, definition name, and output.</param>
+    /// <returns>A composable source query with allocated physical column names.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when the bound source dialect differs from this lowerer's dialect.</exception>
     private LoweredRelation LowerSource(BoundOpaqueSqlSource node)
     {
         if (node.Dialect != _dialect)
@@ -64,6 +82,11 @@ internal sealed class SqlKataRelationLowerer
             node.Output);
     }
 
+    /// <summary>
+    /// Re-lowers an exported parent relation while substituting the reference's inherited output contract.
+    /// </summary>
+    /// <param name="node">The export reference and target relation.</param>
+    /// <returns>A fresh physical query tree exposing the reference output.</returns>
     private LoweredRelation LowerExportReference(BoundExportReference node)
     {
         // Re-lowering the immutable target gives each child a fresh Query tree and
@@ -76,6 +99,11 @@ internal sealed class SqlKataRelationLowerer
         };
     }
 
+    /// <summary>
+    /// Lowers a computed-column relation by emitting its bound expression over the lowered input.
+    /// </summary>
+    /// <param name="node">The bound compute relation containing one output column.</param>
+    /// <returns>The input query with the computed projection stage applied.</returns>
     private LoweredRelation LowerCompute(BoundComputeRelation node)
     {
         var input = Lower(node.Input);
@@ -91,6 +119,11 @@ internal sealed class SqlKataRelationLowerer
         return FromComposable(relation, node.Output);
     }
 
+    /// <summary>
+    /// Lowers bound predicates into SQL WHERE stages over the lowered input.
+    /// </summary>
+    /// <param name="node">The bound filter relation containing zero or more predicates.</param>
+    /// <returns>The filtered query with the node's output contract.</returns>
     private LoweredRelation LowerFilter(BoundFilterRelation node)
     {
         var input = Lower(node.Input);
@@ -107,6 +140,11 @@ internal sealed class SqlKataRelationLowerer
         return FromComposable(relation, node.Output);
     }
 
+    /// <summary>
+    /// Lowers grouping dimensions and metrics into an aggregate relation.
+    /// </summary>
+    /// <param name="node">The bound group relation, including its stable count column id.</param>
+    /// <returns>The grouped query with synthetic metric columns mapped physically.</returns>
     private LoweredRelation LowerGroup(BoundGroupRelation node)
     {
         var input = Lower(node.Input);
@@ -129,6 +167,11 @@ internal sealed class SqlKataRelationLowerer
         return FromComposable(relation, node.Output);
     }
 
+    /// <summary>
+    /// Lowers a chart relation to its category-and-value tabular SQL shape.
+    /// </summary>
+    /// <param name="node">The bound chart relation and normalized chart specification.</param>
+    /// <returns>The chart-shaped query with the node's output contract.</returns>
     private LoweredRelation LowerChart(BoundChartRelation node)
     {
         var input = Lower(node.Input);
@@ -140,6 +183,11 @@ internal sealed class SqlKataRelationLowerer
         return FromComposable(relation, node.Output);
     }
 
+    /// <summary>
+    /// Lowers a resolved dynamic pivot using the discovery keys already bound into the plan.
+    /// </summary>
+    /// <param name="node">The resolved pivot containing row dimensions, column dimensions, metrics, and dynamic cells.</param>
+    /// <returns>The wide pivot query with one physical projection per resolved cell.</returns>
     private LoweredRelation LowerPivot(BoundResolvedPivotRelation node)
     {
         var grouped = Lower(node.Discovery);
@@ -173,6 +221,11 @@ internal sealed class SqlKataRelationLowerer
         return FromComposable(relation, node.Output);
     }
 
+    /// <summary>
+    /// Applies a metadata-only output contract without adding a SQL stage.
+    /// </summary>
+    /// <param name="node">The metadata relation containing labels and formats already reflected in its output.</param>
+    /// <returns>The unchanged input query with the metadata output contract.</returns>
     private LoweredRelation LowerMetadata(BoundMetadataRelation node)
     {
         var input = Lower(node.Input);
@@ -183,6 +236,11 @@ internal sealed class SqlKataRelationLowerer
         };
     }
 
+    /// <summary>
+    /// Applies the bound toolbar search predicate to eligible text columns.
+    /// </summary>
+    /// <param name="node">The search relation and normalized search text.</param>
+    /// <returns>The searched query with the node's output contract.</returns>
     private LoweredRelation LowerSearch(BoundSearchRelation node)
     {
         var input = Lower(node.Input);
@@ -192,6 +250,12 @@ internal sealed class SqlKataRelationLowerer
         return FromComposable(relation, node.Output);
     }
 
+    /// <summary>
+    /// Converts a composable SQL relation back into a lowered relation with the supplied public contract.
+    /// </summary>
+    /// <param name="relation">The composable query and physical-name mapping.</param>
+    /// <param name="output">The logical output contract to expose.</param>
+    /// <returns>A lowered relation that preserves the planner's allocator, nesting depth, and physical map.</returns>
     private static LoweredRelation FromComposable(
         ComposableSqlRelation relation,
         BoundOutputContract output)
@@ -204,6 +268,11 @@ internal sealed class SqlKataRelationLowerer
             output.Name,
             relation.NestingDepth);
 
+    /// <summary>
+    /// Verifies that every logical output column has exactly one physical mapping.
+    /// </summary>
+    /// <param name="relation">The completed lowering result to verify.</param>
+    /// <exception cref="InvalidOperationException">Thrown when mapping count differs from output width or a logical id is unmapped.</exception>
     private static void EnsurePhysicalContract(LoweredRelation relation)
     {
         if (relation.PhysicalColumns.Count != relation.Output.Count)
@@ -220,7 +289,7 @@ internal sealed class SqlKataRelationLowerer
 }
 
 /// <summary>
-/// SQLKata result of visiting one bound relation. Public order and presentation remain
+/// Contains the SQLKata result of visiting one bound relation. Public order and presentation remain
 /// in Output; PhysicalColumns is only a lowering concern.
 /// </summary>
 internal sealed record LoweredRelation(
@@ -231,8 +300,13 @@ internal sealed record LoweredRelation(
     string SchemaName,
     int StageCount)
 {
+    /// <summary>Gets the public report schema projected from the immutable logical output contract.</summary>
     public ReportSchema Schema => Output.ToReportSchema();
 
+    /// <summary>
+    /// Wraps a lowered relation as a composable SQL relation without changing its contract.
+    /// </summary>
+    /// <returns>A composable wrapper sharing this query, allocator, physical map, and stage count.</returns>
     internal ComposableSqlRelation AsComposable()
         => new(
             Query,

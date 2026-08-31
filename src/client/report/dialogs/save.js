@@ -1,4 +1,4 @@
-// The Save / Save As dialog for saved reports.
+// Saved-report authoring dialog: handles Save, Save As, collision replacement, and administrative publication fields.
 
 import { el, labeled } from "../../core/dom.js";
 import { confirmDialog, openDialog } from "../../core/dialog.js";
@@ -10,6 +10,15 @@ import {
     saveReport,
 } from "../saved.js";
 
+/**
+ * Opens Save or Save As and routes create, update, and title-collision replacement through the saved-report controller.
+ *
+ * @param {object} w - The report controller containing current saved metadata, cached summaries, identity hints, and state.
+ * @param {{asNew: boolean}} options - Whether the dialog must create a new report instead of updating a manageable current report.
+ * @returns {void} No value.
+ *
+ * Side effects: opens modeless and modal dialogs and may perform saved-report network writes, update caches, and show errors.
+ */
 export function saveDialog(w, { asNew }) {
     const updating = !asNew && canManageCurrentSaved(w);
     const titleInp = el("input", {

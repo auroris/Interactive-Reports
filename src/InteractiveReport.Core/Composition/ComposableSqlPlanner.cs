@@ -1,3 +1,7 @@
+// SQL planning entrypoint: translates a bound relation plan into SqlKata queries without
+// accepting raw client SQL. Each relational phase produces an explicit query boundary so
+// provider compilation remains parameterized and portable.
+
 using InteractiveReport.Core.Expressions;
 using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Model;
@@ -8,7 +12,7 @@ using SqlKata;
 namespace InteractiveReport.Core.Composition;
 
 /// <summary>
-/// One composable SQL relation. Public column names remain protocol identities while
+/// Contains one composable SQL relation. Public column names remain protocol identities while
 /// PhysicalColumns names the bounded, server-authored aliases used inside SQL. Keeping
 /// those namespaces separate is essential for Pivot cells, whose public names contain
 /// data-derived JSON and must never be interpolated as SQL identifiers.
@@ -21,6 +25,12 @@ internal sealed record ComposableSqlRelation(
     string SchemaName,
     int NestingDepth)
 {
+    /// <summary>
+    /// Creates the initial composable SQL relation for a report definition.
+    /// </summary>
+    /// <param name="definition">Supplies trusted base SQL, canonical report name, and resolved dialect.</param>
+    /// <param name="schema">The discovered source columns in public order.</param>
+    /// <returns>A relation that projects every database-authored column to a fresh server-owned physical alias.</returns>
     public static ComposableSqlRelation Definition(
         ReportDefinition definition,
         ReportSchema schema)
@@ -32,9 +42,9 @@ internal sealed record ComposableSqlRelation(
             $"({definition.Sql}) {SqlKataSyntax.BaseRelationAlias}"));
         foreach (var column in schema.Columns)
         {
-            // Database-authored names may contain SqlKata structure such as dots,
-            // " as ", or even "*". Quote each exactly once at the definition
-            // boundary and expose only generated identifiers to later compositors.
+            // Database-authored names may contain SqlKata structure such as dots, "
+            // as ", or even "*". Quote each exactly once at the definition boundary and expose
+            // only generated identifiers to later compositors.
             var alias = names.Column();
             query.SelectRaw(
                 $"{SqlKataSyntax.Identifier(dialect, column.Name)} AS {SqlKataSyntax.Identifier(dialect, alias)}");
@@ -50,13 +60,17 @@ internal sealed record ComposableSqlRelation(
     }
 }
 
-/// <summary>Short portable aliases. No caller or database value enters these names.</summary>
+/// <summary>Allocates short portable aliases; no caller or database value enters the generated names.</summary>
 internal sealed class SqlPhysicalNameAllocator
 {
     private readonly HashSet<string> _columns;
     private int _column;
     private int _relation;
 
+    /// <summary>
+    /// Initializes a per-relation allocator with physical names that must not be reused.
+    /// </summary>
+    /// <param name="reservedColumns">Physical column names the allocator must not reuse; defaults to an empty set.</param>
     public SqlPhysicalNameAllocator(IEnumerable<string>? reservedColumns = null)
     {
         _columns = new HashSet<string>(
@@ -64,6 +78,10 @@ internal sealed class SqlPhysicalNameAllocator
             StringComparer.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// Allocates the next collision-free physical column alias.
+    /// </summary>
+    /// <returns>A collision-free <c>__ircN</c> alias and reserves it for later allocations.</returns>
     public string Column()
     {
         string candidate;
@@ -72,11 +90,26 @@ internal sealed class SqlPhysicalNameAllocator
         return candidate;
     }
 
+    /// <summary>
+    /// Allocates the next collision-free relation alias.
+    /// </summary>
+    /// <returns>The next <c>ir_rel_N</c> alias from this allocator.</returns>
     public string Relation() => $"ir_rel_{_relation++}";
 }
 
+/// <summary>
+/// Lowers bound relational stages to provider-neutral SQLKata query trees while maintaining a strict
+/// separation between public logical ids and generated physical identifiers.
+/// </summary>
 internal static class ComposableSqlPlanner
 {
+    /// <summary>
+    /// Adds request-local text search predicates to a composable SQL relation.
+    /// </summary>
+    /// <param name="source">The completed relation to wrap in a searchable derived table.</param>
+    /// <param name="search">Optional toolbar text, trimmed before binding.</param>
+    /// <returns>The original relation when search is blank or no text column exists; otherwise, a filtered relation.</returns>
+    /// <remarks>Allocates a relation alias from <paramref name="source"/>'s physical-name allocator.</remarks>
     public static ComposableSqlRelation ApplySearch(
         ComposableSqlRelation source,
         string? search)
@@ -100,6 +133,15 @@ internal static class ComposableSqlPlanner
         return source with { Query = query, NestingDepth = source.NestingDepth + 1 };
     }
 
+    /// <summary>
+    /// Adds one bound computed-column projection to a composable SQL relation.
+    /// </summary>
+    /// <param name="source">The completed relation to project into a new computation stage.</param>
+    /// <param name="rule">The already-bound value expression and synthetic output column.</param>
+    /// <param name="dialect">The database dialect whose SQL rules apply.</param>
+    /// <param name="evaluationUtcNow">The fixed UTC timestamp used to evaluate time-sensitive expressions consistently throughout the request.</param>
+    /// <returns>A relation exposing every input column plus the computed column.</returns>
+    /// <remarks>Allocates one column and two relation aliases from <paramref name="source"/>'s allocator.</remarks>
     public static ComposableSqlRelation ApplyComputed(
         ComposableSqlRelation source,
         CompiledRule<DefineColumnEffect> rule,
@@ -133,6 +175,15 @@ internal static class ComposableSqlPlanner
         };
     }
 
+    /// <summary>
+    /// Adds bound filter predicates to a composable SQL relation.
+    /// </summary>
+    /// <param name="source">The completed relation to wrap in a filter stage.</param>
+    /// <param name="predicates">Already-bound predicates applied with AND semantics.</param>
+    /// <param name="dialect">The database dialect whose SQL rules apply.</param>
+    /// <param name="evaluationUtcNow">The fixed UTC timestamp used to evaluate time-sensitive expressions consistently throughout the request.</param>
+    /// <returns>The original relation for an empty predicate list; otherwise, a filtered relation with the same schema.</returns>
+    /// <remarks>Allocates a relation alias when predicates are present.</remarks>
     public static ComposableSqlRelation ApplyFilters(
         ComposableSqlRelation source,
         IReadOnlyList<CompiledRule<IncludeRowEffect>> predicates,
@@ -155,6 +206,17 @@ internal static class ComposableSqlPlanner
         };
     }
 
+    /// <summary>
+    /// Composes a grouped SQL relation from dimensions, metrics, and the count column.
+    /// </summary>
+    /// <param name="source">The completed relation whose rows will be grouped.</param>
+    /// <param name="schemaName">The logical name assigned to the grouped output schema.</param>
+    /// <param name="dimensions">Grouping columns in public output order.</param>
+    /// <param name="metrics">Validated aggregate metrics in public output order.</param>
+    /// <param name="dialect">The database dialect whose SQL rules apply.</param>
+    /// <param name="countName">The logical output name assigned to the generated count column; defaults to <c>"__count"</c>.</param>
+    /// <returns>A grouped relation exposing dimensions, count, then metrics.</returns>
+    /// <remarks>Uses a ranked two-stage plan when any metric requests median and advances the shared physical-name allocator.</remarks>
     public static ComposableSqlRelation Group(
         ComposableSqlRelation source,
         string schemaName,
@@ -212,6 +274,15 @@ internal static class ComposableSqlPlanner
             source.NestingDepth + 1);
     }
 
+    /// <summary>
+    /// Composes the projection and aggregation required by a chart terminal.
+    /// </summary>
+    /// <param name="source">The completed relation supplying chart rows.</param>
+    /// <param name="schemaName">The logical name assigned to the chart output schema.</param>
+    /// <param name="chart">The validated label, value, and optional aggregate definition.</param>
+    /// <param name="dialect">The database dialect whose SQL rules apply.</param>
+    /// <returns>A two-column label/value relation, grouped when the chart has an aggregate.</returns>
+    /// <remarks>Uses the ranked median plan for median charts and advances the shared physical-name allocator.</remarks>
     public static ComposableSqlRelation Chart(
         ComposableSqlRelation source,
         string schemaName,
@@ -265,6 +336,18 @@ internal static class ComposableSqlPlanner
             source.NestingDepth + 1);
     }
 
+    /// <summary>
+    /// Composes the conditional-aggregation query for a resolved wide pivot.
+    /// </summary>
+    /// <param name="grouped">The grouped query that supplies rows for the pivot projection.</param>
+    /// <param name="schemaName">The logical name assigned to the wide output schema.</param>
+    /// <param name="rowDimensions">The ordered dimensions that identify grouping or pivot rows.</param>
+    /// <param name="columnDimensions">The ordered pivot dimensions that identify output columns.</param>
+    /// <param name="metrics">The pivot metric definitions to aggregate.</param>
+    /// <param name="keys">The canonical pivot keys that identify output cells.</param>
+    /// <param name="dialect">The database dialect whose SQL rules apply.</param>
+    /// <returns>A wide relation containing row dimensions followed by all registered dynamic cells.</returns>
+    /// <remarks>Embeds only server-authored identifier syntax; typed key values remain positional bindings.</remarks>
     public static ComposableSqlRelation PivotWide(
         ComposableSqlRelation grouped,
         string schemaName,
@@ -329,14 +412,35 @@ internal static class ComposableSqlPlanner
             grouped.NestingDepth + 1);
     }
 
+    /// <summary>
+    /// Projects the selected public columns from a freshly aliased wrapper around the source relation.
+    /// </summary>
+    /// <param name="source">The relation to wrap as a derived table.</param>
+    /// <param name="columns">The public columns to project in result ordinal order.</param>
+    /// <returns>A fresh SQLKata projection using only mapped physical names.</returns>
     public static Query Project(
         ComposableSqlRelation source,
         IReadOnlyList<ColumnModel> columns)
         => Addressable(source).Select(columns.Select(column => source.PhysicalColumns[column.Name]).ToArray());
 
+    /// <summary>
+    /// Wraps a cloned relation query in a freshly allocated derived-table alias.
+    /// </summary>
+    /// <param name="source">The relation whose physical projections need an addressable scope.</param>
+    /// <returns>A new outer SQLKata query.</returns>
     private static Query Addressable(ComposableSqlRelation source)
         => new Query().From(source.Query.Clone().As(source.Names.Relation()));
 
+    /// <summary>
+    /// Composes a grouped relation with dialect-specific median calculations.
+    /// </summary>
+    /// <param name="source">The completed relation whose rows will be ranked and grouped.</param>
+    /// <param name="schemaName">The logical name assigned to the grouped output schema.</param>
+    /// <param name="dimensions">The ordered dimensions that identify grouping or pivot rows.</param>
+    /// <param name="metrics">The pivot metric definitions to aggregate.</param>
+    /// <param name="dialect">The database dialect whose SQL rules apply.</param>
+    /// <param name="countName">The logical output name assigned to the generated count column.</param>
+    /// <returns>A two-stage grouped relation with exact odd/even medians and ordinary aggregates.</returns>
     private static ComposableSqlRelation GroupWithMedian(
         ComposableSqlRelation source,
         string schemaName,
@@ -428,6 +532,14 @@ internal static class ComposableSqlPlanner
             source.NestingDepth + 2);
     }
 
+    /// <summary>
+    /// Composes the chart projection when one or more metrics use median.
+    /// </summary>
+    /// <param name="source">The completed relation supplying chart rows.</param>
+    /// <param name="schemaName">The logical name assigned to the chart output schema.</param>
+    /// <param name="chart">The validated median chart definition.</param>
+    /// <param name="dialect">The database dialect whose SQL rules apply.</param>
+    /// <returns>A two-column label/value relation projected from a median group.</returns>
     private static ComposableSqlRelation MedianChart(
         ComposableSqlRelation source,
         string schemaName,
@@ -473,14 +585,33 @@ internal static class ComposableSqlPlanner
             grouped.NestingDepth + 1);
     }
 
+    /// <summary>
+    /// Builds the dialect-specific SQL expression for one median row position.
+    /// </summary>
+    /// <param name="countAlias">The quoted SQL alias of the generated count expression.</param>
+    /// <param name="add">The increment applied when calculating the median position.</param>
+    /// <param name="dialect">The database dialect whose SQL rules apply.</param>
+    /// <returns>The SQL expression for one median row position.</returns>
     private static string HalfPosition(string countAlias, int add, ReportDialect dialect)
         => dialect == ReportDialect.Oracle
             ? $"FLOOR(({Identifier(dialect, countAlias)} + {add}) / 2)"
             : $"(({Identifier(dialect, countAlias)} + {add}) / 2)";
 
+    /// <summary>
+    /// Quotes a physical SQL identifier according to the selected dialect.
+    /// </summary>
+    /// <param name="dialect">The database dialect whose SQL rules apply.</param>
+    /// <param name="name">A server-allocated physical column or relation name.</param>
+    /// <returns>A dialect-quoted SQL identifier safe for raw SQL fragments.</returns>
     private static string Identifier(ReportDialect dialect, string name)
         => SqlKataSyntax.Identifier(dialect, name);
 
+    /// <summary>
+    /// Allocates a case-insensitively unique logical column name.
+    /// </summary>
+    /// <param name="existing">Logical names already used in the output scope.</param>
+    /// <param name="candidate">The preferred generated name.</param>
+    /// <returns>The unique logical name text.</returns>
     private static string UniqueLogicalName(IEnumerable<string> existing, string candidate)
     {
         var used = new HashSet<string>(existing, StringComparer.OrdinalIgnoreCase);
@@ -488,6 +619,11 @@ internal static class ComposableSqlPlanner
         return candidate;
     }
 
+    /// <summary>
+    /// Resolves the logical output column associated with a chart or pivot metric.
+    /// </summary>
+    /// <param name="metric">The validated aggregate id, input column, and function.</param>
+    /// <returns>A synthetic column with the public aggregate label and function-dependent CLR type.</returns>
     private static ColumnModel MetricColumn(ValidMetric metric)
         => new()
         {
@@ -501,6 +637,12 @@ internal static class ComposableSqlPlanner
             },
         };
 
+    /// <summary>
+    /// Converts result-column metadata into a bound output-column contract.
+    /// </summary>
+    /// <param name="column">The public chart result-column metadata.</param>
+    /// <param name="chart">The validated chart used to preserve the original label-column model.</param>
+    /// <returns>The original label model or a synthetic typed chart-value model.</returns>
     private static ColumnModel ColumnFromInfo(ColumnInfo column, ValidChart chart)
     {
         if (string.Equals(column.Name, chart.Label.Name, StringComparison.OrdinalIgnoreCase))
@@ -522,8 +664,10 @@ internal static class ComposableSqlPlanner
     }
 }
 
+/// <summary>Contains one resolved pivot key's SQL values and public cell definitions.</summary>
 internal sealed record PivotColumnKey(
     object?[] Values,
     IReadOnlyList<PivotCellColumn> Cells);
 
+/// <summary>Maps a grouped metric source to one registered wide pivot output column.</summary>
 internal sealed record PivotCellColumn(string SourceName, ColumnModel Column);

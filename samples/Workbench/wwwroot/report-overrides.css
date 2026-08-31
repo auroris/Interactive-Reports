@@ -1,4 +1,4 @@
-/* Loaded inside the orders report's shadow root through its styleSheet setting. */
+/* The orders report loads these host-defined overrides into its shadow root through styleSheet. */
 .amount-column {
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum";

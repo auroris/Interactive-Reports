@@ -2,9 +2,15 @@ using System.Text;
 
 namespace InteractiveReport.Core.Planning;
 
-/// <summary>Deterministic diagnostic rendering of a bound relation tree.</summary>
+/// <summary>Renders bound relation trees as deterministic diagnostics for tests and troubleshooting.</summary>
 internal static class BoundRelationPlanDebug
 {
+    /// <summary>
+    /// Renders a bound relation tree as a deterministic, indented diagnostic snapshot.
+    /// </summary>
+    /// <param name="relation">The root relation node to render.</param>
+    /// <returns>The deterministic multiline representation of the bound relation tree.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="relation"/> is <see langword="null"/>.</exception>
     public static string Render(BoundRelationNode relation)
     {
         ArgumentNullException.ThrowIfNull(relation);
@@ -13,6 +19,12 @@ internal static class BoundRelationPlanDebug
         return result.ToString().TrimEnd();
     }
 
+    /// <summary>
+    /// Appends one relation node, its output columns, and its input subtree to the diagnostic buffer.
+    /// </summary>
+    /// <param name="target">The buffer receiving the rendered plan.</param>
+    /// <param name="node">The relation node to render.</param>
+    /// <param name="depth">The node depth used to indent the diagnostic output.</param>
     private static void Append(StringBuilder target, BoundRelationNode node, int depth)
     {
         target.Append(' ', depth * 2)
@@ -69,6 +81,11 @@ internal static class BoundRelationPlanDebug
         }
     }
 
+    /// <summary>
+    /// Maps a relation-node type to its concise diagnostic name.
+    /// </summary>
+    /// <param name="node">The relation node to identify.</param>
+    /// <returns>The diagnostic name for the relation-node kind.</returns>
     private static string NodeName(BoundRelationNode node)
         => node switch
         {
@@ -84,6 +101,11 @@ internal static class BoundRelationPlanDebug
             _ => node.GetType().Name,
         };
 
+    /// <summary>
+    /// Formats column-lineage metadata for deterministic plan diagnostics.
+    /// </summary>
+    /// <param name="lineage">The lineage metadata to format.</param>
+    /// <returns>The deterministic diagnostic representation of the column lineage.</returns>
     private static string Lineage(BoundColumnLineage lineage)
         => lineage switch
         {

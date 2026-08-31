@@ -19,17 +19,17 @@ public sealed class InteractiveReportDefinition
 {
     private ReportState? _state;
 
-    /// <summary>The saved-report id that will be created or updated.</summary>
+    /// <summary>Gets the saved-report identifier to create or update.</summary>
     public required string Id { get; init; }
 
-    /// <summary>The report/data-source definition this saved report belongs to.</summary>
+    /// <summary>Gets the configured report definition this saved report belongs to.</summary>
     public required string ReportName { get; init; }
 
-    /// <summary>The saved report's display title.</summary>
+    /// <summary>Gets or sets the saved report's display title.</summary>
     public required string Title { get; set; }
 
     /// <summary>
-    /// Whether the report has ordinary public/global publication. A primary report is
+    /// Gets or sets whether the report has ordinary public/global publication. A primary report is
     /// also broadly visible through its separate flag. This property is named
     /// <c>isGlobal</c> in the HTTP JSON contract.
     /// </summary>
@@ -37,17 +37,17 @@ public sealed class InteractiveReportDefinition
     public bool Public { get; set; }
 
     /// <summary>
-    /// Whether the saved report is a primary report. This is named <c>isPrimary</c> in
+    /// Gets or sets whether the saved report is a primary report. This is named <c>isPrimary</c> in
     /// the HTTP JSON contract.
     /// </summary>
     [JsonPropertyName("isPrimary")]
     public bool Primary { get; set; }
 
-    /// <summary>The canonical owner identity that will be stored.</summary>
+    /// <summary>Gets or sets the canonical owner identity to persist.</summary>
     public string? Owner { get; set; }
 
     /// <summary>
-    /// Typed client-authored report state. On update this is null when the request did
+    /// Gets or sets the typed client-authored report state. On update this is null when the request did
     /// not replace state. Assigning it marks the state as changed.
     /// </summary>
     public ReportState? State
@@ -61,7 +61,7 @@ public sealed class InteractiveReportDefinition
     }
 
     /// <summary>
-    /// True when this request will replace the stored state. False means an update
+    /// Gets whether this request will replace the stored state. <see langword="false"/> means an update
     /// keeps the existing state JSON untouched.
     /// </summary>
     [JsonIgnore]

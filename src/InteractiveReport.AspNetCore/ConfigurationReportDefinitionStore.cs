@@ -10,8 +10,10 @@ using Microsoft.Extensions.Options;
 namespace InteractiveReport.AspNetCore;
 
 /// <summary>
-/// Config-backed definition store. Definitions are validated on access (fail fast, with
-/// the report named in the error), and a configuration reload clears the schema cache.
+/// Resolves report definitions from monitored application configuration. Each lookup returns a detached,
+/// validated snapshot with its connection and dialect resolved. When saved-report storage is enabled,
+/// the store also synchronizes configured documents and lets a primary saved report replace the configured
+/// default state. Configuration reloads clear discovered schemas so subsequent requests cannot reuse stale metadata.
 /// </summary>
 public sealed partial class ConfigurationReportDefinitionStore :
     IReportDefinitionStore,
@@ -24,6 +26,13 @@ public sealed partial class ConfigurationReportDefinitionStore :
     private readonly ISavedReportStore? _savedReports;
     private readonly IDisposable? _reloadSubscription;
 
+    /// <summary>
+    /// Initializes a definition store without saved-report document synchronization.
+    /// </summary>
+    /// <param name="options">The monitored Interactive Reports configuration source.</param>
+    /// <param name="schemaCache">The cache used to reuse discovered schemas across requests.</param>
+    /// <param name="registry">Resolves connection names and SQL dialects for definitions.</param>
+    /// <remarks>Subscribes to option reloads and clears <paramref name="schemaCache"/> after each reload.</remarks>
     internal ConfigurationReportDefinitionStore(
         IOptionsMonitor<InteractiveReportOptions> options,
         SchemaCache schemaCache,
@@ -32,6 +41,15 @@ public sealed partial class ConfigurationReportDefinitionStore :
     {
     }
 
+    /// <summary>
+    /// Initializes a definition store with saved-report document synchronization and primary-default lookup.
+    /// </summary>
+    /// <param name="options">The monitored Interactive Reports configuration source.</param>
+    /// <param name="schemaCache">The cache used to reuse discovered schemas across requests.</param>
+    /// <param name="registry">Resolves connection names and SQL dialects for definitions.</param>
+    /// <param name="synchronizer">Mirrors configured documents before saved-report reads.</param>
+    /// <param name="savedReports">Supplies the primary saved report that may override a definition's default state.</param>
+    /// <remarks>Subscribes to option reloads and clears <paramref name="schemaCache"/> after each reload.</remarks>
     internal ConfigurationReportDefinitionStore(
         IOptionsMonitor<InteractiveReportOptions> options,
         SchemaCache schemaCache,
@@ -46,23 +64,30 @@ public sealed partial class ConfigurationReportDefinitionStore :
         _reloadSubscription = options.OnChange(_ => schemaCache.Clear());
     }
 
+    /// <summary>
+    /// Resolves a detached report definition, including the synthetic saved-reports listing when configured.
+    /// </summary>
+    /// <param name="name">The case-insensitive report name.</param>
+    /// <param name="ct">Cancels document synchronization and saved-report lookup.</param>
+    /// <returns>The validated definition snapshot, or <see langword="null"/> when the name is unknown or the internal constructor disables the built-in listing.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when configuration is invalid or a persisted primary state cannot be read.</exception>
+    /// <remarks>May synchronize configured documents, create the saved-report table, and replace the snapshot's default state from persistence.</remarks>
     public async ValueTask<ReportDefinition?> Find(string name, CancellationToken ct = default)
     {
         if (SavedReportsListingDefinition.Matches(name))
         {
-            // Reserved: configuration cannot declare or shadow the built-in name.
+            // Configuration cannot declare or shadow the reserved built-in report name.
             if (_options.CurrentValue.Reports.ContainsKey(name))
                 throw new InvalidOperationException(
                     $"Report '{name}': this name is reserved for the built-in saved-reports listing.");
-            // Syncing here both freshens configured rows and — via the store's lazy
-            // auto-create on its first operation — guarantees the table exists before
-            // schema discovery probes it. Skipping the built-in definition entirely,
-            // not synthesizing it unsynced, keeps a null synchronizer (internal test
-            // constructor) honest.
+            // Synchronizing here both freshens configured rows and, through the store's
+            // lazy auto-create on its first operation, guarantees the table exists before
+            // schema discovery probes it. A null synchronizer means this store instance does
+            // not expose the built-in persistence-backed definition.
             if (_synchronizer is null) return null;
-            // The built-in report is an administration feature. Resolving its target
-            // here produces the normal sanitized configuration error without making
-            // persistence a prerequisite for ordinary report definitions.
+            // The built-in report is an administration feature. Resolving its target here
+            // produces the normal sanitized configuration error without making persistence a
+            // prerequisite for ordinary report definitions.
             var savedConfig = _registry.ResolveStoreConfig(_options.CurrentValue.SavedReports);
             await _synchronizer.EnsureSynced(ct);
             return SavedReportsListingDefinition.Create(savedConfig);
@@ -72,18 +97,18 @@ public sealed partial class ConfigurationReportDefinitionStore :
         if (!reports.TryGetValue(name, out var def))
             return null;
 
-        // The lookup accepts any casing, but the configured key is the canonical name:
-        // it becomes REPORT_NAME in saved-report rows and the filter that finds them
+        // Invariant: the lookup accepts any casing, but the configured key is the canonical
+        // name: it becomes REPORT_NAME in saved-report rows and the filter that finds them
         // again, so it must be a single spelling on case-sensitive databases.
         var configuredName = reports.Keys.FirstOrDefault(key => string.Equals(key, name, StringComparison.Ordinal))
             ?? reports.Keys.First(key => string.Equals(key, name, StringComparison.OrdinalIgnoreCase));
         var snapshot = Snapshot(configuredName, def);
         Validate(snapshot);
         ResolveConnection(snapshot, _registry);
-        // No persistence target means no persistence work. In particular, installing
-        // the package and resolving a report must never create a directory or SQLite
-        // file as an incidental side effect. Saved-report endpoints still resolve the
-        // target explicitly and return an error until one is configured.
+        // Provider constraint: no persistence target means no persistence work. In particular,
+        // installing the package and resolving a report must never create a directory or SQLite
+        // file as an incidental side effect. Saved-report endpoints still resolve the target
+        // explicitly and return an error until one is configured.
         if (_synchronizer is not null
             && _savedReports is not null
             && ReportConnectionRegistry.IsStoreConfigured(_options.CurrentValue.SavedReports))
@@ -109,6 +134,13 @@ public sealed partial class ConfigurationReportDefinitionStore :
         return snapshot;
     }
 
+    /// <summary>
+    /// Loads the lightweight authorization envelope for a report definition.
+    /// </summary>
+    /// <param name="name">The case-insensitive configured or built-in report name.</param>
+    /// <param name="ct">Cancels the lookup before configuration is read.</param>
+    /// <returns>A completed value task containing the canonical report name and detached authorization settings, or <see langword="null"/> when unknown.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when configuration shadows the reserved built-in report name.</exception>
     public ValueTask<ReportDefinitionAuthorization?> FindAuthorization(
         string name,
         CancellationToken ct = default)
@@ -139,6 +171,11 @@ public sealed partial class ConfigurationReportDefinitionStore :
             SnapshotAuthorization(definition.Authorization)));
     }
 
+    /// <summary>
+    /// Copies mutable authorization configuration into a request-stable value.
+    /// </summary>
+    /// <param name="source">The mutable configuration object to copy into an immutable runtime model.</param>
+    /// <returns>A detached authorization object, or <see langword="null"/> when no authorization block is configured.</returns>
     private static ReportAuthorization? SnapshotAuthorization(ReportAuthorization? source)
         => source is null
             ? null
@@ -152,13 +189,15 @@ public sealed partial class ConfigurationReportDefinitionStore :
             };
 
     /// <summary>
-    /// Stamps the resolved connection name and dialect onto the detached snapshot
-    /// before anything downstream sees it. The dialect assignment is unconditional:
-    /// dialect is a property of the connection, so a configured value (a leftover
-    /// from before it was derived) is simply superseded, never validated. Shared
-    /// with the startup validator, which runs the same pipeline without Find's
+    /// Stamps the resolved connection name and dialect onto the detached snapshot before
+    /// anything downstream sees it. The dialect assignment is unconditional: dialect is a property of the
+    /// connection, so a configured value (a leftover from before it was derived) is simply superseded, never
+    /// validated. Shared with the startup validator, which runs the same pipeline without Find's
     /// saved-report side effects.
     /// </summary>
+    /// <param name="def">The detached definition whose connection fields will be resolved in place.</param>
+    /// <param name="registry">Resolves registered or data-source-backed connections and dialects.</param>
+    /// <remarks>Mutates <paramref name="def"/>. A data source replaces its connection name with a synthesized name; every path overwrites the dialect.</remarks>
     internal static void ResolveConnection(ReportDefinition def, ReportConnectionRegistry registry)
     {
         if (!string.IsNullOrWhiteSpace(def.DataSource))
@@ -172,10 +211,17 @@ public sealed partial class ConfigurationReportDefinitionStore :
         def.Dialect = registry.ResolveDialect(def.Connection);
     }
 
+    /// <summary>
+    /// Deep-copies a mutable options-bound definition and assigns its canonical configured name.
+    /// </summary>
+    /// <param name="name">The canonical key from the report configuration dictionary.</param>
+    /// <param name="source">The mutable options-bound definition to copy.</param>
+    /// <returns>A detached definition that request processing may safely mutate.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when the definition cannot be round-tripped through the protocol serializer.</exception>
     internal static ReportDefinition Snapshot(string name, ReportDefinition source)
     {
-        // OptionsMonitor owns and may replace its object graph. Returning a detached
-        // snapshot prevents request code from mutating configuration or observing a
+        // The options monitor owns and may replace its object graph. Returning a
+        // detached snapshot prevents request code from mutating configuration or observing a
         // half-reloaded nested definition.
         var snapshot = JsonSerializer.Deserialize<ReportDefinition>(
             JsonSerializer.Serialize(source, IrJson.Options),
@@ -184,6 +230,11 @@ public sealed partial class ConfigurationReportDefinitionStore :
         return snapshot;
     }
 
+    /// <summary>
+    /// Validates definition-level authorization, data source, limits, SQL, presentation, and default-state configuration.
+    /// </summary>
+    /// <param name="def">The detached definition to validate before connection resolution or execution.</param>
+    /// <exception cref="InvalidOperationException">Thrown with the report name and offending setting when configuration is inconsistent or unsafe.</exception>
     internal static void Validate(ReportDefinition def)
     {
         if (string.IsNullOrWhiteSpace(def.Name))
@@ -269,9 +320,9 @@ public sealed partial class ConfigurationReportDefinitionStore :
         if (!Enum.IsDefined(def.Consistency))
             throw new InvalidOperationException(
                 $"Report '{def.Name}': unknown consistency strategy '{def.Consistency}' (known: none, snapshot).");
-        // The base SELECT becomes a derived table; a trailing ORDER BY breaks that on
-        // SQL Server (APEX imposes the same rule). The scanner is comment-, string-,
-        // and quoted-identifier-aware, so 'order by' as data or documentation never
+        // The base SELECT becomes a derived table; a trailing ORDER BY
+        // breaks that on SQL Server (APEX imposes the same rule). The scanner is comment-,
+        // string-, and quoted-identifier-aware, so 'order by' as data or documentation never
         // trips this — only the real clause at parenthesis depth 0 does.
         if (SqlTopLevelScanner.HasTopLevelOrderBy(def.Sql))
             throw new InvalidOperationException(
@@ -306,8 +357,8 @@ public sealed partial class ConfigurationReportDefinitionStore :
 
         if (def.ColumnLabels is not null)
         {
-            // Unknown column names stay tolerated (schema drift), but a blank or
-            // case-colliding entry is a config mistake worth failing fast on.
+            // Unknown column names stay tolerated (schema drift), but a blank or case-colliding
+            // entry is a config mistake worth failing fast on.
             var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var (name, label) in def.ColumnLabels)
             {
@@ -356,6 +407,11 @@ public sealed partial class ConfigurationReportDefinitionStore :
         ValidateColumnOverrides(def);
     }
 
+    /// <summary>
+    /// Validates a definition's per-row edit-link template and presentation options.
+    /// </summary>
+    /// <param name="def">The definition whose optional edit link is being validated.</param>
+    /// <exception cref="InvalidOperationException">Thrown when the template, URL scheme, label, or target violates the public contract.</exception>
     private static void ValidateEditLink(ReportDefinition def)
     {
         if (def.EditLink is not { } editLink) return;
@@ -373,9 +429,9 @@ public sealed partial class ConfigurationReportDefinitionStore :
         if (placeholders.Count == 0)
             throw new InvalidOperationException(
                 $"Report '{def.Name}': editLink.urlTemplate needs at least one {{COLUMN}} placeholder — a constant URL is not a per-row edit link.");
-        // Same rule as styleSheet, probed with placeholders neutralized: relative URLs
-        // (the primary case) always pass, and substituted values cannot introduce a
-        // scheme because the client URL-encodes them.
+        // Apply the stylesheet URL rule after neutralizing placeholders:
+        // relative URLs (the primary case) always pass, and substituted values cannot introduce
+        // a scheme because the client URL-encodes them.
         var probe = EditLinkTemplate.Rewrite(editLink.UrlTemplate, _ => "x").Replace("{", "").Replace("}", "");
         if (Uri.TryCreate(probe, UriKind.RelativeOrAbsolute, out var probeUri)
             && probeUri.IsAbsoluteUri
@@ -397,12 +453,17 @@ public sealed partial class ConfigurationReportDefinitionStore :
                 $"Report '{def.Name}': editLink.target must be '_self' or '_blank'.");
     }
 
+    /// <summary>
+    /// Validates configured column overrides and their interaction with the default state.
+    /// </summary>
+    /// <param name="def">The definition whose optional column settings are being validated.</param>
+    /// <exception cref="InvalidOperationException">Thrown for invalid names, labels, help text, duplicates, or a default sort/break on a locked column.</exception>
     private static void ValidateColumnOverrides(ReportDefinition def)
     {
         if (def.Columns is null) return;
 
-        // Unknown column names stay tolerated (schema drift, same as columnLabels);
-        // blank keys, case collisions, and double-configured labels fail fast.
+        // Unknown column names stay tolerated (schema drift, same as columnLabels); blank keys,
+        // case collisions, and double-configured labels fail fast.
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var (name, over) in def.Columns)
         {
@@ -430,8 +491,8 @@ public sealed partial class ConfigurationReportDefinitionStore :
                     $"Report '{def.Name}': columns['{name}'].helpText must be at most 1000 characters.");
         }
 
-        // A definition contradicting itself is a config mistake, not saved-state drift:
-        // the default view must not sort or break on a column the definition locks.
+        // Invariant: a definition contradicting itself is a config mistake, not saved-state
+        // drift: the default view must not sort or break on a column the definition locks.
         // (Default-state filters are expressions needing the schema; they degrade into
         // ignored[] at query time instead.)
         var restricted = new HashSet<string>(
@@ -456,9 +517,11 @@ public sealed partial class ConfigurationReportDefinitionStore :
     }
 
     /// <summary>
-    /// Finds the definition-input table in the active table's ancestry. A table map is
-    /// unordered, so unrelated roots and insertion order must not affect validation.
+    /// Finds the definition-input table in the active table's ancestry. A table map
+    /// is unordered, so unrelated roots and insertion order must not affect validation.
     /// </summary>
+    /// <param name="state">The optional default state whose active ancestry should be followed.</param>
+    /// <returns>The table that reads from <c>definition</c>, or <see langword="null"/> for a missing, broken, or cyclic ancestry.</returns>
     private static ReportTable? DefinitionInputTable(ReportState? state)
     {
         if (state?.Tables is not { Count: > 0 } tables
@@ -484,14 +547,21 @@ public sealed partial class ConfigurationReportDefinitionStore :
     }
 
     /// <summary>
-    /// First-segment literals of the mounted endpoint routes. ASP.NET's literal-first
+    /// Reserved route names: first-segment literals of the mounted endpoint routes. ASP.NET's literal-first
     /// routing makes a report with one of these names unreachable (or, worse,
     /// partially reachable), so configuration fails fast instead.
     /// </summary>
     private static readonly string[] ReservedRouteNames = ["ui", "saved", "whoami", "admin"];
 
+    /// <summary>
+    /// Builds the compiled expression used to reserve composer-generated parameter names such as <c>p0</c>.
+    /// </summary>
+    /// <returns>The compiled regular expression.</returns>
     [GeneratedRegex(@"^p\d+$", RegexOptions.IgnoreCase)]
     private static partial Regex ReservedParamPattern();
 
+    /// <summary>
+    /// Unsubscribes from configuration reload notifications.
+    /// </summary>
     public void Dispose() => _reloadSubscription?.Dispose();
 }

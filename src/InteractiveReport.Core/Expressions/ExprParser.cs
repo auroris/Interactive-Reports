@@ -3,7 +3,7 @@ using InteractiveReport.Core.Model;
 namespace InteractiveReport.Core.Expressions;
 
 /// <summary>
-/// The expression-rule language frontend, staged (ARCHITECTURE §8):
+/// Expression-rule language frontend, staged as follows:
 ///
 ///   text ── ExprSyntaxParser ──► untyped syntax tree (shape + positions)
 ///        ── ExprBinder ────────► typed AST (schema + function registry)
@@ -16,9 +16,13 @@ namespace InteractiveReport.Core.Expressions;
 public static class ExprParser
 {
     /// <summary>
-    /// Parse and bind an expression, then enforce the result contract required by
-    /// the rule effect that will consume it.
+    /// Parse and bind an expression, then enforce the result contract required by the rule effect that will
+    /// consume it.
     /// </summary>
+    /// <param name="expression">The portable expression text.</param>
+    /// <param name="schema">The case-insensitive schema against which column names are bound.</param>
+    /// <param name="requirement">The result contract that the bound expression must satisfy.</param>
+    /// <returns>The bound expression tree and a validation error, which is <see langword="null"/> when binding succeeds.</returns>
     public static (ExprNode? Ast, string? Error) Parse(
         string expression,
         IReadOnlyDictionary<string, ColumnModel> schema,
@@ -39,16 +43,32 @@ public static class ExprParser
         };
     }
 
-    /// <summary>Schema keys are base-schema column names (case-insensitive dictionary).</summary>
+    /// <summary>
+    /// Parses a computed-value expression against a case-insensitive schema.
+    /// </summary>
+    /// <param name="expression">The portable expression text to parse, bind, or evaluate.</param>
+    /// <param name="schema">The column schema used to bind names, types, and capabilities.</param>
+    /// <returns>The bound expression tree and a validation error, which is <see langword="null"/> when binding succeeds.</returns>
     public static (ExprNode? Ast, string? Error) Parse(string expression, IReadOnlyDictionary<string, ColumnModel> schema)
         => Parse(expression, schema, ExpressionRequirement.Value);
 
-    /// <summary>A filter/highlight expression must produce a boolean condition.</summary>
+    /// <summary>
+    /// Parses a filter or highlight expression and requires a boolean result.
+    /// </summary>
+    /// <param name="expression">The portable condition text.</param>
+    /// <param name="schema">The case-insensitive schema against which column names are bound.</param>
+    /// <returns>The bound expression tree and a validation error, which is <see langword="null"/> when binding succeeds.</returns>
     public static (ExprNode? Ast, string? Error) ParseCondition(
         string expression,
         IReadOnlyDictionary<string, ColumnModel> schema)
         => Parse(expression, schema, ExpressionRequirement.Predicate);
 
+    /// <summary>
+    /// Parses expression text and binds it against the supplied schema in one operation.
+    /// </summary>
+    /// <param name="expression">The portable expression text.</param>
+    /// <param name="schema">The case-insensitive schema against which column names are bound.</param>
+    /// <returns>The bound expression tree and a validation error, which is <see langword="null"/> when binding succeeds.</returns>
     private static (ExprNode? Ast, string? Error) ParseAndBind(
         string expression,
         IReadOnlyDictionary<string, ColumnModel> schema)
@@ -74,6 +94,8 @@ public static class ExprParser
 /// <summary>The result contract imposed by an expression rule's effect.</summary>
 public enum ExpressionRequirement
 {
+    /// <summary>Requires a non-boolean, non-bare-null value.</summary>
     Value,
+    /// <summary>Requires a boolean condition.</summary>
     Predicate,
 }

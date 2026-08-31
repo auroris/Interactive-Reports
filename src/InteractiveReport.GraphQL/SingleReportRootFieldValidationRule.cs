@@ -1,3 +1,7 @@
+// GraphQL validation boundary: independently limit fragment expansion, then expand reachable
+// selections just far enough to reject multiple executable report fields. This prevents aliases
+// and fragment DAGs from multiplying database work within one transport request.
+
 using GraphQL.Validation;
 using GraphQLParser.AST;
 
@@ -10,9 +14,9 @@ namespace InteractiveReport.GraphQL;
 /// </summary>
 internal sealed class SingleReportRootFieldValidationRule : ValidationRuleBase
 {
-    // GraphQL.NET pre-counts recursively expanded fragment spreads before collecting
-    // fields. Keep the adapter's explicit ceiling comfortably above ordinary queries,
-    // but low enough that a small fragment DAG cannot amplify into material work.
+    // Invariant: GraphQL.NET pre-counts recursively expanded fragment spreads before collecting
+    // fields. Keep the adapter's explicit ceiling comfortably above ordinary queries, but low
+    // enough that a small fragment DAG cannot amplify into material work.
     private const int MaxFragmentExpansions = 256;
     private const int ExceededFragmentExpansions = MaxFragmentExpansions + 1;
     private const string ErrorNumber = "IR-GQL-ROOT-FIELD-LIMIT";
@@ -22,6 +26,12 @@ internal sealed class SingleReportRootFieldValidationRule : ValidationRuleBase
     private static readonly string FragmentErrorMessage =
         $"The operation exceeds the fragment expansion limit of {MaxFragmentExpansions}.";
 
+    /// <summary>
+    /// Validates fragment expansion and report-root response keys during the post-validation hook.
+    /// </summary>
+    /// <param name="context">The GraphQL validation context containing the schema, document, and error sink.</param>
+    /// <returns>A completed value task containing no visitor because this method performs the check immediately.</returns>
+    /// <remarks>Reports validation errors through <paramref name="context"/> when limits are exceeded.</remarks>
     public override ValueTask<INodeVisitor?> GetPostNodeVisitorAsync(ValidationContext context)
     {
         if (context.Schema is not InteractiveReportGraphQLSchema)
@@ -68,6 +78,15 @@ internal sealed class SingleReportRootFieldValidationRule : ValidationRuleBase
         return default;
     }
 
+    /// <summary>
+    /// Traverses fields and fragments until it finds a second distinct report response key.
+    /// </summary>
+    /// <param name="selectionSet">The GraphQL selection set to validate.</param>
+    /// <param name="context">The GraphQL validation context containing the schema, document, and error sink.</param>
+    /// <param name="fragments">The GraphQL fragment definitions available to the selection traversal.</param>
+    /// <param name="responseKeys">The collection that receives distinct GraphQL response keys.</param>
+    /// <param name="visitedFragments">The fragment names already traversed, used to prevent cycles.</param>
+    /// <returns>The second distinct executable <c>report</c> field, or <see langword="null"/> when the operation contains at most one.</returns>
     private static GraphQLField? FindSecondReportField(
         GraphQLSelectionSet selectionSet,
         ValidationContext context,
@@ -142,15 +161,26 @@ internal sealed class SingleReportRootFieldValidationRule : ValidationRuleBase
     /// ignored: GraphQL.NET performs its recursive spread pre-count before applying
     /// @skip/@include, and cached documents can execute with different variables.
     /// </summary>
+    /// <param name="fragments">The document's fragment definitions, keyed by fragment name.</param>
     private sealed class FragmentExpansionCounter(
         IReadOnlyDictionary<string, GraphQLFragmentDefinition> fragments)
     {
         private readonly Dictionary<string, int> _costs = new(StringComparer.Ordinal);
         private readonly HashSet<string> _active = new(StringComparer.Ordinal);
 
+        /// <summary>
+        /// Counts fragment-spread expansions reachable from the supplied selection set.
+        /// </summary>
+        /// <param name="selectionSet">The GraphQL selection set to validate.</param>
+        /// <returns>The expansion count, capped at the over-budget sentinel.</returns>
         public int Count(GraphQLSelectionSet selectionSet)
             => CountSelectionSet(selectionSet);
 
+        /// <summary>
+        /// Recursively counts fragment spreads contributed by a selection set.
+        /// </summary>
+        /// <param name="selectionSet">The GraphQL selection set to validate.</param>
+        /// <returns>The expansion count, capped at the over-budget sentinel.</returns>
         private int CountSelectionSet(GraphQLSelectionSet selectionSet)
         {
             var count = 0;
@@ -172,6 +202,12 @@ internal sealed class SingleReportRootFieldValidationRule : ValidationRuleBase
             return count;
         }
 
+        /// <summary>
+        /// Counts one fragment spread plus its nested spreads while preventing recursion cycles.
+        /// </summary>
+        /// <param name="spread">The fragment spread to expand.</param>
+        /// <returns>The bounded number of spread visits contributed by this edge.</returns>
+        /// <remarks>Caches completed fragment costs and temporarily tracks the active recursion path.</remarks>
         private int CountSpread(GraphQLFragmentSpread spread)
         {
             var fragmentName = spread.FragmentName.Name.StringValue;
@@ -184,8 +220,8 @@ internal sealed class SingleReportRootFieldValidationRule : ValidationRuleBase
                 return AddSaturated(1, cached);
             }
 
-            // Core validation reports cycles separately. Treat one as over-budget so
-            // this security rule terminates deterministically even on an invalid DAG.
+            // Core validation reports cycles separately. Treat one as over-budget so this
+            // security rule terminates deterministically even on an invalid DAG.
             if (_active.Count >= MaxFragmentExpansions || !_active.Add(fragmentName))
             {
                 return ExceededFragmentExpansions;
@@ -204,6 +240,12 @@ internal sealed class SingleReportRootFieldValidationRule : ValidationRuleBase
             return AddSaturated(1, nested);
         }
 
+        /// <summary>
+        /// Adds two expansion counts without exceeding the sentinel used for an over-budget operation.
+        /// </summary>
+        /// <param name="left">The accumulated expansion count.</param>
+        /// <param name="right">The expansion count to add.</param>
+        /// <returns>The sum, capped at the exceeded-expansion sentinel.</returns>
         private static int AddSaturated(int left, int right)
             => left >= ExceededFragmentExpansions
                 || right >= ExceededFragmentExpansions

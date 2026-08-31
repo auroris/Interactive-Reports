@@ -1,9 +1,9 @@
-// Chart theming: resolve the documented --ir-* custom properties into concrete
-// colors and fonts, plus the color arithmetic the chart forms need. Pure
-// presentation — nothing here enters protocol or saved state.
+// Chart theme resolution translates the documented --ir-* custom properties into concrete
+// colors and fonts, plus the color arithmetic required by chart forms. These presentation
+// choices remain outside the report protocol and saved state.
 
-// Fallbacks mirror the token defaults in ir.css; getComputedStyle resolves any
-// host overrides of the documented --ir-* custom properties.
+// Fallbacks mirror the token defaults in ir.css; getComputedStyle resolves any host overrides
+// of the documented --ir-* custom properties.
 const FALLBACKS = {
     "--ir-chart-1": "#0572ce",
     "--ir-chart-2": "#eb6834",
@@ -19,6 +19,12 @@ const FALLBACKS = {
     "--ir-font": 'system-ui, -apple-system, "Segoe UI", sans-serif',
 };
 
+/**
+ * Reads the chart palette, typography, and surface colors from the canvas's computed styles.
+ *
+ * @param {HTMLCanvasElement} canvas - The canvas used to resolve theme colors or render the chart.
+ * @returns {object} The resolved chart palette, font, grid, and surface theme.
+ */
 export function readTheme(canvas) {
     const styles = getComputedStyle(canvas);
     const token = name => styles.getPropertyValue(name).trim() || FALLBACKS[name];
@@ -31,7 +37,13 @@ export function readTheme(canvas) {
     };
 }
 
-/// Canvas normalizes any CSS color, so tokens may hold hex, rgb(), or names.
+/**
+ * Applies an alpha value after using the canvas color parser to normalize any valid CSS color.
+ *
+ * @param {string} color - A CSS color accepted by the browser canvas implementation.
+ * @param {number} alpha - The opacity to place in the returned `rgba()` value.
+ * @returns {string} The normalized red, green, and blue channels with the requested alpha.
+ */
 export function withAlpha(color, alpha) {
     const probe = document.createElement("canvas").getContext("2d");
     probe.fillStyle = "#000";
@@ -47,8 +59,15 @@ export function withAlpha(color, alpha) {
     return `rgba(${inner[0].trim()}, ${inner[1].trim()}, ${inner[2].trim()}, ${alpha})`;
 }
 
-/// Fixed hue order, never re-cut per dataset; past the 8th slice the same hues
-/// return as lighter tints (a step of the same hue, not an invented color).
+// Invariant: fixed hue order, never re-cut per dataset; past the 8th slice the same hues return
+// as lighter tints (a step of the same hue, not an invented color).
+/**
+ * Returns enough chart colors for every slice, deriving translucent variants as needed.
+ *
+ * @param {number} count - The number of colors required by the chart series.
+ * @param {Array<string>} palette - The base chart colors to expand to the requested series count.
+ * @returns {Array<string>} The slice colors.
+ */
 export function sliceColors(count, palette) {
     const tiers = [1, 0.72, 0.5];
     return Array.from({ length: count }, (_, i) => {

@@ -1,6 +1,6 @@
-/* InteractiveReport widget theme — an APEX Universal-Theme-flavored skin.
-   This sheet is adopted by each custom element's shadow root. Host-page CSS
-   cannot reach it; hosts can still theme the documented --ir-* properties. */
+/* Shared custom-element theme with an APEX Universal Theme visual vocabulary. Each widget adopts
+   this sheet inside its shadow root, isolating the rules from host-page CSS while exposing the
+   documented --ir-* custom properties as the supported theming boundary. */
 
 :host {
     all: initial;
@@ -18,9 +18,9 @@
     --ir-radius: 3px;
     --ir-font: system-ui, -apple-system, "Segoe UI", sans-serif;
     --ir-font-size: 13px;
-    /* Chart palette: fixed categorical order (slot 1 doubles as the single-series
-       color), validated for adjacent-slot CVD separation on the white surface.
-       The below-3:1-contrast slots are relieved by the built-in data table. */
+    /* Chart palette: fixed categorical order (slot 1 doubles as the single-series color),
+       validated for adjacent-slot CVD separation on the white surface. The
+       below-3:1-contrast slots are relieved by the built-in data table. */
     --ir-chart-1: #0572ce;
     --ir-chart-2: #eb6834;
     --ir-chart-3: #1baf7a;
@@ -46,7 +46,7 @@
 
 .ir-icon { display: inline-flex; align-items: center; line-height: 0; }
 
-/* --- buttons & inputs ----------------------------------------------------- */
+/* Buttons and form controls shared by toolbars, menus, and dialogs. */
 
 .ir-btn {
     font: inherit;
@@ -87,7 +87,7 @@
     outline-offset: 1px;
 }
 
-/* --- toolbar ---------------------------------------------------------------- */
+/* Report toolbar, search control, view selector, and saved-report picker. */
 
 .ir-toolbar {
     display: flex;
@@ -113,7 +113,7 @@
     font-size: var(--ir-font-size);
     border: 1px solid #c3cbd3;
     padding: 4px 8px;
-    width: clamp(140px, 26vw, 260px); /* pre-container-query hosts */
+    width: clamp(140px, 26vw, 260px); /* Pre-container-query hosts. */
     width: clamp(140px, 26cqi, 260px);
 }
 .ir-search .ir-go { border-radius: 0 var(--ir-radius) var(--ir-radius) 0; border-left: none; }
@@ -131,7 +131,7 @@
 .ir-saved-label { font-size: 12px; color: var(--ir-text-muted); }
 .ir-saved-select { max-width: 16rem; }
 
-/* --- busy bar ---------------------------------------------------------------- */
+/* Indeterminate progress strip driven by the widget's aria-busy state. */
 
 .ir-busybar { height: 2px; position: relative; overflow: hidden; }
 [aria-busy="true"] .ir-busybar::after {
@@ -151,7 +151,7 @@
     [aria-busy="true"] .ir-busybar::after { animation: none; width: 100%; }
 }
 
-/* --- notices ---------------------------------------------------------------- */
+/* Inline status and error notices announced through the widget's live regions. */
 
 .ir-notices { margin: 0 10px; }
 .ir-banner {
@@ -170,7 +170,7 @@
 .ir-banner-warn { background: #fff8e1; border-color: #ecdba4; color: #6d4f00; }
 .ir-banner-ok { background: #e9f5ea; border-color: #c0e0c3; color: #1e5b24; }
 
-/* --- settings chips ---------------------------------------------------------- */
+/* Removable chips summarizing active filters, sorting, formatting, and other report state. */
 
 .ir-chips {
     display: flex;
@@ -210,7 +210,7 @@
 .ir-chip-x { background: none; border: none; cursor: pointer; color: var(--ir-text-muted); padding: 2px 3px; line-height: 0; }
 .ir-chip-x:hover { color: var(--ir-danger); }
 
-/* --- grid ---------------------------------------------------------------- */
+/* Scrollable result grid, column headings, cell states, breaks, and aggregate rows. */
 
 .ir-tablewrap { overflow-x: auto; }
 .ir-table {
@@ -265,7 +265,7 @@
 .ir-cell-image { display: block; max-width: 100%; max-height: 8rem; width: auto; height: auto; }
 .ir-cell-action { padding: 1px 8px; font-size: 12px; }
 
-/* The definition's edit pencil: a narrow leading column, icon-only anchor. */
+/* The definition's edit link occupies a narrow leading column and uses an icon-only anchor. */
 .ir-table th.ir-th-edit { width: 1%; }
 .ir-table td.ir-td-edit { text-align: center; padding: 5px 6px; }
 .ir-cell-edit {
@@ -295,7 +295,7 @@
 .ir-agg-fn { font-style: normal; font-weight: 600; font-size: 12px; color: var(--ir-text-muted); }
 .ir-table tr.ir-empty td { text-align: center; color: var(--ir-text-muted); padding: 26px; }
 
-/* --- chart view ---------------------------------------------------------------- */
+/* Chart canvas and its accessible tabular-data companion. */
 
 .ir-chart-region {
     position: relative;
@@ -314,7 +314,7 @@
 .ir-chart-data .ir-tablewrap { max-height: 16rem; overflow-y: auto; }
 .ir-chart-valuerow select { min-width: 0; }
 
-/* --- pagination ---------------------------------------------------------------- */
+/* Pagination controls shown beneath the active result view. */
 
 .ir-pager {
     display: flex;
@@ -329,7 +329,7 @@
 .ir-page-btn { padding: 2px 9px; font-size: 14px; line-height: 1.2; }
 .ir-page-info { min-width: 8rem; text-align: center; }
 
-/* --- popup menus ---------------------------------------------------------------- */
+/* Anchored action menus, including the fallback positioning used by older browsers. */
 
 .ir-popup {
     position: fixed;
@@ -354,9 +354,9 @@
     and (position-area: bottom span-right)
     and (position-try-order: most-height) {
     .ir-popup {
-        /* The position area is also the menu's sizing container: 100% is the
-           available block space from the anchor to the viewport edge. The
-           roomier side wins, and an over-tall menu scrolls inside that area. */
+        /* The position area is also the menu's sizing container: 100% is the available block
+           space from the anchor to the viewport edge. The roomier side wins, and an over-tall
+           menu scrolls inside that area. */
         position-area: bottom span-right;
         position-try-order: most-height;
         justify-self: start;
@@ -403,7 +403,7 @@
     color: var(--ir-text-muted);
 }
 
-/* --- dialog windows --------------------------------------------------------- */
+/* Modal editors and their reusable field, rule, color, and preview layouts. */
 
 .ir-dialog {
     position: fixed;
@@ -568,7 +568,7 @@ dialog.ir-dialog::backdrop {
 .ir-dialog:has(.ir-highlight-scope option[value="row"]:checked) .ir-cell-only,
 .ir-dialog:has(.ir-chart-type option[value="pie"]:checked) .ir-non-pie { display: none; }
 
-/* --- admin widget ---------------------------------------------------------------- */
+/* Saved-report administration identity, document preview, and authorization editor. */
 
 .ir-admin-count { color: var(--ir-text-muted); font-size: 12px; }
 .ir-state-pre {

@@ -1,6 +1,6 @@
-// The chart view container: an accessibly described canvas region plus a
-// "View chart data" table of the same dataset. The Chart.js pixels themselves
-// come from the lazily loaded chart bundle the widget hands in.
+// Accessible chart-view composition: a described canvas region plus a "View chart data"
+// table of the same dataset. The Chart.js pixels themselves come from the lazily loaded chart
+// bundle the widget hands in.
 
 import { el } from "../../core/dom.js";
 import { resolveLocale, translate } from "../../core/localization.js";
@@ -9,6 +9,12 @@ import { activeShapeLocation } from "../state.js";
 import { fnLabel, hasFraction } from "./format.js";
 import { formatForColumn, renderTextValue } from "./column-renderers.js";
 
+/**
+ * Resolves the active chart's label and metric roles against the returned result columns.
+ *
+ * @param {object} w - The report controller containing active state and the latest result contract.
+ * @returns {[object, object]|null} The distinct label and metric columns, or `null` when either role is missing.
+ */
 export function chartResultColumns(w) {
     const view = activeShapeLocation(w.doc, "chart")?.composable ?? {};
     const columns = w.lastResult?.columns ?? [];
@@ -23,10 +29,22 @@ export function chartResultColumns(w) {
     return label && metric && label !== metric ? [label, metric] : null;
 }
 
+/**
+ * Determines whether the active result and schema can render the selected chart view.
+ *
+ * @param {object} w - The report controller to inspect.
+ * @returns {boolean} Whether both required chart result columns are available.
+ */
 export const canRenderChart = w => chartResultColumns(w) !== null;
 
-/// "Sum of Amount by Status" — the chart's human name, shared by the view chip
-/// and the accessible description.
+/**
+ * Builds the chart's human name, such as "Sum of Amount by Status," for the view chip and accessible
+ * description.
+ *
+ * @param {object} w - The report controller providing schema labels and localization.
+ * @param {object} view - The active chart view definition to summarize.
+ * @returns {string} The chart summary.
+ */
 export function chartSummary(w, view) {
     const value = !view.fn
         ? labelOf(w, view.value)
@@ -40,10 +58,16 @@ export function chartSummary(w, view) {
 }
 
 /**
- * Render the chart view into its container: a canvas region (described for
- * assistive tech — canvas pixels are invisible to it) plus a "View chart data"
- * disclosure holding the same label/value dataset as a real table. Returns the
- * Chart.js instance via the lazily loaded chartModule, or null with no data.
+ * Renders a described canvas plus a "View chart data" disclosure holding the
+ * same label/value dataset as a real table. Returns the Chart.js instance via the lazily loaded
+ * chart module, or returns null when pixels cannot or should not be drawn.
+ *
+ * @param {object} w - The report controller containing state, schema, localization, and the latest result.
+ * @param {Element} container - The chart-view region whose children will be replaced.
+ * @param {{renderChart: Function}} chartModule - The lazily loaded Chart.js adapter.
+ * @returns {object|null} The live chart instance, or `null` for empty, invalid, or canvas-less results.
+ *
+ * Side effects: replaces the chart region and may initialize Chart.js on a new canvas.
  */
 export function renderChartView(w, container, chartModule) {
     const result = w.lastResult;
@@ -70,22 +94,23 @@ export function renderChartView(w, container, chartModule) {
     const values = result.rows.map(r => {
         const value = r[valueCol.name];
         if (value === null || value === undefined) return null;
-        // Chart.js ultimately needs an IEEE-754 coordinate. Conversion happens only
-        // at that pixel boundary; the response and accessible data table stay exact.
+        // Protocol contract: chart.js ultimately needs an IEEE-754 coordinate. Conversion
+        // happens only at that pixel boundary; the response and accessible data table stay
+        // exact.
         const coordinate = Number(value);
         return Number.isFinite(coordinate) ? coordinate : null;
     });
     const decimal = result.rows.some(r => hasFraction(r[valueCol.name]));
-    // One canonical display string per point, shared by the data table and the
-    // chart's tooltips — exact values, masks and all, never the lossy coordinate.
+    // Invariant: one canonical display string per point, shared by the data table and the
+    // chart's tooltips. Exact values and masks never pass through the lossy coordinate.
     const displayValues = result.rows.map(r => {
         const value = r[valueCol.name];
         if (value === null || value === undefined) return null;
         return renderTextValue(w, r, valueCol, decimal, valueFormat);
     });
 
-    // The metric column is synthetic (v0/__count) when aggregated, so its server
-    // label embeds the raw column label — rebuild it from the chart spec instead.
+    // Protocol contract: the metric column is synthetic (v0/__count) when aggregated, so its
+    // server label embeds the raw column label, so rebuild it from the chart spec instead.
     const metricLabel = view.fn
         ? (view.value ? `${view.fn}(${labelOf(w, view.value)})` : fnLabel(w, "count"))
         : labelOf(w, valueCol.formatSource ?? valueCol.name);
@@ -110,8 +135,8 @@ export function renderChartView(w, container, chartModule) {
             el("summary", {}, translate(w, "chart.viewData")),
             el("div", { class: "ir-tablewrap" }, table)));
 
-    // No 2d context (headless/print environments): the description and data
-    // table still stand on their own; only the pixels are skipped.
+    // Invariant: no 2d context (headless/print environments): the description and data table
+    // still stand on their own; only the pixels are skipped.
     if (!canvas.getContext?.("2d")) return null;
 
     return chartModule.renderChart(canvas, {

@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 namespace InteractiveReport.Core.Schema;
 
 /// <summary>
-/// Per-report schema cache. Discovery runs once per definition; Clear/Remove exist for
+/// Caches one discovery task per effective report definition. <see cref="Clear"/> and <see cref="Remove"/> support
 /// configuration-reload invalidation at the host layer.
 /// </summary>
 public sealed class SchemaCache
@@ -13,12 +13,26 @@ public sealed class SchemaCache
     private readonly ConcurrentDictionary<SchemaCacheKey, Lazy<Task<ReportSchema>>> _cache = new();
     private readonly ILogger? _logger;
 
+    /// <summary>
+    /// Creates a schema cache with logging disabled.
+    /// </summary>
     public SchemaCache() : this(logger: null)
     {
     }
 
+    /// <summary>
+    /// Creates a schema cache with an optional diagnostic logger.
+    /// </summary>
+    /// <param name="logger">The host-provided logger that receives diagnostic events; <see langword="null"/> disables logging.</param>
     public SchemaCache(ILogger<SchemaCache>? logger) => _logger = logger;
 
+    /// <summary>
+    /// Returns the shared discovery task for an effective definition, starting it on the first request.
+    /// </summary>
+    /// <param name="definition">The definition whose schema-affecting fields form the cache key.</param>
+    /// <param name="discover">The asynchronous factory used to discover an uncached schema.</param>
+    /// <returns>The existing or newly created schema-discovery task.</returns>
+    /// <remarks>Stores a lazy task and emits a cache-hit or discovery log event.</remarks>
     public Task<ReportSchema> GetOrDiscover(
         ReportDefinition definition,
         Func<Task<ReportSchema>> discover)
@@ -35,7 +49,13 @@ public sealed class SchemaCache
         return lazy.Value;
     }
 
-    /// <summary>A failed discovery must not be cached forever — evict so the next request retries.</summary>
+    /// <summary>
+    /// Runs discovery and evicts the key on failure so the next request can retry.
+    /// </summary>
+    /// <param name="key">The definition-specific schema cache key.</param>
+    /// <param name="discover">The asynchronous factory used to discover an uncached schema.</param>
+    /// <returns>A task containing the discovered schema.</returns>
+    /// <remarks>Removes <paramref name="key"/> and logs when <paramref name="discover"/> fails.</remarks>
     private async Task<ReportSchema> WithEviction(
         SchemaCacheKey key,
         Func<Task<ReportSchema>> discover)
@@ -52,6 +72,11 @@ public sealed class SchemaCache
         }
     }
 
+    /// <summary>
+    /// Removes every cached definition variant for one report name.
+    /// </summary>
+    /// <param name="reportName">The case-insensitive configured report name to invalidate.</param>
+    /// <remarks>Mutates the cache and logs the number of removed entries.</remarks>
     public void Remove(string reportName)
     {
         var removed = 0;
@@ -64,6 +89,10 @@ public sealed class SchemaCache
             reportName);
     }
 
+    /// <summary>
+    /// Removes every cached schema-discovery task.
+    /// </summary>
+    /// <remarks>Mutates the cache and logs the number of removed entries.</remarks>
     public void Clear()
     {
         var count = _cache.Count;
@@ -78,6 +107,9 @@ public sealed class SchemaCache
         string Sql,
         string ContextSignature)
     {
+        /// <summary>Creates a key from every definition field that can change discovery SQL, bindings, or provider metadata.</summary>
+        /// <param name="definition">The resolved report definition to fingerprint.</param>
+        /// <returns>A case-stabilized key for schema-affecting definition content.</returns>
         public static SchemaCacheKey From(ReportDefinition definition) => new(
             definition.Name.ToUpperInvariant(),
             definition.Connection,

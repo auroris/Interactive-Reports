@@ -1,7 +1,7 @@
-// Expression-rule dialogs — the client face of the server's composable table
-// algebra: filters (predicate over rows), computed columns (value per row),
-// and highlights (predicate driving row/cell styling). Every rule edits the
-// exact terminal composable owned by the active table.
+// Expression-rule dialogs for the server's composable table algebra: filters (predicates over
+// rows), computed columns (values per row), and highlights
+// (predicate driving row/cell styling). Every rule edits the exact terminal composable owned by
+// the active table.
 
 import { el, labeled, sel } from "../../core/dom.js";
 import { openDialog } from "../../core/dialog.js";
@@ -14,15 +14,36 @@ import {
 } from "../state.js";
 import { colorPick, expressionColumnToken, expressionEditor, colOptions } from "./parts.js";
 
+/**
+ * Returns the normalized kind of a composable operation.
+ *
+ * @param {object|null|undefined} composable - The composable whose kind token will be normalized.
+ * @returns {string} The normalized composable kind.
+ */
 const kindOf = composable => String(composable?.kind ?? "").trim().toLowerCase();
 
-/// Highlight declarations in every repeated node owned by the active table form
-/// one priority set. Earlier nodes may be read-only in the packaged editor, but
-/// their ids and explicit/implicit precedence still reserve authoring space.
+// Invariant: highlight declarations in every repeated node owned by the active table form one
+// priority set. Earlier nodes may be read-only in the packaged editor, but their ids and
+// explicit/implicit precedence still reserve authoring space.
+/**
+ * Returns highlight rules authored by the active table with their mutation locations.
+ *
+ * @param {object} doc - The report state whose active table ownership will be inspected.
+ * @returns {Array<object>} Highlight rule objects across all nodes owned by the active table, in storage order.
+ */
 const ownedHighlights = doc => composableLocations(doc)
     .filter(location => location.owned && kindOf(location.composable) === "highlight")
     .flatMap(location => location.composable?.highlights ?? []);
 
+/**
+ * Opens an add or edit dialog for one active-table filter expression.
+ *
+ * @param {object} w - The report controller whose active table, expression capabilities, and apply pipeline are used.
+ * @param {{editIndex?: number, col?: string}} [options={}] - Existing rule index or an optional column used to seed a new expression.
+ * @returns {void} No value.
+ *
+ * Side effects: opens a dialog; applying it inserts or replaces a filter and runs the report.
+ */
 export function filterDialog(w, { editIndex, col } = {}) {
     const ctx = tableContext(w);
     const existing = editIndex !== undefined ? ctx.node(w.doc, "filter")?.filters?.[editIndex] : undefined;
@@ -51,6 +72,15 @@ export function filterDialog(w, { editIndex, col } = {}) {
     });
 }
 
+/**
+ * Opens an add or edit dialog for one computed column and allocates a stable synthetic id for new rules.
+ *
+ * @param {object} w - The report controller whose active output columns and expression capabilities are used.
+ * @param {number|undefined} editIndex - The zero-based rule index to edit; `undefined` creates a new rule.
+ * @returns {void} No value.
+ *
+ * Side effects: opens a dialog; applying it inserts or replaces a computed rule and runs the report.
+ */
 export function computeDialog(w, editIndex) {
     const ctx = tableContext(w);
     const existing = editIndex !== undefined ? ctx.node(w.doc, "compute")?.computed?.[editIndex] : undefined;
@@ -66,8 +96,8 @@ export function computeDialog(w, editIndex) {
         initial: existing?.expr,
         placeholder: w.t("expression.gridValuePlaceholder"),
         result: "value",
-        // Existing computed outputs can participate in the dependency graph. When
-        // editing, omit only the rule's own id; the server detects longer cycles.
+        // Protocol contract: existing computed outputs can participate in the dependency graph.
+        // When editing, omit only the rule's own id; the server detects longer cycles.
         columns: computeColumns,
     });
 
@@ -100,6 +130,15 @@ export function computeDialog(w, editIndex) {
     });
 }
 
+/**
+ * Opens an add or edit dialog for a sequenced row or cell highlight rule.
+ *
+ * @param {object} w - The report controller whose active columns, owned highlights, and apply pipeline are used.
+ * @param {number|undefined} editIndex - The zero-based rule index to edit; `undefined` creates a new rule.
+ * @returns {void} No value.
+ *
+ * Side effects: opens a dialog; applying it validates name and colors, then inserts or replaces a highlight and runs the report.
+ */
 export function highlightDialog(w, editIndex) {
     const ctx = tableContext(w);
     const existing = editIndex !== undefined ? ctx.node(w.doc, "highlight")?.highlights?.[editIndex] : undefined;

@@ -9,10 +9,23 @@ namespace InteractiveReport.Core.Composition;
 
 /// <summary>
 /// Builds the common terminal datasets over any completed composable relation. Public
-/// names are kept out of SQL; the reader restores them by ordinal from PagePublicNames.
+/// names are kept out of SQL; the reader restores them by ordinal from <c>PagePublicNames</c>.
 /// </summary>
 internal static class ComposableTerminalQueryComposer
 {
+    /// <summary>
+    /// Composes main rows, total count, optional footer aggregates, and optional break totals.
+    /// </summary>
+    /// <param name="definition">Supplies dialect and row/chart limits.</param>
+    /// <param name="relation">The completed lowered relation to query without mutating.</param>
+    /// <param name="terminal">The bound owner-local projection, sorts, decorations, breaks, and aggregates.</param>
+    /// <param name="evaluationUtcNow">The fixed UTC timestamp used to evaluate time-sensitive expressions consistently throughout the request.</param>
+    /// <param name="pageIndex">The one-based page index passed to SQLKata.</param>
+    /// <param name="pageSize">The positive page size when paging is active.</param>
+    /// <param name="pageAll">Whether the request selected the explicit unpaged mode.</param>
+    /// <param name="terminalShape">The optional group, pivot, or chart shape that supplies default ordering.</param>
+    /// <param name="chartTerminal">Whether chart point limits replace ordinary paging.</param>
+    /// <returns>Independent SQLKata queries plus public names for the main-row projection.</returns>
     public static MappedTerminalQueries Compose(
         ReportDefinition definition,
         ComposableSqlRelation relation,
@@ -25,8 +38,8 @@ internal static class ComposableTerminalQueryComposer
         bool chartTerminal = false)
     {
         var dialect = definition.GetEffectiveDialect();
-        // ComposableSqlRelation still owns a mutable physical-name allocator. Every
-        // terminal role receives an independent snapshot so adding a footer or break
+        // ComposableSqlRelation still owns a mutable physical-name allocator.
+        // Every terminal role receives an independent snapshot so adding a footer or break
         // query cannot rename aliases in an unrelated statement.
         var rowRelation = Isolate(relation);
         var core = Addressable(rowRelation);
@@ -83,6 +96,15 @@ internal static class ComposableTerminalQueryComposer
             publicNames);
     }
 
+    /// <summary>
+    /// Composes one unpaged export query with terminal projection and effective ordering.
+    /// </summary>
+    /// <param name="definition">Supplies the dialect used for null-placement SQL.</param>
+    /// <param name="relation">The completed lowered relation to query without mutating.</param>
+    /// <param name="terminal">The bound owner-local export projection and sorts.</param>
+    /// <param name="terminalShape">The optional shape that supplies default ordering.</param>
+    /// <param name="maxRows">The public row cap; a positive cap fetches one extra sentinel when possible.</param>
+    /// <returns>An isolated SQLKata query and its public projection names.</returns>
     public static MappedQuery ComposeExport(
         ReportDefinition definition,
         ComposableSqlRelation relation,
@@ -108,6 +130,13 @@ internal static class ComposableTerminalQueryComposer
             terminal.ProjectionColumns.Select(column => column.Name).ToList());
     }
 
+    /// <summary>
+    /// Composes the request-local aggregate query for the terminal relation.
+    /// </summary>
+    /// <param name="relation">An isolated completed relation.</param>
+    /// <param name="aggregates">Validated terminal aggregates in result ordinal order.</param>
+    /// <param name="dialect">The database dialect whose SQL rules apply.</param>
+    /// <returns>A one-row query projecting only generated aggregate aliases.</returns>
     private static Query AggregateQuery(
         ComposableSqlRelation relation,
         IReadOnlyList<ValidAggregate> aggregates,
@@ -132,6 +161,15 @@ internal static class ComposableTerminalQueryComposer
             metrics.Select(metric => grouped.Schema.Lookup[metric.Id]).ToList());
     }
 
+    /// <summary>
+    /// Composes the control-break query for the terminal relation.
+    /// </summary>
+    /// <param name="relation">An isolated completed relation.</param>
+    /// <param name="breaks">The ordered break columns whose values define a group boundary.</param>
+    /// <param name="aggregates">Validated terminal aggregates in result ordinal order.</param>
+    /// <param name="effectiveSorts">Final sorts; the leading break-key sorts order subtotal rows.</param>
+    /// <param name="dialect">The database dialect whose SQL rules apply.</param>
+    /// <returns>A grouped query projecting break keys, generated count, and generated aggregate aliases.</returns>
     private static Query BreakQuery(
         ComposableSqlRelation relation,
         IReadOnlyList<ColumnModel> breaks,
@@ -167,15 +205,31 @@ internal static class ComposableTerminalQueryComposer
         return query;
     }
 
+    /// <summary>
+    /// Allocates an internal identifier by prepending underscores until it is unique.
+    /// </summary>
+    /// <param name="candidate">The preferred generated identifier.</param>
+    /// <param name="used">The set of identifiers already allocated in the generated scope.</param>
+    /// <returns>A unique name derived from the requested base value.</returns>
     private static string Unique(string candidate, HashSet<string> used)
     {
         while (!used.Add(candidate)) candidate = $"_{candidate}";
         return candidate;
     }
 
+    /// <summary>
+    /// Wraps a completed relation as an addressable derived table.
+    /// </summary>
+    /// <param name="relation">The relation whose query should be cloned and aliased.</param>
+    /// <returns>A new outer query reading from the cloned relation.</returns>
     private static Query Addressable(ComposableSqlRelation relation)
         => new Query().From(relation.Query.Clone().As(relation.Names.Relation()));
 
+    /// <summary>
+    /// Clones and isolates a query before provider-neutral SQL composition mutates it.
+    /// </summary>
+    /// <param name="relation">The relation whose mutable SQLKata and allocator state must be isolated.</param>
+    /// <returns>A copy with cloned query, copied physical map, and a fresh allocator seeded from all logical/physical names.</returns>
     private static ComposableSqlRelation Isolate(ComposableSqlRelation relation)
     {
         var reserved = relation.Schema.Columns
@@ -191,6 +245,13 @@ internal static class ComposableTerminalQueryComposer
         };
     }
 
+    /// <summary>
+    /// Combines request sorts with terminal-shape defaults in execution order.
+    /// </summary>
+    /// <param name="terminal">The bound explicit sorts and break columns.</param>
+    /// <param name="shape">The optional terminal shape supplying stable defaults.</param>
+    /// <param name="schema">The completed schema used to resolve chart role columns.</param>
+    /// <returns>Break columns first, then explicit sorts, then non-conflicting shape defaults.</returns>
     private static IEnumerable<ValidSort> EffectiveSorts(
         BoundLocalResult terminal,
         CompiledShape? shape,
@@ -213,6 +274,13 @@ internal static class ComposableTerminalQueryComposer
             .Concat(declared.Where(sort => !breakNames.Contains(sort.Column.Name)));
     }
 
+    /// <summary>
+    /// Derives stable default sorts from the terminal shape.
+    /// </summary>
+    /// <param name="shape">The optional terminal group, pivot, or chart shape.</param>
+    /// <param name="schema">The shape output schema; chart label and value occupy its first two columns.</param>
+    /// <param name="hasTerminalSort">Whether an explicit sort suppresses chart-owned default ordering.</param>
+    /// <returns>Ascending dimensions for group/pivot, chart-owned ordering for an unsorted chart, or an empty sequence.</returns>
     private static IEnumerable<ValidSort> ShapeSorts(
         CompiledShape? shape,
         ReportSchema schema,
@@ -232,6 +300,14 @@ internal static class ComposableTerminalQueryComposer
             : [new ValidSort(label, chart.SortDir)];
     }
 
+    /// <summary>
+    /// Applies validated sort terms to a terminal SQL query.
+    /// </summary>
+    /// <param name="query">The mutable terminal query to order.</param>
+    /// <param name="sort">The validated direction and optional null placement.</param>
+    /// <param name="physicalName">The allocated SQL projection name.</param>
+    /// <param name="dialect">The database dialect whose SQL rules apply.</param>
+    /// <remarks>Mutates <paramref name="query"/>. SQL Server emulates explicit null placement with a leading CASE rank.</remarks>
     private static void ApplySort(
         Query query,
         ValidSort sort,
@@ -262,14 +338,17 @@ internal static class ComposableTerminalQueryComposer
     }
 }
 
+/// <summary>Contains the logical SQL result sets needed for a terminal table.</summary>
 internal sealed record TerminalQueries(
     Query MainRows,
     Query Count,
     Query? FooterAggregates = null,
     Query? BreakTotals = null);
 
+/// <summary>Pairs terminal SQL result sets with public main-row names in projection order.</summary>
 internal sealed record MappedTerminalQueries(
     TerminalQueries Queries,
     IReadOnlyList<string> PagePublicNames);
 
+/// <summary>Pairs one SQLKata query with public output names in projection order.</summary>
 internal sealed record MappedQuery(Query Query, IReadOnlyList<string> PublicNames);
