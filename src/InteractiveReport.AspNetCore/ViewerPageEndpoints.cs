@@ -20,16 +20,16 @@ internal static class ViewerPageEndpoints
     /// <summary>
     /// Renders the standard report viewer page.
     /// </summary>
-    /// <param name="id">The numeric report-document id embedded into the custom element.</param>
+    /// <param name="name">The appsettings report configuration name embedded into the custom element.</param>
     /// <param name="ctx">The current HTTP request and response context.</param>
     /// <returns>The HTTP result to send to the client.</returns>
     /// <remarks>Reads options, route, query, culture, and language headers; writes <c>Cache-Control: no-store</c> when enabled.</remarks>
-    internal static IResult Report(long id, HttpContext ctx)
+    internal static IResult Report(string name, HttpContext ctx)
     {
         if (!Enabled(ctx)) return Results.NotFound();
 
         var prefix = HtmlEncoder.Default.Encode(StripSegments(ctx, segments: 2));
-        var encodedName = HtmlEncoder.Default.Encode(id.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        var encodedName = HtmlEncoder.Default.Encode(name);
         var language = Language(ctx);
         var fallback = language == "fr-CA"
             ? $"Cette page nécessite JavaScript et le script de rapport fourni ({prefix}/ui/ir.js). Si ce message demeure affiché, le chargement du script a échoué."

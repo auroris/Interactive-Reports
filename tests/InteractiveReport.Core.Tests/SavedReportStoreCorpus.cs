@@ -135,6 +135,27 @@ public abstract class SavedReportStoreCorpus
     }
 
     [SkippableFact]
+    public async Task ListFamily_returns_the_complete_unfiltered_named_family()
+    {
+        var anchor = Make("Anchor", "alice", global: true);
+        var alicePrivate = Make("Alice private", "alice");
+        var bobPrivate = Make("Bob private", "bob");
+        var otherFamily = Make("Other family", "bob", report: "big-orders");
+        await Store.Create(anchor);
+        await Store.Create(alicePrivate);
+        await Store.Create(bobPrivate);
+        await Store.Create(otherFamily);
+
+        var family = await Store.ListFamily(anchor.ReportName);
+
+        Assert.Equal(3, family.Count);
+        Assert.Contains(family, report => report.Id == alicePrivate.Id);
+        Assert.Contains(family, report => report.Id == bobPrivate.Id);
+        Assert.DoesNotContain(family, report => report.Id == otherFamily.Id);
+        Assert.Empty(await Store.ListFamily("missing-family"));
+    }
+
+    [SkippableFact]
     public async Task ReplaceDefault_atomically_promotes_one_global_report_and_retains_the_previous_default()
     {
         var original = Make("Original", "admin");

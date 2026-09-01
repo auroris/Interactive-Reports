@@ -180,7 +180,7 @@ test("a Pivot stored after its same-table transformations still executes first",
         // Saved-report writes validate and hydrate schema caches before persistence.
         // Simulate an older external document at the browser ingestion boundary so
         // this query, rather than the save endpoint, proves advisory caches are ignored.
-        await page.route(`**/api/reports/${saved.id}`, async route => {
+        await page.route(`**/api/reports/orders/${saved.id}`, async route => {
             const upstream = await route.fetch();
             const document = await upstream.json();
             document.state.tables.pivotSource.schema = structuredClone(staleSchema);

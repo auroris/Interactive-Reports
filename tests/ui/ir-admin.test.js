@@ -38,10 +38,13 @@ const json = (value, status = 200) => new Response(JSON.stringify(value), {
 globalThis.fetch = async (url, options = {}) => {
     const method = options.method ?? "GET";
     if (String(url) === "/admin-api") {
+        return json([{ name: "orders", title: "Orders" }]);
+    }
+    if (String(url) === "/admin-api/orders") {
         return json([{
             id: 1,
-            reportName: "__saved-reports",
-            title: "Saved Reports",
+            reportName: "orders",
+            title: "Default",
             isDefault: true,
             isGlobal: true,
         }]);
@@ -110,6 +113,9 @@ test("the administration shell and its embedded report share the selected locale
     assert.equal(admin.shadowRoot.querySelector(".ir-admin-count").textContent,
         "Connecté en tant que administrateur");
     assert.equal(admin.shadowRoot.querySelector("interactive-report").getAttribute("lang"), "fr-CA");
+    assert.deepEqual(admin.availableReports.map(report => [report.reportName, report.id]), [
+        ["orders", 1],
+    ], "the admin shell enumerates the root families and then each family document list");
 
     admin.remove();
 });

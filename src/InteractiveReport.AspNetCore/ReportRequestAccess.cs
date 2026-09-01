@@ -44,9 +44,11 @@ public sealed record ReportAccessRequest
 /// </summary>
 /// <param name="Resource">The hydrated resource to pass to operation authorization.</param>
 /// <param name="Error">An endpoint result that stops authorization before the operation checks.</param>
+/// <param name="AdministratorRequired">Whether the prepared resource requires administrator access.</param>
 public sealed record ReportAccessResourcePreparation(
     InteractiveReportAuthorizationResource? Resource,
-    IResult? Error = null);
+    IResult? Error = null,
+    bool AdministratorRequired = false);
 
 /// <summary>Contains either the authorized executable definition or the HTTP result that stopped access.</summary>
 /// <param name="Definition">The authorized definition, present only on success.</param>
@@ -175,12 +177,14 @@ internal sealed class ReportAccessService : IReportAccessService
             return new ReportAccessResult(null, EndpointExtensions.ReportNotFound());
 
         var suppliedResource = request.Resource;
+        var preparedAdministratorRequired = false;
         if (request.PrepareResource is not null)
         {
             var prepared = await request.PrepareResource(definition, ct);
             if (prepared.Error is not null)
                 return new ReportAccessResult(null, prepared.Error);
             suppliedResource = prepared.Resource;
+            preparedAdministratorRequired = prepared.AdministratorRequired;
         }
 
         var resource = suppliedResource is null
@@ -191,6 +195,7 @@ internal sealed class ReportAccessService : IReportAccessService
             request.Actions,
             resource,
             request.AdministratorRequired
+                || preparedAdministratorRequired
                 || definition.Authorization?.AdministratorsOnly == true,
             request.HideDenied || definition.Authorization?.AdministratorsOnly == true,
             request.DenialDetail,

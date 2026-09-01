@@ -44,7 +44,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
             HttpMethod.Post, "/api/reports/orders/export", "action-admin", state));
         Assert.Equal(HttpStatusCode.OK, export.StatusCode);
         using var list = await host.Client.SendAsync(Request(
-            HttpMethod.Get, $"/api/reports/{host.OrdersId}/saved", "action-admin"));
+            HttpMethod.Get, "/api/reports/orders", "action-admin"));
         Assert.Equal(HttpStatusCode.OK, list.StatusCode);
 
         using var save = await host.Client.SendAsync(Request(
@@ -63,7 +63,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
         Assert.Equal(HttpStatusCode.OK, makeDefault.StatusCode);
 
         using var load = await host.Client.SendAsync(Request(
-            HttpMethod.Get, $"/api/reports/{id}", "action-admin"));
+            HttpMethod.Get, $"/api/reports/orders/{id}", "action-admin"));
         Assert.Equal(HttpStatusCode.OK, load.StatusCode);
         using var update = await host.Client.SendAsync(Request(
             HttpMethod.Put,
@@ -291,7 +291,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
 
         using var load = await host.Client.SendAsync(Request(
             HttpMethod.Get,
-            $"/api/reports/{saved.GetProperty("id").GetInt64()}",
+            $"/api/reports/orders/{saved.GetProperty("id").GetInt64()}",
             "ordinary-user"));
         Assert.Equal(HttpStatusCode.OK, load.StatusCode);
         var loadedState = (await ReadJson(load)).GetProperty("state");
@@ -339,7 +339,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
         Assert.NotNull(proposedId);
         using var load = await host.Client.SendAsync(Request(
             HttpMethod.Get,
-            $"/api/reports/{proposedId}",
+            $"/api/reports/orders/{proposedId}",
             "ordinary-user"));
         Assert.Equal(HttpStatusCode.NotFound, load.StatusCode);
     }
@@ -437,7 +437,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
 
         using var load = await host.Client.SendAsync(Request(
             HttpMethod.Get,
-            $"/api/reports/{report.Id}",
+            $"/api/reports/orders/{report.Id}",
             "ordinary-user"));
 
         Assert.Equal(HttpStatusCode.OK, load.StatusCode);

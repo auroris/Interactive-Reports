@@ -48,11 +48,13 @@ globalThis.fetch = async (url, options = {}) => {
         });
     }
     if (request.url.endsWith("/whoami")) return json({ identity: "test-user" });
-    if (request.url.endsWith("/saved")) return json([]);
-    if (request.method === "GET" && /\/[^/?]+$/.test(request.url)) {
-        const id = request.url.split("/").at(-1);
+    const family = /^\/programmatic-api\/([^/?]+)$/.exec(request.url)?.[1];
+    if (request.method === "GET" && family)
+        return json([{ id: 1, reportName: family, title: "Default", isDefault: true, isGlobal: true }]);
+    const document = /^\/programmatic-api\/([^/?]+)\/(\d+)$/.exec(request.url);
+    if (request.method === "GET" && document) {
         return json({
-            summary: { id, reportName: id, title: "Default", isDefault: true, isGlobal: true },
+            summary: { id: Number(document[2]), reportName: document[1], title: "Default", isDefault: true, isGlobal: true },
             state: {},
         });
     }
@@ -206,7 +208,7 @@ test("client control overrides win over server suggestions and global disabled i
     assert.equal(report.isControlEnabled("search"), true);
     assert.equal(report.isControlEnabled("filter"), false);
     assert.equal(report.shadowRoot.querySelector(".ir-search").hidden, false);
-    assert.equal(requests.some(request => request.url.endsWith("/saved")), true);
+    assert.equal(requests.some(request => request.url === "/programmatic-api/orders"), true);
 
     assert.equal(report.setControlEnabled("FILTER", true), true, "control names are case-insensitive");
     assert.equal(report.isControlEnabled("filter"), true);
@@ -262,7 +264,7 @@ test("client control overrides win over server suggestions and global disabled i
     assert.equal(report.shadowRoot.querySelector(".ir-search").hidden, false);
 
     report.setControlEnabled("savedReports", true);
-    await settle(() => requests.some(request => request.url.endsWith("/saved")));
+    await settle(() => requests.some(request => request.url === "/programmatic-api/orders"));
     assert.equal(report.isControlEnabled("savedReports"), true);
 
     report.shadowRoot.querySelector(".ir-actionsbtn").click();

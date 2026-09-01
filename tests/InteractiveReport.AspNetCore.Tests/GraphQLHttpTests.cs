@@ -55,8 +55,9 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
             await connection.OpenAsync();
             await using var command = connection.CreateCommand();
             command.CommandText = """
-                CREATE TABLE ORDERS (ID INTEGER PRIMARY KEY, LABEL TEXT NOT NULL);
-                INSERT INTO ORDERS (ID, LABEL) VALUES (1, 'first'), (2, 'second'), (3, 'third');
+                CREATE TABLE ORDERS (ID INTEGER PRIMARY KEY, LABEL TEXT NOT NULL, AMOUNT NUMERIC NOT NULL);
+                INSERT INTO ORDERS (ID, LABEL, AMOUNT)
+                VALUES (1, 'first', 10), (2, 'second', -5), (3, 'third', 15);
                 """;
             await command.ExecuteNonQueryAsync();
         }
@@ -73,7 +74,7 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
             ["InteractiveReport:Administrators:0"] = "admin",
             [$"InteractiveReport:Reports:{ReportName}:Connection"] = "Data",
             [$"InteractiveReport:Reports:{ReportName}:Dialect"] = "Sqlite",
-            [$"InteractiveReport:Reports:{ReportName}:Sql"] = "SELECT ID, LABEL FROM ORDERS",
+            [$"InteractiveReport:Reports:{ReportName}:Sql"] = "SELECT ID, LABEL, AMOUNT FROM ORDERS",
             [$"InteractiveReport:Reports:{ReportName}:Authorization:AllowAnonymous"] = "true",
             [$"InteractiveReport:Reports:{ReportName}:DocumentFiles:0"] = "ReportDocuments/orders.file.json",
             ["InteractiveReport:SavedReports:Connection"] = "Data",
@@ -197,7 +198,7 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
     public async Task Configured_report_uses_the_same_saved_report_lookup_and_executes_anonymously()
     {
         var reportId = await DefaultId();
-        using var list = await Send(HttpMethod.Get, $"/api/reports/{reportId}/saved", identity: null);
+        using var list = await Send(HttpMethod.Get, $"/api/reports/{ReportName}", identity: null);
         Assert.Equal(HttpStatusCode.OK, list.StatusCode);
         var reports = await ReadJson(list);
         var configured = reports.EnumerateArray().Single(item =>
@@ -219,7 +220,7 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
     public async Task Invalid_configured_report_is_deleted_and_hidden_as_not_found()
     {
         var reportId = await DefaultId();
-        using var list = await Send(HttpMethod.Get, $"/api/reports/{reportId}/saved", identity: null);
+        using var list = await Send(HttpMethod.Get, $"/api/reports/{ReportName}", identity: null);
         var reports = await ReadJson(list);
         var id = reports.EnumerateArray().Single(item =>
             item.GetProperty("title").GetString() == "File View")
@@ -249,6 +250,49 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
         Assert.Equal("NOT_FOUND", body.GetProperty("errors")[0]
             .GetProperty("extensions").GetProperty("code").GetString());
         Assert.Null(await _app!.Services.GetRequiredService<ISavedReportStore>().Get(id));
+    }
+
+    [Fact]
+    public async Task Configured_query_time_validation_failure_does_not_delete_the_source_identity()
+    {
+        var reportId = await DefaultId();
+        using var list = await Send(HttpMethod.Get, $"/api/reports/{ReportName}", identity: null);
+        var reports = await ReadJson(list);
+        var id = reports.EnumerateArray().Single(item =>
+            item.GetProperty("title").GetString() == "File View")
+            .GetProperty("id").GetInt64();
+
+        var path = Path.Combine(_tempRoot, "ReportDocuments", "orders.file.json");
+        await File.WriteAllTextAsync(path, """
+            {
+              "title": "File View",
+              "state": {
+                "activeTable": "chart",
+                "tables": {
+                  "chart": {
+                    "from": "definition",
+                    "composables": [
+                      {
+                        "kind": "chart",
+                        "type": "pie",
+                        "label": "LABEL",
+                        "value": "AMOUNT",
+                        "fn": "sum"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+            """);
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddMinutes(2));
+
+        using var response = await GraphQL(id, identity: null);
+        var body = await ReadJson(response);
+
+        Assert.Equal("REPORT_VALIDATION_FAILED", body.GetProperty("errors")[0]
+            .GetProperty("extensions").GetProperty("code").GetString());
+        Assert.NotNull(await _app!.Services.GetRequiredService<ISavedReportStore>().Get(id));
     }
 
     [Fact]

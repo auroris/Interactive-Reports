@@ -7,10 +7,10 @@ import { reportId } from "./support.js";
 // shell hosts the saved-report listing for the dev administrator identity.
 
 test("the packaged viewer page serves a working report", async ({ page, request }) => {
-    const id = await reportId(request, "orders");
-    await page.goto(`/api/reports/${id}/view`);
+    await reportId(request, "orders");
+    await page.goto("/api/reports/orders/view");
 
-    await expect(page).toHaveTitle(String(id));
+    await expect(page).toHaveTitle("orders");
     await expect(page.getByRole("table")).toBeVisible();
     await expect(page.getByRole("button", { name: "Actions", exact: true })).toBeEnabled();
     const rows = page.getByRole("table").locator("tbody tr.ir-row");
@@ -32,8 +32,8 @@ test("the Workbench exposes a Canadian French report page", async ({ page }) => 
 });
 
 test("a dataSource-configured report with no dialect loads through the packaged page", async ({ page, request }) => {
-    const id = await reportId(request, "order-feed");
-    await page.goto(`/api/reports/${id}/view`);
+    await reportId(request, "order-feed");
+    await page.goto("/api/reports/order-feed/view");
 
     await expect(page.getByRole("columnheader", { name: "Order #", exact: true })).toBeVisible();
     await expect(page.getByText("1 – 50 of 500 rows", { exact: true })).toBeVisible();

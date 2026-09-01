@@ -152,27 +152,18 @@ internal static class SavedReportEndpoints
 
     // End-user saved-report surface.
 
-    /// <summary>Lists every report document visible through the caller's authorized report definitions.</summary>
-    internal static async Task<IResult> ListAvailable(HttpContext ctx, CancellationToken ct)
+    /// <summary>Lists appsettings report configurations visible to the current caller.</summary>
+    internal static async Task<IResult> ListConfigurations(HttpContext ctx, CancellationToken ct)
     {
-        await Synchronizer(ctx).EnsureSynced(ct);
-        var identity = Identity(ctx);
         var options = Options(ctx);
-        var reportNames = options.Reports.Keys.ToList();
-        if (ReportConnectionRegistry.IsStoreConfigured(options.SavedReports))
-            reportNames.Add(SavedReportsListingDefinition.Name);
-
-        var summaries = new List<SavedReportSummary>();
+        var summaries = new List<ReportConfigurationSummary>();
         IResult? firstDenial = null;
-        var authorizedDefinitions = 0;
-        foreach (var reportName in reportNames)
+        foreach (var reportName in options.Reports.Keys)
         {
             var access = await Access(ctx).Authorize(new ReportAccessRequest
             {
                 ReportName = reportName,
-                Actions = SavedReportsListingDefinition.Matches(reportName)
-                    ? [InteractiveReportAction.ListAllSavedReports]
-                    : [InteractiveReportAction.ListSavedReports],
+                Actions = [InteractiveReportAction.ViewReport],
                 HideDenied = true,
             }, ctx, ct);
             if (access.Error is not null)
@@ -183,49 +174,78 @@ internal static class SavedReportEndpoints
                 continue;
             }
 
-            authorizedDefinitions++;
             var definition = access.Definition!;
-            var visible = await SavedStore(ctx).ListVisibleMetadata(definition.Name, identity, ct);
-            if (!visible.Any(report => report.IsDefault))
-            {
-                await DefaultDocuments(ctx).CreateMissing(definition, ct);
-                visible = await SavedStore(ctx).ListVisibleMetadata(definition.Name, identity, ct);
-            }
-            summaries.AddRange(visible.Select(report => Summary(report, identity)));
+            summaries.Add(new ReportConfigurationSummary(
+                definition.Name,
+                definition.Title ?? ColumnModel.Prettify(definition.Name)));
         }
 
-        return authorizedDefinitions == 0 && firstDenial is not null
+        return summaries.Count == 0 && firstDenial is not null
             ? firstDenial
-            : Results.Json(summaries, IrJson.Options);
+            : Results.Json(
+                summaries.OrderBy(summary => summary.Title, StringComparer.OrdinalIgnoreCase),
+                IrJson.Options);
     }
 
     /// <summary>
     /// Lists saved reports visible to the caller for one authorized report definition.
     /// </summary>
-    /// <param name="id">The numeric document id used to select its report family.</param>
+    /// <param name="name">The appsettings report configuration name.</param>
     /// <param name="ctx">The current HTTP request and response context.</param>
     /// <param name="ct">Cancels authorization, document synchronization, and persistence reads.</param>
-    /// <returns>A JSON array containing public documents and the caller's private documents.</returns>
+    /// <returns>A JSON array containing the complete family for administrators, or public and caller-owned documents otherwise.</returns>
     /// <remarks>Synchronizes configured document identities before listing.</remarks>
-    internal static async Task<IResult> ListForReport(long id, HttpContext ctx, CancellationToken ct)
+    internal static async Task<IResult> ListForReport(string name, HttpContext ctx, CancellationToken ct)
     {
-        await Synchronizer(ctx).EnsureSynced(ct);
-        var anchor = await SavedStore(ctx).GetMetadata(id, ct);
-        if (anchor is null) return EndpointExtensions.SavedReportNotFound();
-        var identity = Identity(ctx);
-        var builtIn = SavedReportAccessPolicy.Read(anchor, identity, administrator: false);
         var access = await Access(ctx).Authorize(new ReportAccessRequest
         {
-            ReportName = anchor.ReportName,
-            Actions = [InteractiveReportAction.ReadSavedReport, InteractiveReportAction.ListSavedReports],
-            Resource = Resource(anchor.ReportName, anchor),
-            AdministratorRequired = builtIn != SavedReportAccess.Allowed,
-            HideDenied = builtIn != SavedReportAccess.Allowed,
+            ReportName = name,
+            Actions = SavedReportsListingDefinition.Matches(name)
+                ? [InteractiveReportAction.ListAllSavedReports]
+                : [InteractiveReportAction.ListSavedReports],
+            AdministratorRequired = SavedReportsListingDefinition.Matches(name),
+            HideDenied = true,
         }, ctx, ct);
         if (access.Error is not null) return access.Error;
-        var def = access.Definition!;
+        var definition = access.Definition!;
 
-        var visible = await SavedStore(ctx).ListVisibleMetadata(def.Name, identity, ct);
+        // The store returns every public and private document for the configured family in one
+        // query. Reconciliation consumes that complete truth before caller visibility is applied.
+        List<SavedReport> family;
+        try
+        {
+            family = (await Synchronizer(ctx).ReconcileFamily(definition.Name, ct)).ToList();
+            if (!family.Any(report => report.IsDefault))
+            {
+                var created = await DefaultDocuments(ctx).CreateMissing(
+                    definition, family, ct);
+                family.RemoveAll(report => report.Id == created.Id);
+                family.Add(created);
+            }
+        }
+        catch (ReportDocumentBootstrapException)
+        {
+            return EndpointExtensions.SavedReportNotFound();
+        }
+        var identity = Identity(ctx);
+        var administratorDenial = await Access(ctx).AuthorizeEndpoint(new EndpointAccessRequest
+        {
+            Actions = [InteractiveReportAction.ListAllSavedReports],
+            Resource = new InteractiveReportAuthorizationResource
+            {
+                ReportName = definition.Name,
+            },
+            AdministratorRequired = true,
+            HideDenied = true,
+        }, ctx, ct);
+        if (administratorDenial is IStatusCodeHttpResult { StatusCode: >= 500 })
+            return administratorDenial;
+        var administrator = administratorDenial is null;
+        var visible = family
+            .Where(report => VisibleTo(report, identity, administrator))
+            .OrderByDescending(report => report.IsDefault)
+            .ThenByDescending(report => report.IsGlobal)
+            .ThenBy(report => report.Title, StringComparer.OrdinalIgnoreCase);
         return Results.Json(visible.Select(report => Summary(report, identity)), IrJson.Options);
     }
 
@@ -234,14 +254,13 @@ internal static class SavedReportEndpoints
     /// </summary>
     /// <param name="id">The numeric document id used to select its report family.</param>
     /// <param name="ctx">The current HTTP request and response context.</param>
-    /// <param name="ct">Cancels authorization, request-body reading, state validation, synchronization, and persistence.</param>
+    /// <param name="ct">Cancels authorization, request-body reading, state validation, and persistence.</param>
     /// <returns>The created summary with HTTP 201, or an authentication, access, validation, or title-conflict result.</returns>
-    /// <remarks>Consumes the JSON request body, may refresh schema caches in the submitted state, synchronizes configured documents, and inserts one saved-report row.</remarks>
+    /// <remarks>Consumes the JSON request body, may refresh schema caches in the submitted state, and inserts one saved-report row.</remarks>
     internal static async Task<IResult> Save(long id, HttpContext ctx, CancellationToken ct)
     {
         var identity = Identity(ctx);
         if (identity is null) return EndpointExtensions.AuthenticationRequired();
-        await Synchronizer(ctx).EnsureSynced(ct);
         var anchor = await SavedStore(ctx).GetMetadata(id, ct);
         if (anchor is null) return EndpointExtensions.SavedReportNotFound();
         var builtIn = SavedReportAccessPolicy.Read(anchor, identity, administrator: false);
@@ -339,41 +358,61 @@ internal static class SavedReportEndpoints
     /// <summary>
     /// Loads one visible saved report and returns its metadata plus raw report-state document.
     /// </summary>
+    /// <param name="name">The appsettings report configuration name.</param>
     /// <param name="id">The numeric report-document identifier from the route.</param>
     /// <param name="ctx">The current HTTP request and response context.</param>
     /// <param name="ct">Cancels persistence reads, authorization, and missing-file cleanup.</param>
     /// <returns>The saved-report document JSON, or a hidden not-found/access result.</returns>
     /// <remarks>Trusts database identity metadata. A missing configured file deletes its stale row and restores a synthetic default when needed. A configured state that fails processing is logged and deleted without fallback. Both cases return 404.</remarks>
-    internal static async Task<IResult> Load(long id, HttpContext ctx, CancellationToken ct)
+    internal static async Task<IResult> Load(
+        string name,
+        long id,
+        HttpContext ctx,
+        CancellationToken ct)
     {
-        var report = await SavedStore(ctx).Get(id, ct);
-        if (report is null) return EndpointExtensions.SavedReportNotFound();
-        var metadata = report.Metadata();
-
-        // Loading a state document still requires access to the underlying report.
+        SavedReport? report = null;
         var identity = Identity(ctx);
-        var builtIn = SavedReportAccessPolicy.Read(metadata, identity, administrator: false);
         var access = await Access(ctx).Authorize(new ReportAccessRequest
         {
-            ReportName = metadata.ReportName,
+            ReportName = name,
             Actions = [InteractiveReportAction.ReadSavedReport],
-            Resource = Resource(metadata.ReportName, metadata),
-            AdministratorRequired = builtIn != SavedReportAccess.Allowed,
             HideDenied = true,
+            PrepareResource = async (definition, token) =>
+            {
+                report = await SavedStore(ctx).Get(id, token);
+                if (report is null
+                    || !string.Equals(
+                        report.ReportName,
+                        definition.Name,
+                        StringComparison.Ordinal))
+                    return new ReportAccessResourcePreparation(
+                        Resource: null,
+                        Error: EndpointExtensions.SavedReportNotFound());
+
+                var metadata = report.Metadata();
+                var builtIn = SavedReportAccessPolicy.Read(
+                    metadata, identity, administrator: false);
+                return new ReportAccessResourcePreparation(
+                    Resource(definition.Name, metadata),
+                    AdministratorRequired: builtIn != SavedReportAccess.Allowed);
+            },
         }, ctx, ct);
         if (access.Error is not null) return access.Error;
+        // Resource preparation succeeded only after loading a matching row.
+        var loadedReport = report!;
 
         try
         {
             JsonElement state;
-            if (report.Origin == SavedReportOrigin.Configured)
+            if (loadedReport.Origin == SavedReportOrigin.Configured)
             {
                 ConfiguredReportDocument? file;
                 try
                 {
-                    file = report.SourceFile is null
+                    file = loadedReport.SourceFile is null
                         ? null
-                        : ConfiguredDocuments(ctx).Find(report.ReportName, report.SourceFile);
+                        : ConfiguredDocuments(ctx).Find(
+                            loadedReport.ReportName, loadedReport.SourceFile);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
@@ -381,13 +420,14 @@ internal static class SavedReportEndpoints
                 }
                 catch (Exception ex)
                 {
-                    await RemoveInvalidConfiguredDocument(report, ctx, ex, ct);
+                    await RemoveInvalidConfiguredDocument(loadedReport, ctx, ex, ct);
                     return EndpointExtensions.SavedReportNotFound();
                 }
 
                 if (file is null)
                 {
-                    await RemoveMissingConfiguredDocument(report, access.Definition!, ctx, ct);
+                    await RemoveMissingConfiguredDocument(
+                        loadedReport, access.Definition!, ctx, ct);
                     return EndpointExtensions.SavedReportNotFound();
                 }
 
@@ -401,33 +441,33 @@ internal static class SavedReportEndpoints
                 }
                 catch (ReportValidationException ex)
                 {
-                    await RemoveInvalidConfiguredDocument(report, ctx, ex, ct);
+                    await RemoveInvalidConfiguredDocument(loadedReport, ctx, ex, ct);
                     return EndpointExtensions.SavedReportNotFound();
                 }
             }
-            else if (report.IsDefault)
+            else if (loadedReport.IsDefault)
             {
                 var contextParameters = await Access(ctx).ResolveContextParameters(
                     access.Definition!, ctx, ct);
                 var loaded = await DefaultDocuments(ctx).LoadState(
-                    report,
+                    loadedReport,
                     access.Definition!,
                     ctx.RequestServices.GetRequiredService<ReportExecutor>(),
                     contextParameters,
                     ct);
-                report = loaded.Report;
+                loadedReport = loaded.Report;
                 state = JsonSerializer.SerializeToElement(loaded.State, IrJson.Options);
             }
             else
             {
                 using var document = JsonDocument.Parse(
-                    report.StateJson ?? throw new JsonException("The report document has no state."));
+                    loadedReport.StateJson ?? throw new JsonException("The report document has no state."));
                 state = document.RootElement.Clone();
             }
 
             return Results.Json(
                 new SavedReportDocument(
-                    Summary(report, identity),
+                    Summary(loadedReport, identity),
                     state),
                 IrJson.Options);
         }
@@ -435,9 +475,14 @@ internal static class SavedReportEndpoints
         {
             throw;
         }
+        catch (ReportDocumentBootstrapException)
+        {
+            return EndpointExtensions.SavedReportNotFound();
+        }
         catch (Exception ex)
         {
-            return EndpointExtensions.ServerError(ctx, report.ReportName, "report document retrieval", ex);
+            return EndpointExtensions.ServerError(
+                ctx, loadedReport.ReportName, "report document retrieval", ex);
         }
     }
 
@@ -446,12 +491,11 @@ internal static class SavedReportEndpoints
     /// </summary>
     /// <param name="id">The numeric report-document identifier from the route.</param>
     /// <param name="ctx">The current HTTP request and response context.</param>
-    /// <param name="ct">Cancels synchronization, body reading, authorization, validation, and persistence.</param>
+    /// <param name="ct">Cancels body reading, authorization, validation, and persistence.</param>
     /// <returns>The updated summary, or a not-found, read-only, validation, denial, or title-conflict result.</returns>
     /// <remarks>Consumes the JSON request body and conditionally updates persistence. State changes are rebound and receive refreshed schema caches before storage.</remarks>
     internal static async Task<IResult> Update(long id, HttpContext ctx, CancellationToken ct)
     {
-        await Synchronizer(ctx).EnsureSynced(ct);
         var savedStore = SavedStore(ctx);
         var current = await savedStore.Get(id, ct);
         if (current is null) return EndpointExtensions.SavedReportNotFound();
@@ -586,12 +630,11 @@ internal static class SavedReportEndpoints
     /// </summary>
     /// <param name="id">The numeric report-document identifier from the route.</param>
     /// <param name="ctx">The current HTTP request and response context.</param>
-    /// <param name="ct">Cancels synchronization, persistence reads, authorization, and deletion.</param>
+    /// <param name="ct">Cancels persistence reads, authorization, and deletion.</param>
     /// <returns>No content on deletion, or a hidden not-found, denial, or configured-read-only result.</returns>
-    /// <remarks>Synchronizes configured documents and deletes one persistence row when it still matches the loaded version.</remarks>
+    /// <remarks>Deletes one persistence row when it still matches the loaded version.</remarks>
     internal static async Task<IResult> Delete(long id, HttpContext ctx, CancellationToken ct)
     {
-        await Synchronizer(ctx).EnsureSynced(ct);
         var savedStore = SavedStore(ctx);
         var report = await savedStore.Get(id, ct);
         if (report is null) return EndpointExtensions.SavedReportNotFound();
@@ -627,7 +670,7 @@ internal static class SavedReportEndpoints
     /// </summary>
     /// <param name="id">The numeric report-document identifier from the route.</param>
     /// <param name="ctx">The current HTTP request and response context.</param>
-    /// <param name="ct">Cancels synchronization, persistence reads, and administrator authorization.</param>
+    /// <param name="ct">Cancels persistence reads and administrator authorization.</param>
     /// <returns>An indented JSON file result, or an authentication, hidden-denial, not-found, or server-error result.</returns>
     /// <remarks>Reads and deserializes the stored state; it does not mutate the saved report.</remarks>
     internal static async Task<IResult> AdminDownloadDocument(
@@ -718,7 +761,7 @@ internal static class SavedReportEndpoints
     /// </summary>
     /// <param name="id">The numeric report-document id used to resolve the report family.</param>
     /// <param name="ctx">The current HTTP request and response context.</param>
-    /// <param name="ct">Cancels body reading, administrator authorization, validation, synchronization, and persistence.</param>
+    /// <param name="ct">Cancels body reading, administrator authorization, validation, and persistence.</param>
     /// <returns>The imported summary with HTTP 201, or an authentication, hidden-denial, validation, title-conflict, or server-error result.</returns>
     /// <remarks>Consumes the JSON body, refreshes schema caches in the imported state, and inserts a user-origin saved-report row.</remarks>
     internal static async Task<IResult> AdminUploadDocument(
@@ -728,7 +771,6 @@ internal static class SavedReportEndpoints
     {
         var identity = Identity(ctx);
         if (identity is null) return EndpointExtensions.AuthenticationRequired();
-        await Synchronizer(ctx).EnsureSynced(ct);
         var anchor = await SavedStore(ctx).GetMetadata(id, ct);
         if (anchor is null) return EndpointExtensions.SavedReportNotFound();
         InteractiveReportDefinition candidate = null!;
@@ -908,6 +950,16 @@ internal static class SavedReportEndpoints
     }
 
     /// <summary>
+    /// Applies administrator, saved-report publication, and exact-owner visibility after configured reconciliation
+    /// has consumed the database's complete, unfiltered family snapshot.
+    /// </summary>
+    private static bool VisibleTo(SavedReport report, string? identity, bool administrator)
+        => administrator
+            || report.IsPublic
+            || (identity is not null
+                && string.Equals(report.Owner, identity, StringComparison.Ordinal));
+
+    /// <summary>
     /// Projects saved-report metadata into the public summary response.
     /// </summary>
     /// <param name="report">The metadata to expose.</param>
@@ -1027,8 +1079,7 @@ internal static class SavedReportEndpoints
 
     /// <summary>
     /// Finds a same-title row across both configured and user origins. Title uniqueness spans one report
-    /// definition's rows and synced
-    /// configured rows included, so callers must EnsureSynced first.
+    /// definition's rows, including configured identities already present in the database catalogue.
     /// </summary>
     /// <param name="ctx">The current HTTP request and response context.</param>
     /// <param name="reportName">The configured report name whose definition or saved reports are being addressed.</param>

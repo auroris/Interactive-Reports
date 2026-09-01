@@ -88,6 +88,7 @@ internal sealed class InteractiveReportGraphQLExecutor(
             throw AuthorizationError(authorization.Error, context);
         var definition = authorization.Definition ?? throw NotFound();
 
+        var configuredDocumentValidated = false;
         try
         {
             var contextParameters = await reportAccess.ResolveContextParameters(definition, context, ct);
@@ -114,10 +115,23 @@ internal sealed class InteractiveReportGraphQLExecutor(
                 if (file is null)
                 {
                     await synchronizer.RemoveMissing(saved, ct);
-                    await defaultDocuments.CreateMissing(definition, ct);
+                    try
+                    {
+                        await defaultDocuments.CreateMissing(definition, ct);
+                    }
+                    catch (ReportDocumentBootstrapException)
+                    {
+                        // The bootstrap service already logged the failed insert. The vanished
+                        // configured id remains a not-found result regardless of fallback health.
+                    }
                     throw NotFound();
                 }
-                state = file.State;
+                // Establish whether the configured source itself is valid before applying
+                // GraphQL arguments or executing data-dependent terminals. Only failure of this
+                // source-validation stage is grounds for deleting its optimistic identity.
+                state = await executor.RefreshSchemaCaches(
+                    definition, file.State, contextParameters, ct);
+                configuredDocumentValidated = true;
             }
             else if (saved.IsDefault)
             {
@@ -142,7 +156,8 @@ internal sealed class InteractiveReportGraphQLExecutor(
         }
         catch (ReportValidationException ex)
         {
-            if (saved.Origin == SavedReportOrigin.Configured)
+            if (saved.Origin == SavedReportOrigin.Configured
+                && !configuredDocumentValidated)
             {
                 await synchronizer.RemoveInvalid(saved, ex, ct);
                 throw NotFound();

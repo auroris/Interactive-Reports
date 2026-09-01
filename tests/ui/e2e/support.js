@@ -29,11 +29,10 @@ export async function clickAction(page, name) {
 }
 
 export async function reportId(request, reportName = "orders", options = {}) {
-    const response = await request.get("/api/reports", options);
+    const response = await request.get(`/api/reports/${encodeURIComponent(reportName)}`, options);
     if (!response.ok())
         throw new Error(`Could not list report documents (${response.status()}): ${await response.text()}`);
-    const report = (await response.json()).find(candidate =>
-        candidate.reportName === reportName && candidate.isDefault);
+    const report = (await response.json()).find(candidate => candidate.isDefault);
     if (!report)
         throw new Error(`No visible default document exists for report '${reportName}'.`);
     return report.id;

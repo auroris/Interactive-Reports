@@ -262,7 +262,7 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, makeDefault.StatusCode);
 
         using var visibleResponse = await _client.SendAsync(Request(
-            HttpMethod.Get, $"/api/reports/{_ordersId}/saved", User));
+            HttpMethod.Get, "/api/reports/orders", User));
         Assert.Equal(HttpStatusCode.OK, visibleResponse.StatusCode);
         var visible = await ReadJson(visibleResponse);
         Assert.Contains(visible.EnumerateArray(), report =>
@@ -282,7 +282,7 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
             HttpMethod.Put, $"/api/reports/{_ordersId}", Admin, new { isDefault = true }));
         Assert.Equal(HttpStatusCode.OK, restoreOriginal.StatusCode);
         using var afterResponse = await _client.SendAsync(Request(
-            HttpMethod.Get, $"/api/reports/{_ordersId}/saved", User));
+            HttpMethod.Get, "/api/reports/orders", User));
         var after = await ReadJson(afterResponse);
         Assert.Contains(after.EnumerateArray(), report =>
             report.GetProperty("id").GetInt64() == id
@@ -336,7 +336,7 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
         Assert.True(await store.Update(invalid, current));
 
         using var response = await _client.SendAsync(Request(
-            HttpMethod.Get, $"/api/reports/{_ordersId}", Admin));
+            HttpMethod.Get, $"/api/reports/orders/{_ordersId}", Admin));
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var loaded = await ReadJson(response);
         Assert.Equal(_ordersId, loaded.GetProperty("summary").GetProperty("id").GetInt64());
@@ -385,7 +385,7 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.Conflict, duplicatePrivate.StatusCode);
 
         using var visibleResponse = await _client.SendAsync(Request(
-            HttpMethod.Get, $"/api/reports/{_ordersId}/saved", User));
+            HttpMethod.Get, "/api/reports/orders", User));
         Assert.Equal(HttpStatusCode.OK, visibleResponse.StatusCode);
         var visible = await ReadJson(visibleResponse);
         var matches = visible.EnumerateArray()
@@ -409,7 +409,7 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
         var id = (await ReadJson(save)).GetProperty("id").GetInt64();
 
         using var retrieve = await _client.SendAsync(Request(
-            HttpMethod.Get, $"/api/reports/{id}", User));
+            HttpMethod.Get, $"/api/reports/orders/{id}", User));
         Assert.Equal(HttpStatusCode.OK, retrieve.StatusCode);
         var clientCopy = (await ReadJson(retrieve)).GetProperty("state").Clone();
 
@@ -419,7 +419,7 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, reassign.StatusCode);
 
         using var hiddenOriginal = await _client.SendAsync(Request(
-            HttpMethod.Get, $"/api/reports/{id}", User));
+            HttpMethod.Get, $"/api/reports/orders/{id}", User));
         Assert.Equal(HttpStatusCode.NotFound, hiddenOriginal.StatusCode);
 
         using var query = await _client.SendAsync(Request(

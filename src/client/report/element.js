@@ -128,11 +128,11 @@ class ReportController {
         disposeWidget(this.host);
     }
     /**
-     * Returns the report-document id requested by the host attribute.
+     * Returns the appsettings report configuration requested by the host attribute.
      *
-     * @returns {string|null} The requested report-document id.
+     * @returns {string|null} The requested report configuration name.
      */
-    get requestedReportId() { return this.getAttribute("report"); }
+    get requestedReportName() { return this.getAttribute("report"); }
     /**
      * Returns the saved report-document id requested by the host attribute.
      *
@@ -144,7 +144,7 @@ class ReportController {
      *
      * @returns {string|null} The report-document id.
      */
-    get reportId() { return this._activeReportId ?? this.requestedReportId; }
+    get reportId() { return this._activeReportId ?? null; }
     /** Returns the configured definition key learned from the active anchor document. */
     get definitionName() { return this._activeDefinitionName ?? null; }
 
@@ -327,7 +327,7 @@ class ReportController {
         this.whoami = null;
         buildSkeleton(this);
 
-        const requested = this.requestedReportId?.trim();
+        const requested = this.requestedReportName?.trim();
         if (!requested) {
             this.showError(new Error(this.t("report.attributeRequired")));
             return;
@@ -350,70 +350,65 @@ class ReportController {
     /**
      * Loads a report's schema, saved state, and initial query result as one sequenced activation.
      *
-     * @param {string} id - The report-family anchor document id to activate.
+     * @param {string} name - The appsettings report configuration name to activate.
      * @param {number} [seq=++this._seq] - The lifecycle sequence used to reject stale asynchronous work.
      * @param {{quiet?: boolean}} [options={}] - Set `quiet` to suppress query errors during activation.
      * @returns {Promise<boolean|undefined>} True after a current successful query, false for failure or stale work detected at most checkpoints, and undefined at the saved-list checkpoint.
      *
      * Side effects: aborts prior work, fetches schema and saved reports, adopts initial state, runs a query, and updates styles, controls, notices, and saved selection.
      */
-    async activateReport(id, seq = ++this._seq, { quiet = false } = {}) {
-        id = id?.trim();
-        if (!id || seq !== this._seq) return false;
+    async activateReport(name, seq = ++this._seq, { quiet = false } = {}) {
+        name = name?.trim();
+        if (!name || seq !== this._seq) return false;
 
         this._abort?.abort();
         this._abort = null;
         this.resetReportContext();
-        this._activeReportId = id;
+        this._activeReportId = null;
         this.clearReportView();
         refreshSavedSelect(this);
         const finishBusy = this.beginBusy();
 
         try {
             const requestedSaved = this.requestedSavedReportId?.trim();
-            const anchorResponse = await api(apiUrl(this.base, id));
+            const saved = await api(apiUrl(this.base, name));
             if (seq !== this._seq) return false;
-            const definitionName = anchorResponse.summary?.reportName?.trim();
-            if (!definitionName)
-                throw new Error("The report document did not identify its configured definition.");
-            this._activeDefinitionName = definitionName;
+            const selected = requestedSaved
+                ? saved.find(candidate => String(candidate.id) === requestedSaved)
+                : saved.find(candidate => candidate.isDefault);
+            if (!selected)
+                throw new Error(requestedSaved
+                    ? this.t("saved.unavailable")
+                    : `Report configuration “${name}” has no default document.`);
 
-            let docResponse = anchorResponse;
-            if (requestedSaved && requestedSaved !== id) {
-                docResponse = await api(apiUrl(this.base, requestedSaved));
-                if (seq !== this._seq) return false;
-                if (docResponse.summary?.reportName !== definitionName)
-                    throw new Error("The selected report document belongs to a different report definition.");
-            }
+            const definitionName = selected.reportName?.trim();
+            if (!definitionName)
+                throw new Error("The report listing did not identify its configured definition.");
+            if (definitionName.localeCompare(name, undefined, { sensitivity: "accent" }) !== 0)
+                throw new Error("The default report document belongs to a different report definition.");
+            this._activeDefinitionName = definitionName;
+            this._activeReportId = String(selected.id);
 
             // Schema and processing are definition operations. Only document discovery and
             // persistence use numeric document ids.
-            // Invariant: a missing saved endpoint means the feature is off; any other failure
-            // must not masquerade as "no saved reports exist".
-            let savedError = null;
-            const [schema, saved] = await Promise.all([
+            const [docResponse, schema] = await Promise.all([
+                api(apiUrl(this.base, definitionName, selected.id)),
                 api(apiUrl(this.base, definitionName, "schema")),
-                api(apiUrl(this.base, id, "saved")).catch(err => {
-                    if (err.status !== 404) savedError = err;
-                    return [];
-                }),
             ]);
             if (seq !== this._seq) return;
+            if (docResponse.summary?.reportName !== definitionName)
+                throw new Error("The selected report document belongs to a different report definition.");
             this.schema = schema;
             applyFeatureChrome(this);
             this._savedListLoaded = true;
             this.savedList = saved;
 
-            let savedWarning = savedError
-                ? this.t("saved.loadFailed", { message: savedError.message })
-                : undefined;
             this.currentSaved = docResponse.summary;
             if (!saved.some(candidate => String(candidate.id) === String(docResponse.summary.id)))
                 this.savedList = [...saved, docResponse.summary];
             this.adoptState(docResponse.state);
             refreshSavedSelect(this);
             await this.runQuery({ quiet, source: "initial" });
-            if (savedWarning) this.notify(savedWarning, "warn");
             return seq === this._seq && this.lastResult !== null;
         } catch (err) {
             if (!quiet && err.name !== "AbortError" && seq === this._seq) this.showError(err);
@@ -1144,10 +1139,10 @@ export class InteractiveReportElement extends HTMLElement {
     }
 
     /**
-     * The active report-family anchor id, or the requested `report` attribute before activation.
-     * This property is read-only; set the attribute to activate another report document.
+     * The active report-family anchor id. The `report` attribute contains the appsettings
+     * configuration name instead, so this remains null until family bootstrap succeeds.
      *
-     * @returns {string|null} The active or requested report-document id.
+     * @returns {string|null} The active report-document id.
      */
     get reportId() { return controllerFor(this).reportId; }
 

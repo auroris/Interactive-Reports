@@ -68,11 +68,13 @@ globalThis.fetch = async url => {
         });
     }
     if (path.endsWith("/whoami")) return json({ identity: "test-user" });
-    if (path.endsWith("/saved")) return json([]);
-    if (!path.endsWith("/query") && /\/[^/?]+$/.test(path)) {
-        const id = path.split("/").at(-1);
+    const family = /^\/grid-api\/([^/?]+)$/.exec(path)?.[1];
+    if (family)
+        return json([{ id: 1, reportName: family, title: "Default", isDefault: true, isGlobal: true }]);
+    const document = /^\/grid-api\/([^/?]+)\/(\d+)$/.exec(path);
+    if (document) {
         return json({
-            summary: { id, reportName: id, title: "Default", isDefault: true, isGlobal: true },
+            summary: { id: Number(document[2]), reportName: document[1], title: "Default", isDefault: true, isGlobal: true },
             state: {},
         });
     }

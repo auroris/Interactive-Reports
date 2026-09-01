@@ -153,7 +153,7 @@ public static class EndpointExtensions
         // InteractiveReport:ViewerPagesEnabled. Literal-first routing means the existing /ui
         // and /saved segments shadow reports with those names at /view, as they already do on
         // the data routes.
-        group.MapGet("/{id:long}/view", ViewerPageEndpoints.Report)
+        group.MapGet("/{name}/view", ViewerPageEndpoints.Report)
             .AllowAnonymous()
             .ExcludeFromDescription();
         group.MapGet("/admin", ViewerPageEndpoints.Admin)
@@ -170,16 +170,16 @@ public static class EndpointExtensions
             .Produces<InteractiveReportError>(StatusCodes.Status404NotFound)
             .Produces<InteractiveReportError>(StatusCodes.Status500InternalServerError);
         ProtectedApi(
-                WithStorageErrors(group.MapGet("", SavedReportEndpoints.ListAvailable)),
-                SavedReportsTag,
-                "List available report documents",
-                "Lists public and caller-owned documents across authorized report definitions.")
-            .Produces<SavedReportSummary[]>();
+                group.MapGet("", SavedReportEndpoints.ListConfigurations),
+                ReportsTag,
+                "List available report configurations",
+                "Lists appsettings report configurations the current caller may view.")
+            .Produces<ReportConfigurationSummary[]>();
         ProtectedApi(
-                WithStorageErrors(group.MapGet("/{id:long}/saved", SavedReportEndpoints.ListForReport)),
+                WithStorageErrors(group.MapGet("/{name}", SavedReportEndpoints.ListForReport)),
                 SavedReportsTag,
                 "List saved reports",
-                "Lists saved reports visible to the current caller for one report definition.")
+                "Lists visible documents for one appsettings report configuration; administrators receive the complete family.")
             .Produces<SavedReportSummary[]>();
         ProtectedApi(
                 WithStorageErrors(group.MapPost("/{id:long}/saved", SavedReportEndpoints.Save)),
@@ -191,10 +191,10 @@ public static class EndpointExtensions
             .Produces<InteractiveReportError>(StatusCodes.Status400BadRequest)
             .Produces<InteractiveReportError>(StatusCodes.Status409Conflict);
         ProtectedApi(
-                WithStorageErrors(group.MapGet("/{id:long}", SavedReportEndpoints.Load)),
+                WithStorageErrors(group.MapGet("/{name}/{id:long}", SavedReportEndpoints.Load)),
                 SavedReportsTag,
                 "Load a saved report",
-                "Returns visible saved-report metadata and its versioned report-state document.")
+                "Returns a visible saved-report document after verifying its configured family name.")
             .Produces<SavedReportDocument>();
         ProtectedApi(
                 WithStorageErrors(group.MapPut("/{id:long}", SavedReportEndpoints.Update)),
@@ -307,7 +307,8 @@ public static class EndpointExtensions
             }
             catch (Exception ex)
             {
-                var reportName = invocation.HttpContext.Request.RouteValues["id"]?.ToString()
+                var reportName = invocation.HttpContext.Request.RouteValues["name"]?.ToString()
+                    ?? invocation.HttpContext.Request.RouteValues["id"]?.ToString()
                     ?? SavedReportsListingDefinition.Name;
                 return ServerError(
                     invocation.HttpContext,

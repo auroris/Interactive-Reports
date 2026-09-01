@@ -86,7 +86,7 @@ public sealed class SavedReportConcurrencyHttpTests
 
         using var response = await host.Client.SendAsync(Request(
             HttpMethod.Get,
-            $"/api/reports/{report.Id}",
+            $"/api/reports/{report.ReportName}/{report.Id}",
             "mallory"));
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);

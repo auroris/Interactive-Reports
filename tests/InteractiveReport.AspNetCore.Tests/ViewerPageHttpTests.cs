@@ -85,13 +85,13 @@ public sealed class ViewerPageHttpTests : IAsyncLifetime
     [Fact]
     public async Task The_viewer_shell_is_anonymous_while_the_data_endpoints_stay_gated()
     {
-        using var page = await _client.GetAsync($"/api/reports/{_securedId}/view");
+        using var page = await _client.GetAsync("/api/reports/secured/view");
         Assert.Equal(HttpStatusCode.OK, page.StatusCode);
         Assert.Equal("text/html", page.Content.Headers.ContentType?.MediaType);
         Assert.Equal("no-store", page.Headers.CacheControl?.ToString());
         var html = await page.Content.ReadAsStringAsync();
         Assert.Contains("src=\"/api/reports/ui/ir.js\"", html);
-        Assert.Contains($"<interactive-report report=\"{_securedId}\">", html);
+        Assert.Contains("<interactive-report report=\"secured\">", html);
         Assert.DoesNotContain("api-base", html);
 
         using var schema = await _client.GetAsync("/api/reports/secured/schema");
@@ -99,13 +99,14 @@ public sealed class ViewerPageHttpTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task The_shell_renders_identically_for_unknown_ids_and_encodes_injected_values()
+    public async Task The_shell_renders_identically_for_unknown_names_and_encodes_injected_values()
     {
-        using var unknown = await _client.GetAsync($"/api/reports/{long.MaxValue}/view");
+        using var unknown = await _client.GetAsync("/api/reports/unknown/view");
         Assert.Equal(HttpStatusCode.OK, unknown.StatusCode);
-        Assert.Contains($"report=\"{long.MaxValue}\"", await unknown.Content.ReadAsStringAsync());
+        Assert.Contains("report=\"unknown\"", await unknown.Content.ReadAsStringAsync());
 
-        using var hostile = await _client.GetAsync($"/api/reports/{long.MaxValue}/view?saved-report=%22%3E%3Cimg%3E");
+        using var hostile = await _client.GetAsync(
+            "/api/reports/unknown/view?saved-report=%22%3E%3Cimg%3E");
         Assert.Equal(HttpStatusCode.OK, hostile.StatusCode);
         var html = await hostile.Content.ReadAsStringAsync();
         Assert.DoesNotContain("<script>", html.Replace("<script type=\"module\"", ""));
@@ -126,7 +127,7 @@ public sealed class ViewerPageHttpTests : IAsyncLifetime
     [Fact]
     public async Task The_packaged_pages_negotiate_Canadian_French()
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, $"/api/reports/{_securedId}/view");
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/reports/secured/view");
         request.Headers.AcceptLanguage.Add(new StringWithQualityHeaderValue("en", 0.5));
         request.Headers.AcceptLanguage.Add(new StringWithQualityHeaderValue("fr-CA", 0.9));
         using var page = await _client.SendAsync(request);

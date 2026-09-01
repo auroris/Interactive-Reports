@@ -64,7 +64,7 @@ public sealed class OpenApiMetadataTests
 
         var routes = Routes(app);
         Assert.True(IsExcluded(Route(routes, "/api/reports/ui/{file}", "GET")));
-        Assert.True(IsExcluded(Route(routes, "/api/reports/{id:long}/view", "GET")));
+        Assert.True(IsExcluded(Route(routes, "/api/reports/{name}/view", "GET")));
         Assert.True(IsExcluded(Route(routes, "/api/reports/admin", "GET")));
         Assert.False(IsExcluded(Route(routes, "/api/reports/whoami", "GET")));
     }

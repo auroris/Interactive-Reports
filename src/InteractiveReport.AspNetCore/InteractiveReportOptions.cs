@@ -45,7 +45,7 @@ public sealed class InteractiveReportOptions
     public AuthorizationStoreOptions Authorization { get; set; } = new();
 
     /// <summary>
-    /// Gets or sets whether to serve the packaged browser pages at GET {prefix}/{id}/view and
+    /// Gets or sets whether to serve the packaged browser pages at GET {prefix}/{name}/view and
     /// GET {prefix}/admin. On by default; the pages are anonymous shells (the data
     /// endpoints keep their own authorization), so disabling them only matters to
     /// hosts that author every page themselves.

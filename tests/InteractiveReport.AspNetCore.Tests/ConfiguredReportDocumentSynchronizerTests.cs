@@ -1,3 +1,4 @@
+using System.Data.Common;
 using InteractiveReport.Core.Model;
 using InteractiveReport.Core.SavedReports;
 using Microsoft.Extensions.FileProviders;
@@ -48,21 +49,7 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
         var monitor = new MonitorStub(OptionsWith(documentFiles));
         var documents = new ConfiguredReportDocumentStore(monitor, new EnvStub(_root));
         var store = new RecordingStore();
-        var registry = new ReportConnectionRegistry(
-            new Dictionary<string, Func<IServiceProvider, System.Data.Common.DbConnection>>(StringComparer.OrdinalIgnoreCase),
-            new Dictionary<string, ReportDialect>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["recording"] = ReportDialect.Sqlite,
-            },
-            EmptyServices.Instance,
-            new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build());
-        return (new ConfiguredReportDocumentSynchronizer(documents, store, monitor, registry), store, monitor);
-    }
-
-    private sealed class EmptyServices : IServiceProvider
-    {
-        public static readonly EmptyServices Instance = new();
-        public object? GetService(Type serviceType) => null;
+        return (new ConfiguredReportDocumentSynchronizer(documents, store), store, monitor);
     }
 
     [Fact]
@@ -114,7 +101,8 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
         store.Calls.Clear();
 
         await synchronizer.EnsureSynced();
-        Assert.Empty(store.Calls);
+        Assert.Equal(["listAll"], store.Calls);
+        store.Calls.Clear();
 
         File.WriteAllText(_regionalPath, """
             { "title": "Regional View v2",
@@ -123,7 +111,7 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
         File.SetLastWriteTimeUtc(_regionalPath, DateTime.UtcNow.AddMinutes(1));
 
         await synchronizer.EnsureSynced();
-        Assert.Empty(store.Calls);
+        Assert.Equal(["listAll"], store.Calls);
         Assert.Contains(store.Rows.Values, row => row.Title == "Regional View");
         Assert.DoesNotContain(store.Rows.Values, row => row.Title == "Regional View v2");
     }
@@ -144,8 +132,32 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
 
         await synchronizer.EnsureSynced();
 
-        Assert.Empty(store.Calls);
+        Assert.Equal(["listAll"], store.Calls);
         Assert.Contains(store.Rows.Values, row => row.Title == "Regional View");
+    }
+
+    [Fact]
+    public async Task Family_reconciliation_starts_from_every_private_and_public_database_row()
+    {
+        var (synchronizer, store, _) = Build(_defaultPath);
+        await synchronizer.EnsureSynced();
+        var anchor = store.Rows.Values.Single(report => report.Origin == SavedReportOrigin.Configured);
+        var otherUsersPrivate = new SavedReport
+        {
+            Id = 0,
+            ReportName = "orders",
+            Title = "Bob's private report",
+            Owner = "bob",
+            StateJson = "{\"v\":3}",
+            ModifiedUtc = DateTime.UtcNow,
+        };
+        await store.Create(otherUsersPrivate);
+        store.Calls.Clear();
+
+        var family = await synchronizer.ReconcileFamily(anchor.ReportName);
+
+        Assert.Equal([ $"listFamily:{anchor.ReportName}" ], store.Calls);
+        Assert.Contains(family, report => report.Id == otherUsersPrivate.Id);
     }
 
     [Fact]
@@ -199,6 +211,36 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
         Assert.NotEqual(synthetic.Id, configured.Id);
         Assert.Equal(SavedReportOrigin.Configured, configured.Origin);
         Assert.True(configured.IsDefault);
+    }
+
+    [Fact]
+    public async Task Failed_configured_default_insert_leaves_bootstrap_retryable()
+    {
+        var (synchronizer, store, _) = Build(_defaultPath);
+        var synthetic = new SavedReport
+        {
+            Id = 0,
+            ReportName = "orders",
+            Title = "Default",
+            Owner = null,
+            IsGlobal = true,
+            IsDefault = true,
+            StateJson = "{\"v\":3}",
+            ModifiedUtc = DateTime.UtcNow,
+            Origin = SavedReportOrigin.Synthetic,
+        };
+        await store.Create(synthetic);
+        store.FailCreates = true;
+
+        await Assert.ThrowsAsync<ReportDocumentBootstrapException>(
+            () => synchronizer.ReconcileFamily("orders"));
+        Assert.Empty(store.Rows);
+
+        store.FailCreates = false;
+        var retried = await synchronizer.ReconcileFamily("orders");
+        var configured = Assert.Single(retried);
+        Assert.True(configured.IsDefault);
+        Assert.Equal(SavedReportOrigin.Configured, configured.Origin);
     }
 
     [Fact]
@@ -262,6 +304,7 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
         private long _nextId;
         public Dictionary<long, SavedReport> Rows { get; } = [];
         public List<string> Calls { get; } = [];
+        public bool FailCreates { get; set; }
 
         public Task<SavedReport?> Get(long id, CancellationToken ct = default)
         {
@@ -276,6 +319,15 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
                 .Select(row => row with { })
                 .ToArray());
 
+        public Task<IReadOnlyList<SavedReport>> ListFamily(string reportName, CancellationToken ct = default)
+        {
+            Calls.Add($"listFamily:{reportName}");
+            return Task.FromResult<IReadOnlyList<SavedReport>>(Rows.Values
+                .Where(row => row.ReportName == reportName)
+                .Select(row => row with { })
+                .ToArray());
+        }
+
         public Task<SavedReport?> FindDefault(string reportName, CancellationToken ct = default)
             => Task.FromResult(Rows.Values.SingleOrDefault(row =>
                 row.ReportName == reportName && row.IsDefault) is { } row ? row with { } : null);
@@ -288,6 +340,7 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
 
         public Task Create(SavedReport report, CancellationToken ct = default)
         {
+            if (FailCreates) throw new TestDbException();
             report.Id = Interlocked.Increment(ref _nextId);
             report.ModifiedUtc = DateTime.UtcNow;
             Rows.Add(report.Id, report with { });
@@ -378,6 +431,10 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
 
         private static bool SameSnapshot(SavedReport current, SavedReport expected)
             => current == expected;
+    }
+
+    private sealed class TestDbException : DbException
+    {
     }
 
     private sealed class MonitorStub(InteractiveReportOptions initial) : IOptionsMonitor<InteractiveReportOptions>

@@ -37,7 +37,6 @@ const chartStageOf = state =>
 globalThis.fetch = async (url, options = {}) => {
     const request = { url: String(url), method: options.method ?? "GET", body: options.body ?? null };
     requests.push(request);
-    if (request.url === "/api") return json([{ name: "orders", title: "Orders" }]);
     if (request.url.endsWith("/schema")) {
         return json({
             defaultState: {
@@ -60,11 +59,14 @@ globalThis.fetch = async (url, options = {}) => {
         });
     }
     if (request.url.endsWith("/whoami")) return json({ identity: "test-user" });
-    if (request.url.endsWith("/saved")) return json([]);
-    if (request.method === "GET" && /\/[^/?]+$/.test(request.url)) {
-        const id = request.url.split("/").at(-1);
+    const family = /^\/api\/([^/?]+)$/.exec(request.url)?.[1];
+    if (request.method === "GET" && family) {
+        return json([{ id: 1, reportName: family, title: "Default", isDefault: true, isGlobal: true }]);
+    }
+    const document = /^\/api\/([^/?]+)\/(\d+)$/.exec(request.url);
+    if (request.method === "GET" && document) {
         return json({
-            summary: { id, reportName: id, title: "Default", isDefault: true, isGlobal: true },
+            summary: { id: Number(document[2]), reportName: document[1], title: "Default", isDefault: true, isGlobal: true },
             state: {},
         });
     }

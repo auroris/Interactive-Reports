@@ -50,7 +50,7 @@
 
     <main>
         <nav id="workbench-links" class="workbench-links" aria-label="Outils et points de terminaison de l’atelier">
-            <a data-document-path="view" href="#">
+            <a href="/api/reports/orders/view">
                 <strong>Visionneuse fournie</strong>
                 <small>Page de rapport autonome fournie par le paquet serveur</small>
             </a>
@@ -78,13 +78,14 @@
                 <strong>Qui suis-je?</strong>
                 <small>Diagnostic de l’identité et des autorisations</small>
             </a>
-            <a data-definition-path="schema" href="#">
+            <a href="/api/reports/orders/schema">
                 <strong>Schéma des commandes</strong>
                 <small>Schéma, capacités, fonctionnalités et limites au format JSON</small>
             </a>
         </nav>
 
-        <interactive-report api-base="/api/reports"
+        <interactive-report report="orders"
+                            api-base="/api/reports"
                             stylesheet="/report-overrides.css">
             <p class="build-warning">
                 Vous voyez ce message parce que vous avez oublié d’exécuter
@@ -94,20 +95,6 @@
     </main>
 
     <script type="module">
-        const catalogue = await fetch("/api/reports").then(response => {
-            if (!response.ok) throw new Error(`Échec du catalogue de rapports (${response.status}).`);
-            return response.json();
-        });
-        const defaultReport = catalogue.find(report =>
-            report.reportName === "orders" && report.isDefault);
-        if (!defaultReport) throw new Error("Le rapport des commandes n’a aucun document par défaut.");
-
-        const reportId = String(defaultReport.id);
-        for (const link of document.querySelectorAll("[data-document-path]"))
-            link.href = `/api/reports/${encodeURIComponent(reportId)}/${link.dataset.documentPath}`;
-        for (const link of document.querySelectorAll("[data-definition-path]"))
-            link.href = `/api/reports/${encodeURIComponent(defaultReport.reportName)}/${link.dataset.definitionPath}`;
-        document.querySelector("interactive-report").setAttribute("report", reportId);
         await import("/api/reports/ui/ir.js");
 
         const who = await fetch("/api/reports/whoami").then(r => r.ok ? r.json() : null).catch(() => null);

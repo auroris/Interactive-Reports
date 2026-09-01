@@ -47,8 +47,8 @@ if (app.Environment.IsDevelopment())
 does not enable subscriptions in Interactive Reports; it prevents the legacy fetcher
 from opening a WebSocket during ordinary query and schema-introspection operations.
 Unsupported methods and WebSocket upgrades receive HTTP 405 from the adapter.
-The Workbench additionally resolves its checked-in `orders / Default` report at
-startup and preloads a ready-to-run report query with paging variables.
+The Workbench leaves GraphiQL unpopulated because configured document identities are
+reconciled by report listing rather than application startup.
 
 `MapInteractiveReportGraphQL` returns an `IEndpointConventionBuilder`, so standard
 ASP.NET Core conventions remain available:
@@ -79,8 +79,10 @@ graph; documents above that ceiling fail before authorization or execution, incl
 when parsed documents are cached. The adapter also caps its schema's execution
 concurrency at one without changing other GraphQL schemas registered by the host.
 
-`id` is the database-generated numeric report-document id returned by `GET /api/reports`
-and the ordinary creation APIs. It is unique across report families and origins.
+`id` is the database-generated numeric report-document id returned by
+`GET /api/reports/{name}` and the ordinary creation APIs. It is unique across report
+families and origins. The root `GET /api/reports` route lists appsettings configurations,
+not document identities.
 Configured file-backed documents receive an identity row keyed by their internal family
 and source filename; execution reads their current state from disk rather than from a
 mirrored database body. The row remains the optimistic authority for catalogue metadata.
@@ -88,7 +90,10 @@ If its source file is absent when GraphQL dereferences it, the adapter deletes t
 row, restores a synthetic default when necessary, and returns `NOT_FOUND` for the old id.
 If the file is present but its state fails processing, the adapter logs the exception,
 deletes the optimistic row, and returns `NOT_FOUND` without creating a synthetic fallback.
-The next synchronization creates a new identity and retries the configured source.
+The next report listing creates a new identity and retries the configured source. This
+source-validation stage runs before paging overrides and terminal execution. A later
+data- or execution-dependent validation failure returns `REPORT_VALIDATION_FAILED` and
+does not delete the configured identity.
 
 `page` and `pageSize` optionally replace only the saved state's paging request:
 
@@ -152,7 +157,7 @@ Every saved report in `ISavedReportStore` is eligible:
 
 The adapter does not read configured files as a separate catalogue. It addresses the
 existing database identity directly and performs the same saved-report lookup used for
-database-backed rows; ordinary catalogue discovery synchronizes new configured identities.
+database-backed rows; ordinary catalogue discovery reconciles new configured identities.
 
 File-backed reports are strongly recommended when another application will rely on a
 report as a durable API surface. Their state is read-only through ordinary saved-report

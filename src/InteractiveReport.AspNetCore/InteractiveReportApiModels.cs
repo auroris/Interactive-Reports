@@ -227,6 +227,9 @@ public sealed class UpdateSavedReportRequest
     public string? Owner { get; set; }
 }
 
+/// <summary>Identifies one appsettings report configuration visible to the current caller.</summary>
+public sealed record ReportConfigurationSummary(string Name, string Title);
+
 /// <summary>Contains saved-report metadata visible to the current caller.</summary>
 public sealed record SavedReportSummary(
     [property: System.Text.Json.Serialization.JsonConverter(typeof(ReportDocumentIdJsonConverter))] long Id,

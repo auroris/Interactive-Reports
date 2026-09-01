@@ -32,7 +32,8 @@ const json = value => new Response(JSON.stringify(value), {
 });
 
 globalThis.fetch = async url => {
-    if (String(url).endsWith("/schema")) {
+    const path = String(url);
+    if (path.endsWith("/schema")) {
         return json({
             defaultState: {
                 page: { index: 1, size: 25 },
@@ -51,16 +52,18 @@ globalThis.fetch = async url => {
             },
         });
     }
-    if (String(url).endsWith("/whoami")) return json({ identity: "test-user" });
-    if (String(url).endsWith("/saved")) return json([]);
-    if (!String(url).endsWith("/query") && /\/[^/?]+$/.test(String(url))) {
-        const id = String(url).split("/").at(-1);
+    if (path.endsWith("/whoami")) return json({ identity: "test-user" });
+    const family = /^\/column-api\/([^/?]+)$/.exec(path)?.[1];
+    if (family)
+        return json([{ id: 1, reportName: family, title: "Default", isDefault: true, isGlobal: true }]);
+    const document = /^\/column-api\/([^/?]+)\/(\d+)$/.exec(path);
+    if (document) {
         return json({
-            summary: { id, reportName: id, title: "Default", isDefault: true, isGlobal: true },
+            summary: { id: Number(document[2]), reportName: document[1], title: "Default", isDefault: true, isGlobal: true },
             state: {},
         });
     }
-    if (String(url).endsWith("/query")) {
+    if (path.endsWith("/query")) {
         return json({
             columns: [
                 { name: "LABEL", label: "Label", type: "text" },

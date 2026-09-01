@@ -68,23 +68,27 @@ public sealed class ConfiguredReportDocumentStore : IDisposable
     /// identities are the optimistic catalogue authority; the file body is dereferenced only
     /// when a document is retrieved.
     /// </summary>
-    internal IReadOnlyList<ConfiguredReportDocumentReference> ListReferences()
+    internal IReadOnlyList<ConfiguredReportDocumentReference> ListReferences(
+        string? reportName = null)
     {
         var references = new List<ConfiguredReportDocumentReference>();
-        foreach (var (reportName, definition) in _options.CurrentValue.Reports)
+        foreach (var (configuredName, definition) in _options.CurrentValue.Reports)
         {
+            if (reportName is not null
+                && !string.Equals(configuredName, reportName, StringComparison.Ordinal))
+                continue;
             if (definition.DocumentFiles is not { Count: > 0 }) continue;
             var paths = new HashSet<string>(PathComparer);
             foreach (var configuredPath in definition.DocumentFiles)
             {
                 if (string.IsNullOrWhiteSpace(configuredPath))
                     throw new InvalidOperationException(
-                        $"Report '{reportName}': documentFiles contains a blank path.");
+                        $"Report '{configuredName}': documentFiles contains a blank path.");
                 var sourceFile = configuredPath.Trim();
                 if (!paths.Add(ResolvePath(sourceFile)))
                     throw new InvalidOperationException(
-                        $"Report '{reportName}': documentFiles references '{configuredPath}' more than once.");
-                references.Add(new ConfiguredReportDocumentReference(reportName, sourceFile));
+                        $"Report '{configuredName}': documentFiles references '{configuredPath}' more than once.");
+                references.Add(new ConfiguredReportDocumentReference(configuredName, sourceFile));
             }
         }
         return references;

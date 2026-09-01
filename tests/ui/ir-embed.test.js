@@ -35,9 +35,10 @@ const json = (value, init = {}) => new Response(JSON.stringify(value), {
 });
 
 globalThis.fetch = async (url, options = {}) => {
-    requests.push({ url: String(url), method: options.method ?? "GET", body: options.body });
-    if (String(url).endsWith("/schema")) {
-        const reportName = /\/([^/]+)\/schema$/.exec(String(url))?.[1];
+    const path = String(url);
+    const method = options.method ?? "GET";
+    requests.push({ url: path, method, body: options.body });
+    if (path.endsWith("/schema")) {
         return json({
             // labels here mirror the server contract: friendly names reach the client
             // only as part of the default report; column metadata stays neutral.
@@ -50,23 +51,27 @@ globalThis.fetch = async (url, options = {}) => {
             capabilities: { aggregateFunctions: {}, expressionFunctions: [] },
         });
     }
-    if (String(url).endsWith("/whoami")) return json(whoami);
-    if (String(url).endsWith("/saved")) return json(savedReports);
-    const savedId = /\/([^/]+)$/.exec(String(url))?.[1];
-    if (savedId && savedDocuments.has(savedId)) return json(savedDocuments.get(savedId));
-    if ((options.method ?? "GET") === "GET" && savedId) {
+    if (path.endsWith("/whoami")) return json(whoami);
+    const family = /^\/custom-report-api\/([^/?]+)$/.exec(path)?.[1];
+    if (method === "GET" && family) {
+        const visible = savedReports.filter(report => report.reportName === family);
+        return json(visible.length ? visible : [{
+            id: 1, reportName: family, title: "Default", isDefault: true, isGlobal: true,
+        }]);
+    }
+    const document = /^\/custom-report-api\/([^/?]+)\/([^/?]+)$/.exec(path);
+    if (method === "GET" && document) {
+        const [, reportName, savedId] = document;
+        if (savedDocuments.has(savedId)) return json(savedDocuments.get(savedId));
+        const listed = savedReports.find(report => String(report.id) === savedId);
         return json({
-            summary: {
-                id: savedId,
-                reportName: savedId,
-                title: "Default",
-                isDefault: true,
-                isGlobal: true,
+            summary: listed ?? {
+                id: Number(savedId), reportName, title: "Default", isDefault: true, isGlobal: true,
             },
             state: {},
         });
     }
-    if (String(url).endsWith("/query")) {
+    if (path.endsWith("/query")) {
         return json({
             columns: [{ name: "ID", label: "ID", type: "number" }],
             rows: [{ ID: 1 }],
@@ -77,7 +82,7 @@ globalThis.fetch = async (url, options = {}) => {
             ignored: [],
         });
     }
-    if (String(url).endsWith("/export?format=csv")) {
+    if (path.endsWith("/export?format=csv")) {
         return new Response("\ufeffIdent\r\n1\r\n", {
             headers: {
                 "Content-Type": "text/csv; charset=utf-8",
@@ -212,7 +217,7 @@ test("the configured report is loaded directly and can be changed through its at
     for (let attempt = 0; attempt < 20 && !requests.some(r => r.url.endsWith("/order-feed/query")); attempt++)
         await new Promise(resolve => setTimeout(resolve, 1));
 
-    assert.equal(report.reportId, "order-feed");
+    assert.equal(report.reportId, "1");
     assert.equal(report.shadowRoot.querySelector("link[data-ir-host-stylesheet]")?.getAttribute("href"),
         "/styles/orders-report.css?v=3",
         "the host-owned stylesheet survives report changes");
@@ -342,7 +347,7 @@ test("saved-report loads a uniquely named saved report before the initial query"
         await new Promise(resolve => setTimeout(resolve, 1));
 
     assert.equal(report.shadowRoot.querySelector(".ir-saved-select").value, "saved-1");
-    assert.ok(requests.some(r => r.url === "/custom-report-api/saved-1"));
+    assert.ok(requests.some(r => r.url === "/custom-report-api/orders/saved-1"));
     const queries = requests.filter(r => r.url === "/custom-report-api/orders/query");
     assert.equal(queries.length, 1, "Default should not be queried before the requested saved report");
     assert.equal(JSON.parse(queries[0].body).search, "Acme");
@@ -363,7 +368,7 @@ test("the flagged default report represents the schema Default", async () => {
     }];
 
     const report = document.createElement("interactive-report");
-    report.setAttribute("report", "default-1");
+    report.setAttribute("report", "orders");
     report.setAttribute("api-base", "/custom-report-api");
     document.body.append(report);
 
@@ -376,7 +381,7 @@ test("the flagged default report represents the schema Default", async () => {
     assert.equal(select.options[0].value, "default-1");
     assert.equal(select.querySelector('optgroup[label="Public"] option')?.text, "Default");
     assert.equal(select.value, "default-1");
-    assert.equal(requests.some(r => r.url.endsWith("/default-1")), true,
+    assert.equal(requests.some(r => r.url.endsWith("/orders/default-1")), true,
         "the default document is retrieved independently of the schema");
 
     report.remove();

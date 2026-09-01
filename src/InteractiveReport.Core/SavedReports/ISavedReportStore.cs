@@ -50,6 +50,26 @@ public interface ISavedReportStore
     Task<IReadOnlyList<SavedReport>> ListVisible(string reportName, string? identity, CancellationToken ct = default);
 
     /// <summary>
+    /// Lists the complete, unfiltered database family selected by one configured report name.
+    /// Every public or private document is returned so reconciliation can
+    /// compare appsettings with the database's whole view before caller visibility is applied.
+    /// </summary>
+    /// <param name="reportName">The canonical configured report name whose family should be loaded.</param>
+    /// <param name="ct">Cancels persistence access.</param>
+    /// <returns>Every row in the configured report family.</returns>
+    async Task<IReadOnlyList<SavedReport>> ListFamily(
+        string reportName,
+        CancellationToken ct = default)
+    {
+        return (await ListAll(ct))
+            .Where(report => string.Equals(
+                report.ReportName,
+                reportName,
+                StringComparison.Ordinal))
+            .ToList();
+    }
+
+    /// <summary>
     /// Returns the metadata-only counterpart to <see cref="ListVisible"/>.
     /// </summary>
     /// <param name="reportName">The canonical report name that scopes the rows.</param>

@@ -79,7 +79,9 @@ public static class ServiceCollectionExtensions
             logging.For<ReportExecutor>()));
         services.AddSingleton<IReportFileExporter, ReportFileExporter>();
         services.AddSingleton<IReportAccessService, ReportAccessService>();
-        services.AddSingleton<DefaultReportDocumentService>();
+        services.AddSingleton(sp => new DefaultReportDocumentService(
+            sp.GetRequiredService<ISavedReportStore>(),
+            logging.For<DefaultReportDocumentService>()));
         services.TryAddSingleton<IContextParameterResolver, ClaimContextParameterResolver>();
 
         services.AddSingleton<ISavedReportStore>(sp => new SqlSavedReportStore(
@@ -90,8 +92,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(sp => new ConfiguredReportDocumentSynchronizer(
             sp.GetRequiredService<ConfiguredReportDocumentStore>(),
             sp.GetRequiredService<ISavedReportStore>(),
-            sp.GetRequiredService<IOptionsMonitor<InteractiveReportOptions>>(),
-            sp.GetRequiredService<ReportConnectionRegistry>(),
             logging.For<ConfiguredReportDocumentSynchronizer>()));
         services.AddHostedService<InteractiveReportStartupValidator>();
 

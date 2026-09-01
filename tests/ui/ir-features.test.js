@@ -59,12 +59,14 @@ globalThis.fetch = async (url, options = {}) => {
         });
     }
     if (String(url).endsWith("/whoami")) return json({ identity: "test-user" });
-    if (String(url).endsWith("/saved")) return json([]);
-    if ((options.method ?? "GET") === "GET" && /\/[^/?]+$/.test(String(url))) {
-        const id = String(url).split("/").at(-1);
+    const family = /^\/feature-api\/([^/?]+)$/.exec(String(url))?.[1];
+    if ((options.method ?? "GET") === "GET" && family)
+        return json([{ id: 1, reportName: family, title: "Default", isDefault: true, isGlobal: true }]);
+    const document = /^\/feature-api\/([^/?]+)\/(\d+)$/.exec(String(url));
+    if ((options.method ?? "GET") === "GET" && document) {
         return json({
-            summary: { id, reportName: id, title: "Default", isDefault: true, isGlobal: true },
-            state: DEFAULT_STATES[id] ?? {},
+            summary: { id: Number(document[2]), reportName: document[1], title: "Default", isDefault: true, isGlobal: true },
+            state: DEFAULT_STATES[document[1]] ?? {},
         });
     }
     if (String(url).endsWith("/query")) {
@@ -109,7 +111,7 @@ test("a whitelisted report hides the chrome its features do not cover", async ()
     assert.equal(report.shadowRoot.querySelector(".ir-search").getAttribute("role"), "search");
     assert.equal(report.shadowRoot.querySelector(".ir-viewbtns").hidden, true, "no alternate view feature → the switcher goes");
     assert.equal(report.shadowRoot.querySelector(".ir-actionsbtn").hidden, false);
-    assert.equal(requests.some(r => r.url.endsWith("/saved")), true,
+    assert.equal(requests.some(r => r.url === "/feature-api/kiosk"), true,
         "the report-document list remains part of activation even when save controls are hidden");
 
     report.shadowRoot.querySelector(".ir-actionsbtn").click();
@@ -134,7 +136,7 @@ test("a schema without a features field (older server) leaves everything on", as
     assert.equal(report.shadowRoot.querySelector(".ir-search").hidden, false);
     assert.equal(report.shadowRoot.querySelector(".ir-viewbtns").hidden, false);
     assert.equal(report.shadowRoot.querySelector('.ir-viewbtn[data-mode="grid"]').getAttribute("aria-pressed"), "true");
-    assert.equal(requests.some(r => r.url.endsWith("/saved")), true);
+    assert.equal(requests.some(r => r.url === "/feature-api/orders"), true);
 
     report.shadowRoot.querySelector(".ir-actionsbtn").click();
     const labels = menuLabels(report);

@@ -73,7 +73,7 @@ export function refreshSavedSelect(w) {
     const isPublic = saved => saved.isDefault || saved.isGlobal;
     group(w.t("saved.public"), w.savedList.filter(isPublic));
     group(w.t("saved.private"), w.savedList.filter(saved => !isPublic(saved)));
-    savedSel.value = w.currentSaved?.id ?? "";
+    savedSel.value = w.currentSaved?.id == null ? "" : String(w.currentSaved.id);
     savedWrap.hidden = !featureEnabled(w, "savedReports") || w.savedList.length === 0;
 }
 
@@ -87,10 +87,10 @@ export function refreshSavedSelect(w) {
  */
 export async function loadSavedList(w) {
     const sequence = w._seq;
-    const reportId = w.reportId;
-    const stillCurrent = () => sequence === w._seq && reportId === w.reportId;
+    const reportName = w.definitionName;
+    const stillCurrent = () => sequence === w._seq && reportName === w.definitionName;
     try {
-        const saved = await api(w.documentFamilyUrl("saved"));
+        const saved = await api(apiUrl(w.base, reportName));
         if (stillCurrent()) w.savedList = saved;
     } catch (err) {
         // Protocol contract: a save/delete refresh can finish after the element has switched
@@ -146,7 +146,7 @@ function removeSavedSummary(w, id) {
 export async function loadSavedById(w, id) {
     const transition = w.beginStateTransition();
     try {
-        const docResponse = await api(apiUrl(w.base, id));
+        const docResponse = await api(apiUrl(w.base, w.definitionName, id));
         if (!w.isCurrentStateTransition(transition)) return;
         if (docResponse.summary?.reportName !== w.definitionName)
             throw new Error("The selected report document belongs to a different report definition.");

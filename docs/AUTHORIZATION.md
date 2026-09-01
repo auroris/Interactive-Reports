@@ -199,7 +199,7 @@ subsequent requests. Any database-backed default is repairable: invalid stored s
 regenerated from current appsettings without changing the database id. Configured file
 bodies are never rewritten this way. If a present configured body fails processing, its
 exception and identity are logged, its optimistic row is deleted, and the request returns
-404. Its configuration remains authoritative, so the next synchronization recreates an
+404. Its configuration remains authoritative, so the next report listing recreates an
 identity and retries it rather than substituting a synthetic default.
 
 Query, LOV, and export are addressed by configured definition key. They authorize that
@@ -235,10 +235,10 @@ use the same service before invoking their authorization store or user provider.
 
 | Action | Request that emits it | Built-in notes |
 |---|---|---|
-| `ViewReport` | Schema for an ordinary report | Report-definition authentication and policy run first. |
+| `ViewReport` | Root configuration catalogue or schema for an ordinary report | Report-definition authentication and policy run first. The root catalogue returns names and titles only; it does not reconcile documents. |
 | `Query` | Process a client document through HTTP, or execute a stored document through GraphQL | HTTP processing authorizes only the resolved report definition and never supplies original document metadata. GraphQL loads a stored document and supplies `SavedReport` metadata. |
 | `Export` | CSV export | The report's `download` feature must also be enabled. Admin-list export emits `ListAllSavedReports` as well. |
-| `ListSavedReports` | List visible saved reports for one report definition | Storage filters to the default, global, and caller-owned rows. |
+| `ListSavedReports` | List visible saved reports for one report definition | The server reconciles the complete family in one store query, then filters in memory. Administrators see all rows; other callers see public and exactly owned rows. |
 | `ReadSavedReport` | Load one saved report, or execute it through GraphQL | Public, owner, and administrator access are distinguished from `SavedReport` metadata and the principal. |
 | `CreateSavedReport` | Create a saved report | Requires an authenticated canonical owner and the `savedReports` feature. Receives the typed definition before publication actions are derived. |
 | `UpdateSavedReport` | Update a saved report | Owner or administrator. Receives effective metadata and only client-authored replacement state. Global publication and default selection remain unchanged unless their separate actions also pass. Configured content remains read-only. |
@@ -246,7 +246,7 @@ use the same service before invoking their authorization store or user provider.
 | `PublishGlobalReport` | Effective definition changes public status | Emitted for both publishing and unpublishing after base-action mutation. Administrator action. |
 | `SelectDefaultReport` | Effective definition selects a new family default | Administrator action. The new default becomes global and the previous default remains global. A configured default cannot be replaced through the API. |
 | `ChangeSavedReportOwner` | Effective definition changes owner | Administrator action. |
-| `ListAllSavedReports` | Schema/query/export of the built-in `__saved-reports` definition | Administrator action. Its export also emits `Export`. |
+| `ListAllSavedReports` | Administrator view of a family list, or schema/query/export of the built-in `__saved-reports` definition | Administrator action. Its export also emits `Export`. |
 | `ListAuthorizationUsers` | Resolve the protected administration user directory | Administrator action. Directory entries are choices, not grants. |
 | `ManageAuthorization` | List or change database administrators, report restrictions, and report-user grants | Administrator action. Configuration grants remain read-only. |
 | `DownloadReportDocument` | Download the canonical admin JSON envelope | Administrator action. |

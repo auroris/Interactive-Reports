@@ -175,10 +175,10 @@ internal static class PersistenceHttpScenario
                          savedReportsConnection,
                          savedReportsTable))
         {
-            var visible = await GetJson(restarted.Client, $"/api/reports/{restarted.ReportId}/saved");
+            var visible = await GetJson(restarted.Client, $"/api/reports/{ReportName}");
             Assert.Contains(visible.EnumerateArray(), item => item.GetProperty("id").GetInt64() == id);
 
-            var loaded = await GetJson(restarted.Client, $"/api/reports/{id}");
+            var loaded = await GetJson(restarted.Client, $"/api/reports/{ReportName}/{id}");
             Assert.Equal(title, loaded.GetProperty("summary").GetProperty("title").GetString());
             Assert.True(JsonNode.DeepEquals(
                 JsonNode.Parse(defaultState.GetRawText()),
@@ -241,10 +241,9 @@ internal static class PersistenceHttpScenario
         var server = app.Services.GetRequiredService<IServer>();
         var address = server.Features.Get<IServerAddressesFeature>()!.Addresses.Single();
         var client = new HttpClient { BaseAddress = new Uri(address) };
-        var catalogue = await GetJson(client, "/api/reports");
-        var reportId = catalogue.EnumerateArray()
-            .Single(item => item.GetProperty("reportName").GetString() == ReportName
-                && item.GetProperty("isDefault").GetBoolean())
+        var family = await GetJson(client, $"/api/reports/{ReportName}");
+        var reportId = family.EnumerateArray()
+            .Single(item => item.GetProperty("isDefault").GetBoolean())
             .GetProperty("id").GetInt64();
         return new RunningHost(app, client, reportId);
     }

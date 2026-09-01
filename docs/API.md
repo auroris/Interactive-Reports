@@ -114,8 +114,9 @@ sets either `connection` or `dataSource`, never both.
 ## Report-definition configuration
 
 Definitions are keyed by an internal family name under `InteractiveReport:Reports`.
-Processing endpoints use that key because the client submits its own document; catalogue,
-load, save, and viewer endpoints use database-generated numeric document ids.
+Processing, family discovery, document loading, and viewer endpoints use that key.
+Database-generated numeric ids identify individual documents within or after that family
+context; mutation routes use the id directly.
 
 | Property | Purpose |
 |---|---|
@@ -144,14 +145,20 @@ The server creates a database identity row containing its family key and source 
 while the state remains on disk and can be deployed or versioned in Git. The row is the
 optimistic catalogue authority for title and default metadata. Configured titles may
 collide with any database or configured title. At most one file per family may set
-`default: true`; it supersedes the synthetic appsettings default. When no file default
+`default: true`; it supersedes the synthetic appsettings default. A family-listing endpoint
+first authorizes its appsettings definition, then loads the complete, unfiltered database
+family in one query, reconciles that snapshot with configured file references in memory,
+and only afterward filters the response by administrator/public/exact-owner visibility.
+The root configuration catalogue does not reconcile report documents. When no file default
 exists, the synthetic document is created lazily. Any database-backed default is repaired
 in place from current configuration if its stored state can no longer be processed. A
 missing file is detected when its numeric id is loaded; the server deletes the stale row,
 restores a synthetic default when necessary, and returns 404 for that id. If a present
 configured file throws while its state is processed, the server logs the exception, deletes
 the optimistic identity, and returns 404 without creating a synthetic fallback. The next
-synchronization recreates the configured identity and retries the file.
+report listing recreates the configured identity and retries the file.
+A bootstrap insert that leaves the family without a configured or synthetic default is
+logged and returns 404; the next family-list request retries from the current database truth.
 
 ## Server API index
 
@@ -458,25 +465,28 @@ With the default prefix, the principal routes are:
 
 | Method and route | Contract |
 |---|---|
-| `GET /api/reports` | Lists every report document visible through an authorized report definition. IDs are JSON numbers. |
+| `GET /api/reports` | Lists appsettings report configurations the caller may view as `{ name, title }`. It does not list or reconcile report documents. |
+| `GET /api/reports/{name}` | Reconciles one configured family and lists its visible report documents. Administrators see the complete family; other callers see public and exactly owned documents. IDs are JSON numbers. |
 | `GET /api/reports/{name}/schema` | Definition schema, presentation hints, limits, features, and client capabilities for a configured definition key. |
 | `POST /api/reports/{name}/query` | Accepts the client's `ReportState`; returns `ReportResult` with rows and the accepted server-enriched `document`. |
 | `POST /api/reports/{name}/lov` | Accepts a required current `document`, its active `table`, one `column`, and optional `search`; returns at most 50 distinct values. |
 | `POST /api/reports/{name}/export` | Accepts the client's `ReportState`; returns the requested file format. CSV is currently supported. |
-| `GET /api/reports/{id}/saved` | Lists public documents and the caller's private documents in the same report family. |
 | `POST /api/reports/{id}/saved` | Creates a private or global saved report from `SaveReportRequest` in that family. |
-| `GET /api/reports/{id}` | Returns `SavedReportDocument`. |
+| `GET /api/reports/{name}/{id}` | Returns `SavedReportDocument` after authorizing the named configuration and confirming that the numeric id belongs to it. |
 | `PUT /api/reports/{id}` | Applies `UpdateSavedReportRequest`; `isDefault: true` atomically selects a new default. |
 | `DELETE /api/reports/{id}` | Deletes an editable saved report. |
 | `GET /api/reports/whoami` | Optional identity diagnostic; disabled unless `WhoamiEnabled` is true. |
 | `/api/reports/admin/*` | Administrator user, authorization, and report-document operations. |
 | `GET /api/reports/ui/{file}` | Packaged browser assets. |
-| `GET /api/reports/{id}/view` | Optional packaged viewer page. |
+| `GET /api/reports/{name}/view` | Optional packaged viewer page. |
 | `GET /api/reports/admin` | Optional packaged administration page. |
 
-All document IDs are database-generated integers. A missing document and a document the
-caller may not read both return 404. Document catalogue, retrieval, reset, save, update,
-and delete operations use those IDs. Schema, query, LOV, and export instead use the
+All persisted document IDs are database-generated integers. A missing document, a document
+addressed through the wrong configured family, and a document the caller may not read all
+return 404. The ordinary component starts with the appsettings name: it lists that family,
+selects `isDefault`, then loads `/api/reports/{name}/{id}`. It never calls the root catalogue.
+The administration component uses the root catalogue to enumerate appsettings families,
+then loops over the same family-list route. Schema, query, LOV, and export also use the
 configured definition key. These processing endpoints authorize that definition and do
 not read the saved-report store. A submitted `ReportState` has no required ID or stored
 provenance; it may be a mutated default, another retrieved document, or a document made
@@ -595,7 +605,7 @@ only the supported element interface; mutable controller state remains private.
 
 <interactive-report
   id="orders-report"
-  report="42"
+  report="orders"
   saved-report="87"
   api-base="/api/reports"
   stylesheet="/css/orders-report.css">
@@ -606,8 +616,9 @@ only the supported element interface; mutable controller state remains private.
 
 | Attribute | Property | Meaning |
 |---|---|---|
-| `report` | `reportId` (read-only) | Required numeric anchor document id. Changing the attribute loads that report family. |
-| none | `definitionName` (read-only) | Configured definition key learned from the retrieved anchor document; available after activation. |
+| `report` | none | Required appsettings report configuration name. Changing the attribute lists and activates that family. |
+| none | `reportId` (read-only) | Numeric id of the active report document; available after activation. |
+| none | `definitionName` (read-only) | Canonical configured definition key learned during activation. |
 | `saved-report` | none | Optional numeric document id to load on activation. |
 | `api-base` | `apiBase` | API prefix. It is inferred from the module URL when omitted. |
 | `base` | `apiBase` | Older alias for `api-base`. |

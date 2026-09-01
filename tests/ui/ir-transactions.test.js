@@ -80,15 +80,22 @@ globalThis.fetch = (url, options = {}) => {
             ? json({ identity: "test-user" })
             : new Response(null, { status: whoamiStatus }));
     }
-    if (path.endsWith("/saved") && method === "GET") {
+    const family = /^\/txn-api\/([^/?]+)$/.exec(path)?.[1];
+    if (family && method === "GET") {
         if (holdSavedLists) {
             return new Promise(resolve => heldSavedLists.push({
                 url: path,
                 succeed: reports => resolve(json(reports)),
             }));
         }
+        const visible = savedReports
+            .filter(report => !report.reportName || report.reportName === family)
+            .map(report => ({ ...report, reportName: report.reportName ?? family }));
+        if (!visible.some(report => report.isDefault)) visible.unshift({
+            id: 1, reportName: family, title: "Default", isDefault: true, isGlobal: true,
+        });
         return Promise.resolve(savedListStatus === 200
-            ? json(savedReports)
+            ? json(visible)
             : new Response(null, { status: savedListStatus }));
     }
     if (path.endsWith("/saved") && method === "POST") {
@@ -100,21 +107,20 @@ globalThis.fetch = (url, options = {}) => {
         }
         return Promise.resolve(json(savedMutationResult, 201));
     }
-    const savedId = !path.endsWith("/query") && !path.endsWith("/lov") && !path.endsWith("/export")
-        ? /\/([^/?]+)$/.exec(path)?.[1]
-        : null;
-    if (savedId && method === "GET") {
+    const document = /^\/txn-api\/([^/?]+)\/([^/?]+)$/.exec(path);
+    if (document && method === "GET") {
+        const [, reportName, savedId] = document;
         if (holdSavedDocuments) {
             return new Promise(resolve => heldSavedDocuments.push({
                 id: savedId,
                 succeed: document => resolve(json(document)),
             }));
         }
-        const fallback = savedId === "orders" || savedId === "invoices"
+        const fallback = savedId === "1"
             ? {
                 summary: {
-                    id: savedId,
-                    reportName: savedId,
+                    id: 1,
+                    reportName,
                     title: "Default",
                     isDefault: true,
                     isGlobal: true,
@@ -126,6 +132,7 @@ globalThis.fetch = (url, options = {}) => {
             ? json(savedDocuments.get(savedId))
             : fallback ? json(fallback) : new Response(null, { status: 404 }));
     }
+    const savedId = /\/([^/?]+)$/.exec(path)?.[1];
     if (savedId && method === "DELETE")
         return Promise.resolve(new Response(null, { status: 204 }));
     if (path.endsWith("/query")) {
@@ -391,13 +398,13 @@ test("a saved-list refresh cannot cross a report switch", async () => {
     heldSavedLists.length = 0;
     beginSaveAs(report, "Orders copy");
     await settle(() => heldSavedLists.length === 1);
-    assert.match(heldSavedLists[0].url, /\/orders\/saved$/);
+    assert.equal(heldSavedLists[0].url, "/txn-api/orders");
 
     holdSavedLists = false;
     const invoiceSaved = { id: "saved-invoices", title: "Invoices copy", mine: true };
     savedReports = [invoiceSaved];
     report.setAttribute("report", "invoices");
-    await settle(() => report.reportId === "invoices"
+    await settle(() => report.reportId === "1"
         && savedSelect(report).querySelector(`option[value="${invoiceSaved.id}"]`));
 
     heldSavedLists[0].succeed([
@@ -407,7 +414,7 @@ test("a saved-list refresh cannot cross a report switch", async () => {
 
     assert.equal(!!savedSelect(report).querySelector('option[value="late-orders"]'), false,
         "the completed Orders request must not replace the Invoices list");
-    assert.equal(savedSelect(report).value, "invoices",
+    assert.equal(savedSelect(report).value, "1",
         "the current report's selector remains on its own default document");
 
     savedMutationResult = null;
@@ -476,7 +483,7 @@ test("a saved-report load whose query fails restores doc, selection, and search 
         "the working copy reverts to the validated state");
     assert.equal(report.shadowRoot.querySelector(".ir-search-input").value, "",
         "the search box follows the reverted doc");
-    assert.equal(select.value, "orders", "the select returns to the previous default document");
+    assert.equal(select.value, "1", "the select returns to the previous default document");
 
     report.remove();
     savedReports = [];
@@ -499,7 +506,7 @@ test("a saved report deleted elsewhere reports precisely and refreshes the list"
 
     assert.match(errorText(report), /no longer available/i,
         "a missing saved report must not present as 'Report not found'");
-    assert.equal(savedSelect(report).value, "");
+    assert.equal(savedSelect(report).value, "1");
     assert.equal(report.getReportDocument().search ?? "", "");
 
     report.remove();
@@ -558,18 +565,20 @@ test("whoami failures other than 404/401 warn instead of passing for anonymous",
     whoamiStatus = 200;
 });
 
-test("a saved-list failure surfaces instead of presenting as 'no saved reports'", async () => {
+test("a family-list failure prevents activation instead of inventing a default document", async () => {
     requests.length = 0;
     savedListStatus = 500;
     const report = await mount();
 
-    assert.match(warnText(report), /saved reports could not be loaded/i);
-    assert.equal(!!report.shadowRoot.querySelector("tbody tr"), true, "the report still loads");
+    assert.match(errorText(report), /HTTP 500/i);
+    assert.equal(report.shadowRoot.querySelector("tbody tr"), null,
+        "the client cannot select a default document without the family listing");
     report.remove();
 
     savedListStatus = 404;
-    const disabled = await mount();
-    assert.equal(warnText(disabled), "", "404 means the feature is off — no warning");
-    disabled.remove();
+    const missing = await mount();
+    assert.match(errorText(missing), /not found|access/i,
+        "a missing family is an activation failure, not an optional saved-report feature");
+    missing.remove();
     savedListStatus = 200;
 });

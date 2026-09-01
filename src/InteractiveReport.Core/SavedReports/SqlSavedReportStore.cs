@@ -150,6 +150,26 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     }
 
     /// <summary>
+    /// Loads one configured report's complete document family in a single database query. No ownership or
+    /// publication filtering is applied; callers reconcile this authoritative snapshot before
+    /// filtering it in memory for the requesting identity.
+    /// </summary>
+    public Task<IReadOnlyList<SavedReport>> ListFamily(
+        string reportName,
+        CancellationToken ct = default)
+    {
+        var config = Validated(_config());
+        return Select(
+            config,
+            query => query
+                .Where("REPORT_NAME", reportName)
+                .OrderByDesc("IS_DEFAULT")
+                .OrderByDesc("IS_GLOBAL")
+                .OrderBy("TITLE"),
+            ct);
+    }
+
+    /// <summary>
     /// Lists metadata for default, global, and caller-owned reports without loading state JSON.
     /// </summary>
     /// <param name="reportName">The configured report name whose definition or saved reports are being addressed.</param>

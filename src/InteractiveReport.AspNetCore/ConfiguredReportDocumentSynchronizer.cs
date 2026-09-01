@@ -1,201 +1,51 @@
-using InteractiveReport.Core.SavedReports;
 using System.Data.Common;
+using InteractiveReport.Core.SavedReports;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 
 namespace InteractiveReport.AspNetCore;
 
 /// <summary>
-/// Creates database identities for configured report-document files so persistence is the
-/// single listing surface and every endpoint can use a numeric document id. The database row
-/// is the optimistic authority for existence, title, and default selection; the JSON file is
-/// dereferenced only for its state body. Removing or renaming a configured source removes its
-/// old identity. A configured default supersedes the synthetic default for its report family.
+/// Reconciles configured report-document file references with the database catalogue. Listing
+/// supplies the database's complete, unfiltered view before caller visibility is applied; the
+/// in-memory appsettings comparison opens only configured files whose identities are absent.
 /// </summary>
 public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
 {
     private readonly ConfiguredReportDocumentStore _documents;
     private readonly ISavedReportStore _store;
-    private readonly IOptionsMonitor<InteractiveReportOptions> _options;
-    private readonly ReportConnectionRegistry _registry;
     private readonly ILogger? _logger;
     private readonly SemaphoreSlim _lock = new(1, 1);
-    private readonly IDisposable? _reloadSubscription;
-    private string? _applied;
 
-    /// <summary>
-    /// Initializes a synchronizer and watches option reloads so the next request
-    /// reconciles the newly configured document set.
-    /// </summary>
-    /// <param name="documents">The configured document source to mirror.</param>
-    /// <param name="store">The saved-report store that receives configured rows.</param>
-    /// <param name="options">The monitored options that select the store and documents.</param>
-    /// <param name="registry">Resolves the concrete saved-report store target.</param>
-    /// <param name="logger">Receives synchronization diagnostics; <see langword="null"/> disables logging.</param>
-    /// <remarks>Subscribes to option changes. Dispose the synchronizer to release that subscription.</remarks>
+    /// <summary>Initializes configured report-document reconciliation.</summary>
     internal ConfiguredReportDocumentSynchronizer(
         ConfiguredReportDocumentStore documents,
         ISavedReportStore store,
-        IOptionsMonitor<InteractiveReportOptions> options,
-        ReportConnectionRegistry registry,
         ILogger<ConfiguredReportDocumentSynchronizer>? logger = null)
     {
         _documents = documents;
         _store = store;
-        _options = options;
-        _registry = registry;
         _logger = logger;
-        _reloadSubscription = options.OnChange(_ => Volatile.Write(ref _applied, null));
     }
 
     /// <summary>
-    /// Brings configured source references and database identities into agreement. Existing
-    /// identities are trusted without probing their files. Only a configured source lacking an
-    /// identity is opened so its initial database metadata can be recorded.
+    /// Reconciles every report family from one complete database query. Retained for explicit
+    /// host and administration synchronization; normal document listings consume the returned
+    /// snapshot through <see cref="ReconcileAll"/>.
     /// </summary>
-    /// <param name="ct">Cancels lock acquisition and database operations.</param>
-    /// <returns>A task that completes after all configured rows and orphans have been reconciled.</returns>
-    /// <remarks>May insert, update, or delete saved-report rows and emit diagnostic log events.</remarks>
     public async Task EnsureSynced(CancellationToken ct = default)
-    {
-        if (Signature() == Volatile.Read(ref _applied))
-        {
-            _logger?.LogDebug("Configured report documents are already synchronized");
-            return;
-        }
+        => _ = await ReconcileAll(ct);
 
+    /// <summary>
+    /// Loads every database report once, reconciles configured identities, and returns the
+    /// corrected unfiltered snapshot for authorization and owner/public filtering in memory.
+    /// </summary>
+    internal async Task<IReadOnlyList<SavedReport>> ReconcileAll(CancellationToken ct = default)
+    {
         await _lock.WaitAsync(ct);
         try
         {
-            // Recompute under the lock because another request may have applied it,
-            // and the files may have changed again while we waited.
-            var signature = Signature();
-            if (signature == _applied) return;
-
-            var references = _documents.ListReferences().ToArray();
-            var desired = references
-                .Select(reference => (reference.ReportName, reference.SourceFile))
-                .ToHashSet();
-            var existing = await _store.ListAll(ct);
-            var bySourceFile = existing
-                .Where(row => row.SourceFile is not null)
-                .ToDictionary(row => (row.ReportName, row.SourceFile!));
-            var upserted = 0;
-            var deleted = 0;
-            var unresolved = false;
-
-            // The database is the optimistic catalogue. Do not touch files for identities
-            // that already exist. A new configured reference must be read once to seed its
-            // title and default bit; an absent new file remains absent from the database and
-            // is retried on a later synchronization.
-            var documents = new List<ConfiguredReportDocument>();
-            foreach (var reference in references)
-            {
-                if (bySourceFile.ContainsKey((reference.ReportName, reference.SourceFile)))
-                    continue;
-                if (_documents.Find(reference.ReportName, reference.SourceFile) is { } document)
-                    documents.Add(document);
-                else
-                {
-                    unresolved = true;
-                    _logger?.LogWarning(
-                        "Configured report document {ReportName}/{SourceFile} has no database identity because its file is absent",
-                        reference.ReportName,
-                        reference.SourceFile);
-                }
-            }
-
-            // A configured file explicitly marked as default supersedes the database selection.
-            // User-authored predecessors remain global; configured predecessors are demoted; every
-            // synthetic fallback is removed before inserting the configured public identity.
-            foreach (var configuredDefault in documents.Where(document => document.Default))
-            {
-                while (await _store.FindDefault(configuredDefault.ReportName, ct) is { } currentDefault)
-                {
-                    if (currentDefault.Origin == SavedReportOrigin.Configured
-                        && string.Equals(
-                            currentDefault.SourceFile,
-                            configuredDefault.SourceFile,
-                            StringComparison.Ordinal))
-                        break;
-
-                    if (currentDefault.Origin == SavedReportOrigin.Synthetic)
-                    {
-                        if (await _store.Delete(currentDefault, ct))
-                        {
-                            deleted++;
-                            break;
-                        }
-                        continue;
-                    }
-
-                    var demoted = currentDefault with { IsDefault = false, IsGlobal = true };
-                    if (!await _store.Update(demoted, currentDefault, ct)) continue;
-                    if (demoted.SourceFile is not null)
-                        bySourceFile[(demoted.ReportName, demoted.SourceFile)] = demoted;
-                    upserted++;
-                    break;
-                }
-
-                foreach (var synthetic in existing.Where(report =>
-                             report.Origin == SavedReportOrigin.Synthetic
-                             && string.Equals(
-                                 report.ReportName,
-                                 configuredDefault.ReportName,
-                                 StringComparison.OrdinalIgnoreCase)))
-                {
-                    if (await _store.Delete(synthetic.Id, ct)) deleted++;
-                }
-            }
-
-            foreach (var document in documents)
-            {
-                var sourceIdentity = (document.ReportName, document.SourceFile);
-                var row = new SavedReport
-                {
-                    Id = 0,
-                    ReportName = document.ReportName,
-                    SourceFile = document.SourceFile,
-                    Title = document.Title,
-                    Owner = null,
-                    IsGlobal = true,
-                    IsDefault = document.Default,
-                    StateJson = null,
-                    ModifiedUtc = document.ModifiedUtc,
-                    Origin = SavedReportOrigin.Configured,
-                };
-                try
-                {
-                    await _store.Create(row, ct);
-                    bySourceFile[sourceIdentity] = row;
-                    upserted++;
-                }
-                catch (DbException)
-                {
-                    var winner = await _store.FindConfiguredFile(
-                        document.ReportName, document.SourceFile, ct);
-                    if (winner is null) throw;
-                    bySourceFile[sourceIdentity] = winner;
-                }
-            }
-
-            foreach (var orphan in existing)
-            {
-                if (orphan.Origin == SavedReportOrigin.Configured
-                    && (orphan.SourceFile is null
-                        || !desired.Contains((orphan.ReportName, orphan.SourceFile))))
-                {
-                    await _store.Delete(orphan.Id, ct);
-                    deleted++;
-                }
-            }
-
-            _applied = unresolved ? null : signature;
-            _logger?.LogInformation(
-                "Synchronized {DocumentCount} configured report documents: {UpsertedCount} upserted, {DeletedCount} deleted",
-                references.Length,
-                upserted,
-                deleted);
+            var databaseReports = await _store.ListAll(ct);
+            return await Reconcile(databaseReports, reportName: null, ct);
         }
         finally
         {
@@ -204,34 +54,225 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
     }
 
     /// <summary>
-    /// Builds a signature from the store target and configured source references without
-    /// probing any file body.
+    /// Loads the complete family selected by <paramref name="reportName"/> in one query and
+    /// reconciles that configured family even when the database does not contain a document yet.
     /// </summary>
-    /// <returns>A deterministic string that changes when the target store or a configured file changes.</returns>
-    private string Signature()
+    internal async Task<IReadOnlyList<SavedReport>> ReconcileFamily(
+        string reportName,
+        CancellationToken ct = default)
     {
-        var cfg = _registry.ResolveStoreConfig(_options.CurrentValue.SavedReports);
-        var parts = _documents.ListReferences()
-            .Select(document => $"{document.ReportName}:{document.SourceFile}")
-            .OrderBy(part => part, StringComparer.Ordinal);
-        return $"{cfg.ConnectionName}|{cfg.Dialect}|{cfg.TableName}|{string.Join(";", parts)}";
+        await _lock.WaitAsync(ct);
+        try
+        {
+            var databaseReports = await _store.ListFamily(reportName, ct);
+            return await Reconcile(databaseReports, reportName, ct);
+        }
+        finally
+        {
+            _lock.Release();
+        }
     }
 
     /// <summary>
-    /// Deletes a configured identity whose referenced body was absent and invalidates the
-    /// reconciliation cache so a later deployment of that file can create a new identity.
+    /// Compares one authoritative database snapshot with configured file references, applying
+    /// only the missing, superseded-default, and orphan discrepancies it finds.
     /// </summary>
-    internal async Task RemoveMissing(SavedReport report, CancellationToken ct)
+    private async Task<IReadOnlyList<SavedReport>> Reconcile(
+        IReadOnlyList<SavedReport> databaseReports,
+        string? reportName,
+        CancellationToken ct)
     {
-        await _store.Delete(report, ct);
-        Volatile.Write(ref _applied, null);
+        var references = _documents.ListReferences(reportName).ToArray();
+        var desired = references
+            .Select(reference => (reference.ReportName, reference.SourceFile))
+            .ToHashSet();
+        var current = databaseReports.ToDictionary(report => report.Id, report => report with { });
+        var bySourceFile = current.Values
+            .Where(row => row.Origin == SavedReportOrigin.Configured && row.SourceFile is not null)
+            .ToDictionary(row => (row.ReportName, row.SourceFile!));
+        var upserted = 0;
+        var deleted = 0;
+
+        // Existing database identities are the optimistic truth. A configured reference absent
+        // from that complete snapshot is the only case that opens its file to seed metadata.
+        var missingDocuments = new List<ConfiguredReportDocument>();
+        foreach (var reference in references)
+        {
+            if (bySourceFile.ContainsKey((reference.ReportName, reference.SourceFile)))
+                continue;
+            if (_documents.Find(reference.ReportName, reference.SourceFile) is { } document)
+                missingDocuments.Add(document);
+            else
+                _logger?.LogWarning(
+                    "Configured report document {ReportName}/{SourceFile} has no database identity because its file is absent",
+                    reference.ReportName,
+                    reference.SourceFile);
+        }
+
+        // A newly discovered configured default replaces the database selection. Internal
+        // removals are unconditional by numeric id; deleting an already-absent row is harmless.
+        foreach (var configuredDefault in missingDocuments.Where(document => document.Default))
+        {
+            var currentDefault = CurrentDefault(current.Values, configuredDefault.ReportName);
+            while (currentDefault is not null)
+            {
+                if (currentDefault.Origin == SavedReportOrigin.Configured
+                    && string.Equals(
+                        currentDefault.SourceFile,
+                        configuredDefault.SourceFile,
+                        StringComparison.Ordinal))
+                    break;
+
+                if (currentDefault.Origin == SavedReportOrigin.Synthetic)
+                {
+                    await _store.Delete(currentDefault.Id, ct);
+                    current.Remove(currentDefault.Id);
+                    deleted++;
+                    break;
+                }
+
+                var demoted = currentDefault with { IsDefault = false, IsGlobal = true };
+                if (await _store.Update(demoted, currentDefault, ct))
+                {
+                    current[demoted.Id] = demoted;
+                    if (demoted.SourceFile is not null)
+                        bySourceFile[(demoted.ReportName, demoted.SourceFile)] = demoted;
+                    upserted++;
+                    break;
+                }
+
+                // A concurrent default change is exceptional. Refresh only this fact and retry;
+                // the normal reconciliation path remains one database snapshot query.
+                currentDefault = await _store.FindDefault(configuredDefault.ReportName, ct);
+                if (currentDefault is not null) current[currentDefault.Id] = currentDefault;
+            }
+
+            foreach (var synthetic in current.Values.Where(report =>
+                         report.Origin == SavedReportOrigin.Synthetic
+                         && string.Equals(
+                             report.ReportName,
+                             configuredDefault.ReportName,
+                             StringComparison.OrdinalIgnoreCase)).ToArray())
+            {
+                await _store.Delete(synthetic.Id, ct);
+                current.Remove(synthetic.Id);
+                deleted++;
+            }
+        }
+
+        foreach (var document in missingDocuments)
+        {
+            var sourceIdentity = (document.ReportName, document.SourceFile);
+            var row = new SavedReport
+            {
+                Id = 0,
+                ReportName = document.ReportName,
+                SourceFile = document.SourceFile,
+                Title = document.Title,
+                Owner = null,
+                IsGlobal = true,
+                IsDefault = document.Default,
+                StateJson = null,
+                ModifiedUtc = document.ModifiedUtc,
+                Origin = SavedReportOrigin.Configured,
+            };
+            try
+            {
+                await _store.Create(row, ct);
+                current[row.Id] = row with { };
+                bySourceFile[sourceIdentity] = row;
+                upserted++;
+            }
+            catch (DbException ex)
+            {
+                var winner = await FindConcurrentConfiguredWinner(document, ct);
+                if (winner is null)
+                    throw LogBootstrapFailure(
+                        document.ReportName,
+                        $"configured report document '{document.SourceFile}'",
+                        ex);
+                current[winner.Id] = winner;
+                bySourceFile[sourceIdentity] = winner;
+            }
+        }
+
+        foreach (var orphan in current.Values.Where(report =>
+                     report.Origin == SavedReportOrigin.Configured
+                     && (report.SourceFile is null
+                         || !desired.Contains((report.ReportName, report.SourceFile)))).ToArray())
+        {
+            await _store.Delete(orphan.Id, ct);
+            current.Remove(orphan.Id);
+            deleted++;
+        }
+
+        if (upserted == 0 && deleted == 0)
+            _logger?.LogDebug(
+                "Configured report documents already match {DocumentCount} configured references",
+                references.Length);
+        else
+            _logger?.LogInformation(
+                "Reconciled {DocumentCount} configured report documents: {UpsertedCount} upserted, {DeletedCount} deleted",
+                references.Length,
+                upserted,
+                deleted);
+
+        return current.Values
+            .OrderBy(report => report.ReportName, StringComparer.Ordinal)
+            .ThenByDescending(report => report.IsDefault)
+            .ThenByDescending(report => report.IsGlobal)
+            .ThenBy(report => report.Title, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
-    /// <summary>
-    /// Logs and deletes a configured identity whose file body could not be loaded or processed.
-    /// The configured reference remains authoritative, so invalidating reconciliation causes the
-    /// next synchronization attempt to create a fresh optimistic identity for another load attempt.
-    /// </summary>
+    private static SavedReport? CurrentDefault(
+        IEnumerable<SavedReport> reports,
+        string reportName)
+        => reports.SingleOrDefault(report =>
+            report.IsDefault
+            && string.Equals(report.ReportName, reportName, StringComparison.OrdinalIgnoreCase));
+
+    private async Task<SavedReport?> FindConcurrentConfiguredWinner(
+        ConfiguredReportDocument document,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await _store.FindConfiguredFile(
+                document.ReportName, document.SourceFile, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw LogBootstrapFailure(
+                document.ReportName,
+                $"configured report document '{document.SourceFile}'",
+                ex);
+        }
+    }
+
+    private ReportDocumentBootstrapException LogBootstrapFailure(
+        string reportName,
+        string document,
+        Exception? exception = null)
+    {
+        var failure = new ReportDocumentBootstrapException(reportName, document, exception);
+        _logger?.LogError(
+            failure,
+            "Report {ReportName}: failed to insert {Document}; the family has no loadable default document",
+            reportName,
+            document);
+        return failure;
+    }
+
+    /// <summary>Deletes a configured identity whose referenced body was absent.</summary>
+    internal Task RemoveMissing(SavedReport report, CancellationToken ct)
+        => _store.Delete(report.Id, ct);
+
+    /// <summary>Logs and deletes a configured identity whose body failed loading or processing.</summary>
     internal async Task RemoveInvalid(
         SavedReport report,
         Exception exception,
@@ -243,16 +284,19 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
             report.ReportName,
             report.SourceFile,
             report.Id);
-        await _store.Delete(report, ct);
-        Volatile.Write(ref _applied, null);
+        await _store.Delete(report.Id, ct);
     }
 
-    /// <summary>
-    /// Releases the options-reload subscription and synchronization lock.
-    /// </summary>
-    public void Dispose()
-    {
-        _reloadSubscription?.Dispose();
-        _lock.Dispose();
-    }
+    /// <summary>Releases the synchronization lock.</summary>
+    public void Dispose() => _lock.Dispose();
+}
+
+/// <summary>Signals that a family bootstrap insert failed after no durable default remained.</summary>
+internal sealed class ReportDocumentBootstrapException(
+    string reportName,
+    string document,
+    Exception? innerException = null)
+    : Exception($"Report '{reportName}' could not persist its {document}.", innerException)
+{
+    internal string ReportName { get; } = reportName;
 }

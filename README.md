@@ -73,8 +73,8 @@ in-process execution and export, REST routes, and the browser element, see the
    app.MapInteractiveReports("/reports");
    ```
 
-4. Done — call **`GET /reports`**, select the `isDefault` document whose
-   `reportName` is `orders`, then browse `/reports/{id}/view`. The packaged page hosts the report;
+4. Done — call **`GET /reports/orders`** and select its `isDefault` document, or
+   browse `/reports/orders/view`. The packaged page hosts the report;
    embedding `<interactive-report>` in your own pages (below) remains the primary
    path for real applications. Saved reports and administration require the explicit
    storage configuration below. The administration page is at `/reports/admin`;
@@ -257,7 +257,11 @@ source filename, display title, and default flag; only the state body is read fr
 when the document is retrieved. Configured titles are deployment declarations and may
 duplicate any public, private, or other configured title. File content remains read-only,
 although Save As can create an editable database copy. At most one file per report may
-set `default: true`; synchronizing that file removes the synthetic default and gives the
+set `default: true`. Whenever one family's reports are listed, the server first loads that
+database family's complete, unfiltered contents in one query, compares the snapshot with
+appsettings in memory, and repairs configured-file discrepancies. Only then does it apply
+administrator/public/exact-owner visibility for the response. Discovering
+the configured default removes the synthetic default and gives the
 file-backed row the default role. Without a configured file default, the server lazily
 creates a synthetic default row. Invalid database-backed default state is rebuilt in place
 from current configuration, retaining the same id. If a referenced file is missing during
@@ -266,9 +270,10 @@ missing row was the default, and the vanished numeric id returns 404. Ensure the
 project copies the referenced files to its build and publish output; the Workbench project
 shows one way to do that. A present configured document whose state fails processing is
 different: its identity is deleted and retrieval returns 404, but its declaration remains
-authoritative, so no synthetic fallback is created. The next synchronization inserts a new
+authoritative, so no synthetic fallback is created. The next report listing inserts a new
 identity and retries it. Each failed attempt is logged with its family, id, source file, and
-exception.
+exception. A configured-identity or synthetic-default insert that leaves the family without
+a default is also logged and returns 404; the next family listing retries bootstrap.
 
 Auto-created stores create the report-document and adjacent `IR_REPORT_AUTHORIZATION`
 tables. This release uses the replacement schema and does not upgrade an older table in
@@ -280,7 +285,9 @@ Administrators can select an ordinary database report as the new default; the op
 publishes it globally and retains the previous default as an ordinary global report.
 A configured file marked `default: true` owns default selection until configuration changes.
 
-The packaged administration panel lists every saved report through an embedded
+The packaged administration panel discovers appsettings families from `GET /api/reports`,
+then loops over `GET /api/reports/{name}` to reconcile and enumerate their report documents.
+It presents saved-report administration through an embedded
 `<interactive-report>` bound to the built-in, administrator-only `__saved-reports`
 definition — the listing is a report like any other, so searching, sorting, column
 tools, pagination, and CSV export all apply to it. Per-row actions (Publish/Unpublish,
@@ -533,7 +540,7 @@ English (`en`) and Canadian French (`fr-CA`). Set `lang` on the component, or on
 its ancestors:
 
 ```html
-<interactive-report lang="fr-CA" report="42"></interactive-report>
+<interactive-report lang="fr-CA" report="orders"></interactive-report>
 ```
 
 The nearest `lang` value wins, including across the component's shadow root. The page
@@ -544,7 +551,7 @@ accessible labels, plural messages, and client-formatted numbers and dates follo
 selected locale. Report titles, column labels, query data, and server error `details`
 remain application data and are displayed as supplied.
 
-The packaged `{prefix}/{id}/view` and `{prefix}/admin` pages set their document
+The packaged `{prefix}/{name}/view` and `{prefix}/admin` pages set their document
 language from ASP.NET Core Request Localization when configured, then from the request's
 `Accept-Language` header. Their page title and JavaScript fallback copy use the same
 locale.
@@ -571,7 +578,7 @@ one `<link>` inside the report's shadow root after the packaged styles, so its r
 target report internals without leaking into the host page. For example:
 
 ```html
-<interactive-report report="42" stylesheet="/css/orders-report.css">
+<interactive-report report="orders" stylesheet="/css/orders-report.css">
 </interactive-report>
 ```
 
@@ -722,18 +729,20 @@ not reach the host page.
 ```html
 <script type="module" src="/assets/ir.js"></script>
 <interactive-report
-  report="42"
+  report="orders"
   saved-report="87"
   api-base="/api/reports"
   stylesheet="/assets/report-overrides.css">
 </interactive-report>
 ```
 
-`report` is the numeric id of the report family's anchor document, normally its default.
-`saved-report`, when present, is another numeric document id in the same family. Resolve
-these values from `GET /api/reports`; titles are presentation only and duplicate titles
-remain distinguishable by their Public and Private groups. Server authorization still
-applies when the component requests schema, saved reports, queries, and exports.
+`report` is the appsettings report configuration name. The component calls
+`GET /api/reports/{name}`, selects the flagged default (or the optional numeric
+`saved-report` id), and retrieves it through `GET /api/reports/{name}/{id}`. It does not
+use the root configuration catalogue during ordinary bootstrap. Titles are presentation
+only, and duplicate titles remain distinguishable by their Public and Private groups.
+Server authorization still applies when the component requests schema, report documents,
+queries, and exports.
 
 Once the initial report has loaded, an embedding application can retrieve an export
 without presenting it as a browser download. `getExport` accepts the format token and

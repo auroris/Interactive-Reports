@@ -84,20 +84,13 @@ test("explains how to build the client when its bundle is missing", async ({ pag
     )).toBeVisible();
 });
 
-test("GraphiQL starts with the configured Default report ready to fetch", async ({ request }) => {
-    const reportsResponse = await request.get("/api/reports");
-    expect(reportsResponse.ok()).toBe(true);
-    const defaultReport = (await reportsResponse.json())
-        .find(report => report.reportName === "orders" && report.isDefault && report.isReadOnly);
-    expect(defaultReport).toBeDefined();
-
+test("GraphiQL does not bind a report identity during application startup", async ({ request }) => {
     const graphiqlResponse = await request.get("/graphiql");
     expect(graphiqlResponse.ok()).toBe(true);
     const html = await graphiqlResponse.text();
-    expect(html).toContain("query: parameters.query ??");
-    expect(html).toContain("variables: parameters.variables ??");
-    expect(html).toContain("FetchDefaultReport");
-    expect(html).toContain(String(defaultReport.id));
+    expect(html).toContain("query: parameters.query,");
+    expect(html).toContain("variables: parameters.variables,");
+    expect(html).not.toContain("FetchDefaultReport");
 });
 
 test("loads the stored default document, queries data, paginates from Actions, and changes reports", async ({ page, request }) => {
@@ -105,7 +98,12 @@ test("loads the stored default document, queries data, paginates from Actions, a
 
     const catalogResponse = await page.request.get("/api/reports");
     expect(catalogResponse.ok()).toBe(true);
-    expect((await catalogResponse.json()).every(report => Number.isSafeInteger(report.id))).toBe(true);
+    const configurations = await catalogResponse.json();
+    expect(configurations.some(report => report.name === "orders" && report.title === "Orders")).toBe(true);
+    expect(configurations.every(report => report.id === undefined)).toBe(true);
+    const ordersResponse = await page.request.get("/api/reports/orders");
+    expect(ordersResponse.ok()).toBe(true);
+    expect((await ordersResponse.json()).every(report => Number.isSafeInteger(report.id))).toBe(true);
     await expect(page.locator("#identity")).toHaveText("workbench-dev · admin");
     await expect(page.getByRole("combobox", { name: "Report", exact: true })).toHaveCount(0);
     await expect(page.getByRole("columnheader")).toHaveText([
@@ -157,10 +155,10 @@ test("loads the stored default document, queries data, paginates from Actions, a
     expect(allResult.rows).toHaveLength(Number(allResult.totalRows));
     await expect(page.getByRole("button", { name: "Next page" })).toBeDisabled();
 
-    const feedId = await reportId(request, "order-feed");
+    await reportId(request, "order-feed");
     await runAndWaitForQuery(page, () =>
         page.locator("interactive-report").evaluate(
-            (element, id) => element.setAttribute("report", String(id)), feedId));
+            element => element.setAttribute("report", "order-feed")));
     await expect(page.getByRole("columnheader")).toHaveText(["Order #", "Customer", "Amount"]);
     await expect(page.getByRole("searchbox", { name: "Search" })).toHaveValue("");
     await expect(page.getByText("1 – 50 of 500 rows", { exact: true })).toBeVisible();
@@ -566,15 +564,13 @@ test("Save As confirms and replaces an existing report instead of creating a dup
         const replaced = await replacePromise;
         expect(replaced.request().postDataJSON().state.search).toBe("Acme Corp");
 
-        const anchorId = await reportId(request);
-        const visible = await request.get(`/api/reports/${anchorId}/saved`);
+        const visible = await request.get("/api/reports/orders");
         const matches = (await visible.json()).filter(report =>
             report.title.toLocaleLowerCase() === title.toLocaleLowerCase());
         expect(matches).toHaveLength(1);
         expect(matches[0].id).toBe(savedId);
     } finally {
-        const anchorId = await reportId(request);
-        const visible = await request.get(`/api/reports/${anchorId}/saved`);
+        const visible = await request.get("/api/reports/orders");
         if (visible.ok()) {
             for (const report of await visible.json())
                 if (report.title.toLocaleLowerCase() === title.toLocaleLowerCase())
@@ -761,7 +757,7 @@ test("a feature-whitelisted report pares the UI down and the server enforces the
     const kioskId = await reportId(request, "orders-kiosk");
     await runAndWaitForQuery(page, () =>
         page.locator("interactive-report").evaluate(
-            (element, id) => element.setAttribute("report", String(id)), kioskId));
+            element => element.setAttribute("report", "orders-kiosk")));
 
     // search + sort + download survive; views, saved reports, and the rest are gone.
     await expect(page.getByRole("searchbox", { name: "Search" })).toBeVisible();
@@ -818,10 +814,10 @@ test("column settings restyle a column from the header menu", async ({ page }) =
 
 test("a definition edit link and per-column overrides shape the managed report", async ({ page, request }) => {
     await openWorkbench(page);
-    const managedId = await reportId(request, "orders-managed");
+    await reportId(request, "orders-managed");
     await runAndWaitForQuery(page, () =>
         page.locator("interactive-report").evaluate(
-            (element, id) => element.setAttribute("report", String(id)), managedId));
+            element => element.setAttribute("report", "orders-managed")));
 
     // The pencil column leads the grid: an accessibly named, visually empty
     // header and a real same-tab anchor per row, its URL canonical-cased from
@@ -903,7 +899,7 @@ test.describe("non-administrator", () => {
         const protectedId = await reportId(page.request, "regional-summary", {
             headers: { "X-Workbench-User": "workbench-dev" },
         });
-        const protectedResponse = await page.request.get(`/api/reports/${protectedId}`);
+        const protectedResponse = await page.request.get(`/api/reports/regional-summary/${protectedId}`);
         expect(protectedResponse.status()).toBe(404);
 
         await page.goto("/admin.html");

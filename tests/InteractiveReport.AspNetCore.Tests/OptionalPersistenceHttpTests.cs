@@ -59,7 +59,9 @@ public sealed class OptionalPersistenceHttpTests
             Assert.Equal(HttpStatusCode.OK, export.StatusCode);
 
             using var catalogue = await host.Client.GetAsync("/api/reports");
-            await AssertStorageFailure(catalogue);
+            Assert.Equal(HttpStatusCode.OK, catalogue.StatusCode);
+            using var family = await host.Client.GetAsync("/api/reports/items");
+            await AssertStorageFailure(family);
 
             using var whoami = await host.Client.GetAsync("/api/reports/whoami");
             Assert.Equal(HttpStatusCode.OK, whoami.StatusCode);
@@ -110,8 +112,17 @@ public sealed class OptionalPersistenceHttpTests
         {
             await using var host = await Start(tempRoot, connectionString, inaccessibleStore);
 
+            // Catalogue authorization still resolves database-backed administrator access.
             using var catalogue = await host.Client.GetAsync("/api/reports");
-            await AssertStorageFailure(catalogue);
+            await AssertStorageFailure(
+                catalogue,
+                "IR-1005",
+                "Report authorization failed");
+            using var family = await host.Client.GetAsync("/api/reports/items");
+            await AssertStorageFailure(
+                family,
+                "IR-1005",
+                "Report authorization failed");
 
             using var administration = await host.Client.GetAsync(
                 "/api/reports/admin/authorization");

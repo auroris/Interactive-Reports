@@ -150,7 +150,7 @@ public sealed class AuthorizationHttpTests : IAsyncLifetime
 
         using var list = await Send(
             HttpMethod.Get,
-            $"/api/reports/{reportId}/saved",
+            "/api/reports/configured",
             "ordinary-user");
         Assert.Equal(HttpStatusCode.NotFound, list.StatusCode);
 

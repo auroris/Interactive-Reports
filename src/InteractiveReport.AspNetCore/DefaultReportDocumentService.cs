@@ -3,6 +3,7 @@ using System.Data.Common;
 using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Model;
 using InteractiveReport.Core.SavedReports;
+using Microsoft.Extensions.Logging;
 
 namespace InteractiveReport.AspNetCore;
 
@@ -11,7 +12,9 @@ namespace InteractiveReport.AspNetCore;
 /// Configuration supplies execution rules; the database document supplies the client-visible identity
 /// and initial state.
 /// </summary>
-internal sealed class DefaultReportDocumentService(ISavedReportStore store)
+internal sealed class DefaultReportDocumentService(
+    ISavedReportStore store,
+    ILogger? logger = null)
 {
     /// <summary>Returns a stored document without attempting definition resolution.</summary>
     internal Task<SavedReport?> Get(long id, CancellationToken ct)
@@ -52,15 +55,29 @@ internal sealed class DefaultReportDocumentService(ISavedReportStore store)
     }
 
     /// <summary>
-    /// Creates the missing default under the configured report id. A concurrent winner is reloaded.
+    /// Creates the missing default for the configured report family. A concurrent winner is reloaded.
     /// </summary>
     internal async Task<SavedReport> CreateMissing(
         ReportDefinition definition,
         CancellationToken ct)
     {
-        if (await store.FindDefault(definition.Name, ct) is { } existing) return existing;
+        var family = await store.ListFamily(definition.Name, ct);
+        return await CreateMissing(definition, family, ct);
+    }
 
-        var dormant = (await store.ListAll(ct)).SingleOrDefault(report =>
+    /// <summary>
+    /// Creates a missing default from a complete family snapshot already loaded for listing.
+    /// The ordinary path performs no second database read; only a concurrent write race is re-read.
+    /// </summary>
+    internal async Task<SavedReport> CreateMissing(
+        ReportDefinition definition,
+        IReadOnlyCollection<SavedReport> databaseFamily,
+        CancellationToken ct)
+    {
+        if (databaseFamily.SingleOrDefault(report => report.IsDefault) is { } existing)
+            return existing;
+
+        var dormant = databaseFamily.SingleOrDefault(report =>
             report.Origin == SavedReportOrigin.Synthetic
             && string.Equals(report.ReportName, definition.Name, StringComparison.OrdinalIgnoreCase));
         if (dormant is not null)
@@ -77,10 +94,22 @@ internal sealed class DefaultReportDocumentService(ISavedReportStore store)
             await store.Create(report, ct);
             return report;
         }
-        catch (DbException)
+        catch (Exception insertException)
+            when (insertException is DbException or SavedReportTitleConflictException)
         {
-            if (await store.FindDefault(definition.Name, ct) is { } winner) return winner;
-            throw;
+            try
+            {
+                if (await store.FindDefault(definition.Name, ct) is { } winner) return winner;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                throw BootstrapFailure(definition.Name, ex);
+            }
+            throw BootstrapFailure(definition.Name, insertException);
         }
     }
 
@@ -139,4 +168,19 @@ internal sealed class DefaultReportDocumentService(ISavedReportStore store)
         ModifiedUtc = DateTime.UtcNow,
         Origin = SavedReportOrigin.Synthetic,
     };
+
+    private ReportDocumentBootstrapException BootstrapFailure(
+        string reportName,
+        Exception? exception = null)
+    {
+        var failure = new ReportDocumentBootstrapException(
+            reportName,
+            "synthetic default report document",
+            exception);
+        logger?.LogError(
+            failure,
+            "Report {ReportName}: failed to insert the synthetic default report document; the family has no loadable default document",
+            reportName);
+        return failure;
+    }
 }

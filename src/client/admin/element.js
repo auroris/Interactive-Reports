@@ -63,7 +63,10 @@ export class InteractiveReportAdminElement extends WidgetElement {
 
         let availableReports;
         try {
-            availableReports = await api(this.base);
+            const families = await api(this.base);
+            const reportsByFamily = await Promise.all(families.map(family =>
+                api(apiUrl(this.base, family.name))));
+            availableReports = reportsByFamily.flat();
         } catch (error) {
             if (seq !== this._seq || !this.isConnected) return;
             this._mount.replaceChildren(banner("error", error.message, null, this));
@@ -71,11 +74,8 @@ export class InteractiveReportAdminElement extends WidgetElement {
         }
         if (seq !== this._seq || !this.isConnected) return;
         this.availableReports = availableReports;
-        const listingReport = availableReports.find(report =>
-            report.reportName === LISTING_REPORT && report.isDefault);
-
         const report = el("interactive-report", {
-            report: listingReport?.id ?? "",
+            report: LISTING_REPORT,
             "api-base": this.apiBase,
             lang: this.locale,
         });
@@ -442,7 +442,7 @@ export class InteractiveReportAdminElement extends WidgetElement {
      * Side effects: fetches the saved report and opens a read-only JSON dialog.
      */
     async viewState(id, row) {
-        const doc = await api(apiUrl(this.base, id));
+        const doc = await api(apiUrl(this.base, row.REPORT_NAME, id));
         openDialog({
             owner: this,
             title: this.t("admin.stateDocumentTitle", { title: row.TITLE }),

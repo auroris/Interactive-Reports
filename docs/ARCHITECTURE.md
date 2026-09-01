@@ -688,14 +688,15 @@ Mounted by the host: `app.MapInteractiveReports("/api/reports").RequireAuthoriza
 
 | Endpoint | Purpose |
 |---|---|
-| `GET  /api/reports` | All visible report documents across authorized definitions. IDs are database-generated JSON numbers. |
+| `GET  /api/reports` | Appsettings report configurations visible to the caller as `{ name, title }`; no document reconciliation. |
+| `GET  /api/reports/{name}` | Authorize one configured family, reconcile its complete database snapshot, then list administrator/public/exact-owner-visible documents. IDs are database-generated JSON numbers. |
 | `GET  /api/reports/{name}/schema` | Column metadata + definition fallback state + capabilities + resolved packaged-control suggestion (§4), gated by the configured definition. |
 | `POST /api/reports/{name}/query` | Body = client-owned state document → enriched document (null table caches filled) + page of results. Authorizes the configured definition and performs no saved-report lookup. |
 | `POST /api/reports/{name}/lov` | Required complete current client document + active table + one column + optional search → at most 50 distinct values. Uses the Query action and the submitted, possibly unsaved active relation without persistence access. |
 | `GET  /api/reports/whoami` | Bootstrap diagnostic for the caller's canonical identity value (only when `whoamiEnabled`); grants no authority. |
-| `GET  /api/reports/{id}/saved` | Public documents and the caller's private documents in the id's report family. |
 | `POST /api/reports/{id}/saved` | Refresh null table caches, then save the posted state in the anchor document's family (global publication = admin). 403 when the configured `savedReports` policy is absent (§4), independently of client controls. |
-| `GET/PUT/DELETE /api/reports/{id}` | Load / modify / delete one report document (matrix in §13; configured documents reject mutation). |
+| `GET /api/reports/{name}/{id}` | Authorize the configured family, confirm the numeric id belongs to it, then load one readable report document. A wrong family, missing row, or inaccessible row returns 404. |
+| `PUT/DELETE /api/reports/{id}` | Modify / delete one report document (matrix in §13; configured documents reject mutation). |
 | `GET/POST /api/reports/__saved-reports/{schema,query}` | Administrator listing through the ordinary definition pipeline; action cells carry numeric document ids. |
 | `GET  /api/reports/admin/saved/{id}/document` | Administrator: download a canonical `{ title, default, state }` source-file envelope. |
 | `POST /api/reports/admin/{id}/documents` | Administrator: validate a source-file envelope against the id's report family and import a private saved copy for testing. |
@@ -1260,15 +1261,27 @@ database-generated numeric ids, `ORIGIN = 'configured'`, the internal `REPORT_NA
 authority for existence, title, and default selection; retrieval dereferences
 `SOURCE_FILE` only for the current state body. Editing a file therefore changes the body
 served under the same id without rewriting stored presentation metadata. Removing a
-configured path during reconciliation removes its identity. If a still-catalogued file
+configured path during reconciliation removes its identity. Family listing first authorizes
+the configured definition, then reads the database's complete, unfiltered family in one
+query. Configured references are reconciled against that authoritative snapshot in memory;
+administrator/public/exact-owner visibility is applied only afterward when constructing the
+client response. The root configuration catalogue reads only appsettings definitions and
+does not reconcile document rows. If a still-catalogued file
 is absent when loaded, that row is deleted, a synthetic default is inserted when needed,
 and the vanished id returns 404. A present configured body that fails report-state
 processing is logged and its optimistic row is deleted; the request returns 404 without a
-synthetic fallback. Reconciliation is invalidated so the still-declared file receives a new
-identity and is retried on the next synchronization. The store is the single listing surface for end-user,
+synthetic fallback. The still-declared file receives a new identity and is retried on the
+next report listing. The store is the single listing surface for end-user,
 administration, and GraphQL discovery, but not the content source. Configured content is
 globally readable within its authorized family, read-only, and grouped under Public.
 Configured titles are deployment declarations and may duplicate user or configured titles.
+GraphQL validates the configured source before applying adapter arguments or executing its
+terminal; only failure of that source-validation stage deletes the identity. Query-time
+validation is reported without mutating the configured catalogue.
+If inserting a configured identity or synthetic fallback fails after the former default was
+removed, the bootstrap service logs the exception and family listing returns 404. It does not
+cache that failure; the next family-list request starts from the current database snapshot and
+retries.
 
 **Store integrity.** `ID` is an identity/sequence value generated by the configured
 database. `REPORT_NAME` always records the internal configured definition key —
@@ -1408,7 +1421,7 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 
 ```html
 <script type="module" src="/api/reports/ui/ir.js"></script>
-<interactive-report report="42" saved-report="87" api-base="/api/reports"
+<interactive-report report="orders" saved-report="87" api-base="/api/reports"
                     stylesheet="/css/report-overrides.css"></interactive-report>
 
 <script type="module" src="/api/reports/ui/ir-admin.js"></script>
@@ -1419,9 +1432,11 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   the assembly and served at `{prefix}/ui/{file}` by `MapInteractiveReports`. `base`
   defaults to the prefix the script was loaded from. The explicit `api-base`
   attribute overrides that inference; `base` remains its compatibility alias.
-  `report` is the required numeric anchor-document id. Loading it establishes the
-  configured definition family used by schema, query, LOV, and export requests. The
-  optional `saved-report` attribute is another numeric document id in that family.
+  `report` is the required appsettings configuration name. Loading it calls the family
+  listing, selects the flagged default or optional numeric `saved-report`, and retrieves
+  that document through the name-and-id route. The ordinary report component never calls
+  the root configuration catalogue. The configured family also scopes schema, query, LOV,
+  and export requests.
   Changing `report`,
   `saved-report`, the API location, or `lang` re-initializes in place. `lang` supports
   English and Canadian French and may instead be inherited from an ancestor. Consumers
@@ -1465,7 +1480,7 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   `scripts/pack.ps1` builds them before packing, and an MSBuild guard fails
   Release builds and packs when they are missing — package consumers do not
   require Node.js, and a UI-less package cannot ship silently.
-- **Packaged pages**: `GET {prefix}/{id}/view` hosts `<interactive-report>` and
+- **Packaged pages**: `GET {prefix}/{name}/view` hosts `<interactive-report>` and
   `GET {prefix}/admin` hosts `<interactive-report-admin>` — minimal shells emitting
   an absolute-prefix script URL so the client's script-relative api-base inference
   resolves with no `api-base` attribute. Their document language follows ASP.NET Core
@@ -1605,7 +1620,9 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 - Every report, saved-report, identity, administration, and GraphQL response starts
   with `Cache-Control: no-store`; only the packaged asset handler deliberately replaces
   it with the ETag-based policy above.
-- The admin element drives the §13 administrator surface: list everything,
+- The admin element discovers every appsettings family through the root catalogue, loops
+  over each family-list route to enumerate its documents, and drives the §13 administrator
+  surface: list everything,
   publish/unpublish, reassign owner, inspect the stored state document, download a
   canonical file-backed envelope, upload and validate an envelope as a private saved
   copy, and delete. It simply loses its data (404) for non-administrators and says so.
@@ -1760,7 +1777,7 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   leftovers; `SavedReportsOptions.Dialect` removed; `SavedReports.DataSource`
   added. Startup validator (config mistakes fail boot); definition resolution
   wrapped in coded-error shaping for post-reload breakage. Packaged
-  anonymous viewer/admin pages (`/{id}/view`, `/admin`) with an admin
+  anonymous viewer/admin pages (`/{name}/view`, `/admin`) with an admin
   whoami-off guidance banner (which also surfaced and fixed the admin element's
   `remove()` method shadowing `Element.remove()`). MIT + full nuget.org metadata
   at 0.9.0 via `Directory.Build.props`, 8.0.x dependency pins, `Ui/dist` pack

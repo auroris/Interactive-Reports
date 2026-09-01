@@ -11,8 +11,8 @@ namespace InteractiveReport.AspNetCore;
 /// <summary>
 /// Resolves report definitions from monitored application configuration. Each lookup returns a detached,
 /// validated snapshot with its connection and dialect resolved. When saved-report storage is enabled,
-/// configured document identities are synchronized before the persistence-backed administrative definition
-/// is resolved. Configuration reloads clear discovered schemas so subsequent requests cannot reuse stale metadata.
+/// the persistence-backed administrative definition is exposed without changing saved-report state.
+/// Configuration reloads clear discovered schemas so subsequent requests cannot reuse stale metadata.
 /// </summary>
 public sealed partial class ConfigurationReportDefinitionStore :
     IReportDefinitionStore,
@@ -63,34 +63,34 @@ public sealed partial class ConfigurationReportDefinitionStore :
     /// Resolves a detached report definition, including the synthetic saved-reports listing when configured.
     /// </summary>
     /// <param name="name">The case-insensitive report name.</param>
-    /// <param name="ct">Cancels document synchronization and saved-report lookup.</param>
+    /// <param name="ct">Cancels the definition lookup before configuration is read.</param>
     /// <returns>The validated definition snapshot, or <see langword="null"/> when the name is unknown or the internal constructor disables the built-in listing.</returns>
     /// <exception cref="InvalidOperationException">Thrown when configuration is invalid.</exception>
-    /// <remarks>May synchronize configured documents and create the saved-report table.</remarks>
-    public async ValueTask<ReportDefinition?> Find(string name, CancellationToken ct = default)
+    /// <remarks>Does not reconcile report documents; the family-list endpoints own that boundary.</remarks>
+    public ValueTask<ReportDefinition?> Find(string name, CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         if (SavedReportsListingDefinition.Matches(name))
         {
             // Configuration cannot declare or shadow the reserved built-in report name.
             if (_options.CurrentValue.Reports.ContainsKey(name))
                 throw new InvalidOperationException(
                     $"Report '{name}': this name is reserved for the built-in saved-reports listing.");
-            // Synchronizing here both freshens configured rows and, through the store's
-            // lazy auto-create on its first operation, guarantees the table exists before
-            // schema discovery probes it. A null synchronizer means this store instance does
-            // not expose the built-in persistence-backed definition.
-            if (_synchronizer is null) return null;
+            // A null synchronizer means this store instance does not expose the built-in
+            // persistence-backed definition. Reconciliation is deliberately owned by listing.
+            if (_synchronizer is null)
+                return ValueTask.FromResult<ReportDefinition?>(null);
             // The built-in report is an administration feature. Resolving its target here
             // produces the normal sanitized configuration error without making persistence a
             // prerequisite for ordinary report definitions.
             var savedConfig = _registry.ResolveStoreConfig(_options.CurrentValue.SavedReports);
-            await _synchronizer.EnsureSynced(ct);
-            return SavedReportsListingDefinition.Create(savedConfig);
+            return ValueTask.FromResult<ReportDefinition?>(
+                SavedReportsListingDefinition.Create(savedConfig));
         }
 
         var reports = _options.CurrentValue.Reports;
         if (!reports.TryGetValue(name, out var def))
-            return null;
+            return ValueTask.FromResult<ReportDefinition?>(null);
 
         // Invariant: the lookup accepts any casing, but the configured key is the canonical
         // name: it becomes REPORT_NAME in saved-report rows and the filter that finds them
@@ -100,7 +100,7 @@ public sealed partial class ConfigurationReportDefinitionStore :
         var snapshot = Snapshot(configuredName, def);
         Validate(snapshot);
         ResolveConnection(snapshot, _registry);
-        return snapshot;
+        return ValueTask.FromResult<ReportDefinition?>(snapshot);
     }
 
     /// <summary>

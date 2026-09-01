@@ -104,11 +104,13 @@ globalThis.fetch = async (url, options = {}) => {
         });
     }
     if (String(url).endsWith("/whoami")) return json({ identity: "test-user" });
-    if (String(url).endsWith("/saved")) return json([]);
-    if ((options.method ?? "GET") === "GET" && /\/[^/?]+$/.test(String(url))) {
-        const id = String(url).split("/").at(-1);
+    const family = /^\/settings-api\/([^/?]+)$/.exec(String(url))?.[1];
+    if ((options.method ?? "GET") === "GET" && family)
+        return json([{ id: 1, reportName: family, title: "Default", isDefault: true, isGlobal: true }]);
+    const document = /^\/settings-api\/([^/?]+)\/(\d+)$/.exec(String(url));
+    if ((options.method ?? "GET") === "GET" && document) {
         return json({
-            summary: { id, reportName: id, title: "Default", isDefault: true, isGlobal: true },
+            summary: { id: Number(document[2]), reportName: document[1], title: "Default", isDefault: true, isGlobal: true },
             state: {},
         });
     }
