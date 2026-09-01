@@ -255,11 +255,24 @@ internal sealed class ReportAuthorizationService(
         var result = new Dictionary<string, object?>();
         foreach (var (parameterName, specification) in definition.ContextParams)
         {
-            result[parameterName] = await resolver.Resolve(
-                parameterName,
-                specification,
-                context.User,
-                ct);
+            try
+            {
+                result[parameterName] = await resolver.Resolve(
+                    parameterName,
+                    specification,
+                    context.User,
+                    ct);
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested)
+            {
+                logging.Logger?.LogError(
+                    ex,
+                    "Failed to resolve context parameter '{Parameter}' for report '{Report}' (traceId {TraceId})",
+                    parameterName,
+                    definition.Name,
+                    context.TraceIdentifier);
+                throw;
+            }
         }
         return result;
     }
@@ -284,14 +297,37 @@ internal sealed class ReportAuthorizationService(
 
         if (authorization?.AdministratorsOnly == true)
         {
-            if (context.User.Identity?.IsAuthenticated != true) return Unauthenticated();
+            if (context.User.Identity?.IsAuthenticated != true)
+            {
+                logging.Logger?.LogDebug(
+                    "Access denied for report '{Report}': caller is not authenticated for administrators-only report (traceId {TraceId})",
+                    definition.Name,
+                    context.TraceIdentifier);
+                return Unauthenticated();
+            }
             var administrator = await AdministratorAccess(context, options, ct);
             if (administrator.Failure is not null) return administrator.Failure;
-            if (administrator.Configured && !administrator.Granted) return Hidden();
+            if (administrator.Configured && !administrator.Granted)
+            {
+                var id = ReportIdentity.Resolve(context.User, options.IdentityClaim);
+                logging.Logger?.LogDebug(
+                    "Access denied for report '{Report}': caller '{Identity}' is not an administrator (traceId {TraceId})",
+                    definition.Name,
+                    id ?? "anonymous",
+                    context.TraceIdentifier);
+                return Hidden();
+            }
         }
 
         if (authorization?.AllowAnonymous == true) return null;
-        if (context.User.Identity?.IsAuthenticated != true) return Unauthenticated();
+        if (context.User.Identity?.IsAuthenticated != true)
+        {
+            logging.Logger?.LogDebug(
+                "Access denied for report '{Report}': caller is not authenticated (traceId {TraceId})",
+                definition.Name,
+                context.TraceIdentifier);
+            return Unauthenticated();
+        }
 
         if (authorization?.Policy is { Length: > 0 } policy)
         {
@@ -299,7 +335,16 @@ internal sealed class ReportAuthorizationService(
                 ?? throw new InvalidOperationException(
                     $"Report '{definition.Name}' declares policy '{policy}' but the host has not registered authorization services (AddAuthorization).");
             var decision = await service.AuthorizeAsync(context.User, policy);
-            if (!decision.Succeeded) return Hidden();
+            if (!decision.Succeeded)
+            {
+                logging.Logger?.LogDebug(
+                    "Access denied for report '{Report}': ASP.NET Core authorization policy '{Policy}' failed for user '{User}' (traceId {TraceId})",
+                    definition.Name,
+                    policy,
+                    context.User.Identity?.Name ?? "anonymous",
+                    context.TraceIdentifier);
+                return Hidden();
+            }
         }
 
         if (authorization?.AdministratorsOnly == true) return null;
@@ -329,7 +374,16 @@ internal sealed class ReportAuthorizationService(
         var configuredGrant = identity is not null
             && authorization?.Users?.Any(user => string.Equals(
                 user.Trim(), identity, StringComparison.Ordinal)) == true;
-        return restricted && !configuredGrant && !databaseAccess.UserGranted ? Hidden() : null;
+        if (restricted && !configuredGrant && !databaseAccess.UserGranted)
+        {
+            logging.Logger?.LogDebug(
+                "Access denied for report '{Report}': report is restricted and caller '{Identity}' lacks a configured or database user grant (traceId {TraceId})",
+                definition.Name,
+                identity ?? "anonymous",
+                context.TraceIdentifier);
+            return Hidden();
+        }
+        return null;
     }
 
     private async Task<ReportAuthorizationFailure?> AuthorizeOperations(
@@ -355,13 +409,37 @@ internal sealed class ReportAuthorizationService(
 
         if (administratorRequired)
         {
-            if (context.User.Identity?.IsAuthenticated != true) return Unauthenticated();
+            if (context.User.Identity?.IsAuthenticated != true)
+            {
+                logging.Logger?.LogDebug(
+                    "Actions {Actions} on resource '{Resource}' denied: caller is not authenticated (traceId {TraceId})",
+                    string.Join(",", actions),
+                    resource.ReportName,
+                    context.TraceIdentifier);
+                return Unauthenticated();
+            }
             var administrator = await AdministratorAccess(context, options, ct);
             if (administrator.Failure is not null) return administrator.Failure;
             if (administrator.Configured && !administrator.Granted)
+            {
+                var id = ReportIdentity.Resolve(context.User, options.IdentityClaim);
+                logging.Logger?.LogDebug(
+                    "Actions {Actions} on resource '{Resource}' denied: caller '{Identity}' is not an administrator (traceId {TraceId})",
+                    string.Join(",", actions),
+                    resource.ReportName,
+                    id ?? "anonymous",
+                    context.TraceIdentifier);
                 return Denied(context, hideDenied, denialDetail);
+            }
             if (!administrator.Configured && authorizers.Length == 0)
+            {
+                logging.Logger?.LogDebug(
+                    "Actions {Actions} on resource '{Resource}' denied: no administrators configured and no custom authorizers registered (traceId {TraceId})",
+                    string.Join(",", actions),
+                    resource.ReportName,
+                    context.TraceIdentifier);
                 return Denied(context, hideDenied, denialDetail);
+            }
         }
 
         if (authorizers.Length == 0) return null;
@@ -395,7 +473,18 @@ internal sealed class ReportAuthorizationService(
                     return Internal(resource.ReportName, $"authorization for {action}", context, ex);
                 }
 
-                if (!allowed) return Denied(context, hideDenied, denialDetail);
+                if (!allowed)
+                {
+                    var id = ReportIdentity.Resolve(context.User, options.IdentityClaim);
+                    logging.Logger?.LogDebug(
+                        "Action '{Action}' on resource '{Resource}' was denied by authorizer '{AuthorizerType}' for caller '{Identity}' (traceId {TraceId})",
+                        action,
+                        resource.ReportName,
+                        authorizer.GetType().Name,
+                        id ?? "anonymous",
+                        context.TraceIdentifier);
+                    return Denied(context, hideDenied, denialDetail);
+                }
             }
         }
         return null;
@@ -455,12 +544,31 @@ internal sealed class ReportAuthorizationService(
         Exception exception,
         string code = InteractiveReportErrorCodes.AuthorizationFailed)
     {
-        logging.Logger?.LogError(
-            exception,
-            "Report {Report}: {Operation} failed (traceId {TraceId})",
-            reportName,
-            operation,
-            context.TraceIdentifier);
+        var dbEx = DbErrorClassifier.UnwrapDbException(exception);
+        if (dbEx is not null || exception is System.Net.Sockets.SocketException || exception is TimeoutException)
+        {
+            var diagnosis = DbErrorClassifier.Classify(ReportDialect.SqlServer, exception);
+            logging.Logger?.LogError(
+                exception,
+                "Report {Report}: {Operation} failed with database error (Category: {Category}, Code: {ProviderCode}, traceId {TraceId}): {Summary}. Hint: {Hint}",
+                reportName,
+                operation,
+                diagnosis.Category,
+                diagnosis.ProviderCode ?? "none",
+                context.TraceIdentifier,
+                diagnosis.Summary,
+                diagnosis.RemediationHint ?? "Check database connection and authorization store table permissions.");
+        }
+        else
+        {
+            logging.Logger?.LogError(
+                exception,
+                "Report {Report}: {Operation} failed (traceId {TraceId})",
+                reportName,
+                operation,
+                context.TraceIdentifier);
+        }
+
         return new(
             ReportAuthorizationFailureKind.Internal,
             code,

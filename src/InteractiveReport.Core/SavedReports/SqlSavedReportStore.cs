@@ -490,26 +490,34 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         var compiled = DialectSupport.GetCompiler(config.Dialect).Compile(query);
         await using var cmd = CommandBuilder.Build(
             conn, compiled, NoParams, TimeoutSeconds, config.Dialect, _logger);
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-
-        var result = new List<SavedReport>();
-        while (await reader.ReadAsync(ct))
+        try
         {
-            result.Add(new SavedReport
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+
+            var result = new List<SavedReport>();
+            while (await reader.ReadAsync(ct))
             {
-                Id = Convert.ToInt64(reader.GetValue(0), CultureInfo.InvariantCulture),
-                ReportName = reader.GetString(1),
-                SourceFile = reader.IsDBNull(2) ? null : reader.GetString(2),
-                Title = reader.GetString(3),
-                Owner = reader.IsDBNull(4) ? null : reader.GetString(4),
-                IsGlobal = Convert.ToBoolean(reader.GetValue(5), CultureInfo.InvariantCulture),
-                IsDefault = Convert.ToBoolean(reader.GetValue(6), CultureInfo.InvariantCulture),
-                StateJson = reader.IsDBNull(7) ? null : reader.GetString(7),
-                ModifiedUtc = DateTime.Parse(reader.GetString(8), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-                Origin = OriginFrom(reader.GetString(9)),
-            });
+                result.Add(new SavedReport
+                {
+                    Id = Convert.ToInt64(reader.GetValue(0), CultureInfo.InvariantCulture),
+                    ReportName = reader.GetString(1),
+                    SourceFile = reader.IsDBNull(2) ? null : reader.GetString(2),
+                    Title = reader.GetString(3),
+                    Owner = reader.IsDBNull(4) ? null : reader.GetString(4),
+                    IsGlobal = Convert.ToBoolean(reader.GetValue(5), CultureInfo.InvariantCulture),
+                    IsDefault = Convert.ToBoolean(reader.GetValue(6), CultureInfo.InvariantCulture),
+                    StateJson = reader.IsDBNull(7) ? null : reader.GetString(7),
+                    ModifiedUtc = DateTime.Parse(reader.GetString(8), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                    Origin = OriginFrom(reader.GetString(9)),
+                });
+            }
+            return result;
         }
-        return result;
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            LogStoreError(config, ex, "select query");
+            throw;
+        }
     }
 
     /// <summary>
@@ -531,23 +539,31 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         var compiled = DialectSupport.GetCompiler(cfg.Dialect).Compile(query);
         await using var cmd = CommandBuilder.Build(
             conn, compiled, NoParams, TimeoutSeconds, cfg.Dialect, _logger);
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-
-        var result = new List<SavedReportMetadata>();
-        while (await reader.ReadAsync(ct))
+        try
         {
-            result.Add(new SavedReportMetadata(
-                Convert.ToInt64(reader.GetValue(0), CultureInfo.InvariantCulture),
-                reader.GetString(1),
-                reader.IsDBNull(2) ? null : reader.GetString(2),
-                reader.GetString(3),
-                reader.IsDBNull(4) ? null : reader.GetString(4),
-                Convert.ToBoolean(reader.GetValue(5), CultureInfo.InvariantCulture),
-                Convert.ToBoolean(reader.GetValue(6), CultureInfo.InvariantCulture),
-                DateTime.Parse(reader.GetString(7), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-                OriginFrom(reader.GetString(8))));
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+
+            var result = new List<SavedReportMetadata>();
+            while (await reader.ReadAsync(ct))
+            {
+                result.Add(new SavedReportMetadata(
+                    Convert.ToInt64(reader.GetValue(0), CultureInfo.InvariantCulture),
+                    reader.GetString(1),
+                    reader.IsDBNull(2) ? null : reader.GetString(2),
+                    reader.GetString(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    Convert.ToBoolean(reader.GetValue(5), CultureInfo.InvariantCulture),
+                    Convert.ToBoolean(reader.GetValue(6), CultureInfo.InvariantCulture),
+                    DateTime.Parse(reader.GetString(7), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                    OriginFrom(reader.GetString(8))));
+            }
+            return result;
         }
-        return result;
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            LogStoreError(cfg, ex, "metadata select query");
+            throw;
+        }
     }
 
     /// <summary>
@@ -582,7 +598,15 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         var compiled = DialectSupport.GetCompiler(config.Dialect).Compile(query);
         await using var cmd = CommandBuilder.Build(
             conn, compiled, NoParams, TimeoutSeconds, config.Dialect, _logger);
-        return await cmd.ExecuteNonQueryAsync(ct);
+        try
+        {
+            return await cmd.ExecuteNonQueryAsync(ct);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            LogStoreError(config, ex, "execute statement");
+            throw;
+        }
     }
 
     /// <summary>Executes a compiled non-query on an existing transaction.</summary>
@@ -597,7 +621,15 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         await using var command = CommandBuilder.Build(
             connection, compiled, NoParams, TimeoutSeconds, config.Dialect, _logger);
         command.Transaction = transaction;
-        return await command.ExecuteNonQueryAsync(ct);
+        try
+        {
+            return await command.ExecuteNonQueryAsync(ct);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            LogStoreError(config, ex, "transactional statement");
+            throw;
+        }
     }
 
     /// <summary>Inserts a new row and returns the database-generated numeric identity.</summary>
@@ -617,45 +649,53 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         await using var command = CommandBuilder.Build(
             connection, compiled, NoParams, TimeoutSeconds, config.Dialect, _logger);
 
-        if (config.Dialect == ReportDialect.Oracle)
+        try
         {
-            command.CommandText += " RETURNING ID INTO :ir_generated_id";
-            var output = command.CreateParameter();
-            output.ParameterName = "ir_generated_id";
-            output.DbType = DbType.Int64;
-            output.Direction = ParameterDirection.Output;
-            command.Parameters.Add(output);
-            CommandBuilder.Log(command, _logger);
-            await command.ExecuteNonQueryAsync(ct);
-            return Convert.ToInt64(output.Value, CultureInfo.InvariantCulture);
-        }
+            if (config.Dialect == ReportDialect.Oracle)
+            {
+                command.CommandText += " RETURNING ID INTO :ir_generated_id";
+                var output = command.CreateParameter();
+                output.ParameterName = "ir_generated_id";
+                output.DbType = DbType.Int64;
+                output.Direction = ParameterDirection.Output;
+                command.Parameters.Add(output);
+                CommandBuilder.Log(command, _logger);
+                await command.ExecuteNonQueryAsync(ct);
+                return Convert.ToInt64(output.Value, CultureInfo.InvariantCulture);
+            }
 
-        // Provider constraint: SQLite's INSERT ... RETURNING reader can throw SQLITE_BUSY
-        // while it is being disposed under concurrent writers, after the row has already been
-        // produced. Complete the insert first, then read the connection-local identity instead.
-        if (config.Dialect == ReportDialect.Sqlite)
-        {
-            CommandBuilder.Log(command, _logger);
-            await command.ExecuteNonQueryAsync(ct);
-            command.CommandText = "SELECT last_insert_rowid()";
-            command.Parameters.Clear();
-            CommandBuilder.Log(command, _logger);
-            var sqliteId = await command.ExecuteScalarAsync(ct)
-                ?? throw new InvalidOperationException(
-                    "SQLite did not return a generated report-document id.");
-            return Convert.ToInt64(sqliteId, CultureInfo.InvariantCulture);
-        }
+            // Provider constraint: SQLite's INSERT ... RETURNING reader can throw SQLITE_BUSY
+            // while it is being disposed under concurrent writers, after the row has already been
+            // produced. Complete the insert first, then read the connection-local identity instead.
+            if (config.Dialect == ReportDialect.Sqlite)
+            {
+                CommandBuilder.Log(command, _logger);
+                await command.ExecuteNonQueryAsync(ct);
+                command.CommandText = "SELECT last_insert_rowid()";
+                command.Parameters.Clear();
+                CommandBuilder.Log(command, _logger);
+                var sqliteId = await command.ExecuteScalarAsync(ct)
+                    ?? throw new InvalidOperationException(
+                        "SQLite did not return a generated report-document id.");
+                return Convert.ToInt64(sqliteId, CultureInfo.InvariantCulture);
+            }
 
-        command.CommandText += config.Dialect switch
+            command.CommandText += config.Dialect switch
+            {
+                ReportDialect.Postgres => " RETURNING \"ID\"",
+                ReportDialect.SqlServer => "; SELECT CAST(SCOPE_IDENTITY() AS BIGINT)",
+                _ => throw new ArgumentOutOfRangeException(nameof(config), config.Dialect, null),
+            };
+            CommandBuilder.Log(command, _logger);
+            var generated = await command.ExecuteScalarAsync(ct)
+                ?? throw new InvalidOperationException("The database did not return a generated report-document id.");
+            return Convert.ToInt64(generated, CultureInfo.InvariantCulture);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
         {
-            ReportDialect.Postgres => " RETURNING \"ID\"",
-            ReportDialect.SqlServer => "; SELECT CAST(SCOPE_IDENTITY() AS BIGINT)",
-            _ => throw new ArgumentOutOfRangeException(nameof(config), config.Dialect, null),
-        };
-        CommandBuilder.Log(command, _logger);
-        var generated = await command.ExecuteScalarAsync(ct)
-            ?? throw new InvalidOperationException("The database did not return a generated report-document id.");
-        return Convert.ToInt64(generated, CultureInfo.InvariantCulture);
+            LogStoreError(config, ex, "insert");
+            throw;
+        }
     }
 
     /// <summary>
@@ -674,6 +714,12 @@ public sealed class SqlSavedReportStore : ISavedReportStore
             if (cfg.AutoCreate)
                 await EnsureCreated(conn, cfg, ct);
             return conn;
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            await conn.DisposeAsync();
+            LogStoreError(cfg, ex, "connection open");
+            throw;
         }
         catch
         {
@@ -700,14 +746,38 @@ public sealed class SqlSavedReportStore : ISavedReportStore
             await using var cmd = conn.CreateCommand();
             cmd.CommandText = CreateTableSql(cfg);
             CommandBuilder.Log(cmd, _logger);
-            await cmd.ExecuteNonQueryAsync(ct);
-            await CreateIndexes(cmd, cfg, ct);
+            try
+            {
+                await cmd.ExecuteNonQueryAsync(ct);
+                await CreateIndexes(cmd, cfg, ct);
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested)
+            {
+                LogStoreError(cfg, ex, "schema initialization");
+                throw;
+            }
             _createdTargets.Add(target);
         }
         finally
         {
             _createLock.Release();
         }
+    }
+
+    private void LogStoreError(SavedReportStoreConfig config, Exception ex, string operation)
+    {
+        var diagnosis = DbErrorClassifier.Classify(config.Dialect, ex);
+        _logger?.LogError(
+            ex,
+            "Saved reports store {Operation} failed on connection '{Connection}' (Dialect: {Dialect}, Table: {Table}, Category: {Category}, Code: {ProviderCode}): {Summary}. Hint: {Hint}",
+            operation,
+            config.ConnectionName,
+            config.Dialect,
+            config.TableName,
+            diagnosis.Category,
+            diagnosis.ProviderCode ?? "none",
+            diagnosis.Summary,
+            diagnosis.RemediationHint ?? "Check saved reports database configuration.");
     }
 
     /// <summary>

@@ -249,22 +249,30 @@ public sealed class SqlReportAuthorizationStore : IReportAuthorizationStore
         var compiled = DialectSupport.GetCompiler(config.Dialect).Compile(query);
         await using var command = CommandBuilder.Build(
             connection, compiled, NoParams, TimeoutSeconds, config.Dialect, _logger);
-        await using var reader = await command.ExecuteReaderAsync(ct);
-
-        var result = new List<ReportAuthorizationEntry>();
-        while (await reader.ReadAsync(ct))
+        try
         {
-            result.Add(new ReportAuthorizationEntry(
-                reader.GetString(0),
-                KindFrom(reader.GetString(1)),
-                reader.IsDBNull(2) ? null : reader.GetString(2),
-                reader.IsDBNull(3) ? null : reader.GetString(3),
-                DateTime.Parse(
-                    reader.GetString(4),
-                    CultureInfo.InvariantCulture,
-                    DateTimeStyles.RoundtripKind)));
+            await using var reader = await command.ExecuteReaderAsync(ct);
+
+            var result = new List<ReportAuthorizationEntry>();
+            while (await reader.ReadAsync(ct))
+            {
+                result.Add(new ReportAuthorizationEntry(
+                    reader.GetString(0),
+                    KindFrom(reader.GetString(1)),
+                    reader.IsDBNull(2) ? null : reader.GetString(2),
+                    reader.IsDBNull(3) ? null : reader.GetString(3),
+                    DateTime.Parse(
+                        reader.GetString(4),
+                        CultureInfo.InvariantCulture,
+                        DateTimeStyles.RoundtripKind)));
+            }
+            return result;
         }
-        return result;
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            LogStoreError(config, ex, "select query");
+            throw;
+        }
     }
 
     /// <summary>
@@ -284,7 +292,15 @@ public sealed class SqlReportAuthorizationStore : IReportAuthorizationStore
         var compiled = DialectSupport.GetCompiler(config.Dialect).Compile(query);
         await using var command = CommandBuilder.Build(
             connection, compiled, NoParams, TimeoutSeconds, config.Dialect, _logger);
-        return await command.ExecuteNonQueryAsync(ct);
+        try
+        {
+            return await command.ExecuteNonQueryAsync(ct);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            LogStoreError(config, ex, "execute statement");
+            throw;
+        }
     }
 
     /// <summary>
@@ -304,6 +320,12 @@ public sealed class SqlReportAuthorizationStore : IReportAuthorizationStore
             await connection.OpenAsync(ct);
             if (config.AutoCreate) await EnsureCreated(connection, config, ct);
             return connection;
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            await connection.DisposeAsync();
+            LogStoreError(config, ex, "connection open");
+            throw;
         }
         catch
         {
@@ -334,13 +356,37 @@ public sealed class SqlReportAuthorizationStore : IReportAuthorizationStore
             await using var command = connection.CreateCommand();
             command.CommandText = CreateTableSql(config);
             CommandBuilder.Log(command, _logger);
-            await command.ExecuteNonQueryAsync(ct);
+            try
+            {
+                await command.ExecuteNonQueryAsync(ct);
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested)
+            {
+                LogStoreError(config, ex, "schema initialization");
+                throw;
+            }
             _createdTargets.Add(target);
         }
         finally
         {
             _createLock.Release();
         }
+    }
+
+    private void LogStoreError(ReportAuthorizationStoreConfig config, Exception ex, string operation)
+    {
+        var diagnosis = DbErrorClassifier.Classify(config.Dialect, ex);
+        _logger?.LogError(
+            ex,
+            "Authorization store {Operation} failed on connection '{Connection}' (Dialect: {Dialect}, Table: {Table}, Category: {Category}, Code: {ProviderCode}): {Summary}. Hint: {Hint}",
+            operation,
+            config.ConnectionName,
+            config.Dialect,
+            config.TableName,
+            diagnosis.Category,
+            diagnosis.ProviderCode ?? "none",
+            diagnosis.Summary,
+            diagnosis.RemediationHint ?? "Check authorization database configuration.");
     }
 
     /// <summary>

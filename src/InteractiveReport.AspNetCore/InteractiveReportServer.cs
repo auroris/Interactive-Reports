@@ -837,9 +837,18 @@ internal sealed class InteractiveReportServer(
         {
             // The compare-and-delete carries the snapshot that was authorized, so a row that
             // changed underneath the decision is reported as gone rather than deleted blindly.
-            return await savedReports.Delete(report, ct)
-                ? InteractiveReportServerResult<bool>.Success(true)
-                : NotFoundDocument<bool>();
+            var deleted = await savedReports.Delete(report, ct);
+            if (deleted)
+            {
+                logging.Logger?.LogInformation(
+                    "Deleted saved report {Id} ('{Title}') for report '{Report}' (traceId {TraceId})",
+                    id,
+                    report.Title,
+                    report.ReportName,
+                    context.TraceIdentifier);
+                return InteractiveReportServerResult<bool>.Success(true);
+            }
+            return NotFoundDocument<bool>();
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -1092,6 +1101,11 @@ internal sealed class InteractiveReportServer(
         try
         {
             await authorizationStore.SetReportRestricted(canonicalName, restricted.Value, ct);
+            logging.Logger?.LogInformation(
+                "Set report restriction for report '{Report}' to {Restricted} (traceId {TraceId})",
+                canonicalName,
+                restricted.Value,
+                context.TraceIdentifier);
             return InteractiveReportServerResult<bool>.Success(true);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -1114,6 +1128,7 @@ internal sealed class InteractiveReportServer(
             reportName,
             readIdentity,
             (canonical, identity, token) => authorizationStore.GrantReportUser(canonical, identity, token),
+            "report user grant",
             context,
             ct);
 
@@ -1127,6 +1142,7 @@ internal sealed class InteractiveReportServer(
             readIdentity,
             async (canonical, identity, token) =>
                 await authorizationStore.RevokeReportUser(canonical, identity, token),
+            "report user revoke",
             context,
             ct);
 
@@ -1155,6 +1171,11 @@ internal sealed class InteractiveReportServer(
         try
         {
             await mutation(identity!, ct);
+            logging.Logger?.LogInformation(
+                "Administrative authorization mutation '{Operation}' succeeded for identity '{Identity}' (traceId {TraceId})",
+                operation,
+                identity,
+                context.TraceIdentifier);
             return InteractiveReportServerResult<bool>.Success(true);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -1173,6 +1194,7 @@ internal sealed class InteractiveReportServer(
         string reportName,
         Func<CancellationToken, Task<string?>> readIdentity,
         Func<string, string, CancellationToken, Task> mutation,
+        string operation,
         InteractiveReportRequestContext context,
         CancellationToken ct)
     {
@@ -1194,6 +1216,12 @@ internal sealed class InteractiveReportServer(
         try
         {
             await mutation(canonicalName, identity!, ct);
+            logging.Logger?.LogInformation(
+                "Updated user grant on report '{Report}' for identity '{Identity}' ({Operation}, traceId {TraceId})",
+                canonicalName,
+                identity,
+                operation,
+                context.TraceIdentifier);
             return InteractiveReportServerResult<bool>.Success(true);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -1382,6 +1410,13 @@ internal sealed class InteractiveReportServer(
                     "report document download",
                     context,
                     new InvalidOperationException($"Saved report '{id}' has no state document.")));
+
+        logging.Logger?.LogInformation(
+            "Exported saved report {Id} ('{Title}') for report '{Report}' (traceId {TraceId})",
+            id,
+            report.Title,
+            metadata.ReportName,
+            context.TraceIdentifier);
 
         return InteractiveReportServerResult<InteractiveReportDocumentExport>.Success(
             new InteractiveReportDocumentExport(
@@ -1624,6 +1659,16 @@ internal sealed class InteractiveReportServer(
                 Internal(definition.Name, shape.Operation, context, ex));
         }
 
+        logging.Logger?.LogInformation(
+            "Created saved report {Id} ('{Title}') for report '{Report}' by '{Owner}' (IsGlobal: {IsGlobal}, Operation: '{Operation}', traceId {TraceId})",
+            report.Id,
+            report.Title,
+            definition.Name,
+            effectiveOwner ?? "anonymous",
+            candidateIsPublic,
+            shape.Operation,
+            context.TraceIdentifier);
+
         return InteractiveReportServerResult<SavedReportSummary>.Success(
             SavedReportSummary.From(report.Metadata(), identity));
     }
@@ -1773,10 +1818,18 @@ internal sealed class InteractiveReportServer(
                 updated = await savedReports.Update(report, current, ct);
             }
 
-            return updated
-                ? InteractiveReportServerResult<SavedReportSummary>.Success(
-                    SavedReportSummary.From(report.Metadata(), identity))
-                : NotFoundDocument<SavedReportSummary>();
+            if (updated)
+            {
+                logging.Logger?.LogInformation(
+                    "Updated saved report {Id} ('{Title}') for report '{Report}' (traceId {TraceId})",
+                    report.Id,
+                    report.Title,
+                    definition.Name,
+                    context.TraceIdentifier);
+                return InteractiveReportServerResult<SavedReportSummary>.Success(
+                    SavedReportSummary.From(report.Metadata(), identity));
+            }
+            return NotFoundDocument<SavedReportSummary>();
         }
         catch (SavedReportTitleConflictException conflict)
         {
@@ -1880,6 +1933,12 @@ internal sealed class InteractiveReportServer(
         }
         catch (ReportValidationException ex)
         {
+            logging.Logger?.LogWarning(
+                "Report {Report}: {Operation} state validation failed with {ErrorCount} errors (traceId {TraceId})",
+                definition.Name,
+                operation,
+                ex.Errors.Count,
+                context.TraceIdentifier);
             return Validation(ex);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -2081,12 +2140,35 @@ internal sealed class InteractiveReportServer(
         InteractiveReportRequestContext context,
         Exception ex)
     {
-        logging.Logger?.LogError(
-            ex,
-            "Report {Report}: {Operation} failed (traceId {TraceId})",
-            reportName,
-            operation,
-            context.TraceIdentifier);
+        var dialect = options.CurrentValue.Reports.TryGetValue(reportName, out var def) && def is not null
+            ? def.GetEffectiveDialect()
+            : (ReportDialect?)null;
+
+        var dbEx = DbErrorClassifier.UnwrapDbException(ex);
+        if (dbEx is not null || ex is System.Net.Sockets.SocketException || ex is TimeoutException)
+        {
+            var diagnosis = DbErrorClassifier.Classify(dialect ?? ReportDialect.SqlServer, ex);
+            logging.Logger?.LogError(
+                ex,
+                "Report {Report}: {Operation} failed with database error (Category: {Category}, Code: {ProviderCode}, traceId {TraceId}): {Summary}. Hint: {Hint}",
+                reportName,
+                operation,
+                diagnosis.Category,
+                diagnosis.ProviderCode ?? "none",
+                context.TraceIdentifier,
+                diagnosis.Summary,
+                diagnosis.RemediationHint ?? "Check database connection, credentials, and permissions.");
+        }
+        else
+        {
+            logging.Logger?.LogError(
+                ex,
+                "Report {Report}: {Operation} failed (traceId {TraceId})",
+                reportName,
+                operation,
+                context.TraceIdentifier);
+        }
+
         return new(
             InteractiveReportFailureKind.Internal,
             InteractiveReportErrorCodes.ReportExecutionFailed,

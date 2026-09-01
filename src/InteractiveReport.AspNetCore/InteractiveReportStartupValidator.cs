@@ -68,6 +68,11 @@ internal sealed class InteractiveReportStartupValidator(
             ConfigurationReportDefinitionStore.ResolveConnection(snapshot, registry);
             ActivationCheck(snapshot.Connection);
             configuredDocuments.ValidateDefaults(snapshot.Name, snapshot.DocumentFiles);
+            logging.Logger?.LogDebug(
+                "Validated report definition '{Report}' (Connection: '{Connection}', Dialect: {Dialect})",
+                snapshot.Name,
+                snapshot.Connection,
+                snapshot.GetEffectiveDialect());
         }
 
         var savedTable = ReportConnectionRegistry.ResolveTableName(
@@ -96,6 +101,11 @@ internal sealed class InteractiveReportStartupValidator(
     private void ActivationCheck(string connectionName)
     {
         if (connectionName.StartsWith("__ir:ds:", StringComparison.Ordinal))
+        {
             registry.CreateConnection(connectionName).Dispose();
+            logging.Logger?.LogDebug(
+                "Verified provider activation for synthesized data source '{Connection}'",
+                connectionName);
+        }
     }
 }

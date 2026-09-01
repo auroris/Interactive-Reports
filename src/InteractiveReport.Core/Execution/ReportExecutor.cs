@@ -70,9 +70,16 @@ public sealed class ReportExecutor
         // the command timeout instead, and each caller observes only its own token while waiting.
         var discovery = _schemaCache.GetOrDiscover(definition, async () =>
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             await using var connection = await _connections.Open(definition, CancellationToken.None);
-            return await SchemaDiscovery.Discover(
+            var schema = await SchemaDiscovery.Discover(
                 connection, definition, contextParams, _logger, CancellationToken.None);
+            _logger?.LogDebug(
+                "Discovered and cached schema for report '{Report}' ({ColumnCount} columns in {ElapsedMs} ms)",
+                definition.Name,
+                schema.Columns.Count,
+                sw.ElapsedMilliseconds);
+            return schema;
         });
         return await discovery.WaitAsync(ct);
     }
@@ -301,7 +308,15 @@ public sealed class ReportExecutor
         bool executeActive)
     {
         var structural = StateStructureValidator.Collect(state);
-        if (structural.Count > 0) throw new ReportValidationException(structural);
+        if (structural.Count > 0)
+        {
+            _logger?.LogWarning(
+                "Report '{Report}' state validation failed with {ErrorCount} errors: {Errors}",
+                definition.Name,
+                structural.Count,
+                string.Join("; ", structural.Select(e => $"{e.Path}: {e.Message}")));
+            throw new ReportValidationException(structural);
+        }
         if (definition.DefaultState is not null
             && StateStructureValidator.Collect(definition.DefaultState) is { Count: > 0 } defaultErrors)
             throw new InvalidOperationException(

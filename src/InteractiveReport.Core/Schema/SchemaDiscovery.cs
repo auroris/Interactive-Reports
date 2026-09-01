@@ -58,33 +58,55 @@ public static class SchemaDiscovery
         var compiled = DialectSupport.GetCompiler(def.GetEffectiveDialect()).Compile(probe);
 
         await using var cmd = CommandBuilder.Build(connection, compiled, contextParams, def, logger);
-        await using var reader = await cmd.ExecuteReaderAsync(CommandBehavior.SchemaOnly, ct);
-
-        var columns = new List<ColumnModel>();
-        var dialect = def.GetEffectiveDialect();
-        foreach (var col in reader.GetColumnSchema())
+        DbDataReader reader;
+        try
         {
-            var name = col.ColumnName;
-            if (string.IsNullOrWhiteSpace(name))
-                throw new InvalidOperationException(
-                    $"Report '{def.Name}': base query returns an unnamed column (position {col.ColumnOrdinal}). Alias every expression.");
-
-            columns.Add(new ColumnModel
-            {
-                Name = name,
-                Label = ColumnModel.Prettify(name),
-                ClrType = col.DataType ?? typeof(object),
-                // Provider constraint: microsoft.Data.Sqlite reports every source expression as
-                // BLOB / byte[] during a zero-row probe. Only an origin column carries a
-                // meaningful type there; treating the expression as a known BLOB would make
-                // ordinary text/number literals impossible to filter.
-                HasKnownType = col.DataType is not null
-                    && (dialect != ReportDialect.Sqlite
-                        || !string.IsNullOrWhiteSpace(col.BaseColumnName)),
-                IsNullable = col.AllowDBNull ?? true,
-            });
+            reader = await cmd.ExecuteReaderAsync(CommandBehavior.SchemaOnly, ct);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            var diagnosis = DbErrorClassifier.Classify(def.GetEffectiveDialect(), ex);
+            logger?.LogError(
+                ex,
+                "Schema discovery probe failed for report '{Report}' on connection '{Connection}' (Dialect: {Dialect}, Category: {Category}, Code: {ProviderCode}): {Summary}. Hint: {Hint}",
+                def.Name,
+                def.Connection,
+                def.GetEffectiveDialect(),
+                diagnosis.Category,
+                diagnosis.ProviderCode ?? "none",
+                diagnosis.Summary,
+                diagnosis.RemediationHint ?? "Check report base SQL syntax, table existence, and database user permissions.");
+            throw;
         }
 
-        return ReportSchema.Create(def.Name, columns);
+        await using (reader)
+        {
+            var columns = new List<ColumnModel>();
+            var dialect = def.GetEffectiveDialect();
+            foreach (var col in reader.GetColumnSchema())
+            {
+                var name = col.ColumnName;
+                if (string.IsNullOrWhiteSpace(name))
+                    throw new InvalidOperationException(
+                        $"Report '{def.Name}': base query returns an unnamed column (position {col.ColumnOrdinal}). Alias every expression.");
+
+                columns.Add(new ColumnModel
+                {
+                    Name = name,
+                    Label = ColumnModel.Prettify(name),
+                    ClrType = col.DataType ?? typeof(object),
+                    // Provider constraint: microsoft.Data.Sqlite reports every source expression as
+                    // BLOB / byte[] during a zero-row probe. Only an origin column carries a
+                    // meaningful type there; treating the expression as a known BLOB would make
+                    // ordinary text/number literals impossible to filter.
+                    HasKnownType = col.DataType is not null
+                        && (dialect != ReportDialect.Sqlite
+                            || !string.IsNullOrWhiteSpace(col.BaseColumnName)),
+                    IsNullable = col.AllowDBNull ?? true,
+                });
+            }
+
+            return ReportSchema.Create(def.Name, columns);
+        }
     }
 }

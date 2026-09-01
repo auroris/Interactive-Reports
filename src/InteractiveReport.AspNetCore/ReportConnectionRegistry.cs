@@ -6,6 +6,8 @@ using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Model;
 using InteractiveReport.Core.SavedReports;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace InteractiveReport.AspNetCore;
 
@@ -101,6 +103,12 @@ internal sealed class ReportConnectionRegistry : IReportConnectionFactory
         var name = "__ir:ds:" + Convert.ToHexString(
             SHA256.HashData(Encoding.UTF8.GetBytes($"{token}|{connectionString}")))[..16].ToLowerInvariant();
         _synthetic.TryAdd(name, new SyntheticEntry(token, connectionString, dialect));
+        _services.GetService<InteractiveReportLogging>()?.Logger?.LogDebug(
+            "Synthesized data source connection '{ConnectionName}' with dialect {Dialect} from provider '{ProviderToken}' for {Owner}",
+            name,
+            dialect,
+            token,
+            owner);
         return (name, dialect);
     }
 
@@ -249,10 +257,16 @@ internal sealed class ReportConnectionRegistry : IReportConnectionFactory
         }
         using (connection)
         {
-            return ProviderCatalog.FromConnectionType(connection.GetType())
+            var dialect = ProviderCatalog.FromConnectionType(connection.GetType())
                 ?? throw new InvalidOperationException(
                     $"Connection '{name}' creates a {connection.GetType().FullName}, which is not a recognized ADO.NET "
                     + $"provider connection. Declare its dialect: AddConnection(\"{name}\", factory, ReportDialect.…).");
+            _services.GetService<InteractiveReportLogging>()?.Logger?.LogInformation(
+                "Sniffed SQL dialect {Dialect} for connection '{Connection}' ({ConnectionType})",
+                dialect,
+                name,
+                connection.GetType().Name);
+            return dialect;
         }
     }
 

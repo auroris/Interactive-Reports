@@ -95,30 +95,38 @@ internal sealed class ReportQueryReader(
         if (queries.BreakTotals is not null) resultSets.Add(queries.BreakTotals);
         resultSets.Add(queries.MainRows);
 
-        await using var command = BuildOracleBatch(resultSets);
-        await using var reader = await command.ExecuteReaderAsync(ct);
-        var total = await MaterializeCount(reader, ct);
-
-        Dictionary<string, IReadOnlyDictionary<string, object?>> aggregateValues = [];
-        if (queries.FooterAggregates is not null)
+        try
         {
-            await RequireNextResult(reader, ct);
-            aggregateValues = await MaterializeAggregates(reader, aggregates, ct);
-        }
+            await using var command = BuildOracleBatch(resultSets);
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            var total = await MaterializeCount(reader, ct);
 
-        List<BreakTotal> breakValues = [];
-        if (queries.BreakTotals is not null)
+            Dictionary<string, IReadOnlyDictionary<string, object?>> aggregateValues = [];
+            if (queries.FooterAggregates is not null)
+            {
+                await RequireNextResult(reader, ct);
+                aggregateValues = await MaterializeAggregates(reader, aggregates, ct);
+            }
+
+            List<BreakTotal> breakValues = [];
+            if (queries.BreakTotals is not null)
+            {
+                await RequireNextResult(reader, ct);
+                breakValues = await MaterializeBreakTotals(reader, breaks, aggregates, ct);
+            }
+
+            await RequireNextResult(reader, ct);
+            var pageRows = (pagePublicNames is null
+                ? await MaterializeRows(reader, maxRows: null, ct)
+                : await MaterializeRows(reader, pagePublicNames, maxRows: null, ct)).Rows;
+            await RequireEnd(reader, ct);
+            return new TableQueryRows(total, aggregateValues, breakValues, pageRows);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
         {
-            await RequireNextResult(reader, ct);
-            breakValues = await MaterializeBreakTotals(reader, breaks, aggregates, ct);
+            LogQueryError(ex, "Oracle batch query");
+            throw;
         }
-
-        await RequireNextResult(reader, ct);
-        var pageRows = (pagePublicNames is null
-            ? await MaterializeRows(reader, maxRows: null, ct)
-            : await MaterializeRows(reader, pagePublicNames, maxRows: null, ct)).Rows;
-        await RequireEnd(reader, ct);
-        return new TableQueryRows(total, aggregateValues, breakValues, pageRows);
     }
 
     /// <summary>
@@ -130,8 +138,16 @@ internal sealed class ReportQueryReader(
     /// <remarks>Creates, executes, and disposes one command.</remarks>
     private async Task<long> ReadCount(Query query, CancellationToken ct)
     {
-        await using var command = Build(query);
-        return Convert.ToInt64(await command.ExecuteScalarAsync(ct));
+        try
+        {
+            await using var command = Build(query);
+            return Convert.ToInt64(await command.ExecuteScalarAsync(ct));
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            LogQueryError(ex, "count query");
+            throw;
+        }
     }
 
     /// <summary>
@@ -144,9 +160,17 @@ internal sealed class ReportQueryReader(
     /// <remarks>Creates, executes, and disposes one command and reader.</remarks>
     public async Task<QueryRows> ReadRows(Query query, int? maxRows, CancellationToken ct)
     {
-        await using var command = Build(query);
-        await using var reader = await command.ExecuteReaderAsync(ct);
-        return await MaterializeRows(reader, maxRows, ct);
+        try
+        {
+            await using var command = Build(query);
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            return await MaterializeRows(reader, maxRows, ct);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            LogQueryError(ex, "row query");
+            throw;
+        }
     }
 
     /// <summary>
@@ -167,21 +191,29 @@ internal sealed class ReportQueryReader(
         int? maxRows,
         CancellationToken ct)
     {
-        await using var command = Build(query);
-        await using var reader = await command.ExecuteReaderAsync(ct);
-        if (reader.FieldCount != publicNames.Count)
-            throw new InvalidOperationException(
-                $"The composed table returned {reader.FieldCount} columns for a {publicNames.Count}-column projection.");
-
-        var rows = new List<IReadOnlyDictionary<string, object?>>();
-        while (await reader.ReadAsync(ct))
+        try
         {
-            var row = new Dictionary<string, object?>(publicNames.Count, StringComparer.OrdinalIgnoreCase);
-            for (var index = 0; index < publicNames.Count; index++)
-                row[publicNames[index]] = ValueAt(reader, index);
-            rows.Add(row);
+            await using var command = Build(query);
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            if (reader.FieldCount != publicNames.Count)
+                throw new InvalidOperationException(
+                    $"The composed table returned {reader.FieldCount} columns for a {publicNames.Count}-column projection.");
+
+            var rows = new List<IReadOnlyDictionary<string, object?>>();
+            while (await reader.ReadAsync(ct))
+            {
+                var row = new Dictionary<string, object?>(publicNames.Count, StringComparer.OrdinalIgnoreCase);
+                for (var index = 0; index < publicNames.Count; index++)
+                    row[publicNames[index]] = ValueAt(reader, index);
+                rows.Add(row);
+            }
+            return ApplyLimit(rows, maxRows);
         }
-        return ApplyLimit(rows, maxRows);
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            LogQueryError(ex, "projection query");
+            throw;
+        }
     }
 
     /// <summary>
@@ -196,10 +228,18 @@ internal sealed class ReportQueryReader(
         IReadOnlyList<ValidAggregate> aggregates,
         CancellationToken ct)
     {
-        await using var command = Build(query);
-        await using var reader = await command.ExecuteReaderAsync(ct);
+        try
+        {
+            await using var command = Build(query);
+            await using var reader = await command.ExecuteReaderAsync(ct);
 
-        return await MaterializeAggregates(reader, aggregates, ct);
+            return await MaterializeAggregates(reader, aggregates, ct);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            LogQueryError(ex, "aggregate query");
+            throw;
+        }
     }
 
     /// <summary>
@@ -216,10 +256,18 @@ internal sealed class ReportQueryReader(
         IReadOnlyList<ValidAggregate> aggregates,
         CancellationToken ct)
     {
-        await using var command = Build(query);
-        await using var reader = await command.ExecuteReaderAsync(ct);
+        try
+        {
+            await using var command = Build(query);
+            await using var reader = await command.ExecuteReaderAsync(ct);
 
-        return await MaterializeBreakTotals(reader, breaks, aggregates, ct);
+            return await MaterializeBreakTotals(reader, breaks, aggregates, ct);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            LogQueryError(ex, "break total query");
+            throw;
+        }
     }
 
     /// <summary>
@@ -239,21 +287,45 @@ internal sealed class ReportQueryReader(
         int valueCount,
         CancellationToken ct)
     {
-        var dimensionCount = rowDimensionCount + columnDimensionCount;
-        var groups = new List<PivotGroup>();
-
-        await using var command = Build(query);
-        await using var reader = await command.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
+        try
         {
-            var rowKey = ReadKey(reader, 0, rowDimensionCount);
-            var columnKey = ReadKey(reader, rowDimensionCount, columnDimensionCount);
-            var count = Convert.ToInt64(reader.GetValue(dimensionCount));
-            var values = ReadKey(reader, dimensionCount + 1, valueCount);
-            groups.Add(new PivotGroup(rowKey, columnKey, count, values));
-        }
+            var dimensionCount = rowDimensionCount + columnDimensionCount;
+            var groups = new List<PivotGroup>();
 
-        return groups;
+            await using var command = Build(query);
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                var rowKey = ReadKey(reader, 0, rowDimensionCount);
+                var columnKey = ReadKey(reader, rowDimensionCount, columnDimensionCount);
+                var count = Convert.ToInt64(reader.GetValue(dimensionCount));
+                var values = ReadKey(reader, dimensionCount + 1, valueCount);
+                groups.Add(new PivotGroup(rowKey, columnKey, count, values));
+            }
+
+            return groups;
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            LogQueryError(ex, "pivot discovery query");
+            throw;
+        }
+    }
+
+    private void LogQueryError(Exception ex, string operation)
+    {
+        var diagnosis = DbErrorClassifier.Classify(definition.GetEffectiveDialect(), ex);
+        logger?.LogError(
+            ex,
+            "Report '{Report}': {Operation} failed on connection '{Connection}' (Dialect: {Dialect}, Category: {Category}, Code: {ProviderCode}): {Summary}. Hint: {Hint}",
+            definition.Name,
+            operation,
+            definition.Connection,
+            definition.GetEffectiveDialect(),
+            diagnosis.Category,
+            diagnosis.ProviderCode ?? "none",
+            diagnosis.Summary,
+            diagnosis.RemediationHint ?? "Check report query and database configuration.");
     }
 
     /// <summary>

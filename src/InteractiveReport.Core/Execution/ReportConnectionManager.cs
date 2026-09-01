@@ -30,6 +30,22 @@ internal sealed class ReportConnectionManager(
             await ApplySessionTimeZone(connection, definition, ct);
             return connection;
         }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            await connection.DisposeAsync();
+            var diagnosis = DbErrorClassifier.Classify(definition.GetEffectiveDialect(), ex);
+            logger?.LogError(
+                ex,
+                "Failed to open database connection '{Connection}' for report '{Report}' (Dialect: {Dialect}, Category: {Category}, Code: {ProviderCode}): {Summary}. Hint: {Hint}",
+                definition.Connection,
+                definition.Name,
+                definition.GetEffectiveDialect(),
+                diagnosis.Category,
+                diagnosis.ProviderCode ?? "none",
+                diagnosis.Summary,
+                diagnosis.RemediationHint ?? "Check connection settings.");
+            throw;
+        }
         catch
         {
             await connection.DisposeAsync();
@@ -149,7 +165,25 @@ internal sealed class ReportConnectionManager(
             "SELECT snapshot_isolation_state FROM sys.databases WHERE database_id = DB_ID()";
         command.CommandTimeout = definition.CommandTimeoutSeconds;
         logger?.LogDebug("Executing report SQL:\n{Sql}", command.CommandText);
-        return Convert.ToInt32(await command.ExecuteScalarAsync(ct) ?? 0) == 1;
+        try
+        {
+            return Convert.ToInt32(await command.ExecuteScalarAsync(ct) ?? 0) == 1;
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            var diagnosis = DbErrorClassifier.Classify(definition.GetEffectiveDialect(), ex);
+            logger?.LogError(
+                ex,
+                "Snapshot isolation check failed for report '{Report}' on connection '{Connection}' (Dialect: {Dialect}, Category: {Category}, Code: {ProviderCode}): {Summary}. Hint: {Hint}",
+                definition.Name,
+                definition.Connection,
+                definition.GetEffectiveDialect(),
+                diagnosis.Category,
+                diagnosis.ProviderCode ?? "none",
+                diagnosis.Summary,
+                diagnosis.RemediationHint ?? "Verify that the database user has VIEW SERVER STATE or access to sys.databases.");
+            throw;
+        }
     }
 
     /// <summary>
@@ -173,7 +207,26 @@ internal sealed class ReportConnectionManager(
         command.CommandTimeout = definition.CommandTimeoutSeconds;
         command.Transaction = transaction;
         logger?.LogDebug("Executing report SQL:\n{Sql}", command.CommandText);
-        await command.ExecuteNonQueryAsync(ct);
+        try
+        {
+            await command.ExecuteNonQueryAsync(ct);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            var diagnosis = DbErrorClassifier.Classify(definition.GetEffectiveDialect(), ex);
+            logger?.LogError(
+                ex,
+                "Database control statement '{Sql}' failed for report '{Report}' on connection '{Connection}' (Dialect: {Dialect}, Category: {Category}, Code: {ProviderCode}): {Summary}. Hint: {Hint}",
+                sql,
+                definition.Name,
+                definition.Connection,
+                definition.GetEffectiveDialect(),
+                diagnosis.Category,
+                diagnosis.ProviderCode ?? "none",
+                diagnosis.Summary,
+                diagnosis.RemediationHint ?? "Check database permissions and configuration.");
+            throw;
+        }
     }
 
     /// <summary>
