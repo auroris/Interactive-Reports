@@ -173,11 +173,25 @@ public enum SavedReportOrigin
 }
 
 /// <summary>
+/// Supplies the two facts every saved-report access decision is made from: who owns the document
+/// and whether it is published. The complete row and its metadata projection both provide them, so
+/// a policy can decide from whichever one a caller already holds without projecting between them.
+/// </summary>
+public interface ISavedReportAccessSubject
+{
+    /// <summary>Gets the canonical owner identity; configured and unowned rows have none.</summary>
+    string? Owner { get; }
+
+    /// <summary>Gets whether the document belongs to the public name and visibility scope.</summary>
+    bool IsPublic { get; }
+}
+
+/// <summary>
 /// Represents one named state document belonging to a report definition.
 /// Owner is the canonical identity value (see ReportIdentity); global reports keep the
 /// owner who published them. Configured rows have no owner.
 /// </summary>
-public sealed record SavedReport
+public sealed record SavedReport : ISavedReportAccessSubject
 {
     /// <summary>Gets the stable row identifier.</summary>
     public long Id { get; set; }
@@ -236,7 +250,7 @@ public sealed record SavedReportMetadata(
     bool IsGlobal,
     bool IsDefault,
     DateTime ModifiedUtc,
-    SavedReportOrigin Origin)
+    SavedReportOrigin Origin) : ISavedReportAccessSubject
 {
     /// <summary>Gets whether the document belongs to the public name and visibility scope.</summary>
     public bool IsPublic => IsDefault || IsGlobal || Origin == SavedReportOrigin.Configured;
