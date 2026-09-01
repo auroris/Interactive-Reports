@@ -37,6 +37,13 @@ public interface IReportFileExporter
     /// <param name="format">The case-insensitive output format token; defaults to <c>csv</c>.</param>
     /// <param name="ct">Signals that the operation should be canceled; defaults to <c>default</c>.</param>
     /// <returns>A task whose result is the report export file.</returns>
+    /// <example>
+    /// <code><![CDATA[
+    /// var file = await exporter.Export(
+    ///     "orders", state, contextParameters, format: "csv", ct: ct);
+    /// await storage.Put(file.FileName, file.ContentType, file.Bytes, ct);
+    /// ]]></code>
+    /// </example>
     Task<ReportExportFile> Export(
         string reportName,
         ReportState state,

@@ -19,7 +19,7 @@ public static class ReportFeatures
 
     /// <summary>
     /// Enables the Column Settings dialog for per-column masks, alignment, and styling. The
-    /// state document's formats map). Its visibility checkbox additionally needs
+    /// settings are stored in the state document's formats map. Its visibility checkbox additionally needs
     /// <see cref="Columns"/>, whose visible-columns list it writes.
     /// </summary>
     public const string ColumnSettings = "columnSettings";

@@ -3,9 +3,16 @@ using InteractiveReport.Core.Model;
 namespace InteractiveReport.Core.Definitions;
 
 /// <summary>
-/// Supplies executable report definitions. The built-in implementation is configuration-backed; this
-/// database-backed store (runtime-editable reports) can arrive without touching the engine.
+/// Supplies executable report definitions. The built-in implementation is configuration-backed;
+/// applications may replace it with a database-backed or otherwise dynamic store without changing
+/// the execution engine.
 /// </summary>
+/// <example>
+/// <code><![CDATA[
+/// var definition = await store.Find("orders", ct)
+///     ?? throw new KeyNotFoundException("Report 'orders' was not found.");
+/// ]]></code>
+/// </example>
 public interface IReportDefinitionStore
 {
     /// <summary>

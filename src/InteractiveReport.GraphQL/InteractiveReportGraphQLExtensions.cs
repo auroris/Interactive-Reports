@@ -24,6 +24,12 @@ public static class InteractiveReportGraphQLExtensions
     /// <returns>The service collection for further registrations.</returns>
     /// <remarks>Mutates <paramref name="services"/> by adding the adapter's dependencies.</remarks>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="services"/> is <see langword="null"/>.</exception>
+    /// <example>
+    /// <code><![CDATA[
+    /// builder.Services.AddInteractiveReports(builder.Configuration);
+    /// builder.Services.AddInteractiveReportGraphQL();
+    /// ]]></code>
+    /// </example>
     public static IServiceCollection AddInteractiveReportGraphQL(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
@@ -59,6 +65,12 @@ public static class InteractiveReportGraphQLExtensions
     /// <returns>The endpoint convention builder for further route customization.</returns>
     /// <remarks>Adds route metadata and filters to <paramref name="endpoints"/>. Each request disables caching and rejects unsupported methods, WebSockets, and batching.</remarks>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="endpoints"/> is <see langword="null"/>.</exception>
+    /// <example>
+    /// <code><![CDATA[
+    /// app.MapInteractiveReportGraphQL("/graphql")
+    ///     .RequireRateLimiting("reports");
+    /// ]]></code>
+    /// </example>
     public static IEndpointConventionBuilder MapInteractiveReportGraphQL(
         this IEndpointRouteBuilder endpoints,
         string path = "/graphql")

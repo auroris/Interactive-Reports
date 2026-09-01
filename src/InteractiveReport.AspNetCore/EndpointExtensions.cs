@@ -51,6 +51,13 @@ public static class EndpointExtensions
     /// <param name="prefix">The URL prefix under which to map the report routes; defaults to <c>"/api/reports"</c>.</param>
     /// <returns>The mapped route group, which the host can configure further.</returns>
     /// <remarks>Adds routes and endpoint filters to <paramref name="endpoints"/>.</remarks>
+    /// <example>
+    /// <code><![CDATA[
+    /// app.MapInteractiveReports("/api/reports")
+    ///     .RequireAuthorization("ReportingUsers")
+    ///     .RequireRateLimiting("reports");
+    /// ]]></code>
+    /// </example>
     public static RouteGroupBuilder MapInteractiveReports(
         this IEndpointRouteBuilder endpoints,
         string prefix = "/api/reports")
@@ -768,7 +775,7 @@ public static class EndpointExtensions
     /// Definition resolution sits behind this error shaping because it validates configuration and
     /// synchronizes configured documents, so a mistake introduced by a live config reload must surface as
     /// the standard sanitized coded error rather than an unhandled 500. (Startup-time mistakes fail the host
-    /// before traffic — see InteractiveReportStartupValidator.).
+    /// before traffic; see <c>InteractiveReportStartupValidator</c>.)
     /// </summary>
     /// <param name="ctx">The current HTTP request and response context.</param>
     /// <param name="reportName">The configured report name whose definition or saved reports are being addressed.</param>

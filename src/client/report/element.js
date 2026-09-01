@@ -609,7 +609,7 @@ class ReportController {
     /**
      * Requests the current report in a generated format without starting a browser download.
      *
-     * @param {string} [format="csv"] - The server-supported export format, normally `csv` or `xlsx`.
+     * @param {string} [format="csv"] - The server-supported export format. The built-in exporter supports `csv`.
      * @param {{signal?: AbortSignal}} [options={}] - Optional cancellation for the export request.
      * @returns {Promise<{blob: Blob, filename: string, contentType: string, truncated: boolean}>} The generated file and response metadata.
      *
@@ -1075,6 +1075,10 @@ class ReportController {
  *
  * All mutable report and rendering state is held by a closure-owned controller in `controllers`.
  * The custom element deliberately exposes only host configuration and supported integration APIs.
+ *
+ * @fires ir-before-query Cancelable query-transform event with a detached document.
+ * @fires ir-query-complete Observational event after a current result is adopted and rendered.
+ * @fires ir-action Application action event emitted by an action-format cell.
  */
 export class InteractiveReportElement extends HTMLElement {
     static observedAttributes = [
@@ -1095,41 +1099,115 @@ export class InteractiveReportElement extends HTMLElement {
         controllerFor(this).attributeChangedCallback(name, oldValue, newValue);
     }
 
-    /** The canonical name of the active report. */
+    /**
+     * The active canonical report name, or the requested `report` attribute before activation.
+     * This property is read-only; set the attribute to activate another report.
+     *
+     * @returns {string|null} The active or requested report name.
+     */
     get reportName() { return controllerFor(this).reportName; }
 
-    /** The explicit API base, legacy base, or bundle-relative default. */
+    /**
+     * The explicit `api-base`, legacy `base`, or bundle-relative default.
+     *
+     * @returns {string} The normalized API prefix.
+     */
     get apiBase() { return controllerFor(this).apiBase; }
+    /** @param {string|null|undefined} value - The new `api-base`; nullish removes the attribute. */
     set apiBase(value) {
         if (value === null || value === undefined) this.removeAttribute("api-base");
         else this.setAttribute("api-base", String(value));
     }
 
-    /** The application-owned stylesheet URL injected into this report's shadow root. */
+    /**
+     * The application-owned stylesheet URL injected into this report's shadow root.
+     *
+     * @returns {string|null} The configured URL, or null when no host stylesheet is present.
+     */
     get styleSheet() { return this.getAttribute("stylesheet"); }
+    /** @param {string|null|undefined} value - The new URL; nullish removes the stylesheet. */
     set styleSheet(value) {
         if (value === null || value === undefined) this.removeAttribute("stylesheet");
         else this.setAttribute("stylesheet", String(value));
     }
 
-    /** Whether every package-owned interactive control is inert. */
+    /**
+     * Whether every package-owned interactive control is inert. Control overrides are retained.
+     *
+     * @returns {boolean} True when the standard boolean `disabled` attribute is present.
+     */
     get disabled() { return this.hasAttribute("disabled"); }
+    /** @param {boolean} value - Whether to set the standard boolean `disabled` attribute. */
     set disabled(value) { this.toggleAttribute("disabled", Boolean(value)); }
 
+    /**
+     * Returns the accepted report document as a detached JSON-compatible object.
+     *
+     * @returns {object} The canonical transport document.
+     * @throws {Error} When the initial query has not completed successfully.
+     */
     getReportDocument() { return controllerFor(this).getReportDocument(); }
+
+    /**
+     * Replaces the working document and submits it through the ordinary query pipeline.
+     * A current failure restores the last accepted document.
+     *
+     * @param {object} document - A JSON-compatible report document.
+     * @returns {Promise<object|undefined>} A detached result, or undefined when canceled or superseded.
+     * @throws {TypeError} When the document is not JSON-compatible.
+     * @throws {Error} When the report is not loaded or the request fails.
+     */
     submitReportDocument(document) {
         return controllerFor(this).submitReportDocument(document);
     }
+
+    /**
+     * Retrieves a generated representation of the accepted report without starting a browser download.
+     *
+     * @param {string} [format="csv"] - The server-supported format token.
+     * @param {{signal?: AbortSignal}} [options={}] - Optional request cancellation.
+     * @returns {Promise<{blob: Blob, filename: string, contentType: string, truncated: boolean}>} File data and response metadata.
+     * @throws {Error} When the report is not loaded or the request fails.
+     */
     getExport(format = "csv", options = {}) {
         return controllerFor(this).getExport(format, options);
     }
+
+    /**
+     * Overrides one package-owned control, or restores the server suggestion with a nullish value.
+     *
+     * @param {string} name - A supported control name, matched case-insensitively.
+     * @param {boolean|null|undefined} enabled - The override, or nullish to inherit the server suggestion.
+     * @returns {boolean} The control's effective state.
+     * @throws {TypeError} When the name or value is invalid.
+     */
     setControlEnabled(name, enabled) {
         return controllerFor(this).setControlEnabled(name, enabled);
     }
+
+    /**
+     * Applies several client control overrides as one visual update.
+     *
+     * @param {Record<string, boolean|null|undefined>} overrides - Control names and values.
+     * @returns {Record<string, boolean>} The detached explicit override map.
+     * @throws {TypeError} When any name or value is invalid.
+     */
     setControlOverrides(overrides) {
         return controllerFor(this).setControlOverrides(overrides);
     }
+
+    /** Removes every client override and resumes following server suggestions. */
     clearControlOverrides() { return controllerFor(this).clearControlOverrides(); }
+
+    /**
+     * Returns one control's effective state after client override precedence.
+     *
+     * @param {string} name - A supported control name, matched case-insensitively.
+     * @returns {boolean} The effective state.
+     * @throws {TypeError} When the name is unknown.
+     */
     isControlEnabled(name) { return controllerFor(this).isControlEnabled(name); }
+
+    /** @returns {Record<string, boolean>} A detached map of explicit client overrides. */
     getControlOverrides() { return controllerFor(this).getControlOverrides(); }
 }

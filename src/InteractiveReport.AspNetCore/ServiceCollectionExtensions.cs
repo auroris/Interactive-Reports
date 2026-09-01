@@ -26,6 +26,13 @@ public static class ServiceCollectionExtensions
     /// <param name="sectionName">The configuration section containing <see cref="InteractiveReportOptions"/>.</param>
     /// <returns>A builder for connection, logging, context, user-directory, and authorization integrations.</returns>
     /// <remarks>Mutates <paramref name="services"/> and defers option validation until host startup.</remarks>
+    /// <example>
+    /// <code><![CDATA[
+    /// var reports = builder.Services.AddInteractiveReports(builder.Configuration);
+    /// reports.AddConnection("MainDb", sp =>
+    ///     new SqlConnection(sp.GetRequiredService<IConfiguration>().GetConnectionString("MainDb")));
+    /// ]]></code>
+    /// </example>
     public static InteractiveReportBuilder AddInteractiveReports(
         this IServiceCollection services,
         IConfiguration configuration,
@@ -142,6 +149,11 @@ public sealed class InteractiveReportBuilder
     /// <param name="factory">The callback that creates a new unopened connection from the runtime service provider.</param>
     /// <returns>This builder for further registration.</returns>
     /// <remarks>Replaces any existing factory and removes any previously declared dialect for <paramref name="name"/>.</remarks>
+    /// <example>
+    /// <code><![CDATA[
+    /// reports.AddConnection("MainDb", sp => new SqlConnection(connectionString));
+    /// ]]></code>
+    /// </example>
     public InteractiveReportBuilder AddConnection(string name, Func<IServiceProvider, DbConnection> factory)
     {
         Connections[name] = factory;
@@ -205,6 +217,14 @@ public sealed class InteractiveReportBuilder
     /// <returns>This builder for further registration.</returns>
     /// <remarks>Adds a singleton authorizer; it does not replace previously registered authorizers.</remarks>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="callback"/> is <see langword="null"/>.</exception>
+    /// <example>
+    /// <code><![CDATA[
+    /// reports.UseAuthorization((request, ct) => ValueTask.FromResult(
+    ///     request.Action is InteractiveReportAction.ViewReport or InteractiveReportAction.Query
+    ///         ? request.User.IsInRole("ReportingUsers")
+    ///         : request.User.IsInRole("ReportAdministrators")));
+    /// ]]></code>
+    /// </example>
     public InteractiveReportBuilder UseAuthorization(InteractiveReportAuthorizationCallback callback)
     {
         ArgumentNullException.ThrowIfNull(callback);

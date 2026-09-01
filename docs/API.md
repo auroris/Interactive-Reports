@@ -1,0 +1,603 @@
+# Integration API
+
+This guide is the application integrator's reference for Interactive Reports. It
+starts with the ASP.NET Core surface because the server owns report definitions,
+authorization, trusted context parameters, database access, and validation. The
+browser element owns presentation and user-authored report state.
+
+For report-state semantics and the full trust model, see
+[Architecture](ARCHITECTURE.md). For the optional saved-report GraphQL transport,
+see [GraphQL adapter](GRAPHQL.md).
+
+## Packages and namespaces
+
+| Package | Primary namespace | Use it for |
+|---|---|---|
+| `InteractiveReport.AspNetCore` | `InteractiveReport.AspNetCore` | Registration, REST endpoints, authorization integration, HTTP contracts, and the packaged client. |
+| `InteractiveReport.Core` | `InteractiveReport.Core.*` | Report definitions and state, direct execution, export, definition stores, and persistence contracts. This is referenced transitively by the ASP.NET Core package. |
+| `InteractiveReport.GraphQL` | `InteractiveReport.GraphQL` | Optional query-only execution of saved reports through GraphQL.NET. |
+
+## Register and map the server
+
+The smallest application uses configuration-backed definitions:
+
+```csharp
+using InteractiveReport.AspNetCore;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddInteractiveReports(builder.Configuration);
+
+var app = builder.Build();
+app.MapInteractiveReports("/api/reports");
+app.Run();
+```
+
+The default configuration section is `InteractiveReport`. Supply a different
+`sectionName` argument when the application needs one:
+
+```csharp
+builder.Services.AddInteractiveReports(builder.Configuration, "Reporting");
+```
+
+```json
+{
+  "ConnectionStrings": {
+    "MainDb": "Data Source=reports.db"
+  },
+  "InteractiveReport": {
+    "Reports": {
+      "orders": {
+        "title": "Orders",
+        "dataSource": "MainDb",
+        "provider": "sqlite",
+        "sql": "SELECT ORDER_ID, CUSTOMER, STATUS, AMOUNT FROM ORDERS",
+        "authorization": { "allowAnonymous": true }
+      }
+    }
+  }
+}
+```
+
+`MapInteractiveReports` returns a `RouteGroupBuilder`, so normal endpoint conventions
+can be applied to the complete surface:
+
+```csharp
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapInteractiveReports("/api/reports")
+    .RequireAuthorization("ReportingUsers")
+    .RequireRateLimiting("reports");
+```
+
+The host's route-group authorization is independent of report-definition
+authorization. For example, a group-level requirement still applies to a definition
+that sets `allowAnonymous`.
+
+### Register a connection factory
+
+Use `AddConnection` when the application creates connections in code. The callback
+must create a new, unopened connection for each call. The package detects the SQL
+dialect from the concrete connection type.
+
+```csharp
+using InteractiveReport.AspNetCore;
+using Microsoft.Data.SqlClient;
+
+builder.Services
+    .AddInteractiveReports(builder.Configuration)
+    .AddConnection("MainDb", sp =>
+    {
+        var configuration = sp.GetRequiredService<IConfiguration>();
+        var connectionString = configuration.GetConnectionString("MainDb")
+            ?? throw new InvalidOperationException("MainDb is not configured.");
+        return new SqlConnection(connectionString);
+    });
+```
+
+Wrapper and profiler connection types may not reveal their provider. Declare the
+dialect in that case:
+
+```csharp
+using InteractiveReport.Core.Model;
+
+reports.AddConnection(
+    "ProfiledDb",
+    sp => new ProfiledDbConnection(CreateInnerConnection(sp)),
+    ReportDialect.SqlServer);
+```
+
+The corresponding report definition uses `"connection": "MainDb"`. A definition
+sets either `connection` or `dataSource`, never both.
+
+## Report-definition configuration
+
+Definitions are keyed by their route name under `InteractiveReport:Reports`.
+
+| Property | Purpose |
+|---|---|
+| `title` | Optional display title. |
+| `dataSource`, `provider` | A `ConnectionStrings` name or literal connection string and its provider token. |
+| `connection` | A name registered through `AddConnection`; an alternative to `dataSource`. |
+| `sql` | The developer-owned base `SELECT`. It never crosses the client boundary. |
+| `contextParams` | Trusted server-resolved values used by the base SQL. |
+| `authorization` | Authentication, policy, administrator-only, restriction, and configured-user rules. |
+| `features` | Initial client-control suggestions. `download` and saved-report creation also have server checks. |
+| `defaultState` | The developer-owned initial `ReportState`. |
+| `documentFiles` | Source-controlled saved-report envelopes, relative to the content root unless absolute. |
+| `maxRows`, `defaultPageSize`, `maxPageSize`, `maxPivotColumns`, `maxChartPoints` | Execution limits. |
+| `commandTimeoutSeconds`, `consistency`, `timeZone` | Database execution policy. |
+| `columnLabels`, `columns`, `editLink` | Definition-owned presentation and behavior hints. |
+
+Configuration is validated at startup. Reports require authentication unless their
+authorization block explicitly sets `allowAnonymous`. `features` is a client hint,
+not an authorization boundary: embedding JavaScript may override client controls.
+The server still independently enforces authorization, report-state validation,
+trusted context, and the `download` and saved-report-creation feature checks.
+
+## Server API index
+
+| API | Purpose |
+|---|---|
+| `IServiceCollection.AddInteractiveReports(...)` | Registers definitions, execution, persistence, authorization, export, and HTTP support. Returns `InteractiveReportBuilder`. |
+| `InteractiveReportBuilder.AddConnection(...)` | Registers an unopened ADO.NET connection factory, with inferred or explicit dialect. |
+| `InteractiveReportBuilder.UseLogger(...)` | Sends package diagnostics to a host-owned `ILogger`. The package is silent when no logger is supplied. |
+| `InteractiveReportBuilder.UseContextParameterResolver<T>()` | Replaces claim-based trusted-context resolution with a singleton application resolver. |
+| `InteractiveReportBuilder.UseUserProvider<T>()` | Adds a scoped application user directory for administration choices. |
+| `InteractiveReportBuilder.UseAuthorization(...)` | Adds a direct application authorization callback. |
+| `InteractiveReportBuilder.UseAspNetCoreAuthorization()` | Adds an adapter to ASP.NET Core resource-based authorization. |
+| `IEndpointRouteBuilder.MapInteractiveReports(...)` | Maps REST, saved-report, administration, packaged asset, and optional viewer routes. |
+| `IReportAccessService` | Reuses the packaged authorization and trusted-context boundary in host-owned HTTP endpoints. |
+| `IReportDefinitionStore` | Resolves executable report definitions. `IReportDefinitionAuthorizationStore` is its optional lightweight authorization companion. |
+| `ReportExecutor` | Validates and executes a resolved definition and `ReportState`; it performs no HTTP authorization. |
+| `IReportFileExporter` | Resolves and exports report state to a transport-neutral `ReportExportFile`. |
+| `ISavedReportStore` | Replaceable persistence contract. It stores data but does not make authorization decisions. |
+| `IrJson.Options` | Shared JSON protocol options for host-owned endpoints. |
+| `ReportFeatures` | Canonical client-control feature names and server feature checks. |
+
+## Trusted context parameters
+
+The default resolver reads configured claims from the current principal. These
+values are never accepted from report-state JSON.
+
+```json
+{
+  "sql": "SELECT * FROM ORDERS WHERE TENANT_ID = @tenantId",
+  "contextParams": {
+    "tenantId": { "claim": "tenant_id" }
+  }
+}
+```
+
+Register an `IContextParameterResolver` when context comes from another trusted
+source, such as a tenant service:
+
+```csharp
+using System.Security.Claims;
+using InteractiveReport.Core.Execution;
+using InteractiveReport.Core.Model;
+
+public sealed class TenantContextResolver(ITenantAccessor tenants)
+    : IContextParameterResolver
+{
+    public ValueTask<object?> Resolve(
+        string name,
+        ContextParamSpec spec,
+        ClaimsPrincipal? user,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return name.Equals("tenantId", StringComparison.OrdinalIgnoreCase)
+            ? ValueTask.FromResult<object?>(tenants.RequiredTenantId)
+            : throw new InvalidOperationException($"Unknown context parameter '{name}'.");
+    }
+}
+
+builder.Services
+    .AddInteractiveReports(builder.Configuration)
+    .UseContextParameterResolver<TenantContextResolver>();
+```
+
+The resolver is registered as a singleton. Its dependencies must therefore be safe
+to consume from a singleton, or it must use a scope-safe accessor.
+
+## Application authorization
+
+Report-definition authorization remains active for every integration. Application
+authorization can add restrictions; it cannot bypass authentication, configured
+users, administrator rules, or database grants.
+
+### Direct callback
+
+`UseAuthorization` receives the caller, attempted action, report resource, and the
+current request service provider. Return `false` for an expected denial.
+
+```csharp
+var reports = builder.Services.AddInteractiveReports(builder.Configuration);
+
+reports.UseAuthorization(static (request, ct) =>
+{
+    ct.ThrowIfCancellationRequested();
+
+    var allowed = request.Action switch
+    {
+        InteractiveReportAction.ViewReport or
+        InteractiveReportAction.Query or
+        InteractiveReportAction.Export
+            => request.User.IsInRole("ReportingUsers"),
+
+        _ => request.User.IsInRole("ReportAdministrators")
+    };
+
+    return ValueTask.FromResult(allowed);
+});
+```
+
+Use `request.Resource.ReportName` and `request.Resource.SavedReport` for
+resource-specific decisions. Multiple callbacks, plus the ASP.NET Core adapter when
+enabled, compose with AND semantics.
+
+### ASP.NET Core resource authorization
+
+`UseAspNetCoreAuthorization` emits an
+`InteractiveReportAuthorizationRequirement` and an
+`InteractiveReportAuthorizationResource` through `IAuthorizationService`:
+
+```csharp
+using InteractiveReport.AspNetCore;
+using Microsoft.AspNetCore.Authorization;
+
+builder.Services.AddSingleton<IAuthorizationHandler, ReportAuthorizationHandler>();
+
+builder.Services
+    .AddInteractiveReports(builder.Configuration)
+    .UseAspNetCoreAuthorization();
+
+public sealed class ReportAuthorizationHandler
+    : AuthorizationHandler<
+        InteractiveReportAuthorizationRequirement,
+        InteractiveReportAuthorizationResource>
+{
+    protected override Task HandleRequirementAsync(
+        AuthorizationHandlerContext context,
+        InteractiveReportAuthorizationRequirement requirement,
+        InteractiveReportAuthorizationResource resource)
+    {
+        if (context.User.IsInRole("ReportingUsers") &&
+            resource.ReportName.Equals("orders", StringComparison.OrdinalIgnoreCase))
+        {
+            context.Succeed(requirement);
+        }
+
+        return Task.CompletedTask;
+    }
+}
+```
+
+The requirement's `Action` distinguishes query, export, saved-report, publication,
+and administration operations. A handler should succeed only the actions it intends
+to grant.
+
+## Build a host-owned HTTP endpoint
+
+Use `IReportAccessService` when a custom endpoint should preserve the same report
+authorization and context-parameter boundary as the packaged endpoints:
+
+```csharp
+using InteractiveReport.AspNetCore;
+using InteractiveReport.Core.Execution;
+using InteractiveReport.Core.Model;
+
+app.MapPost("/internal/orders/query", async (
+    ReportState state,
+    HttpContext http,
+    IReportAccessService access,
+    ReportExecutor executor,
+    CancellationToken ct) =>
+{
+    var decision = await access.Authorize(
+        new ReportAccessRequest
+        {
+            ReportName = "orders",
+            Actions = [InteractiveReportAction.Query]
+        },
+        http,
+        ct);
+
+    if (decision.Error is not null)
+        return decision.Error;
+
+    var definition = decision.Definition!;
+    var contextParams = await access.ResolveContextParameters(definition, http, ct);
+    var result = await executor.Query(definition, state, contextParams, ct);
+    return Results.Json(result, IrJson.Options);
+}).RequireAuthorization();
+```
+
+`Authorize` returns an `IResult` for denials and failures. Return it unchanged. This
+preserves the package's non-disclosure and coded-error behavior.
+
+## Execute and export in process
+
+`ReportExecutor` is the transport-neutral query engine. Direct callers must resolve
+an executable definition and supply trusted context parameters themselves:
+
+```csharp
+using InteractiveReport.Core.Definitions;
+using InteractiveReport.Core.Execution;
+
+var definition = await definitions.Find("orders", ct)
+    ?? throw new KeyNotFoundException("Report 'orders' was not found.");
+
+var contextParams = new Dictionary<string, object?>
+{
+    ["tenantId"] = tenant.Id
+};
+
+var result = await executor.Query(definition, state, contextParams, ct);
+```
+
+This path does not perform HTTP authorization or infer context from a principal. In
+an HTTP request, use `IReportAccessService` as shown above. In a background process,
+the application itself is the trust and authorization boundary.
+
+For files, prefer the registered `IReportFileExporter`. It resolves the definition,
+executes without paging, applies report export limits, and currently supports CSV:
+
+```csharp
+using InteractiveReport.Core.Export;
+
+var file = await exporter.Export(
+    reportName: "orders",
+    state: state,
+    contextParams: contextParams,
+    format: "csv",
+    ct: ct);
+
+await storage.Put(file.FileName, file.ContentType, file.Bytes, ct);
+if (file.Truncated)
+    logger.LogWarning("The report export reached its row limit.");
+```
+
+Like direct query execution, this API does not run HTTP authorization or the endpoint's
+`download` feature check.
+
+## Replace a definition or saved-report store
+
+The built-in `IReportDefinitionStore` reads configuration. An application can replace
+it after calling `AddInteractiveReports`:
+
+```csharp
+using InteractiveReport.Core.Definitions;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+
+builder.Services.Replace(
+    ServiceDescriptor.Singleton<IReportDefinitionStore, DatabaseReportDefinitionStore>());
+```
+
+A custom definition store returns detached definitions, assigns the canonical `Name`,
+and resolves `Connection` and `Dialect` before returning. It is also responsible for
+validating its definition-level settings. Implement
+`IReportDefinitionAuthorizationStore` as well when the store can return a lightweight
+name and authorization envelope before loading the executable SQL definition.
+
+Replacing the store also replaces configuration-backed report lookup, configured
+document synchronization through that lookup, and its built-in definition behavior.
+Treat this as an advanced application boundary, not as a way to append one report.
+
+`ISavedReportStore` is separately replaceable for custom persistence. Its methods are
+storage-only; endpoint ownership and authorization policy remain in
+`IReportAccessService`. Implementations must honor the documented detached-snapshot
+and compare-and-swap contracts.
+
+## Supply administration user choices
+
+`IInteractiveReportUserProvider` supplies choices to the administration UI. It does
+not authorize those identities.
+
+```csharp
+using System.Security.Claims;
+using InteractiveReport.AspNetCore;
+
+public sealed class ReportUserProvider(IApplicationUsers users)
+    : IInteractiveReportUserProvider
+{
+    public async ValueTask<IReadOnlyCollection<InteractiveReportUser>?> GetUsers(
+        ClaimsPrincipal administrator,
+        CancellationToken ct = default)
+    {
+        return (await users.List(ct))
+            .Select(user => new InteractiveReportUser(user.DisplayName, user.SubjectId))
+            .ToArray();
+    }
+}
+
+builder.Services
+    .AddInteractiveReports(builder.Configuration)
+    .UseUserProvider<ReportUserProvider>();
+```
+
+Returning `null` or an empty collection keeps free-form identity entry available.
+The provider is scoped.
+
+## REST surface
+
+With the default prefix, the principal routes are:
+
+| Method and route | Contract |
+|---|---|
+| `GET /api/reports/{name}/schema` | Definition schema, default state, presentation hints, limits, features, and client capabilities. |
+| `POST /api/reports/{name}/query` | Accepts `ReportState`; returns `ReportResult` with rows and the accepted server-enriched `document`. |
+| `POST /api/reports/{name}/export` | Accepts `ReportState`; returns the requested file format. CSV is currently supported. |
+| `GET /api/reports/{name}/saved` | Lists saved reports visible to the caller. |
+| `POST /api/reports/{name}/saved` | Creates a saved report from `SaveReportRequest`. |
+| `GET /api/reports/saved/{id}` | Returns `SavedReportDocument`. |
+| `PUT /api/reports/saved/{id}` | Applies `UpdateSavedReportRequest`. |
+| `DELETE /api/reports/saved/{id}` | Deletes an editable saved report. |
+| `GET /api/reports/whoami` | Optional identity diagnostic; disabled unless `WhoamiEnabled` is true. |
+| `/api/reports/admin/*` | Administrator user, authorization, and report-document operations. |
+| `GET /api/reports/ui/{file}` | Packaged browser assets. |
+| `GET /api/reports/{name}/view` | Optional packaged viewer page. |
+| `GET /api/reports/admin` | Optional packaged administration page. |
+
+All data and management routes enter `IReportAccessService`. Packaged assets and page
+shells are intentionally anonymous; the page's API calls are still authorized.
+`MapInteractiveReports` supplies standard endpoint summaries, tags, request and
+response types, and error metadata for the host's OpenAPI generator.
+
+A minimal query document looks like this:
+
+```http
+POST /api/reports/orders/query HTTP/1.1
+Content-Type: application/json
+
+{
+  "page": { "index": 1, "size": 50 },
+  "activeTable": "base",
+  "tables": {
+    "base": {
+      "from": "definition",
+      "schema": null,
+      "composables": [
+        { "kind": "filter", "filters": [ { "expr": "STATUS = 'Open'" } ] },
+        { "kind": "sort", "sorts": [ { "col": "AMOUNT", "dir": "desc" } ] },
+        { "kind": "select", "columns": [ "ORDER_ID", "CUSTOMER", "AMOUNT" ] }
+      ]
+    }
+  }
+}
+```
+
+Use the `document` in the successful response as the accepted state. The server may
+populate advisory schema caches or remove stale state into `ignored`.
+
+## GraphQL transport
+
+The optional adapter executes saved reports by id. It does not accept arbitrary
+report-state input.
+
+```csharp
+using InteractiveReport.GraphQL;
+
+builder.Services.AddInteractiveReports(builder.Configuration);
+builder.Services.AddInteractiveReportGraphQL();
+
+app.MapInteractiveReportGraphQL("/graphql")
+    .RequireRateLimiting("reports");
+```
+
+See [GraphQL adapter](GRAPHQL.md) for the query shape, authorization sequence, limits,
+and errors.
+
+## Browser custom element
+
+The packaged module defines `<interactive-report>`. It uses a shadow root and exposes
+only the supported element interface; mutable controller state remains private.
+
+```html
+<script type="module" src="/api/reports/ui/ir.js"></script>
+
+<interactive-report
+  id="orders-report"
+  report="orders"
+  saved-report="My Open Orders"
+  api-base="/api/reports"
+  stylesheet="/css/orders-report.css">
+</interactive-report>
+```
+
+### Attributes and properties
+
+| Attribute | Property | Meaning |
+|---|---|---|
+| `report` | `reportName` (read-only) | Required report-definition name. Changing the attribute loads that report. |
+| `saved-report` | none | Optional visible saved-report title to select on activation. |
+| `api-base` | `apiBase` | API prefix. It is inferred from the module URL when omitted. |
+| `base` | `apiBase` | Older alias for `api-base`. |
+| `lang` | none | Client locale. |
+| `disabled` | `disabled` | Makes all package-owned controls inert without clearing control overrides. |
+| `stylesheet` | `styleSheet` | Application-owned stylesheet URL inserted into this element's shadow root. Set the property to `null` to remove it. |
+
+### Methods
+
+| Method | Result |
+|---|---|
+| `getReportDocument()` | Detached, JSON-compatible accepted report document. Requires a completed initial query. |
+| `submitReportDocument(document)` | Replaces, queries, adopts, and renders a document. Resolves to a detached result, or `undefined` when canceled or superseded. |
+| `getExport(format = "csv", { signal } = {})` | Resolves to `{ blob, filename, contentType, truncated }` without starting a browser download. |
+| `setControlEnabled(name, enabled)` | Sets one client override. Use `null` to resume the server suggestion. Returns the effective state. |
+| `setControlOverrides(overrides)` | Atomically applies several overrides and returns the detached override map. |
+| `clearControlOverrides()` | Removes every client override. |
+| `isControlEnabled(name)` | Returns one effective control state. |
+| `getControlOverrides()` | Returns a detached object containing explicit client overrides. |
+
+Inputs and outputs are detached. Mutating a value returned by the element cannot reach
+its working state.
+
+```js
+const report = document.querySelector("#orders-report");
+
+const document = report.getReportDocument();
+document.search = "urgent";
+document.page.index = 1;
+
+const result = await report.submitReportDocument(document);
+console.log(result?.rows);
+```
+
+### Query lifecycle events
+
+| Event | Timing and detail |
+|---|---|
+| `ir-before-query` | Cancelable, bubbling, composed. `detail` is `{ document, source, requestId, signal }`. Synchronously mutate the detached document before transport, or call `preventDefault()` to cancel. |
+| `ir-query-complete` | Bubbling and composed after the current response is adopted and rendered. `detail` is detached `{ document, result, submitted, source, requestId }`. It is observational. |
+| `ir-action` | Bubbling and composed when an action-format cell is invoked. `detail` is `{ command, row, column }`. |
+
+`source` is `initial`, `user`, `saved-report`, `host`, or `refresh`.
+
+```js
+report.addEventListener("ir-before-query", event => {
+  event.detail.document.search = event.detail.document.search?.trim();
+});
+
+report.addEventListener("ir-query-complete", event => {
+  auditReportQuery(event.detail.source, event.detail.document);
+});
+```
+
+Ordinary package-control edits use a 200 ms trailing-edge debounce. Rapid changes
+accumulate in the working document and issue only the final query; an in-flight query
+is aborted when a newer user edit arrives. Initial loads, saved-report loads, explicit
+`submitReportDocument` calls, exports, and administration refreshes are immediate.
+
+### Client controls
+
+The server's `features` list supplies initial suggestions. The client may override
+them without changing the server's authorization or endpoint policies.
+
+```js
+report.setControlEnabled("filter", true);
+report.setControlEnabled("download", false);
+report.setControlEnabled("filter", null); // inherit the server suggestion
+
+report.setControlOverrides({ search: true, sort: false, savedReports: true });
+console.log(report.isControlEnabled("search"));
+console.log(report.getControlOverrides());
+report.clearControlOverrides();
+```
+
+Supported names are `search`, `columns`, `rename`, `columnSettings`, `filter`, `sort`,
+`pagination`, `controlBreak`, `highlight`, `aggregate`, `compute`, `groupBy`, `pivot`,
+`chart`, `savedReports`, and `download`. Names are matched case-insensitively.
+
+## Ownership boundaries at a glance
+
+| Concern | Owner |
+|---|---|
+| Base SQL, connection, limits, authorization, trusted context | Server definition and host application |
+| Report-state validation and SQL generation | Server engine |
+| Initial control availability | Server hint, interpreted by the client |
+| Effective packaged controls | Client, after host overrides |
+| Host stylesheet URL and CSS | Embedding application |
+| Search, filters, sorting, layouts, and other report state | User or host JavaScript, validated by the server |

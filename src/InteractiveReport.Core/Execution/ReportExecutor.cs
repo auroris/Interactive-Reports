@@ -125,6 +125,13 @@ public sealed class ReportExecutor
     /// <param name="ct">Cancels schema discovery, validation, database execution, and result reading.</param>
     /// <returns>The active result plus the detached effective document adopted by the client.</returns>
     /// <remarks>Opens one prepared connection/read scope, may execute pivot discovery and multiple terminal queries, and emits a completion log.</remarks>
+    /// <example>
+    /// <code><![CDATA[
+    /// var definition = await definitions.Find("orders", ct)
+    ///     ?? throw new KeyNotFoundException("Report 'orders' was not found.");
+    /// var result = await executor.Query(definition, state, contextParameters, ct);
+    /// ]]></code>
+    /// </example>
     public async Task<ReportResult> Query(
         ReportDefinition definition,
         ReportState state,

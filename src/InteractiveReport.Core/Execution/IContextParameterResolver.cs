@@ -7,6 +7,15 @@ namespace InteractiveReport.Core.Execution;
 /// Resolves a definition's context parameters server-side from trusted request context.
 /// Client-supplied values never reach these — they are the row-level security mechanism.
 /// </summary>
+/// <example>
+/// <code><![CDATA[
+/// public ValueTask<object?> Resolve(
+///     string name, ContextParamSpec spec, ClaimsPrincipal? user, CancellationToken ct = default)
+///     => name == "tenantId"
+///         ? ValueTask.FromResult<object?>(user?.FindFirst("tenant_id")?.Value)
+///         : throw new InvalidOperationException($"Unknown context parameter '{name}'.");
+/// ]]></code>
+/// </example>
 public interface IContextParameterResolver
 {
     /// <summary>

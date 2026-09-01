@@ -2,7 +2,7 @@ namespace InteractiveReport.Core.Model;
 
 /// <summary>
 /// Defines a developer-owned report that lives server-side and is referenced by friendly name.
-/// referenced by friendly name; the base SQL never crosses the network.
+/// The base SQL never crosses the network.
 /// </summary>
 public sealed class ReportDefinition
 {
@@ -54,8 +54,8 @@ public sealed class ReportDefinition
 
     /// <summary>
     /// Gets or sets an optional session timezone, such as <c>Pacific/Auckland</c> or <c>+13:00</c>,
-    /// like "+13:00"), pinned when the connection opens on engines that have session
-    /// timezones — Oracle (ALTER SESSION) and PostgreSQL (SET TIME ZONE). This affects
+    /// pinned when the connection opens on engines that have session timezones — Oracle
+    /// (<c>ALTER SESSION</c>) and PostgreSQL (<c>SET TIME ZONE</c>). This affects
     /// developer SQL and database conversions; portable-expression NOW() is instead
     /// one request-scoped UTC value. Deliberately ignored on SqlServer and SQLite.
     /// Null means the server's setting. Note Oracle pools keep session state:
@@ -99,7 +99,7 @@ public sealed class ReportDefinition
     /// persist or egress data (download at the export endpoint, savedReports at
     /// saved-report creation). The other tokens are presentation-level only — the query
     /// endpoint still accepts any valid state document, because hiding a dialog is not
-    /// a data-security boundary (context params are, §12). Note the JSON config binder
+    /// a data-security boundary (trusted context parameters are). Note the JSON config binder
     /// cannot represent an empty array ([] binds as absent = everything); to lock a
     /// report down, list the one or two features it should keep.
     /// </summary>
@@ -169,7 +169,8 @@ public sealed class ReportDefinition
 
     /// <summary>
     /// Merges <see cref="ColumnLabels"/> with <see cref="Columns"/> labels, with column overrides winning.
-    /// neither map contributes a label — callers keep their existing null-means-absent paths.
+    /// Returns <see langword="null"/> when neither map contributes a label, preserving
+    /// the public null-means-absent contract.
     /// </summary>
     /// <returns>A detached case-insensitive label map, or <see langword="null"/> when neither source contributes a label.</returns>
     public Dictionary<string, string>? GetEffectiveColumnLabels()
@@ -218,20 +219,20 @@ public sealed class ReportColumnOverride
 
     /// <summary>
     /// Gets or sets whether to render the table header cell without visible text. The accessible name and
-    /// every menu, dialog, and picker keep the real label) — the APEX empty-heading
+    /// every menu, dialog, and picker keep the real label — the APEX empty-heading
     /// pattern without the ambiguity of a report full of unnameable columns.
     /// </summary>
     public bool? HideLabel { get; set; }
 
     /// <summary>
     /// Gets or sets whether the column may be sorted. False removes sort controls and control breaks, which imply
-    /// sorting); the server strips violating state into ignored[]. Null = allowed.
+    /// sorting; the server strips violating state into <c>ignored</c>. Null means allowed.
     /// </summary>
     public bool? Sortable { get; set; }
 
     /// <summary>
     /// Gets or sets whether the column may be filtered. False removes filter controls, and rules referencing the
-    /// column are stripped into ignored[]. Null = allowed.
+    /// column are stripped into <c>ignored</c>. Null means allowed.
     /// </summary>
     public bool? Filterable { get; set; }
 

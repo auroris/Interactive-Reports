@@ -4,8 +4,7 @@ namespace InteractiveReport.AspNetCore;
 
 /// <summary>
 /// Options bound from the <c>InteractiveReport</c> configuration section. Config-declared default
-/// states bind fully, expression-rule lists included (filters/computed/highlights are
-/// string expressions since the M7 pipeline — the old typed-value caveat is gone).
+/// states bind fully, including string-expression filter, computed-column, and highlight rules.
 /// </summary>
 public sealed class InteractiveReportOptions
 {

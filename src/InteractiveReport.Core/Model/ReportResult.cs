@@ -41,8 +41,9 @@ public sealed class ReportResult
     public IReadOnlyList<HighlightHit> Highlights { get; init; } = [];
 
     /// <summary>
-    /// Gets state elements that referenced columns that no longer exist or unsupported features. Such elements
-    /// implemented) are dropped and reported here — saved reports degrade, never 500.
+    /// Gets state elements that referenced columns that no longer exist or features the
+    /// current relation cannot implement. Such elements are dropped and reported here —
+    /// saved reports degrade instead of failing the request.
     /// </summary>
     public required IReadOnlyList<IgnoredItem> Ignored { get; init; }
 

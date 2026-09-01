@@ -17,6 +17,10 @@ consumers need no Node.js and no frontend build.
 
 ## Getting started
 
+For a server-first reference to registration, authorization, trusted context,
+in-process execution and export, REST routes, and the browser element, see the
+[Integration API guide](docs/API.md).
+
 1. Add the package:
 
    ```sh
