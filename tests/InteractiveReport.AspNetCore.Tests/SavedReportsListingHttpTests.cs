@@ -118,6 +118,34 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
         if (Directory.Exists(_tempRoot)) Directory.Delete(_tempRoot, recursive: true);
     }
 
+    [Fact]
+    public async Task Listing_visibility_matches_the_owner_ordinally()
+    {
+        // The listing filter is the same read decision the single-document paths make, so a
+        // differently-cased identity is a different owner here exactly as it is there. This pins
+        // the listing to SavedReportAccessPolicy rather than to a predicate of its own.
+        const string owner = "Cased-Listing-User";
+        using var save = await _client.SendAsync(Request(
+            HttpMethod.Post,
+            $"/api/reports/{_ordersId}/saved",
+            owner,
+            new { title = "Owner cased", isGlobal = false, state = new { v = 3 } }));
+        Assert.Equal(HttpStatusCode.Created, save.StatusCode);
+
+        Assert.Contains(await Titles(owner), title => title == "Owner cased");
+        Assert.DoesNotContain(
+            await Titles(owner.ToLowerInvariant()), title => title == "Owner cased");
+    }
+
+    private async Task<IReadOnlyList<string?>> Titles(string identity)
+    {
+        using var response = await _client.SendAsync(
+            Request(HttpMethod.Get, "/api/reports/orders", identity));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        return [.. (await ReadJson(response)).EnumerateArray()
+            .Select(item => item.GetProperty("title").GetString())];
+    }
+
     private HttpRequestMessage Request(HttpMethod method, string url, string? identity, object? body = null)
     {
         var request = new HttpRequestMessage(method, url);

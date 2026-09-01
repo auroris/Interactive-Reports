@@ -50,6 +50,7 @@ internal sealed class InteractiveReportGraphQLExecutor(
     /// <summary>
     /// Executes one saved report after applying the requested view arguments.
     /// </summary>
+    /// <param name="reportName">The configuration the document must belong to, or <see langword="null"/> to take the document's own family.</param>
     /// <param name="id">The saved-report document id.</param>
     /// <param name="page">An optional 1-based page override.</param>
     /// <param name="pageSize">An optional page-size override; zero selects the engine's unpaged mode.</param>
@@ -59,6 +60,7 @@ internal sealed class InteractiveReportGraphQLExecutor(
     /// <returns>The executed report result.</returns>
     /// <exception cref="ExecutionError">Thrown for out-of-range arguments and for every server failure.</exception>
     public async Task<ReportResult?> Query(
+        string? reportName,
         long id,
         int? page,
         int? pageSize,
@@ -73,7 +75,11 @@ internal sealed class InteractiveReportGraphQLExecutor(
             throw Error("every sort entry needs a non-empty col.", "BAD_USER_INPUT");
 
         var context = Context();
-        var loaded = await server.LoadDocument(id, context, ct);
+        // A caller that named the configuration gets the same family verification the REST route
+        // applies; one addressing a document by id alone takes the family from the row.
+        var loaded = string.IsNullOrWhiteSpace(reportName)
+            ? await server.LoadDocument(id, context, ct)
+            : await server.LoadDocument(reportName, id, context, ct);
         if (loaded.Failure is not null) throw Failure(loaded.Failure);
         var document = loaded.Value!;
         var state = ReportStateResolver.Resolve(defaults: null, document.State);
@@ -86,7 +92,7 @@ internal sealed class InteractiveReportGraphQLExecutor(
         if (search is not null) state.Search = search;
         if (sorts is not null) ApplySorts(state, sorts);
 
-        var queried = await server.Query(document with { State = state }, context, ct);
+        var queried = await server.Query(document, state, context, ct);
         if (queried.Failure is not null) throw Failure(queried.Failure);
         return queried.Value;
     }
@@ -176,6 +182,7 @@ internal sealed class InteractiveReportGraphQLExecutor(
             InteractiveReportFailureKind.Unauthenticated => "UNAUTHENTICATED",
             InteractiveReportFailureKind.Forbidden => "FORBIDDEN",
             InteractiveReportFailureKind.NotFound => "NOT_FOUND",
+            InteractiveReportFailureKind.Conflict => "CONFLICT",
             InteractiveReportFailureKind.Invalid => "REPORT_VALIDATION_FAILED",
             _ => "INTERNAL_SERVER_ERROR",
         };

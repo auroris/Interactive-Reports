@@ -24,28 +24,13 @@ public static class EndpointExtensions
     private const string SavedReportsTag = "Interactive Reports - Saved Reports";
     private const string AdministrationTag = "Interactive Reports - Administration";
 
-    /// <summary>Executes an already authorized and parsed report-state operation.</summary>
-    /// <param name="context">The active HTTP exchange.</param>
-    /// <param name="definition">The authorized report definition.</param>
-    /// <param name="executor">The scoped report executor.</param>
-    /// <param name="state">The deserialized request state.</param>
-    /// <param name="contextParameters">Application values resolved for the definition's context parameters.</param>
-    /// <param name="ct">Cancels execution.</param>
-    /// <returns>The HTTP result produced by the operation.</returns>
-    private delegate Task<IResult> StateOperation(
-        HttpContext context,
-        ReportDefinition definition,
-        ReportExecutor executor,
-        ReportState state,
-        IReadOnlyDictionary<string, object?> contextParameters,
-        CancellationToken ct);
-
     /// <summary>
     /// Mounts the report endpoints and returns their group so hosts can chain standard conventions —
     /// .RequireAuthorization(...), antiforgery/CSRF filters for cookie-auth hosts, rate limiting, etc. The
     /// engine deliberately has no authentication mechanism of its own. Every data and
-    /// security-administration endpoint enters IReportAccessService. The opt-in whoami bootstrap diagnostic
-    /// and packaged HTML/CSS/JS delivery are the deliberate exceptions.
+    /// security-administration endpoint enters the transport-neutral server boundary, which owns
+    /// authorization for every client. The opt-in whoami bootstrap diagnostic and packaged
+    /// HTML/CSS/JS delivery are the deliberate exceptions.
     /// </summary>
     /// <param name="endpoints">The endpoint route builder on which to register the report routes.</param>
     /// <param name="prefix">The URL prefix under which to map the report routes; defaults to <c>"/api/reports"</c>.</param>
@@ -357,167 +342,44 @@ public static class EndpointExtensions
     /// <param name="ctx">The current HTTP request and response context.</param>
     /// <param name="ct">Cancels authorization, context resolution, or schema discovery.</param>
     /// <returns>The schema JSON, an access result, or a sanitized server-error result.</returns>
-    /// <remarks>Performs authorization, may query the database for schema metadata, and writes the selected HTTP response.</remarks>
     private static async Task<IResult> GetSchema(string name, HttpContext ctx, CancellationToken ct)
     {
-        var accessService = Access(ctx);
-        var actions = SavedReportsListingDefinition.Matches(name)
-            ? new[] { InteractiveReportAction.ListAllSavedReports }
-            : new[] { InteractiveReportAction.ViewReport };
-        var access = await accessService.Authorize(new ReportAccessRequest
-        {
-            ReportName = name,
-            Actions = actions,
-        }, ctx, ct);
-        if (access.Error is not null) return access.Error;
-        var def = access.Definition!;
-
-        try
-        {
-            var executor = ctx.RequestServices.GetRequiredService<ReportExecutor>();
-            var contextParams = await accessService.ResolveContextParameters(def, ctx, ct);
-            var columns = await executor.GetSchema(def, contextParams, ct);
-
-            return Results.Json(new InteractiveReportSchema(
-                Name: def.Name,
-                Title: def.Title ?? ColumnModel.Prettify(def.Name),
-                Columns: columns.Select(c => new ColumnInfo(c.Name, c.Label, c.KindName, c.IsComputed)).ToArray(),
-                EditLink: ResolveEditLink(def, columns, ctx),
-                ColumnOverrides: ResolveColumnOverrides(def, columns),
-                DefaultState: SchemaDefaultState(def),
-                Capabilities: new InteractiveReportCapabilities(
-                    ExpressionLanguageCatalog.Functions,
-                    AggregateCatalog.FunctionsByColumnType,
-                    AggregateCatalog.ChartFunctionsByColumnType),
-                // Return the resolved effective set in canonical casing and order so the
-                // casing/order), so the client never needs its own copy of the catalog to
-                // interpret it.
-                Features: ReportFeatures.Resolve(def),
-                Limits: new InteractiveReportLimits(
-                    def.DefaultPageSize,
-                    def.MaxPageSize,
-                    def.MaxRows,
-                    def.MaxChartPoints),
-                // A presentation hint, not a grant. Every mutation is still evaluated against
-                // its concrete action and resource.
-                Authorization: new InteractiveReportAuthorizationHint(
-                    await accessService.MayRequestAdministration(ctx, ct))),
-                IrJson.Options);
-        }
-        catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return ServerError(ctx, def.Name, "schema discovery", ex);
-        }
+        var schema = await Server(ctx).GetSchema(name, Context(ctx), ct);
+        return schema.Failure is not null
+            ? Failure(schema.Failure)
+            : Results.Json(schema.Value, IrJson.Options);
     }
-
-    /// <summary>
-    /// Resolves the definition's edit link with placeholders rewritten to canonical
-    /// schema casing (so client row lookups hit row keys directly) and defaults resolved. An unresolvable
-    /// template disables the edit column for this schema — omitted from the payload, with the problem
-    /// logged; the query path surfaces the same binding failure to users through ignored[].
-    /// </summary>
-    /// <param name="def">The definition containing the optional edit-link template.</param>
-    /// <param name="schema">The live schema used to bind placeholder names.</param>
-    /// <param name="ctx">The request context used to obtain the package logger.</param>
-    /// <returns>The client-ready edit-link contract, or <see langword="null"/> when absent or unbindable.</returns>
-    /// <remarks>Logs a warning when an invalid or schema-stale template disables the edit column.</remarks>
-    private static InteractiveReportEditLink? ResolveEditLink(
-        ReportDefinition def,
-        Core.Schema.ReportSchema schema,
-        HttpContext ctx)
-    {
-        if (def.EditLink is not { } editLink) return null;
-
-        var placeholders = EditLinkTemplate.Parse(editLink.UrlTemplate, out var error);
-        var unknown = placeholders?.FirstOrDefault(name => !schema.TryGetValue(name, out _));
-        if (placeholders is null || unknown is not null)
-        {
-            Log(ctx)?.LogWarning(
-                "Report {Report}: editLink.urlTemplate {Problem}; the edit column is disabled.",
-                def.Name,
-                placeholders is null ? $"is invalid — {error}" : $"references unknown column '{unknown}'");
-            return null;
-        }
-
-        return new InteractiveReportEditLink(
-            UrlTemplate: EditLinkTemplate.Rewrite(
-                editLink.UrlTemplate,
-                name => schema.TryGetValue(name, out var col) ? col.Name : name),
-            Label: string.IsNullOrWhiteSpace(editLink.Label) ? "Edit" : editLink.Label.Trim(),
-            Target: string.Equals(editLink.Target, "_blank", StringComparison.OrdinalIgnoreCase)
-                ? "_blank"
-                : "_self");
-    }
-
-    /// <summary>
-    /// Resolves per-column behavior flags for the client, filtered to live schema columns
-    /// and keyed by canonical name. Labels are deliberately absent because they ride the synthetic
-    /// fallback/document-label channel used by columnLabels, so this map only exists when a column
-    /// carries behavior the client must gate on.
-    /// </summary>
-    /// <param name="def">The definition containing optional column overrides.</param>
-    /// <param name="schema">The live schema used to canonicalize and filter column names.</param>
-    /// <returns>Overrides keyed by canonical column name, or <see langword="null"/> when none affect client behavior.</returns>
-    private static IReadOnlyDictionary<string, InteractiveReportColumnOptions>? ResolveColumnOverrides(
-        ReportDefinition def,
-        Core.Schema.ReportSchema schema)
-    {
-        if (def.Columns is not { Count: > 0 }) return null;
-
-        var result = new Dictionary<string, InteractiveReportColumnOptions>();
-        foreach (var (name, over) in def.Columns)
-        {
-            if (over is null || !schema.TryGetValue(name, out var col)) continue;
-            var helpText = string.IsNullOrWhiteSpace(over.HelpText) ? null : over.HelpText.Trim();
-            if (over.HideLabel != true && over.Sortable != false && over.Filterable != false && helpText is null)
-                continue;
-            result[col.Name] = new InteractiveReportColumnOptions(
-                HideLabel: over.HideLabel == true ? true : null,
-                Sortable: over.Sortable == false ? false : null,
-                Filterable: over.Filterable == false ? false : null,
-                HelpText: helpText);
-        }
-        return result.Count > 0 ? result : null;
-    }
-
-    /// <summary>
-    /// Builds the complete synthetic fallback state sent by the schema endpoint. The result is never
-    /// null. An unconfigured fallback synthesizes to an empty state (every schema column in database
-    /// order), and the definition's labels (columnLabels overlaid with columns[*].label) become the
-    /// fallback document's labels unless the configured state carries its own. Query responses never
-    /// apply labels; the document ingestion pipeline mirrors this same layering so exports render what
-    /// an equivalent client displays.
-    /// </summary>
-    /// <param name="def">The definition supplying the synthetic fallback state and definition-level labels.</param>
-    /// <returns>A detached, complete state with a definition-input table and layered default labels.</returns>
-    internal static ReportState SchemaDefaultState(ReportDefinition def)
-        => ReportDocumentDefaults.Create(def);
 
     /// <summary>
     /// Executes a posted report query through the shared request pipeline.
     /// </summary>
     /// <param name="name">The configured or built-in report-definition key from the route.</param>
     /// <param name="ctx">The current HTTP request and response context.</param>
-    /// <param name="ct">Cancels authorization, body reading, context resolution, and query execution.</param>
+    /// <param name="ct">Cancels body reading, authorization, context resolution, and query execution.</param>
     /// <returns>The report-result JSON or a standardized access, validation, or server-error result.</returns>
     /// <remarks>Consumes the JSON request body and may execute database commands.</remarks>
-    private static Task<IResult> PostQuery(string name, HttpContext ctx, CancellationToken ct)
-        => ExecuteStateOperation(
-            name,
-            ctx,
-            "query",
-            InteractiveReportAction.Query,
-            preflight: null,
-            static async (_, definition, executor, state, contextParams, token) =>
-            {
-                var result = await executor.Query(definition, state, contextParams, token);
-                return Results.Json(result, IrJson.Options);
-            },
-            ct);
+    private static async Task<IResult> PostQuery(string name, HttpContext ctx, CancellationToken ct)
+    {
+        ReportState state;
+        try
+        {
+            state = await JsonSerializer.DeserializeAsync<ReportState>(ctx.Request.Body, IrJson.Options, ct)
+                ?? new ReportState();
+        }
+        catch (JsonException ex)
+        {
+            // Returning the parser message is safe here because it references only caller-supplied JSON.
+            return Error(
+                InteractiveReportErrorCodes.MalformedReportState,
+                StatusCodes.Status400BadRequest,
+                ex.Message);
+        }
+
+        var queried = await Server(ctx).Query(name, state, Context(ctx), ct);
+        return queried.Failure is not null
+            ? Failure(queried.Failure)
+            : Results.Json(queried.Value, IrJson.Options);
+    }
 
     /// <summary>
     /// Executes a list-of-values request through the same definition and query authorization path as
@@ -525,19 +387,10 @@ public static class EndpointExtensions
     /// </summary>
     /// <param name="name">The configured or built-in report-definition key from the route.</param>
     /// <param name="ctx">The current HTTP request and response context.</param>
-    /// <param name="ct">Cancels authorization, body reading, context resolution, and lookup execution.</param>
+    /// <param name="ct">Cancels body reading, authorization, context resolution, and lookup execution.</param>
     /// <returns>The bounded LOV JSON or a standardized access, validation, or server-error result.</returns>
     private static async Task<IResult> PostLov(string name, HttpContext ctx, CancellationToken ct)
     {
-        var accessService = Access(ctx);
-        var access = await accessService.Authorize(new ReportAccessRequest
-        {
-            ReportName = name,
-            Actions = OperationActions(name, InteractiveReportAction.Query),
-        }, ctx, ct);
-        if (access.Error is not null) return access.Error;
-        var definition = access.Definition!;
-
         ReportLovRequest request;
         try
         {
@@ -554,121 +407,94 @@ public static class EndpointExtensions
                 ex.Message);
         }
 
-        try
-        {
-            var executor = ctx.RequestServices.GetRequiredService<ReportExecutor>();
-            var contextParams = await accessService.ResolveContextParameters(definition, ctx, ct);
-            var result = await executor.Lov(definition, request, contextParams, ct);
-            return Results.Json(result, IrJson.Options);
-        }
-        catch (ReportValidationException ex)
-        {
-            return ValidationProblem(ex);
-        }
-        catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return ServerError(ctx, definition.Name, "list of values", ex);
-        }
+        var resolved = await Server(ctx).Lov(name, request, Context(ctx), ct);
+        return resolved.Failure is not null
+            ? Failure(resolved.Failure)
+            : Results.Json(resolved.Value, IrJson.Options);
     }
 
     /// <summary>
-    /// Runs the JSON query request pipeline. Definition lookup and authorization happen
-    /// before body parsing, followed by context resolution, validation, and execution.
+    /// Resolves the transport-neutral server boundary from request services.
     /// </summary>
-    /// <param name="name">The configured or built-in report-definition key from the route.</param>
     /// <param name="ctx">The current HTTP request and response context.</param>
-    /// <param name="operationName">A diagnostic operation name used when logging unexpected failures.</param>
-    /// <param name="action">The report action required from the caller.</param>
-    /// <param name="preflight">An optional authorized-definition check performed before reading the body.</param>
-    /// <param name="operation">The query callback invoked after parsing and context resolution.</param>
-    /// <param name="ct">Cancels authorization, body reading, context resolution, and execution.</param>
-    /// <returns>The operation result or the first access, preflight, parse, validation, or server-error result.</returns>
-    /// <remarks>Consumes the request body after authorization and may execute whatever side effects <paramref name="operation"/> defines.</remarks>
-    private static async Task<IResult> ExecuteStateOperation(
-        string name,
-        HttpContext ctx,
-        string operationName,
-        InteractiveReportAction action,
-        Func<HttpContext, ReportDefinition, IResult?>? preflight,
-        StateOperation operation,
-        CancellationToken ct)
-    {
-        var accessService = Access(ctx);
-        var access = await accessService.Authorize(new ReportAccessRequest
-        {
-            ReportName = name,
-            Actions = OperationActions(name, action),
-        }, ctx, ct);
-        if (access.Error is not null) return access.Error;
-        var definition = access.Definition!;
-        if (preflight?.Invoke(ctx, definition) is { } rejected) return rejected;
-
-        ReportState state;
-        try
-        {
-            state = await JsonSerializer.DeserializeAsync<ReportState>(ctx.Request.Body, IrJson.Options, ct)
-                ?? new ReportState();
-        }
-        catch (JsonException ex)
-        {
-            // Returning the parser message is safe here because it references only caller-supplied JSON.
-            return Error(
-                InteractiveReportErrorCodes.MalformedReportState,
-                StatusCodes.Status400BadRequest,
-                ex.Message);
-        }
-
-        try
-        {
-            var executor = ctx.RequestServices.GetRequiredService<ReportExecutor>();
-            var contextParams = await accessService.ResolveContextParameters(definition, ctx, ct);
-            return await operation(ctx, definition, executor, state, contextParams, ct);
-        }
-        catch (ReportValidationException ex)
-        {
-            return ValidationProblem(ex);
-        }
-        catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return ServerError(ctx, definition.Name, operationName, ex);
-        }
-    }
-
-    /// <summary>Returns the action set shared by report-state operations for one configured definition.</summary>
-    private static IReadOnlyCollection<InteractiveReportAction> OperationActions(
-        string name,
-        InteractiveReportAction action)
-        => SavedReportsListingDefinition.Matches(name)
-            ? action == InteractiveReportAction.Export
-                ? [InteractiveReportAction.ListAllSavedReports, InteractiveReportAction.Export]
-                : [InteractiveReportAction.ListAllSavedReports]
-            : [action];
+    /// <returns>The application-wide Interactive Reports server.</returns>
+    internal static IInteractiveReportServer Server(HttpContext ctx)
+        => ctx.RequestServices.GetRequiredService<IInteractiveReportServer>();
 
     /// <summary>
-    /// Converts structured report-state validation errors into the public HTTP 400 error shape.
+    /// Projects the current HTTP exchange onto the transport-neutral request context.
     /// </summary>
-    /// <param name="ex">The validation exception whose path-aware errors should be flattened.</param>
-    /// <returns>A coded JSON result containing one line per validation error.</returns>
-    internal static IResult ValidationProblem(ReportValidationException ex)
+    /// <param name="ctx">The current HTTP request and response context.</param>
+    /// <returns>The request context consumed by the server boundary.</returns>
+    internal static InteractiveReportRequestContext Context(HttpContext ctx)
+        => new()
+        {
+            User = ctx.User,
+            RequestServices = ctx.RequestServices,
+            TraceIdentifier = ctx.TraceIdentifier,
+        };
+
+    /// <summary>
+    /// Resolves the transport-neutral authorization service for the current request. Endpoints that
+    /// need only an endpoint-level decision use it directly; there is no HTTP-shaped wrapper.
+    /// </summary>
+    internal static IReportAuthorizationService Authorization(HttpContext ctx)
+        => ctx.RequestServices.GetRequiredService<IReportAuthorizationService>();
+
+    /// <summary>
+    /// Translates an authorization decision into this adapter's coded JSON response.
+    /// </summary>
+    /// <param name="failure">The classified authorization failure.</param>
+    /// <returns>The HTTP result carrying the failure's stable code.</returns>
+    internal static IResult AuthorizationFailure(ReportAuthorizationFailure failure)
+        => failure.Kind switch
+        {
+            ReportAuthorizationFailureKind.Unauthenticated => AuthenticationRequired(),
+            ReportAuthorizationFailureKind.NotFound => ReportNotFound(),
+            ReportAuthorizationFailureKind.Forbidden => Error(
+                failure.Code,
+                StatusCodes.Status403Forbidden,
+                failure.Details,
+                failure.TraceIdentifier),
+            _ => Error(
+                failure.Code,
+                StatusCodes.Status500InternalServerError,
+                failure.Details,
+                failure.TraceIdentifier),
+        };
+
+    /// <summary>
+    /// Translates a transport-neutral server failure into this adapter's coded JSON response.
+    /// </summary>
+    /// <param name="failure">The classified server failure.</param>
+    /// <returns>The HTTP result carrying the failure's stable code.</returns>
+    internal static IResult Failure(InteractiveReportFailure failure) => failure.Kind switch
     {
-        var details = string.Join(
-            Environment.NewLine,
-            ex.Errors.Select(error => string.IsNullOrWhiteSpace(error.Path)
-                ? error.Message
-                : $"{error.Path}: {error.Message}"));
-        return Error(
-            InteractiveReportErrorCodes.ReportStateInvalid,
+        InteractiveReportFailureKind.Unauthenticated => EndpointExtensions.AuthenticationRequired(),
+        InteractiveReportFailureKind.NotFound => EndpointExtensions.Error(
+            failure.Code,
+            StatusCodes.Status404NotFound),
+        InteractiveReportFailureKind.Forbidden => EndpointExtensions.Error(
+            failure.Code,
+            StatusCodes.Status403Forbidden,
+            failure.Details,
+            failure.TraceIdentifier),
+        InteractiveReportFailureKind.Conflict => EndpointExtensions.Error(
+            failure.Code,
+            StatusCodes.Status409Conflict,
+            failure.Details,
+            failure.TraceIdentifier),
+        InteractiveReportFailureKind.Invalid => EndpointExtensions.Error(
+            failure.Code,
             StatusCodes.Status400BadRequest,
-            details);
-    }
+            failure.Details,
+            failure.TraceIdentifier),
+        _ => EndpointExtensions.Error(
+            failure.Code,
+            StatusCodes.Status500InternalServerError,
+            failure.Details,
+            failure.TraceIdentifier),
+    };
 
     /// <summary>
     /// Builds an Interactive Reports HTTP error using the shared catalog and wire type.
@@ -741,16 +567,6 @@ public static class EndpointExtensions
             StatusCodes.Status500InternalServerError,
             traceId: ctx.TraceIdentifier);
     }
-
-    /// <summary>
-    /// Resolves the configured report-access service from request services.
-    /// </summary>
-    /// <param name="context">The current HTTP request and response context.</param>
-    /// <returns>The configured report access service.</returns>
-    private static IReportAccessService Access(HttpContext context)
-        => context.RequestServices.GetService<IReportAccessService>()
-            ?? new ReportAccessService(
-                context.RequestServices.GetRequiredService<IReportAuthorizationService>());
 
     /// <summary>
     /// Resolves the optional package logger associated with the current application.

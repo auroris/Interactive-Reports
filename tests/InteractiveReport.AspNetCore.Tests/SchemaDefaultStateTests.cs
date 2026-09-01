@@ -38,7 +38,7 @@ public sealed class SchemaDefaultStateTests
     [Fact]
     public void Unconfigured_default_synthesizes_a_definition_table_carrying_the_mapping()
     {
-        var state = EndpointExtensions.SchemaDefaultState(Definition());
+        var state = ReportDocumentDefaults.Create(Definition());
 
         Assert.Equal("base", state.ActiveTable);
         var table = Assert.Single(state.Tables!);
@@ -58,7 +58,7 @@ public sealed class SchemaDefaultStateTests
             Sorts = [new SortRule { Col = "ORDER_ID", Dir = SortDir.Desc }],
         });
 
-        var state = EndpointExtensions.SchemaDefaultState(def);
+        var state = ReportDocumentDefaults.Create(def);
 
         Assert.Single(Node(state, "sort").Sorts!);
         Assert.Equal("Order #", Node(state, "labels").Labels!["ORDER_ID"]);
@@ -74,7 +74,7 @@ public sealed class SchemaDefaultStateTests
             Labels = new() { ["ORDER_ID"] = "Ticket" },
         });
 
-        var labels = Node(EndpointExtensions.SchemaDefaultState(def), "labels").Labels!;
+        var labels = Node(ReportDocumentDefaults.Create(def), "labels").Labels!;
 
         Assert.Equal("Ticket", labels["ORDER_ID"]);
         Assert.Single(labels);
@@ -101,7 +101,7 @@ public sealed class SchemaDefaultStateTests
             },
         });
 
-        var state = EndpointExtensions.SchemaDefaultState(def);
+        var state = ReportDocumentDefaults.Create(def);
         var formats = Node(state, "formats").Formats!;
         var configuredFormats = Node(def.DefaultState, "formats").Formats!;
 
@@ -119,7 +119,7 @@ public sealed class SchemaDefaultStateTests
         var def = Definition();
         def.Columns = new() { ["LABEL"] = new ReportColumnOverride { Label = "Caption" } };
 
-        var labels = Node(EndpointExtensions.SchemaDefaultState(def), "labels").Labels!;
+        var labels = Node(ReportDocumentDefaults.Create(def), "labels").Labels!;
 
         Assert.Equal("Order #", labels["ORDER_ID"]);
         Assert.Equal("Caption", labels["LABEL"]);
@@ -133,7 +133,7 @@ public sealed class SchemaDefaultStateTests
         def.Columns = new() { ["ORDER_ID"] = new ReportColumnOverride { Label = "Ticket" } };
 
         Assert.Equal("Ticket",
-            Node(EndpointExtensions.SchemaDefaultState(def), "labels").Labels!["ORDER_ID"]);
+            Node(ReportDocumentDefaults.Create(def), "labels").Labels!["ORDER_ID"]);
     }
 
     [Fact]
@@ -155,7 +155,7 @@ public sealed class SchemaDefaultStateTests
             },
         };
 
-        var state = EndpointExtensions.SchemaDefaultState(def);
+        var state = ReportDocumentDefaults.Create(def);
 
         Assert.DoesNotContain(state.Tables!["unrelated"].Composables!, c => c.Kind == "labels");
         Assert.Equal("Order #",
@@ -182,7 +182,7 @@ public sealed class SchemaDefaultStateTests
                 Labels = new() { ["ir1"] = "Revenue" },
             });
 
-        var composables = Active(EndpointExtensions.SchemaDefaultState(def)).Composables!;
+        var composables = Active(ReportDocumentDefaults.Create(def)).Composables!;
         var outputLabels = composables[3].Labels!;
 
         Assert.Equal(["sort", "labels", shapeKind, "labels"], composables.Select(c => c.Kind));
@@ -199,7 +199,7 @@ public sealed class SchemaDefaultStateTests
             new TableComposable { Kind = "group", By = ["ORDER_ID"] },
             new TableComposable { Kind = "labels" });
 
-        var composables = Active(EndpointExtensions.SchemaDefaultState(def)).Composables!;
+        var composables = Active(ReportDocumentDefaults.Create(def)).Composables!;
 
         Assert.Equal(["labels", "group", "labels"], composables.Select(c => c.Kind));
         Assert.Equal("Order #", composables[0].Labels!["ORDER_ID"]);
@@ -216,7 +216,7 @@ public sealed class SchemaDefaultStateTests
             Sorts = [new SortRule { Col = "ORDER_ID" }],
         });
 
-        var state = EndpointExtensions.SchemaDefaultState(def);
+        var state = ReportDocumentDefaults.Create(def);
         var labels = Node(state, "labels").Labels!;
         var sorts = Node(state, "sort").Sorts!;
 

@@ -335,23 +335,21 @@ internal static class AuthorizationEndpoints
     /// <param name="resourceReportName">The report name carried to application authorization as the protected resource.</param>
     /// <param name="ct">Cancels application and database authorization checks.</param>
     /// <returns><see langword="null"/> when access is granted; otherwise, the hidden-denial or authorization-error result.</returns>
-    private static Task<IResult?> AuthorizeAdministration(
+    private static async Task<IResult?> AuthorizeAdministration(
         HttpContext context,
         string resourceReportName,
         CancellationToken ct)
-        => (context.RequestServices.GetService<IReportAccessService>()
-                ?? new ReportAccessService(
-                    context.RequestServices.GetRequiredService<IReportAuthorizationService>()))
-            .AuthorizeEndpoint(new EndpointAccessRequest
-            {
-                Actions = [InteractiveReportAction.ManageAuthorization],
-                Resource = new InteractiveReportAuthorizationResource
-                {
-                    ReportName = resourceReportName,
-                },
-                AdministratorRequired = true,
-                HideDenied = true,
-            }, context, ct);
+    {
+        var denied = await EndpointExtensions.Authorization(context).AuthorizeEndpoint(
+            [InteractiveReportAction.ManageAuthorization],
+            new InteractiveReportAuthorizationResource { ReportName = resourceReportName },
+            administratorRequired: true,
+            hideDenied: true,
+            denialDetail: null,
+            EndpointExtensions.Context(context),
+            ct);
+        return denied is null ? null : EndpointExtensions.AuthorizationFailure(denied);
+    }
 
     /// <summary>
     /// Finds a configured report case-insensitively while preserving its canonical configured name.

@@ -58,6 +58,12 @@ public sealed class InteractiveReportQueryGraphType : ObjectGraphType
         Field<InteractiveReportResultGraphType>("report")
             .Description("Executes a saved Interactive Report by id.")
             .Argument<NonNullGraphType<IdGraphType>>("id", "The saved-report id.")
+            .Argument<StringGraphType>(
+                "report",
+                "Optional appsettings report configuration the document must belong to, as listed by "
+                + "savedReports. Supplying it verifies the document's family before it is loaded, the "
+                + "same check GET /api/reports/{name}/{id} applies; a document from another "
+                + "configuration is reported as not found.")
             .Argument<IntGraphType>("page", "Optional 1-based page override.")
             .Argument<IntGraphType>("pageSize", "Optional page-size override; zero uses the engine's unpaged query mode.")
             .Argument<StringGraphType>(
@@ -70,6 +76,7 @@ public sealed class InteractiveReportQueryGraphType : ObjectGraphType
                 "Optional replacement ordering for the document's active table. An empty list "
                 + "clears the saved ordering; null keeps it.")
             .ResolveAsync(async context => await Executor(context).Query(
+                context.GetArgument<string?>("report"),
                 context.GetArgument<long>("id"),
                 context.GetArgument<int?>("page"),
                 context.GetArgument<int?>("pageSize"),

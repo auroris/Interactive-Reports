@@ -10,7 +10,6 @@ public static class InteractiveReportJsonExtensions
     public static IServiceCollection AddInteractiveReportJson(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
-        services.TryAddSingleton<IReportAccessService, ReportAccessService>();
         return services;
     }
 }

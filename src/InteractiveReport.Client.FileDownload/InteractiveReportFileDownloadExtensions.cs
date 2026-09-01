@@ -162,6 +162,7 @@ public static class InteractiveReportFileDownloadExtensions
             InteractiveReportFailureKind.Unauthenticated => StatusCodes.Status401Unauthorized,
             InteractiveReportFailureKind.Forbidden => StatusCodes.Status403Forbidden,
             InteractiveReportFailureKind.NotFound => StatusCodes.Status404NotFound,
+            InteractiveReportFailureKind.Conflict => StatusCodes.Status409Conflict,
             _ => StatusCodes.Status500InternalServerError,
         };
         if (status == StatusCodes.Status401Unauthorized)

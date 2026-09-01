@@ -77,6 +77,12 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
             [$"InteractiveReport:Reports:{ReportName}:Sql"] = "SELECT ID, LABEL, AMOUNT FROM ORDERS",
             [$"InteractiveReport:Reports:{ReportName}:Authorization:AllowAnonymous"] = "true",
             [$"InteractiveReport:Reports:{ReportName}:DocumentFiles:0"] = "ReportDocuments/orders.file.json",
+            // A second real configuration, so a cross-family probe is distinguishable from
+            // naming a report that does not exist at all.
+            ["InteractiveReport:Reports:big-orders:Connection"] = "Data",
+            ["InteractiveReport:Reports:big-orders:Dialect"] = "Sqlite",
+            ["InteractiveReport:Reports:big-orders:Sql"] = "SELECT ID, LABEL, AMOUNT FROM ORDERS WHERE AMOUNT > 0",
+            ["InteractiveReport:Reports:big-orders:Authorization:AllowAnonymous"] = "true",
             ["InteractiveReport:SavedReports:Connection"] = "Data",
         });
 
@@ -832,6 +838,88 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
                     }
                     """,
                 variables = new { id, page, pageSize },
+            });
+
+    [Fact]
+    public async Task Loading_a_repaired_default_document_reports_the_repaired_row()
+    {
+        // Clients hand the loaded document's metadata straight back as the authorization
+        // resource for the follow-up query, so it has to describe the row that exists after
+        // auto-repair — not the drifted row that was read before it.
+        var id = await DefaultId();
+        var store = _app!.Services.GetRequiredService<ISavedReportStore>();
+        var stored = (await store.Get(id))!;
+        var drifted = stored with { IsGlobal = false, StateJson = "{ not json" };
+        Assert.True(await store.Update(drifted, stored));
+
+        var server = _app.Services.GetRequiredService<IInteractiveReportServer>();
+        var loaded = await server.LoadDocument(id, new InteractiveReportRequestContext
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity()),
+            RequestServices = _app.Services,
+            TraceIdentifier = "repaired-default",
+        });
+
+        Assert.Null(loaded.Failure);
+        Assert.True(loaded.Value!.Metadata.IsGlobal);
+        Assert.True((await store.Get(id))!.IsGlobal);
+    }
+
+    [Fact]
+    public async Task Naming_the_configuration_verifies_the_document_family()
+    {
+        // The GraphQL twin of GET /api/reports/{name}/{id}: naming the configuration must apply the
+        // same family check, so a document reached through the wrong report is hidden.
+        var id = await CreatePrivateReport("alice", "Family checked");
+
+        using var matching = await GraphQLInReport(ReportName, id, "alice");
+        var matchingBody = await ReadJson(matching);
+        Assert.False(matchingBody.TryGetProperty("errors", out _));
+        Assert.True(matchingBody.GetProperty("data").GetProperty("report")
+            .GetProperty("totalRows").GetInt32() >= 0);
+
+        // big-orders is a real, readable configuration: the denial comes from the document
+        // belonging to another family, not from the report being unknown.
+        using var reachable = await Send(HttpMethod.Get, "/api/reports/big-orders", "alice");
+        Assert.Equal(HttpStatusCode.OK, reachable.StatusCode);
+
+        using var mismatched = await GraphQLInReport("big-orders", id, "alice");
+        Assert.Equal("NOT_FOUND", (await ReadJson(mismatched)).GetProperty("errors")[0]
+            .GetProperty("extensions").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task The_family_check_compares_canonical_configuration_names()
+    {
+        // Only two identifiers are stable: the appsettings configuration name and the database's
+        // document id. A name argument is resolved case-insensitively but always yields the
+        // canonical configured key, which is what the row's REPORT_NAME was written from — so a
+        // differently-cased request still matches its own family rather than being hidden.
+        var id = await CreatePrivateReport("alice", "Canonical family");
+
+        using var response = await GraphQLInReport(ReportName.ToUpperInvariant(), id, "alice");
+        var body = await ReadJson(response);
+
+        Assert.False(body.TryGetProperty("errors", out _));
+        Assert.True(body.GetProperty("data").GetProperty("report")
+            .GetProperty("totalRows").GetInt32() >= 0);
+    }
+
+    private Task<HttpResponseMessage> GraphQLInReport(string report, long id, string? identity)
+        => Send(
+            HttpMethod.Post,
+            "/graphql",
+            identity,
+            new
+            {
+                query = """
+                    query ExecuteSavedReport($report: String, $id: ID!) {
+                      report(report: $report, id: $id) {
+                        totalRows
+                      }
+                    }
+                    """,
+                variables = new { report, id },
             });
 
     private async Task<HttpResponseMessage> Send(

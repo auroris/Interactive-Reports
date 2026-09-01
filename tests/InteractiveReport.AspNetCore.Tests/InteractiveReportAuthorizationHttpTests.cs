@@ -422,8 +422,11 @@ public sealed class InteractiveReportAuthorizationHttpTests
     }
 
     [Fact]
-    public async Task Stored_state_is_returned_as_json_without_typed_rehydration()
+    public async Task Stored_state_is_served_through_the_current_state_model()
     {
+        // One model serves every document: a stored row is bound and re-serialized on read, so
+        // members outside the current state model are not echoed back. Documents are not kept
+        // readable across state-model changes.
         await using var host = await Start();
         var report = new SavedReport
         {
@@ -431,7 +434,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
             ReportName = "orders",
             Title = "Historical",
             Owner = "ordinary-user",
-            StateJson = "{\"v\":2,\"historicalShape\":{\"stillHere\":true}}",
+            StateJson = "{\"search\":\"kept\",\"foreignShape\":{\"dropped\":true}}",
         };
         await host.Services.GetRequiredService<ISavedReportStore>().Create(report);
 
@@ -442,8 +445,8 @@ public sealed class InteractiveReportAuthorizationHttpTests
 
         Assert.Equal(HttpStatusCode.OK, load.StatusCode);
         var state = (await ReadJson(load)).GetProperty("state");
-        Assert.Equal(2, state.GetProperty("v").GetInt32());
-        Assert.True(state.GetProperty("historicalShape").GetProperty("stillHere").GetBoolean());
+        Assert.Equal("kept", state.GetProperty("search").GetString());
+        Assert.False(state.TryGetProperty("foreignShape", out _));
     }
 
     [Fact]
