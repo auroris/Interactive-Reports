@@ -56,6 +56,10 @@ test("normalization clones the document, supplies a definition table, and resets
     assert.equal(state.tables.base.from, "definition");
     assert.deepEqual(inputNode(state, "filter").filters, [{ expr: "AMOUNT > 1" }]);
 
+    const submitted = normalizeReportState(input, 25, null, { resetPageIndex: false });
+    assert.deepEqual(submitted.page, { index: 9, size: 75 },
+        "whole-document host submissions can preserve an explicitly requested page");
+
     const empty = normalizeReportState(null, 25);
     assert.deepEqual(Object.keys(empty.tables), ["base"]);
     assert.equal(empty.activeTable, "base");

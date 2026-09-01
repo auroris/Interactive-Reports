@@ -5,6 +5,7 @@
 
 import { el } from "../../core/dom.js";
 import { translate } from "../../core/localization.js";
+import { featureEnabled } from "../schema.js";
 import { modeOf } from "../state.js";
 import { formatInteger, parseReportNumber } from "./format.js";
 
@@ -42,11 +43,12 @@ export function renderPager(w, container) {
     const start = zero ? totalCount : all ? parseReportNumber(1) : parseReportNumber(index - 1).times(size).plus(1);
     const end = zero ? totalCount : start.plus(result.rows.length).minus(1);
     const hasNext = !all && parseReportNumber(index).times(size).lt(totalCount);
+    const paginationEnabled = featureEnabled(w, "pagination");
 
     container.replaceChildren(
         el("div", { class: "ir-pager-left" },
             el("button", {
-                type: "button", class: "ir-btn ir-page-btn", disabled: index <= 1,
+                type: "button", class: "ir-btn ir-page-btn", disabled: !paginationEnabled || index <= 1,
                 "aria-label": translate(w, "pagination.previous"), onclick: () => gotoPage(w, index - 1),
             }, "‹"),
             el("span", { class: "ir-page-info" },
@@ -58,7 +60,7 @@ export function renderPager(w, container) {
                         total: formatInteger(totalCount.toString(), w),
                     })),
             el("button", {
-                type: "button", class: "ir-btn ir-page-btn", disabled: !hasNext,
+                type: "button", class: "ir-btn ir-page-btn", disabled: !paginationEnabled || !hasNext,
                 "aria-label": translate(w, "pagination.next"), onclick: () => gotoPage(w, index + 1),
             }, "›")),
         el("div", { class: "ir-pager-right" }, translate(w, "pagination.elapsed", { milliseconds: result.elapsedMs })));

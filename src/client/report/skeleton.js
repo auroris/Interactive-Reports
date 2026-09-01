@@ -83,12 +83,12 @@ export function buildSkeleton(w) {
         w.els.pager);
 }
 
-// Invariant: fit the toolbar to the report's feature whitelist, once the schema has delivered
-// it. The skeleton builds full-width (features are unknown until then); this pares it down:
+// Invariant: fit the toolbar to the effective control policy once the schema has delivered its
+// suggestion and the host's overrides have been applied. The skeleton builds full-width first:
 // search bar, per-mode view buttons (the whole group goes when grid is the only choice left),
 // the Actions button when no menu entry survives, and the saved-report select.
 /**
- * Shows or hides report controls according to the active schema capabilities.
+ * Shows or hides report controls according to the effective server suggestion and client overrides.
  *
  * @param {object} w - The loaded report controller whose schema features and saved reports drive visibility.
  * @returns {void} No value.

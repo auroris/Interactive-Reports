@@ -5,6 +5,30 @@
 
 import { activeChain, inputComposableLocation, lookupValue } from "./state.js";
 
+// Public control names mirror ReportFeatures on the server. The schema list is a server-authored
+// suggestion for the packaged UI, not an authorization boundary: an embedding application may
+// override any name locally. Keeping the catalog here gives every renderer and the public element
+// API one canonical spelling and validation path.
+export const reportControlNames = Object.freeze([
+    "search", "columns", "rename", "columnSettings", "filter", "sort", "pagination",
+    "controlBreak", "highlight", "aggregate", "compute", "groupBy", "pivot", "chart",
+    "savedReports", "download",
+]);
+
+const controlNamesByToken = new Map(reportControlNames.map(name => [name.toLowerCase(), name]));
+
+/**
+ * Resolves a caller-supplied control name to its canonical protocol spelling.
+ *
+ * @param {unknown} name - The requested report control name.
+ * @returns {string|null} The canonical name, or `null` when the token is unknown.
+ */
+export function canonicalControlName(name) {
+    return typeof name === "string"
+        ? (controlNamesByToken.get(name.trim().toLowerCase()) ?? null)
+        : null;
+}
+
 // Protocol contract: server column metadata with the report's own display labels applied.
 // Labels are client-side presentation: the server sends real names and neutral labels; the
 // input labels composable (seeded from the definition via the default report) win here.
@@ -100,19 +124,32 @@ export function visibleColumnNames(w) {
     return pickable(w).map(c => c.name);
 }
 
-// Protocol contract: the definition's feature whitelist, resolved server-side and delivered on
+// Protocol contract: the definition's feature suggestion, resolved server-side and delivered on
 // the schema payload. A missing list (schema not loaded yet, or an older server that predates
-// feature configuration) means everything is on.
+// feature configuration) suggests that everything is on. Client overrides remain authoritative
+// for packaged control presentation; endpoint authorization and validation remain server-owned.
 /**
- * Determines whether a schema feature is available to the current report.
+ * Determines whether the server suggests that a schema feature be available.
  *
- * @param {object} w - The report controller containing the definition feature whitelist.
+ * @param {object} w - The report controller containing the definition feature suggestion.
  * @param {string} feature - The schema feature flag to evaluate.
- * @returns {boolean} Whether the feature is listed, or whether no whitelist has been loaded.
+ * @returns {boolean} Whether the feature is listed, or whether no suggestion has been loaded.
  */
-export function featureEnabled(w, feature) {
+export function serverFeatureEnabled(w, feature) {
     const features = w.schema?.features;
     return !features || features.includes(feature);
+}
+
+/**
+ * Determines whether the packaged client controls for one report feature are enabled.
+ *
+ * @param {object} w - The report controller containing server suggestions and client overrides.
+ * @param {string} feature - The canonical report control name.
+ * @returns {boolean} The client override when present; otherwise the server suggestion.
+ */
+export function featureEnabled(w, feature) {
+    if (w._controlOverrides?.has(feature)) return w._controlOverrides.get(feature);
+    return serverFeatureEnabled(w, feature);
 }
 
 // Protocol contract: the definition's per-column overrides, delivered on the schema payload
@@ -186,10 +223,9 @@ export function filterableColumns(w) { return pickable(w).filter(c => columnFilt
 /**
  * Determines whether the schema exposes any feature that can change report state.
  *
- * @param {object} w - The report controller containing the definition feature whitelist.
- * @returns {boolean} Whether any enabled feature can mutate report state; a missing whitelist is treated as mutable.
+ * @param {object} w - The report controller containing the effective control policy.
+ * @returns {boolean} Whether any effectively enabled feature can mutate report state.
  */
 export function anyMutableFeature(w) {
-    const features = w.schema?.features;
-    return !features || features.some(f => f !== "download");
+    return reportControlNames.some(feature => feature !== "download" && featureEnabled(w, feature));
 }

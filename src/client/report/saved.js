@@ -87,7 +87,7 @@ export function refreshSavedSelect(w) {
  *
  * Side effects: performs a network request, may replace `savedList`, and may show a warning. It does not rebuild the selector.
  */
-async function loadSavedList(w) {
+export async function loadSavedList(w) {
     const sequence = w._seq;
     const reportName = w.reportName;
     const stillCurrent = () => sequence === w._seq && reportName === w.reportName;
@@ -155,7 +155,8 @@ export async function loadSavedById(w, id) {
         // judges it on query. A rejection lands in the catch and rolls back.
         w.adoptState(docResponse.state);
         refreshSavedSelect(w);
-        await w.runQuery({ quiet: true });
+        const result = await w.runQuery({ quiet: true, source: "saved-report" });
+        if (!result && w.isCurrentStateTransition(transition)) w.restoreLastGood();
     } catch (err) {
         if (!w.isCurrentStateTransition(transition)) return;
         // Invariant: nothing validated: put doc, selection, and search back on the last
@@ -186,7 +187,8 @@ export async function resetToPrimary(w) {
     w.adoptState(w.schema?.defaultState);
     refreshSavedSelect(w);
     try {
-        await w.runQuery();
+        const result = await w.runQuery({ source: "saved-report" });
+        if (!result && w.isCurrentStateTransition(transition)) w.restoreLastGood();
     } catch {
         if (w.isCurrentStateTransition(transition)) w.restoreLastGood();
     }

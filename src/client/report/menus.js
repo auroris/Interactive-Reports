@@ -1,6 +1,6 @@
 // The two popup menus: the toolbar Actions menu and the per-column header menu. Menus are pure
 // dispatch: every entry opens a dialog or applies a one-line document mutation; nothing here owns
-// state of its own. Every entry is gated by the definition's feature whitelist and enabled per
+// state of its own. Every entry is gated by the effective client control policy and enabled per
 // the active table's capabilities: the same Columns/Compute/Filter/Sort/Highlight surfaces
 // operate on whichever named table is active.
 
@@ -20,8 +20,8 @@ import { downloadExport } from "./export.js";
  * Ordinary table features have the same header surface regardless of which shape composable precedes
  * them.
  *
- * @param {object} w - The report controller containing the feature whitelist.
- * @returns {boolean} Whether any header-menu feature is enabled for the definition.
+ * @param {object} w - The report controller containing server suggestions and client overrides.
+ * @returns {boolean} Whether any header-menu feature is effectively enabled.
  */
 export function headerMenuAvailable(w) {
     const features = ["sort", "rename", "columnSettings", "columns", "controlBreak", "filter"];
@@ -37,7 +37,7 @@ export function headerMenuAvailable(w) {
 const joinSections = sections => sections.filter(s => s.length)
     .flatMap((section, i) => i === 0 ? section : ["-", ...section]);
 
-// Invariant: the Actions menu entries the whitelist leaves standing. Exported so the toolbar
+// Invariant: the Actions menu entries the effective control policy leaves standing. Exported so the toolbar
 // can hide the Actions button when nothing remains. Entries the active table cannot use stay
 // visible but disabled. The menu shape is stable while the active table changes.
 /**
@@ -173,7 +173,7 @@ export function openHeaderMenu(w, col, anchor) {
 
     const items = joinSections([sortItems, presentation, filterItems]);
     // The definition's help text closes the menu. It is reachable wherever the menu itself is (a
-    // report whose whitelist empties the menu offers no help path; accepted and documented).
+    // report whose effective control policy empties the menu offers no help path; accepted and documented).
     const help = columnHelp(w, col);
     if (help) items.push(...(items.length ? ["-"] : []), { note: help });
     if (items.length) popupMenu(anchor, items);

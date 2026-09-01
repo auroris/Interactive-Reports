@@ -12,11 +12,12 @@ import { resolveLocale, translate } from "../core/localization.js";
  * @param {object|null|undefined} raw - The persisted or caller-supplied state; nullish input starts from the defaults.
  * @param {number} [defaultPageSize=50] - The page size used when the incoming report state does not specify one.
  * @param {object|null} [defaults=null] - Baseline state values copied before defined fields from `raw` are overlaid.
+ * @param {{resetPageIndex?: boolean}} [options={}] - Whether adoption starts again on page one.
  * @returns {object} The normalized report-state document.
  *
  * Side effects: none; both supplied objects are cloned before normalization.
  */
-export function normalizeReportState(raw, defaultPageSize = 50, defaults = null) {
+export function normalizeReportState(raw, defaultPageSize = 50, defaults = null, { resetPageIndex = true } = {}) {
     const state = defaults ? structuredClone(defaults) : {};
     for (const [key, value] of Object.entries(raw ? structuredClone(raw) : {}))
         if (value !== null && value !== undefined) state[key] = value;
@@ -35,7 +36,10 @@ export function normalizeReportState(raw, defaultPageSize = 50, defaults = null)
     }
     for (const table of Object.values(state.tables))
         if (table && !Array.isArray(table.composables)) table.composables = [];
-    state.page = { index: 1, size: state.page?.size ?? defaultPageSize };
+    state.page = {
+        index: resetPageIndex ? 1 : (state.page?.index ?? 1),
+        size: state.page?.size ?? defaultPageSize,
+    };
     return state;
 }
 

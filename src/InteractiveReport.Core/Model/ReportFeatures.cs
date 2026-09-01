@@ -2,8 +2,9 @@ namespace InteractiveReport.Core.Model;
 
 /// <summary>
 /// The canonical end-user feature tokens a definition's <see cref="ReportDefinition.Features"/>
-/// whitelist may name. Tokens are matched case-insensitively in configuration but always
-/// travel to the client in this canonical casing.
+/// control suggestion may name. Tokens are matched case-insensitively in configuration but always
+/// travel to the client in this canonical casing. A browser client may override presentation;
+/// independently enforced endpoint policies remain server-owned.
 /// </summary>
 public static class ReportFeatures
 {
@@ -70,17 +71,17 @@ public static class ReportFeatures
         => All.FirstOrDefault(known => string.Equals(known, feature, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
-    /// Determines whether a feature is enabled. A null whitelist enables everything; otherwise membership is case-insensitive.
+    /// Determines whether a feature is configured. A null list includes everything; otherwise membership is case-insensitive.
     /// </summary>
-    /// <param name="definition">The report definition containing the optional feature whitelist.</param>
+    /// <param name="definition">The report definition containing the optional feature list.</param>
     /// <param name="feature">The report feature whose effective setting is being resolved.</param>
-    /// <returns><see langword="true"/> when the feature is enabled by the definition; otherwise, <see langword="false"/>.</returns>
+    /// <returns><see langword="true"/> when the feature is included by the definition; otherwise, <see langword="false"/>.</returns>
     public static bool IsEnabled(ReportDefinition definition, string feature)
         => definition.Features is null
             || definition.Features.Any(entry => string.Equals(entry, feature, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
-    /// Resolves the definition's effective feature set in canonical casing and stable order.
+    /// Resolves the definition's feature suggestion in canonical casing and stable order.
     /// </summary>
     /// <param name="definition">The report definition that supplies the data source, dialect, policy, and execution limits.</param>
     /// <returns>The enabled feature tokens in <see cref="All"/> order.</returns>

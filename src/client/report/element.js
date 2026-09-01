@@ -8,9 +8,9 @@
 import { api, apiUrl, errorText } from "../core/api.js";
 import { banner } from "../core/dom.js";
 import { loadWhoami } from "../core/identity.js";
-import { setCustomStyleSheet, WidgetElement } from "../core/widget.js";
+import { disposeWidget, setCustomStyleSheet, WidgetElement } from "../core/widget.js";
 import { applyFeatureChrome, buildSkeleton } from "./skeleton.js";
-import { featureEnabled } from "./schema.js";
+import { canonicalControlName, featureEnabled } from "./schema.js";
 import {
     invalidateChangedSchemas,
     modeOf,
@@ -19,7 +19,7 @@ import {
     selectView,
     serializeReportState,
 } from "./state.js";
-import { refreshSavedSelect, sameTitle } from "./saved.js";
+import { loadSavedList, refreshSavedSelect, sameTitle } from "./saved.js";
 import { renderChips } from "./render/chips.js";
 import { renderGrid } from "./render/grid.js";
 import { canRenderChart, renderChartView } from "./render/chart-view.js";
@@ -40,8 +40,35 @@ const loadChartModule = () =>
     chartModulePromise ??= import(new URL("./ir-chart.js", import.meta.url).href)
         .catch(err => { chartModulePromise = undefined; throw err; });
 
+const invalidState = message => {
+    const error = new Error(message);
+    error.name = "InvalidStateError";
+    return error;
+};
+
+const invalidDocument = cause => new TypeError(
+    "The report document must be a JSON-compatible object.",
+    cause === undefined ? undefined : { cause });
+
+/**
+ * Produces the detached transport form of a caller-supplied report document and verifies that it
+ * can cross the JSON protocol boundary.
+ *
+ * @param {unknown} value - The public API input.
+ * @returns {object} A detached JSON-compatible report document.
+ */
+function copyReportDocument(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw invalidDocument();
+    try {
+        const copy = serializeReportState(value);
+        return JSON.parse(JSON.stringify(copy));
+    } catch (error) {
+        throw invalidDocument(error);
+    }
+}
+
 export class InteractiveReportElement extends WidgetElement {
-    static observedAttributes = ["report", "saved-report", "api-base", "base", "lang"];
+    static observedAttributes = ["report", "saved-report", "api-base", "base", "lang", "disabled"];
 
     /**
      * Initializes the component state required by the browser report controller.
@@ -51,6 +78,10 @@ export class InteractiveReportElement extends WidgetElement {
         this._busyTokens = new Set();
         this._initialized = false;
         this._stateRevision = 0;
+        this._requestId = 0;
+        this._controlOverrides = new Map();
+        this._savedListLoaded = false;
+        this._savedListPromise = null;
     }
     /**
      * Returns the report name requested by the host attribute.
@@ -72,13 +103,29 @@ export class InteractiveReportElement extends WidgetElement {
     get reportName() { return this._activeReportName ?? this.requestedReportName; }
 
     /**
+     * Returns whether every package-owned control is temporarily inert.
+     *
+     * @returns {boolean} Whether the host carries the standard boolean `disabled` attribute.
+     */
+    get disabled() { return this.hasAttribute("disabled"); }
+    /**
+     * Enables or disables every package-owned interactive control without changing feature overrides.
+     *
+     * @param {unknown} value - A truthy value disables the report controls.
+     */
+    set disabled(value) { this.toggleAttribute("disabled", Boolean(value)); }
+
+    /**
      * Schedules initialization when the custom element is attached to a document.
      *
      * @returns {void} No value.
      *
      * Side effects: queues a microtask that initializes the element if it remains connected.
      */
-    connectedCallback() { this.scheduleInit(); }
+    connectedCallback() {
+        this.refreshDisabledState();
+        this.scheduleInit();
+    }
     /**
      * Releases request and chart resources when the custom element leaves the document.
      *
@@ -102,8 +149,13 @@ export class InteractiveReportElement extends WidgetElement {
      *
      * Side effects: schedules reinitialization when an initialized element receives a different serialized value.
      */
-    attributeChangedCallback(_name, oldValue, newValue) {
-        if (this._initialized && oldValue !== newValue) this.scheduleInit();
+    attributeChangedCallback(name, oldValue, newValue) {
+        if (oldValue === newValue) return;
+        if (name === "disabled") {
+            this.refreshDisabledState();
+            return;
+        }
+        if (this._initialized) this.scheduleInit();
     }
 
     /**
@@ -156,6 +208,8 @@ export class InteractiveReportElement extends WidgetElement {
         this.currentSaved = null;
         this.searchScopeCol = null;
         this._lastGood = null;
+        this._savedListLoaded = false;
+        this._savedListPromise = null;
     }
 
     /**
@@ -257,6 +311,7 @@ export class InteractiveReportElement extends WidgetElement {
                 })
                 : [];
             if (seq !== this._seq) return;
+            this._savedListLoaded = featureEnabled(this, "savedReports");
             this.savedList = saved;
 
             const requestedSaved = this.requestedSavedReportName?.trim();
@@ -282,7 +337,7 @@ export class InteractiveReportElement extends WidgetElement {
                 }
             }
             refreshSavedSelect(this);
-            await this.runQuery({ quiet });
+            await this.runQuery({ quiet, source: "initial" });
             if (savedWarning) this.notify(savedWarning, "warn");
             return seq === this._seq && this.lastResult !== null;
         } catch (err) {
@@ -300,13 +355,15 @@ export class InteractiveReportElement extends WidgetElement {
      * Normalizes an untrusted report-state value against the active schema defaults.
      *
      * @param {object} raw - The untrusted state value to normalize.
+     * @param {{resetPageIndex?: boolean}} [options={}] - Whether adoption starts again on page one.
      * @returns {object} A detached, structurally valid working document using the schema's defaults and page-size limit.
      */
-    normalize(raw) {
+    normalize(raw, options = {}) {
         return normalizeReportState(
             raw,
             this.schema?.limits?.defaultPageSize ?? 50,
-            this.schema?.defaultState);
+            this.schema?.defaultState,
+            options);
     }
 
     // Protocol contract: adopt a state document as the working copy. Server-delivered documents
@@ -339,6 +396,130 @@ export class InteractiveReportElement extends WidgetElement {
     }
 
     /**
+     * Returns the current accepted report document as a detached JSON-compatible object.
+     *
+     * @returns {object} The canonical transport document. Mutating it cannot mutate the widget.
+     * @throws {Error} When the initial report query has not completed successfully.
+     */
+    getReportDocument() {
+        if (!this.reportName || !this.schema || !this.doc || !this.lastResult)
+            throw invalidState("The report must finish loading before its document can be read.");
+        return this.serialize();
+    }
+
+    /**
+     * Replaces the working document, submits it through the ordinary query pipeline, and adopts the
+     * server-enriched response atomically.
+     *
+     * @param {object} document - A JSON-compatible report document.
+     * @returns {Promise<object|undefined>} A detached query result, or `undefined` when canceled or superseded.
+     * @throws {TypeError} When `document` is not a JSON-compatible object.
+     * @throws {Error} When the report is not loaded or the current submission fails.
+     *
+     * Side effects: aborts an older query, dispatches query lifecycle events, performs a POST,
+     * rerenders on success, and restores the last validated document on current failure or cancellation.
+     */
+    async submitReportDocument(document) {
+        if (!this.reportName || !this.schema || !this.doc || !this.lastResult)
+            throw invalidState("The report must finish loading before a document can be submitted.");
+
+        const prev = this.doc;
+        const next = this.normalize(copyReportDocument(document), { resetPageIndex: false });
+        invalidateChangedSchemas(prev, next);
+        const transition = this.beginStateTransition();
+        this.doc = next;
+        this.els.search.value = next.search ?? "";
+        try {
+            const result = await this.runQuery({ quiet: true, source: "host" });
+            if (!result && this.isCurrentStateTransition(transition)) this.restoreLastGood(prev);
+            return result ? structuredClone(result) : undefined;
+        } catch (error) {
+            if (this.isCurrentStateTransition(transition)) this.restoreLastGood(prev);
+            throw error;
+        }
+    }
+
+    /**
+     * Overrides one package-owned report control, or restores the server suggestion.
+     *
+     * @param {string} name - A canonical report feature/control name, matched case-insensitively.
+     * @param {boolean|null|undefined} enabled - `true` or `false` overrides the server; nullish restores it.
+     * @returns {boolean} The control's effective state after the change.
+     */
+    setControlEnabled(name, enabled) {
+        const canonical = canonicalControlName(name);
+        if (!canonical) throw new TypeError(`Unknown report control: ${String(name)}`);
+        if (enabled !== null && enabled !== undefined && typeof enabled !== "boolean")
+            throw new TypeError("A report control override must be true, false, or null.");
+
+        const had = this._controlOverrides.has(canonical);
+        const previous = this._controlOverrides.get(canonical);
+        if (enabled === null || enabled === undefined) this._controlOverrides.delete(canonical);
+        else this._controlOverrides.set(canonical, enabled);
+        if (had !== this._controlOverrides.has(canonical)
+            || previous !== this._controlOverrides.get(canonical))
+            this.refreshControlSurface();
+        return featureEnabled(this, canonical);
+    }
+
+    /**
+     * Applies several client control overrides as one visual update. Unmentioned controls retain
+     * their current override; a nullish value restores the server suggestion for that control.
+     *
+     * @param {Record<string, boolean|null|undefined>} overrides - Control names and override values.
+     * @returns {object} The resulting detached override map in canonical spelling.
+     */
+    setControlOverrides(overrides) {
+        if (!overrides || typeof overrides !== "object" || Array.isArray(overrides))
+            throw new TypeError("Control overrides must be an object.");
+
+        const changes = [];
+        for (const [name, enabled] of Object.entries(overrides)) {
+            const canonical = canonicalControlName(name);
+            if (!canonical) throw new TypeError(`Unknown report control: ${String(name)}`);
+            if (enabled !== null && enabled !== undefined && typeof enabled !== "boolean")
+                throw new TypeError("A report control override must be true, false, or null.");
+            changes.push([canonical, enabled]);
+        }
+        for (const [canonical, enabled] of changes) {
+            if (enabled === null || enabled === undefined) this._controlOverrides.delete(canonical);
+            else this._controlOverrides.set(canonical, enabled);
+        }
+        if (changes.length) this.refreshControlSurface();
+        return this.getControlOverrides();
+    }
+
+    /**
+     * Removes every client control override and resumes following the active server suggestions.
+     *
+     * @returns {void} No value.
+     */
+    clearControlOverrides() {
+        if (!this._controlOverrides.size) return;
+        this._controlOverrides.clear();
+        this.refreshControlSurface();
+    }
+
+    /**
+     * Returns whether one report control is effectively available after client override precedence.
+     *
+     * @param {string} name - A report feature/control name, matched case-insensitively.
+     * @returns {boolean} The effective control state.
+     */
+    isControlEnabled(name) {
+        const canonical = canonicalControlName(name);
+        if (!canonical) throw new TypeError(`Unknown report control: ${String(name)}`);
+        return featureEnabled(this, canonical);
+    }
+
+    /**
+     * Returns the explicit client control overrides as a detached object.
+     *
+     * @returns {Record<string, boolean>} Canonically named overrides.
+     */
+    getControlOverrides() { return Object.fromEntries(this._controlOverrides); }
+
+    /**
      * Builds a report-relative API URL for the active report.
      *
      * @param {string} resource - The report-relative API resource path.
@@ -362,9 +543,69 @@ export class InteractiveReportElement extends WidgetElement {
     }
 
     /**
+     * Synchronizes the standard boolean `disabled` state to the isolated report surface.
+     *
+     * @returns {void} No value.
+     *
+     * Side effects: makes the surface inert, exposes its disabled state to accessibility APIs,
+     * and closes transient UI that otherwise lives beside the inert surface in the shadow root.
+     */
+    refreshDisabledState() {
+        if (!this._mount) return;
+        const disabled = this.disabled;
+        this._mount.inert = disabled;
+        this._mount.toggleAttribute("inert", disabled);
+        this._mount.setAttribute("aria-disabled", String(disabled));
+        if (disabled) disposeWidget(this);
+    }
+
+    /**
+     * Rebuilds every control-bearing surface after a client feature override changes.
+     *
+     * @returns {void} No value.
+     *
+     * Side effects: closes stale menus/dialogs, refreshes chrome and result controls, and may
+     * lazily request saved-report summaries when the client force-enables that control family.
+     */
+    refreshControlSurface() {
+        if (!this.els) return;
+        disposeWidget(this);
+        if (this.schema) applyFeatureChrome(this);
+        if (this.doc) renderChips(this, this.els.chips);
+        if (this.lastResult) {
+            this.renderView();
+            renderPager(this, this.els.pager);
+            this.refreshViewButtons();
+        }
+        if (this.schema && featureEnabled(this, "savedReports") && !this._savedListLoaded)
+            this.ensureSavedList();
+    }
+
+    /**
+     * Loads the saved-report list once for a report whose client controls were enabled after activation.
+     *
+     * @returns {Promise<void>} The in-flight or completed lazy-load operation.
+     */
+    ensureSavedList() {
+        if (this._savedListLoaded) return Promise.resolve();
+        if (this._savedListPromise) return this._savedListPromise;
+        const sequence = this._seq;
+        const reportName = this.reportName;
+        const promise = this._savedListPromise = loadSavedList(this).then(() => {
+            if (sequence !== this._seq || reportName !== this.reportName) return;
+            this._savedListLoaded = true;
+            refreshSavedSelect(this);
+            applyFeatureChrome(this);
+        }).finally(() => {
+            if (this._savedListPromise === promise) this._savedListPromise = null;
+        });
+        return promise;
+    }
+
+    /**
      * Submits the working report state, adopts the validated result, and refreshes the view.
      *
-     * @param {{quiet?: boolean}} [opts={}] - Set `quiet` to suppress banner rendering when the request fails.
+     * @param {{quiet?: boolean, source?: string}} [opts={}] - Controls banner rendering and identifies the query initiator to lifecycle events.
      * @returns {Promise<object|undefined>} The accepted query response, or undefined when superseded or aborted.
      *
      * Side effects: aborts the previous query, posts serialized state, adopts the validated document, commits rollback state, and rerenders results, controls, and notices.
@@ -372,16 +613,44 @@ export class InteractiveReportElement extends WidgetElement {
     async runQuery(opts = {}) {
         this._abort?.abort();
         const ctrl = this._abort = new AbortController();
-        const submitted = this.serialize();
+        const source = opts.source ?? "refresh";
+        const requestId = ++this._requestId;
         const finishBusy = this.beginBusy();
         try {
+            const beforeHook = this.serialize();
+            const detail = {
+                document: structuredClone(beforeHook),
+                source,
+                requestId,
+                signal: ctrl.signal,
+            };
+            const EventType = this.ownerDocument?.defaultView?.CustomEvent ?? globalThis.CustomEvent;
+            const proceed = this.dispatchEvent(new EventType("ir-before-query", {
+                bubbles: true,
+                composed: true,
+                cancelable: true,
+                detail,
+            }));
+            if (!proceed) {
+                if (ctrl === this._abort) this._abort = null;
+                return;
+            }
+
+            const outgoing = copyReportDocument(detail.document);
+            invalidateChangedSchemas(beforeHook, outgoing);
+            const submitted = serializeReportState(outgoing);
             const result = await api(this.reportUrl("query"), {
                 method: "POST", body: submitted, signal: ctrl.signal,
             });
             if (ctrl !== this._abort) return;
-            const accepted = result.document ?? submitted;
+            const accepted = copyReportDocument(result.document ?? submitted);
+            const completedResult = {
+                ...result,
+                document: structuredClone(accepted),
+            };
             this.doc = structuredClone(accepted);
-            this.lastResult = result;
+            this.els.search.value = this.doc.search ?? "";
+            this.lastResult = completedResult;
             // Protocol contract: the returned document is the submitted working copy with null
             // schema caches replaced by the server. A superseding operation aborts this request
             // before this point, so it cannot overwrite newer edits.
@@ -390,9 +659,20 @@ export class InteractiveReportElement extends WidgetElement {
             renderChips(this, this.els.chips);
             this.renderView();
             renderPager(this, this.els.pager);
-            this.renderIgnored(result.ignored);
+            this.renderIgnored(completedResult.ignored);
             this.refreshViewButtons();
-            return result;
+            this.dispatchEvent(new EventType("ir-query-complete", {
+                bubbles: true,
+                composed: true,
+                detail: {
+                    document: structuredClone(accepted),
+                    result: structuredClone(completedResult),
+                    submitted: structuredClone(submitted),
+                    source,
+                    requestId,
+                },
+            }));
+            return completedResult;
         } catch (err) {
             if (ctrl !== this._abort || err.name === "AbortError") return;
             renderChips(this, this.els.chips);
@@ -471,12 +751,12 @@ export class InteractiveReportElement extends WidgetElement {
      * problem and stay open.
      *
      * @param {(doc: object) => void} mutate - Synchronous callback that edits a cloned working document.
-     * @param {{resetPage?: boolean}} [options={}] - Controls whether the next query starts at page one.
+     * @param {{resetPage?: boolean, source?: string}} [options={}] - Controls paging and identifies the query initiator.
      * @returns {Promise<void>} Resolves after the edited document is validated and rendered; rejects after restoring validated state when the current query fails.
      *
      * Side effects: installs the edited state, invalidates affected schema caches, performs a query, and restores validated state if the current transition fails.
      */
-    async apply(mutate, { resetPage = true } = {}) {
+    async apply(mutate, { resetPage = true, source = "user" } = {}) {
         const prev = this.doc;
         const next = structuredClone(this.doc);
         mutate(next);
@@ -485,7 +765,8 @@ export class InteractiveReportElement extends WidgetElement {
         const transition = this.beginStateTransition();
         this.doc = next;
         try {
-            await this.runQuery({ quiet: true });
+            const result = await this.runQuery({ quiet: true, source });
+            if (!result && this.isCurrentStateTransition(transition)) this.restoreLastGood(prev);
         } catch (err) {
             if (this.isCurrentStateTransition(transition)) this.restoreLastGood(prev);
             throw err;

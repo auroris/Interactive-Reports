@@ -495,7 +495,7 @@ export function visibleTableColumnNames(ctx, w) {
 /**
  * Returns the active schema capability contract with safe empty defaults.
  *
- * @param {object} w - The report controller containing the definition feature whitelist.
+ * @param {object} w - The report controller containing server suggestions and client overrides.
  * @returns {object} Boolean editor capabilities, with visibility and display renderers always enabled inside an available column-settings surface.
  */
 function capabilities(w) {

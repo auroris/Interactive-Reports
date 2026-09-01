@@ -197,17 +197,18 @@ Notes:
   crossing the wire — filters, sorts, and `labels` keys themselves — still uses the
   real name. Blank or case-colliding entries are config errors; entries naming no
   actual column are simply unused display data.
-- `features` is a whitelist of end-user features (APEX's per-action Actions-menu
-  configuration collapsed to a flat token list). Absent means everything;
-  present means exactly what is listed. Known tokens (`ReportFeatures`): `search`,
+- `features` is the server's packaged-control suggestion (APEX's per-action Actions-menu
+  configuration collapsed to a flat token list). Absent suggests everything;
+  present suggests exactly what is listed. Known tokens (`ReportFeatures`): `search`,
   `columns`, `rename`, `columnSettings`, `filter`, `sort`, `pagination`, `controlBreak`, `highlight`,
   `aggregate`, `compute`, `groupBy`, `pivot`, `chart`, `savedReports`, `download`.
-  (`columnSettings` gates the per-column settings dialog; its visibility checkbox
+  (`columnSettings` suggests the per-column settings dialog; its visibility checkbox
   additionally needs `columns`, whose visible-list it writes.) Unknown, blank,
   or duplicate entries fail fast at definition load. The schema endpoint always sends
-  the resolved effective list; the packaged UI removes the chrome for everything else
+  the resolved suggestion; without a client override the packaged UI removes the chrome for everything else
   (menu entries, view buttons, search bar, saved-report select — state a default or
-  saved report already carries still displays, as locked chips). Two tokens are also
+  saved report already carries still displays, as locked chips). Embedding JavaScript may
+  force any packaged control on or off; this changes only client presentation. Two tokens are also
   server-enforced with 403s because they persist or egress data: `download` at the
   export endpoint and `savedReports` at saved-report creation (existing saved reports
   stay governed by the §13 matrix so a config change never strands rows). The rest is
@@ -260,7 +261,7 @@ Notes:
   the column's sort controls and control breaks (breaks force `ORDER BY`);
   `filterable: false` removes its filter controls and expression tokens;
   `helpText` renders as a note at the bottom of the column's header menu (a report
-  whose whitelist removes every header-menu feature has no menu to carry it).
+  whose effective client control policy removes every header-menu feature has no menu to carry it).
   Computed columns are always exempt — restrictions bind to definition columns, so
   `ir1 = AMOUNT * 2` stays sortable while `AMOUNT` is not, with no transitive
   analysis to reason about. Enforcement follows the whitelist philosophy: the
@@ -694,18 +695,18 @@ Mounted by the host: `app.MapInteractiveReports("/api/reports").RequireAuthoriza
 
 | Endpoint | Purpose |
 |---|---|
-| `GET  /api/reports/{name}/schema` | Column metadata + default state + capabilities + resolved feature whitelist (§4). |
+| `GET  /api/reports/{name}/schema` | Column metadata + default state + capabilities + resolved packaged-control suggestion (§4). |
 | `POST /api/reports/{name}/query` | Body = state document → enriched document (null table caches filled) + page of results. |
 | `GET  /api/reports/whoami` | Bootstrap diagnostic for the caller's canonical identity value (only when `whoamiEnabled`); grants no authority. |
 | `GET  /api/reports/{name}/saved` | Visible reports: primary and global reports + configured read-only alternatives + the caller's own. Configured titles win. |
-| `POST /api/reports/{name}/saved` | Refresh null table caches, then save the posted state under a title (global/primary publication = admin). 403 when `savedReports` is not whitelisted (§4). |
+| `POST /api/reports/{name}/saved` | Refresh null table caches, then save the posted state under a title (global/primary publication = admin). 403 when the configured `savedReports` policy is absent (§4), independently of client controls. |
 | `GET/PUT/DELETE /api/reports/saved/{id}` | Load / modify / delete one report document (matrix in §13; configured documents reject mutation). |
 | `GET/POST /api/reports/__saved-reports/{schema,query}` | Administrator listing through the ordinary report pipeline; action cells carry saved-report ids. |
 | `GET  /api/reports/admin/saved/{id}/document` | Administrator: download a canonical `{ title, primary, state }` source-file envelope. |
 | `POST /api/reports/admin/{name}/documents` | Administrator: validate a source-file envelope against the named report and import a private saved copy for testing. |
 | `GET  /api/reports/admin/users` | Administrator: invoke the optional host user-directory provider after endpoint authorization. |
 | `/api/reports/admin/authorization/**` | Administrator: list or change database administrator and report-user grants through the centralized endpoint boundary. |
-| `POST /api/reports/{name}/export` | Same state, same gate, no paging → CSV (UTF-8 BOM; headers are the posted document's display labels, §5), capped when `maxRows` is positive with `X-IR-Truncated` header. Text-sourced cells (labels included) that would trigger spreadsheet formula evaluation — leading `=` `+` `-` `@` tab CR — get the OWASP apostrophe guard by default, since RFC 4180 quoting does not stop Excel from evaluating them; non-text values (negative numbers, dates) are never altered, and `CsvWriter`'s `CsvCellPolicy.Verbatim` opts hosts with non-spreadsheet consumers out. 403 when `download` is not whitelisted (§4). XLSX/HTML later. |
+| `POST /api/reports/{name}/export` | Same state, same gate, no paging → CSV (UTF-8 BOM; headers are the posted document's display labels, §5), capped when `maxRows` is positive with `X-IR-Truncated` header. Text-sourced cells (labels included) that would trigger spreadsheet formula evaluation — leading `=` `+` `-` `@` tab CR — get the OWASP apostrophe guard by default, since RFC 4180 quoting does not stop Excel from evaluating them; non-text values (negative numbers, dates) are never altered, and `CsvWriter`'s `CsvCellPolicy.Verbatim` opts hosts with non-spreadsheet consumers out. 403 when the configured `download` policy is absent (§4), independently of client controls. XLSX/HTML later. |
 | `GET  /api/reports/ui/{file}` | Packaged UI assets (§14). Anonymous by design; content-hash ETags. |
 
 POST is the primary verb deliberately: state documents outgrow querystrings, and GET puts
@@ -1497,14 +1498,28 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   inferring semantics from names or map order. On query it adopts the returned enriched
   `document`; a validation failure rolls the edit/load back to the last validated state,
   while soft drift arrives as `ignored[]` (§5). The whole
-  surface is gated by the definition's feature whitelist (§4), which arrives resolved
-  on the schema payload: menu entries vanish with their headings and separators, the
+  surface follows the definition's control suggestion (§4), which arrives resolved
+  on the schema payload unless client JavaScript overrides it: menu entries vanish with their headings and separators, the
   search bar / view buttons / Actions button / saved-report select hide when their
   features (or every entry under them) are gone, header cells stop being clickable
   when no header-menu entry survives, and chips owned by an absent feature render
   locked — visible state, no toggle/edit/remove (except leaving a locked view for the
   grid, which stays possible). Reset remains as long as any doc-mutating feature
   exists; a missing `features` field (older server) means everything is on.
+- **Host document and control API**: after the initial query,
+  `getReportDocument()` returns a detached canonical document and
+  `submitReportDocument(document)` atomically replaces, queries, adopts, and renders a
+  caller-supplied JSON-compatible document through the same last-validated rollback and
+  request-supersession machinery as built-in editors. All query sources dispatch the
+  synchronous, cancelable `ir-before-query` transform event; accepted queries dispatch
+  an observational `ir-query-complete` event with detached submitted/document/result
+  snapshots. Client control overrides are tri-state per canonical feature (`true`,
+  `false`, or inherit): an explicit override wins over the server suggestion and is
+  retained across report changes. Runtime `savedReports` enablement lazily loads the
+  selector data. The standard `disabled` property makes the complete shadow surface
+  inert and closes transient UI without changing overrides. None of these client choices
+  bypass endpoint authorization, context resolution, document validation, or the
+  server-enforced download and saved-report policies.
 - **Host export API**: after the initial query, `interactive-report.getExport(format,
   { signal })` posts the current canonical state to the ordinary export endpoint and
   resolves to `{ blob, filename, contentType, truncated }` without causing browser
@@ -1619,10 +1634,11 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   groupBy/chart metric labels) and gains header-menu Rename — while export, the
   server rendering the user's screen, applies the posted document's labels to headers
   and synthetics from the completed bound output contract.
-- **M11 — Feature whitelist** ✅ *(2026-08-07)*: per-report `features` whitelist (§4)
+- **M11 — Feature suggestions** ✅ *(2026-08-07; client overrides added 2026-08-31)*: per-report `features` list (§4)
   — sixteen canonical tokens covering the Actions menu, search, views, saved
   reports, and download; validated fail-fast at definition load, resolved onto the
-  schema payload, and applied by the packaged UI (chrome removal + locked chips).
+  schema payload, and applied by default by the packaged UI (chrome removal + locked chips),
+  with embedding JavaScript able to override the presentation.
   `download` and `savedReports` creation are server-enforced 403s; everything else
   stays presentation-level by design. Per-column attributes (alignment, format
   masks, LOVs, per-column sort/filter permissions…) remain the next configuration
@@ -1773,9 +1789,9 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 | Report `labels` keys are not schema-validated; canonical planning rejects only conflicting declarations | ignored[]/errors for unknown or blank entries | Unknown keys are unused display data, exactly as resilient as a saved report is entitled to be. Two different labels for the same case-insensitive key have no order-independent meaning and therefore fail. (Config-side `columnLabels` still fail fast on blank/case-colliding entries — config mistakes, not state.) |
 | Export consumes the posted document's completed active relation, inheritable metadata, and owner-local terminal response | neutral export headers; look up the user's saved report server-side | An export is the server rendering the user's screen, and the active document may never have been saved. A child receives only its parent's Export contract; the shared renderer applies the active table's own visibility and cell presentation without leaking those local choices across `from`. |
 | Schema endpoint synthesizes an empty `defaultState` | nullable `defaultState` | Every client would otherwise invent its own "no default configured" behavior. An empty state already *means* the right thing — all columns, database order — and it is also the delivery vehicle: the definition's mapping rides down as its `labels`. |
-| Feature control is a flat whitelist on the definition | APEX-style per-action objects; per-column attribute model | One `features` array covers the lockdown need with one concept; absent = everything keeps existing configs working. The richer per-column attribute model (alignment, masks, LOVs, per-column permissions) layers on later without reshaping this. |
-| Whitelist is presentation-level except `download` and `savedReports` creation | validate posted state docs against the whitelist | Hiding a dialog is not a data boundary — the query endpoint already accepts any valid document, and context params (§12) are the security story. The two enforced tokens are the ones that egress (unpaged export) or persist (saved-report rows); enforcing at creation only keeps existing saved reports manageable after a config change. |
-| Locked chips: state from an absent feature displays read-only | hide the chips; let them stay editable | The chip strip is the doc made visible — hiding active filters would misrepresent the data shown, and editing them would reopen the very dialogs the whitelist removed. Leaving a locked view for the grid stays possible: it abandons the feature rather than using it. |
+| Feature control is a flat server suggestion plus client-authoritative overrides | APEX-style per-action objects; treat the server list as a client ceiling | One `features` array supplies useful default chrome while an embedding application can force packaged controls on or off without rewriting schema payloads. Absent = everything keeps existing configs working. The richer per-column attribute model (alignment, masks, LOVs, per-column permissions) layers on later without reshaping this. |
+| The control suggestion is presentation-level except server policies for `download` and `savedReports` creation | validate all posted state docs against the suggested controls | Hiding or force-showing a dialog is not a data boundary: the query endpoint accepts any valid document, and context params (§12) are the security story. The two independently enforced policies are the operations that egress (unpaged export) or persist (saved-report rows); enforcing at creation only keeps existing saved reports manageable after a config change. |
+| Locked chips: state from a client-disabled or unsuggested feature displays read-only | hide the chips; let them stay editable | The chip strip is the doc made visible. Hiding active filters would misrepresent the data shown, and editing them would reopen controls the effective client policy removed. Leaving a locked view for the grid stays possible: it abandons the feature rather than using it. |
 | Column formatting is a `formats` composable; only scalar mask lineage crosses `from` | inherit every style and renderer; apply every mask/style server-side | The active owner keeps its full presentation contract, while a child inherits only safe masks. Link/image/action dependencies are schema-bound owner-local inputs. One text renderer owns scalar masks; link/image compose it, and synthetic metric metadata retains its format source. Every terminal-table CSV export intentionally serializes Display As modes as browser-like encoded HTML; hidden inputs never become columns. |
 | Masks are closed per-type tokens (Intl-backed) | freeform mask strings (APEX FML/999G999D99) | Same rule as TO_STRING: a portable vocabulary has stable meaning while `Intl` supplies the user's separators, symbols, and ordering; it cannot smuggle anything. Unknown tokens fall through to default rendering instead of erroring, because a display mask must never break a report. |
 | Int64/UInt64/Decimal travel as invariant JSON strings; all numeric columns use bundled `big.js` | send every numeric database value as a JSON number; maintain separate integer/decimal formatters | JavaScript parses JSON numbers as IEEE-754 doubles. Typed metadata retains numeric behavior, while one arbitrary-precision path handles parsing, comparison, scaling, and rounding without silent digit loss. |

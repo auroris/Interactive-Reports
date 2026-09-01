@@ -6,7 +6,7 @@
 // execution order. Inherited and foreign/repeated nodes remain visible but read-only. Only the
 // last node of each kind owned by the active table is safe for the packaged editors to mutate.
 // The view chip summarizes the shape directly owned by the active table. A chip whose owning
-// feature is not whitelisted still renders (the state is real — a default or saved report put
+// feature is disabled by the effective control policy still renders (the state is real — a default or saved report put
 // it there) but renders locked, with no toggle, edit, or remove action.
 
 import { el, icon } from "../../core/dom.js";

@@ -721,6 +721,79 @@ await uploadReport(artifact.blob, artifact.filename, artifact.contentType);
 The Actions-menu CSV command retrieves the same artifact and then invokes the browser's
 download behavior.
 
+The element also exposes its accepted report document as a detached JSON-compatible
+object. `submitReportDocument` replaces the working document transactionally, posts it
+through the ordinary query endpoint, adopts the server-enriched document, rerenders the
+report, and resolves to a detached query result. A failed submission restores the last
+validated document; a canceled or superseded submission resolves to `undefined`.
+
+```js
+const state = report.getReportDocument();
+state.search = "urgent";
+state.page.index = 1;
+
+const result = await report.submitReportDocument(state);
+console.log(result.rows, report.getReportDocument());
+```
+
+Both methods require the initial query to have completed. Their arguments and return
+values never expose the widget's mutable working objects. Input must be a JSON-compatible
+object; a JSON string should be parsed by the caller first.
+
+Every query, including initial load, saved-report loads, ordinary UI edits, and host
+submissions, dispatches a bubbling, composed `ir-before-query` event immediately before
+the request. Its `detail` is `{ document, source, requestId, signal }`. The detached
+`document` is mutable during synchronous event dispatch; its final value is serialized
+and sent. Calling `preventDefault()` cancels that query. `source` is one of `initial`,
+`user`, `saved-report`, `host`, or `refresh`.
+
+After a current successful query has been adopted and rendered, `ir-query-complete`
+dispatches with detached `{ document, result, submitted, source, requestId }` snapshots.
+It is observational: changing its detail cannot mutate the report. Submit a changed copy
+with `submitReportDocument` when a returned document needs another query.
+
+```js
+report.addEventListener("ir-before-query", event => {
+  event.detail.document.search = event.detail.document.search?.trim();
+});
+
+report.addEventListener("ir-query-complete", event => {
+  auditReportQuery(event.detail.source, event.detail.document);
+});
+```
+
+The schema's `features` list is the server's initial suggestion for packaged client
+controls, not an authorization boundary or a ceiling. Embedding JavaScript may force a
+control on or off, restore the suggestion with `null`, update several controls together,
+or clear every override:
+
+```js
+report.setControlEnabled("filter", true);
+report.setControlEnabled("download", false);
+report.setControlEnabled("filter", null); // inherit the server suggestion again
+
+report.setControlOverrides({ search: true, sort: false, savedReports: true });
+console.log(report.isControlEnabled("search"), report.getControlOverrides());
+report.clearControlOverrides();
+```
+
+Control names are `search`, `columns`, `rename`, `columnSettings`, `filter`, `sort`,
+`pagination`, `controlBreak`, `highlight`, `aggregate`, `compute`, `groupBy`, `pivot`,
+`chart`, `savedReports`, and `download`. Names are matched case-insensitively and retained
+in canonical spelling. Overrides stay on the element across report changes. Enabling
+`savedReports` after load lazily requests the list. Client overrides affect only packaged
+UI: endpoints still perform authorization, validation, and their configured download or
+saved-report checks.
+
+The standard boolean `disabled` property and attribute temporarily make the entire
+package-owned surface inert without altering these overrides:
+
+```js
+report.disabled = true;
+await performHostOperation();
+report.disabled = false;
+```
+
 Server-side integrations should use the registered `IReportFileExporter` directly,
 not make an HTTP request back into their own application:
 
@@ -745,10 +818,11 @@ composition, row caps, and CSV renderer. The browser export endpoint performs it
 existing authorization and `download` feature checks, resolves request context
 parameters, and then delegates to this same exporter.
 
-The widget adapts to the definition's `features` whitelist (docs/ARCHITECTURE.md §4):
-menu entries, view buttons, the search bar, and the saved-report select render only
-for whitelisted features, and the server additionally refuses CSV export and
-saved-report creation for reports that do not whitelist `download` / `savedReports`.
+Without a client override, the widget follows the definition's `features` suggestion
+(docs/ARCHITECTURE.md §4): menu entries, view buttons, the search bar, and the
+saved-report select render only for listed features. Independently, the server refuses
+CSV export and saved-report creation when their configured `download` / `savedReports`
+policies are absent.
 
 A definition's `editLink` pencil navigates like an ordinary anchor — relative
 templates resolve against the host page, and routing to the edit form is entirely
