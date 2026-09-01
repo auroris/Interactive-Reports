@@ -445,7 +445,7 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var body = await ReadJson(response);
         Assert.Contains(
-            "Only one executable 'report' root field is allowed per operation.",
+            "Only one executable root field is allowed per operation.",
             body.GetProperty("errors")[0].GetProperty("message").GetString());
         Assert.False(body.TryGetProperty("data", out _));
         Assert.Empty(_authorization);
@@ -538,6 +538,261 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
             body.GetProperty("title").GetString());
         Assert.Contains("GET and POST", body.GetProperty("description").GetString());
     }
+
+    [Fact]
+    public async Task Configuration_catalogue_matches_the_rest_listing()
+    {
+        using var rest = await Send(HttpMethod.Get, "/api/reports", identity: null);
+        Assert.Equal(HttpStatusCode.OK, rest.StatusCode);
+        var expected = (await ReadJson(rest)).EnumerateArray()
+            .Select(item => (item.GetProperty("name").GetString(), item.GetProperty("title").GetString()))
+            .ToList();
+
+        using var response = await Post("{ reports { name title } }", identity: null);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await ReadJson(response);
+        var actual = body.GetProperty("data").GetProperty("reports").EnumerateArray()
+            .Select(item => (item.GetProperty("name").GetString(), item.GetProperty("title").GetString()))
+            .ToList();
+
+        Assert.Equal(expected, actual);
+        Assert.Contains((ReportName, "Orders"), actual);
+    }
+
+    [Fact]
+    public async Task Saved_report_listing_matches_rest_and_applies_ordinary_read_visibility()
+    {
+        var id = await CreatePrivateReport("alice", "Alice Listing");
+
+        using var rest = await Send(HttpMethod.Get, $"/api/reports/{ReportName}", "alice");
+        var expected = (await ReadJson(rest)).EnumerateArray()
+            .Select(item => item.GetProperty("id").GetInt64())
+            .ToList();
+
+        var owner = await SavedReportIds("alice");
+        Assert.Equal(expected, owner.Select(item => item.Id).ToList());
+        Assert.Contains(owner, item => item.Id == id && item.Mine);
+        // The configured file-backed document is visible to everyone and never editable.
+        Assert.Contains(owner, item => item.ReadOnly && item.Title == "File View");
+
+        Assert.DoesNotContain(await SavedReportIds("bob"), item => item.Id == id);
+        var administrator = await SavedReportIds("admin");
+        Assert.Contains(administrator, item => item.Id == id && !item.Mine);
+    }
+
+    [Fact]
+    public async Task Unknown_report_family_is_hidden_from_the_saved_report_listing()
+    {
+        using var response = await Post(
+            "query Listing($report: String!) { savedReports(report: $report) { id } }",
+            "alice",
+            new { report = "not-a-report" });
+
+        var body = await ReadJson(response);
+        Assert.Equal("NOT_FOUND", body.GetProperty("errors")[0]
+            .GetProperty("extensions").GetProperty("code").GetString());
+        Assert.Equal("IR-1001", body.GetProperty("errors")[0]
+            .GetProperty("extensions").GetProperty("reportErrorCode").GetString());
+    }
+
+    [Fact]
+    public async Task Search_argument_filters_the_executed_document()
+    {
+        var id = await DefaultId();
+
+        using var response = await Post(
+            "query Search($id: ID!, $search: String) "
+            + "{ report(id: $id, search: $search) { totalRows rows } }",
+            identity: null,
+            new { id, search = "second" });
+
+        var result = (await ReadJson(response)).GetProperty("data").GetProperty("report");
+        Assert.Equal(1, result.GetProperty("totalRows").GetInt64());
+        Assert.Equal("second", result.GetProperty("rows")[0].GetProperty("LABEL").GetString());
+    }
+
+    [Fact]
+    public async Task Sort_argument_replaces_the_saved_ordering_and_an_empty_list_clears_it()
+    {
+        // The stored document orders by ID descending; each assertion below overrides it.
+        var id = await CreateSortedReport("alice");
+
+        Assert.Equal(["third", "second", "first"], await Labels(id, "alice", sort: null));
+        Assert.Equal(
+            ["first", "second", "third"],
+            await Labels(id, "alice", sort: new[] { new { col = "ID", dir = "ASC" } }));
+
+        using var cleared = await Post(
+            SortQuery,
+            "alice",
+            new { id, sort = Array.Empty<object>() });
+        var body = await ReadJson(cleared);
+        Assert.False(body.TryGetProperty("errors", out _));
+        Assert.Equal(3, body.GetProperty("data").GetProperty("report")
+            .GetProperty("totalRows").GetInt64());
+    }
+
+    [Fact]
+    public async Task Unsortable_sort_column_degrades_into_the_ignored_list_like_rest()
+    {
+        var id = await CreateSortedReport("alice");
+
+        using var response = await Post(
+            "query Sorted($id: ID!, $sort: [InteractiveReportSortInput!]) "
+            + "{ report(id: $id, sort: $sort) { totalRows ignored { kind detail } } }",
+            "alice",
+            new { id, sort = new[] { new { col = "NOT_A_COLUMN", dir = "ASC" } } });
+
+        // Saved reports degrade rather than fail, so an unknown column is dropped and
+        // reported. Without the ignored list a GraphQL caller could not tell.
+        var result = (await ReadJson(response)).GetProperty("data").GetProperty("report");
+        Assert.Equal(3, result.GetProperty("totalRows").GetInt64());
+        var ignored = result.GetProperty("ignored").EnumerateArray().Single();
+        Assert.Equal("sort", ignored.GetProperty("kind").GetString());
+        Assert.Contains("NOT_A_COLUMN", ignored.GetProperty("detail").GetString());
+    }
+
+    [Fact]
+    public async Task Sort_argument_and_the_rest_sort_composable_produce_the_same_rows()
+    {
+        var id = await CreateSortedReport("alice");
+        var sort = new object[] { new { col = "AMOUNT", dir = "ASC", nulls = "LAST" } };
+
+        using var graph = await Post(SortQuery, "alice", new { id, sort });
+        var graphRows = (await ReadJson(graph)).GetProperty("data").GetProperty("report")
+            .GetProperty("rows").GetRawText();
+
+        using var rest = await Send(
+            HttpMethod.Post,
+            $"/api/reports/{ReportName}/query",
+            "alice",
+            new
+            {
+                activeTable = "mine",
+                tables = new
+                {
+                    mine = new
+                    {
+                        @from = "definition",
+                        composables = new object[]
+                        {
+                            new { kind = "select", columns = new[] { "LABEL" } },
+                            new
+                            {
+                                kind = "sort",
+                                sorts = new[] { new { col = "AMOUNT", dir = "asc", nulls = "last" } },
+                            },
+                        },
+                    },
+                },
+            });
+        Assert.Equal(HttpStatusCode.OK, rest.StatusCode);
+        var restRows = (await ReadJson(rest)).GetProperty("rows").GetRawText();
+
+        Assert.Equal(restRows, graphRows);
+    }
+
+    [Fact]
+    public async Task Two_different_executable_root_fields_are_rejected_before_either_runs()
+    {
+        _authorization.Clear();
+
+        using var response = await Post(
+            "{ reports { name } savedReports(report: \"orders\") { id } }",
+            "alice");
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await ReadJson(response);
+        Assert.Contains(
+            "Only one executable root field is allowed per operation.",
+            body.GetProperty("errors")[0].GetProperty("message").GetString());
+        Assert.Empty(_authorization);
+    }
+
+    [Fact]
+    public async Task Introspection_meta_fields_are_exempt_from_the_root_field_limit()
+    {
+        using var response = await Post(
+            "{ __schema { queryType { name } } __type(name: \"InteractiveReportSortInput\") { name } }",
+            identity: null);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var data = (await ReadJson(response)).GetProperty("data");
+        Assert.Equal("Query", data.GetProperty("__schema").GetProperty("queryType")
+            .GetProperty("name").GetString());
+        Assert.Equal("InteractiveReportSortInput", data.GetProperty("__type")
+            .GetProperty("name").GetString());
+    }
+
+    private const string SortQuery =
+        "query Sorted($id: ID!, $sort: [InteractiveReportSortInput!]) "
+        + "{ report(id: $id, sort: $sort) { totalRows rows } }";
+
+    private async Task<List<string?>> Labels(long id, string identity, object? sort)
+    {
+        using var response = await Post(SortQuery, identity, new { id, sort });
+        var body = await ReadJson(response);
+        Assert.False(body.TryGetProperty("errors", out _));
+        return body.GetProperty("data").GetProperty("report").GetProperty("rows")
+            .EnumerateArray()
+            .Select(row => row.GetProperty("LABEL").GetString())
+            .ToList();
+    }
+
+    private async Task<List<(long Id, string? Title, bool Mine, bool ReadOnly)>> SavedReportIds(
+        string identity)
+    {
+        using var response = await Post(
+            "query Listing($report: String!) "
+            + "{ savedReports(report: $report) { id title mine isReadOnly } }",
+            identity,
+            new { report = ReportName });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await ReadJson(response);
+        Assert.False(body.TryGetProperty("errors", out _));
+        return body.GetProperty("data").GetProperty("savedReports").EnumerateArray()
+            .Select(item => (
+                // GraphQL IDs are strings on the wire; REST keeps the same value as a number.
+                long.Parse(item.GetProperty("id").GetString()!),
+                item.GetProperty("title").GetString(),
+                item.GetProperty("mine").GetBoolean(),
+                item.GetProperty("isReadOnly").GetBoolean()))
+            .ToList();
+    }
+
+    private async Task<long> CreateSortedReport(string owner)
+    {
+        var reportId = await DefaultId();
+        using var response = await Send(
+            HttpMethod.Post,
+            $"/api/reports/{reportId}/saved",
+            owner,
+            new
+            {
+                title = $"Sorted {owner}",
+                state = new
+                {
+                    activeTable = "mine",
+                    tables = new
+                    {
+                        mine = new
+                        {
+                            @from = "definition",
+                            composables = new object[]
+                            {
+                                new { kind = "select", columns = new[] { "LABEL" } },
+                                new { kind = "sort", sorts = new[] { new { col = "ID", dir = "desc" } } },
+                            },
+                        },
+                    },
+                },
+            });
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        return (await ReadJson(response)).GetProperty("id").GetInt64();
+    }
+
+    private Task<HttpResponseMessage> Post(string query, string? identity, object? variables = null)
+        => Send(HttpMethod.Post, "/graphql", identity, new { query, variables });
 
     private async Task<long> CreatePrivateReport(string owner, string title)
     {

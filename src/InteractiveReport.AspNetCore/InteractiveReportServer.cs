@@ -51,6 +51,15 @@ public sealed record InteractiveReportLoadedDocument(
 /// </summary>
 public interface IInteractiveReportServer
 {
+    Task<InteractiveReportServerResult<IReadOnlyList<ReportConfigurationSummary>>> ListConfigurations(
+        InteractiveReportRequestContext context,
+        CancellationToken ct = default);
+
+    Task<InteractiveReportServerResult<IReadOnlyList<SavedReportSummary>>> ListSavedReports(
+        string reportName,
+        InteractiveReportRequestContext context,
+        CancellationToken ct = default);
+
     Task<InteractiveReportServerResult<InteractiveReportLoadedDocument>> LoadDocument(
         long id,
         InteractiveReportRequestContext context,
@@ -84,6 +93,143 @@ internal sealed class InteractiveReportServer(
     IOptionsMonitor<InteractiveReportOptions> options,
     InteractiveReportLogging logging) : IInteractiveReportServer
 {
+    public async Task<InteractiveReportServerResult<IReadOnlyList<ReportConfigurationSummary>>> ListConfigurations(
+        InteractiveReportRequestContext context,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        // A caller sees only the configurations they may view. An ordinary denial hides one entry;
+        // an infrastructure failure stops the whole catalogue so a broken authorizer cannot
+        // masquerade as an empty report list.
+        var summaries = new List<ReportConfigurationSummary>();
+        InteractiveReportFailure? firstDenial = null;
+        foreach (var reportName in options.CurrentValue.Reports.Keys)
+        {
+            var resolved = await authorization.ResolveDefinition(reportName, context, ct);
+            InteractiveReportFailure? denied;
+            if (resolved.Failure is not null) denied = Failure(resolved.Failure);
+            else if (resolved.Definition is null)
+                denied = new(
+                    InteractiveReportFailureKind.NotFound,
+                    InteractiveReportErrorCodes.ReportNotFound);
+            else
+            {
+                var failure = await authorization.AuthorizeActions(
+                    resolved.Definition,
+                    [InteractiveReportAction.ViewReport],
+                    resource: null,
+                    administratorRequired: false,
+                    hideDenied: true,
+                    denialDetail: null,
+                    context,
+                    ct);
+                denied = failure is null ? null : Failure(failure);
+            }
+
+            if (denied is not null)
+            {
+                firstDenial ??= denied;
+                if (denied.Kind == InteractiveReportFailureKind.Internal)
+                    return InteractiveReportServerResult<IReadOnlyList<ReportConfigurationSummary>>
+                        .Failed(denied);
+                continue;
+            }
+
+            var definition = resolved.Definition!;
+            summaries.Add(new ReportConfigurationSummary(
+                definition.Name,
+                definition.Title ?? ColumnModel.Prettify(definition.Name)));
+        }
+
+        if (summaries.Count == 0 && firstDenial is not null)
+            return InteractiveReportServerResult<IReadOnlyList<ReportConfigurationSummary>>
+                .Failed(firstDenial);
+        return InteractiveReportServerResult<IReadOnlyList<ReportConfigurationSummary>>.Success(
+            summaries.OrderBy(summary => summary.Title, StringComparer.OrdinalIgnoreCase).ToList());
+    }
+
+    public async Task<InteractiveReportServerResult<IReadOnlyList<SavedReportSummary>>> ListSavedReports(
+        string reportName,
+        InteractiveReportRequestContext context,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(reportName);
+        ArgumentNullException.ThrowIfNull(context);
+
+        var listing = SavedReportsListingDefinition.Matches(reportName);
+        var resolved = await authorization.ResolveDefinition(reportName, context, ct);
+        if (resolved.Failure is not null)
+            return InteractiveReportServerResult<IReadOnlyList<SavedReportSummary>>.Failed(
+                Failure(resolved.Failure));
+        if (resolved.Definition is null) return NotFoundReport<IReadOnlyList<SavedReportSummary>>();
+        var definition = resolved.Definition;
+
+        var denied = await authorization.AuthorizeActions(
+            definition,
+            listing
+                ? [InteractiveReportAction.ListAllSavedReports]
+                : [InteractiveReportAction.ListSavedReports],
+            resource: null,
+            administratorRequired: listing,
+            hideDenied: true,
+            denialDetail: null,
+            context,
+            ct);
+        if (denied is not null)
+            return InteractiveReportServerResult<IReadOnlyList<SavedReportSummary>>.Failed(Failure(denied));
+
+        // The store returns every public and private document for the configured family in one
+        // query. Reconciliation consumes that complete truth before caller visibility is applied.
+        List<SavedReport> family;
+        try
+        {
+            family = (await synchronizer.ReconcileFamily(definition.Name, ct)).ToList();
+            if (!family.Any(report => report.IsDefault))
+            {
+                var created = await defaultDocuments.CreateMissing(definition, family, ct);
+                family.RemoveAll(report => report.Id == created.Id);
+                family.Add(created);
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (ReportDocumentBootstrapException)
+        {
+            return NotFoundDocument<IReadOnlyList<SavedReportSummary>>();
+        }
+        catch (Exception ex)
+        {
+            return InteractiveReportServerResult<IReadOnlyList<SavedReportSummary>>.Failed(
+                Internal(definition.Name, "saved-report storage", context, ex));
+        }
+
+        var identity = ReportIdentity.Resolve(context.User, options.CurrentValue.IdentityClaim);
+        var administratorDenial = await authorization.AuthorizeEndpoint(
+            [InteractiveReportAction.ListAllSavedReports],
+            new InteractiveReportAuthorizationResource { ReportName = definition.Name },
+            administratorRequired: true,
+            hideDenied: true,
+            denialDetail: null,
+            context,
+            ct);
+        if (administratorDenial is { Kind: ReportAuthorizationFailureKind.Internal })
+            return InteractiveReportServerResult<IReadOnlyList<SavedReportSummary>>.Failed(
+                Failure(administratorDenial));
+        var administrator = administratorDenial is null;
+
+        var visible = family
+            .Where(report => VisibleTo(report, identity, administrator))
+            .OrderByDescending(report => report.IsDefault)
+            .ThenByDescending(report => report.IsGlobal)
+            .ThenBy(report => report.Title, StringComparer.OrdinalIgnoreCase)
+            .Select(report => SavedReportSummary.From(report.Metadata(), identity))
+            .ToList();
+        return InteractiveReportServerResult<IReadOnlyList<SavedReportSummary>>.Success(visible);
+    }
+
     public async Task<InteractiveReportServerResult<InteractiveReportLoadedDocument>> LoadDocument(
         long id,
         InteractiveReportRequestContext context,
@@ -357,6 +503,16 @@ internal sealed class InteractiveReportServer(
             InteractiveReportErrorCodes.ReportExecutionFailed,
             TraceIdentifier: context.TraceIdentifier);
     }
+
+    /// <summary>
+    /// Applies administrator, saved-report publication, and exact-owner visibility after configured
+    /// reconciliation has consumed the database's complete, unfiltered family snapshot.
+    /// </summary>
+    private static bool VisibleTo(SavedReport report, string? identity, bool administrator)
+        => administrator
+            || report.IsPublic
+            || (identity is not null
+                && string.Equals(report.Owner, identity, StringComparison.Ordinal));
 
     private static InteractiveReportFailure Invalid(string details)
         => new(

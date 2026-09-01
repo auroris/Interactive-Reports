@@ -1,5 +1,6 @@
 using System.Text.Json;
 using InteractiveReport.Core.Model;
+using InteractiveReport.Core.SavedReports;
 
 namespace InteractiveReport.AspNetCore;
 
@@ -239,7 +240,25 @@ public sealed record SavedReportSummary(
     bool IsDefault,
     bool Mine,
     bool IsReadOnly,
-    DateTime ModifiedUtc);
+    DateTime ModifiedUtc)
+{
+    /// <summary>
+    /// Projects persisted saved-report metadata into the caller-facing summary. Every client
+    /// adapter shares this projection so ownership and read-only flags cannot drift apart.
+    /// </summary>
+    /// <param name="report">The persisted metadata to expose.</param>
+    /// <param name="caller">The normalized caller identity used to compute the <c>Mine</c> flag.</param>
+    /// <returns>The public metadata projection, including ownership and configured-read-only flags.</returns>
+    internal static SavedReportSummary From(SavedReportMetadata report, string? caller) => new(
+        report.Id,
+        report.ReportName,
+        report.Title,
+        report.IsGlobal,
+        report.IsDefault,
+        SavedReportAccessPolicy.IsOwner(report, caller),
+        report.Origin == SavedReportOrigin.Configured,
+        report.ModifiedUtc);
+}
 
 /// <summary>Contains a saved report's metadata and report-state document.</summary>
 public sealed record SavedReportDocument(SavedReportSummary Summary, JsonElement State);

@@ -17,7 +17,7 @@ see [GraphQL adapter](GRAPHQL.md).
 | `InteractiveReport.Client.Json` | `InteractiveReport.Client.Json` | REST, saved-report, administration, viewer, and packaged-browser routes. |
 | `InteractiveReport.Client.FileDownload` | `InteractiveReport.Client.FileDownload` | Authorized file-download routes and CSV rendering. |
 | `InteractiveReport.Core` | `InteractiveReport.Core.*` | Report definitions and state, execution, definition stores, and persistence contracts. This is referenced transitively by the server package. |
-| `InteractiveReport.Client.GraphQL` | `InteractiveReport.Client.GraphQL` | Optional query-only execution of saved reports through GraphQL.NET. |
+| `InteractiveReport.Client.GraphQL` | `InteractiveReport.Client.GraphQL` | Optional query-only discovery and execution of saved reports through GraphQL.NET. |
 
 ## Register and map the server
 

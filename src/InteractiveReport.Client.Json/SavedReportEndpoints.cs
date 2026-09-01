@@ -154,38 +154,15 @@ internal static class SavedReportEndpoints
     // End-user saved-report surface.
 
     /// <summary>Lists appsettings report configurations visible to the current caller.</summary>
+    /// <param name="ctx">The current HTTP request and response context.</param>
+    /// <param name="ct">Cancels definition resolution and authorization.</param>
+    /// <returns>A JSON array of the configurations the caller may view, or the first denial when none are.</returns>
     internal static async Task<IResult> ListConfigurations(HttpContext ctx, CancellationToken ct)
     {
-        var options = Options(ctx);
-        var summaries = new List<ReportConfigurationSummary>();
-        IResult? firstDenial = null;
-        foreach (var reportName in options.Reports.Keys)
-        {
-            var access = await Access(ctx).Authorize(new ReportAccessRequest
-            {
-                ReportName = reportName,
-                Actions = [InteractiveReportAction.ViewReport],
-                HideDenied = true,
-            }, ctx, ct);
-            if (access.Error is not null)
-            {
-                firstDenial ??= access.Error;
-                if (access.Error is IStatusCodeHttpResult { StatusCode: >= 500 })
-                    return access.Error;
-                continue;
-            }
-
-            var definition = access.Definition!;
-            summaries.Add(new ReportConfigurationSummary(
-                definition.Name,
-                definition.Title ?? ColumnModel.Prettify(definition.Name)));
-        }
-
-        return summaries.Count == 0 && firstDenial is not null
-            ? firstDenial
-            : Results.Json(
-                summaries.OrderBy(summary => summary.Title, StringComparer.OrdinalIgnoreCase),
-                IrJson.Options);
+        var listed = await Server(ctx).ListConfigurations(Context(ctx), ct);
+        return listed.Failure is not null
+            ? Failure(listed.Failure)
+            : Results.Json(listed.Value, IrJson.Options);
     }
 
     /// <summary>
@@ -198,56 +175,10 @@ internal static class SavedReportEndpoints
     /// <remarks>Synchronizes configured document identities before listing.</remarks>
     internal static async Task<IResult> ListForReport(string name, HttpContext ctx, CancellationToken ct)
     {
-        var access = await Access(ctx).Authorize(new ReportAccessRequest
-        {
-            ReportName = name,
-            Actions = SavedReportsListingDefinition.Matches(name)
-                ? [InteractiveReportAction.ListAllSavedReports]
-                : [InteractiveReportAction.ListSavedReports],
-            AdministratorRequired = SavedReportsListingDefinition.Matches(name),
-            HideDenied = true,
-        }, ctx, ct);
-        if (access.Error is not null) return access.Error;
-        var definition = access.Definition!;
-
-        // The store returns every public and private document for the configured family in one
-        // query. Reconciliation consumes that complete truth before caller visibility is applied.
-        List<SavedReport> family;
-        try
-        {
-            family = (await Synchronizer(ctx).ReconcileFamily(definition.Name, ct)).ToList();
-            if (!family.Any(report => report.IsDefault))
-            {
-                var created = await DefaultDocuments(ctx).CreateMissing(
-                    definition, family, ct);
-                family.RemoveAll(report => report.Id == created.Id);
-                family.Add(created);
-            }
-        }
-        catch (ReportDocumentBootstrapException)
-        {
-            return EndpointExtensions.SavedReportNotFound();
-        }
-        var identity = Identity(ctx);
-        var administratorDenial = await Access(ctx).AuthorizeEndpoint(new EndpointAccessRequest
-        {
-            Actions = [InteractiveReportAction.ListAllSavedReports],
-            Resource = new InteractiveReportAuthorizationResource
-            {
-                ReportName = definition.Name,
-            },
-            AdministratorRequired = true,
-            HideDenied = true,
-        }, ctx, ct);
-        if (administratorDenial is IStatusCodeHttpResult { StatusCode: >= 500 })
-            return administratorDenial;
-        var administrator = administratorDenial is null;
-        var visible = family
-            .Where(report => VisibleTo(report, identity, administrator))
-            .OrderByDescending(report => report.IsDefault)
-            .ThenByDescending(report => report.IsGlobal)
-            .ThenBy(report => report.Title, StringComparer.OrdinalIgnoreCase);
-        return Results.Json(visible.Select(report => Summary(report, identity)), IrJson.Options);
+        var listed = await Server(ctx).ListSavedReports(name, Context(ctx), ct);
+        return listed.Failure is not null
+            ? Failure(listed.Failure)
+            : Results.Json(listed.Value, IrJson.Options);
     }
 
     /// <summary>
@@ -896,6 +827,55 @@ internal static class SavedReportEndpoints
         => ctx.RequestServices.GetRequiredService<ISavedReportStore>();
 
     /// <summary>
+    /// Resolves the transport-neutral server boundary from request services.
+    /// </summary>
+    /// <param name="ctx">The current HTTP request and response context.</param>
+    /// <returns>The application-wide Interactive Reports server.</returns>
+    private static IInteractiveReportServer Server(HttpContext ctx)
+        => ctx.RequestServices.GetRequiredService<IInteractiveReportServer>();
+
+    /// <summary>
+    /// Projects the current HTTP exchange onto the transport-neutral request context.
+    /// </summary>
+    /// <param name="ctx">The current HTTP request and response context.</param>
+    /// <returns>The request context consumed by the server boundary.</returns>
+    private static InteractiveReportRequestContext Context(HttpContext ctx)
+        => new()
+        {
+            User = ctx.User,
+            RequestServices = ctx.RequestServices,
+            TraceIdentifier = ctx.TraceIdentifier,
+        };
+
+    /// <summary>
+    /// Translates a transport-neutral server failure into this adapter's coded JSON response.
+    /// </summary>
+    /// <param name="failure">The classified server failure.</param>
+    /// <returns>The HTTP result carrying the failure's stable code.</returns>
+    private static IResult Failure(InteractiveReportFailure failure) => failure.Kind switch
+    {
+        InteractiveReportFailureKind.Unauthenticated => EndpointExtensions.AuthenticationRequired(),
+        InteractiveReportFailureKind.NotFound => EndpointExtensions.Error(
+            failure.Code,
+            StatusCodes.Status404NotFound),
+        InteractiveReportFailureKind.Forbidden => EndpointExtensions.Error(
+            failure.Code,
+            StatusCodes.Status403Forbidden,
+            failure.Details,
+            failure.TraceIdentifier),
+        InteractiveReportFailureKind.Invalid => EndpointExtensions.Error(
+            failure.Code,
+            StatusCodes.Status400BadRequest,
+            failure.Details,
+            failure.TraceIdentifier),
+        _ => EndpointExtensions.Error(
+            failure.Code,
+            StatusCodes.Status500InternalServerError,
+            failure.Details,
+            failure.TraceIdentifier),
+    };
+
+    /// <summary>
     /// Resolves the configured report-access service from request services.
     /// </summary>
     /// <param name="ctx">The current HTTP request and response context.</param>
@@ -953,30 +933,13 @@ internal static class SavedReportEndpoints
     }
 
     /// <summary>
-    /// Applies administrator, saved-report publication, and exact-owner visibility after configured reconciliation
-    /// has consumed the database's complete, unfiltered family snapshot.
-    /// </summary>
-    private static bool VisibleTo(SavedReport report, string? identity, bool administrator)
-        => administrator
-            || report.IsPublic
-            || (identity is not null
-                && string.Equals(report.Owner, identity, StringComparison.Ordinal));
-
-    /// <summary>
     /// Projects saved-report metadata into the public summary response.
     /// </summary>
     /// <param name="report">The metadata to expose.</param>
     /// <param name="caller">The normalized caller identity used to compute the <c>Mine</c> flag.</param>
     /// <returns>The public metadata projection, including ownership and configured-read-only flags.</returns>
-    private static SavedReportSummary Summary(SavedReportMetadata report, string? caller) => new(
-        report.Id,
-        report.ReportName,
-        report.Title,
-        report.IsGlobal,
-        report.IsDefault,
-        SavedReportAccessPolicy.IsOwner(report, caller),
-        report.Origin == SavedReportOrigin.Configured,
-        report.ModifiedUtc);
+    private static SavedReportSummary Summary(SavedReportMetadata report, string? caller)
+        => SavedReportSummary.From(report, caller);
 
     /// <summary>
     /// Projects saved-report metadata into the public summary response.

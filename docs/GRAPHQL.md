@@ -1,8 +1,13 @@
 # GraphQL adapter
 
 `InteractiveReport.Client.GraphQL` is an optional, query-only GraphQL.NET transport for
-executing saved Interactive Reports. It does not replace the HTTP API, report engine,
-saved-report store, or authorization system.
+discovering and executing saved Interactive Reports. It does not replace the HTTP API,
+report engine, saved-report store, or authorization system.
+
+It covers the same read path the packaged JavaScript client walks: list the report
+configurations the caller may view, list the saved documents of one configuration, then
+execute one document with the caller's paging, search, and sorting applied. Creating and
+editing saved reports remains a REST and packaged-UI operation.
 
 ## Installation and mapping
 
@@ -49,8 +54,10 @@ if (app.Environment.IsDevelopment())
 does not enable subscriptions in Interactive Reports; it prevents the legacy fetcher
 from opening a WebSocket during ordinary query and schema-introspection operations.
 Unsupported methods and WebSocket upgrades receive HTTP 405 from the adapter.
-The Workbench leaves GraphiQL unpopulated because configured document identities are
-reconciled by report listing rather than application startup.
+Configured document identities are reconciled by report listing rather than application
+startup, so a freshly started Workbench has no ids to paste. Run `{ reports { name } }`
+and then `{ savedReports(report: "...") { id title } }` in GraphiQL to reconcile them
+and pick one.
 
 `MapInteractiveReportGraphQL` returns an `IEndpointConventionBuilder`, so standard
 ASP.NET Core conventions remain available:
@@ -65,26 +72,68 @@ Interactive Reports does not select an authentication scheme.
 
 ## Query contract
 
-The schema has one root field:
+The schema has three root fields, mirroring the REST read path:
 
 ```graphql
 type Query {
-  report(id: ID!, page: Int, pageSize: Int): InteractiveReportResult
+  reports: [InteractiveReportConfiguration!]!
+  savedReports(report: String!): [InteractiveReportSavedReport!]!
+  report(
+    id: ID!
+    page: Int
+    pageSize: Int
+    search: String
+    sort: [InteractiveReportSortInput!]
+  ): InteractiveReportResult
 }
 ```
 
-Each operation may contain at most one executable `report` response key. Aliases and
-root fragments do not permit one HTTP request to fan out into multiple report/database
-executions; such an operation fails GraphQL validation before any resolver runs. An
-operation may expand at most 256 fragment-spread visits across its reachable fragment
-graph; documents above that ceiling fail before authorization or execution, including
-when parsed documents are cached. The adapter also caps its schema's execution
-concurrency at one without changing other GraphQL schemas registered by the host.
+Each operation may contain at most one executable root response key. Every field above
+reaches the database, so aliases and root fragments do not permit one HTTP request to fan
+out into multiple catalogue, listing, or report executions; such an operation fails
+GraphQL validation before any resolver runs. Introspection meta-fields (`__schema`,
+`__type`, `__typename`) answer from the schema and are exempt. An operation may expand at
+most 256 fragment-spread visits across its reachable fragment graph; documents above that
+ceiling fail before authorization or execution, including when parsed documents are
+cached. The adapter also caps its schema's execution concurrency at one without changing
+other GraphQL schemas registered by the host.
 
-`id` is the database-generated numeric report-document id returned by
-`GET /api/reports/{name}` and the ordinary creation APIs. It is unique across report
-families and origins. The root `GET /api/reports` route lists appsettings configurations,
-not document identities.
+### Discovery
+
+`reports` is the GraphQL twin of `GET /api/reports`: the appsettings report
+configurations the current caller may view, ordered by title. It lists configurations,
+not documents. A caller denied every configuration receives that first denial as an
+error rather than an empty list, so a hidden catalogue is never mistaken for an empty one.
+
+`savedReports(report:)` is the twin of `GET /api/reports/{name}`: the documents of one
+configuration that the caller may load — public, default, configured, and caller-owned —
+with administrators receiving the complete family. Listing reconciles configured file
+identities and creates the family's default document if it is missing, exactly as the
+REST route does. An unknown or hidden configuration returns `NOT_FOUND`.
+
+```graphql
+{
+  savedReports(report: "orders") {
+    id
+    title
+    isDefault
+    isGlobal
+    mine
+    isReadOnly
+    modifiedUtc
+  }
+}
+```
+
+Each `id` is accepted directly by the `report` field. Like every GraphQL `ID` it is a
+string on the wire; the REST listing carries the same value as a JSON number, because
+report-document identities are database keys rather than query result values.
+
+### Execution
+
+`id` is the database-generated report-document id returned by `savedReports`,
+`GET /api/reports/{name}`, and the ordinary creation APIs. It is unique across report
+families and origins.
 Configured file-backed documents receive an identity row keyed by their internal family
 and source filename; execution reads their current state from disk rather than from a
 mirrored database body. The row remains the optimistic authority for catalogue metadata.
@@ -93,23 +142,62 @@ row, restores a synthetic default when necessary, and returns `NOT_FOUND` for th
 If the file is present but its state fails processing, the adapter logs the exception,
 deletes the optimistic row, and returns `NOT_FOUND` without creating a synthetic fallback.
 The next report listing creates a new identity and retries the configured source. This
-source-validation stage runs before paging overrides and terminal execution. A later
-data- or execution-dependent validation failure returns `REPORT_VALIDATION_FAILED` and
-does not delete the configured identity.
+source-validation stage runs before the paging, search, and sort overrides and before
+terminal execution. A later data- or execution-dependent validation failure returns
+`REPORT_VALIDATION_FAILED` and does not delete the configured identity.
 
-`page` and `pageSize` optionally replace only the saved state's paging request:
+The remaining arguments replace individual parts of the loaded document before it is
+executed. They mutate a detached copy; nothing is written back to the store, so the same
+id executes identically for the next caller. Omitting an argument — or passing `null` —
+keeps what the document already says, and omitting all of them executes the saved state
+exactly as stored.
+
+`page` and `pageSize` replace the saved paging request:
 
 - `page` is 1-based.
 - `pageSize` is non-negative.
 - `pageSize: 0` uses the engine's unpaged query mode. Reserve it for reports whose
   filtered result is known to be bounded; positive sizes are safer for general use.
-- Omitting both executes the saved state exactly as stored.
+
+`search` replaces the document's toolbar search text, the same case-insensitive
+contains match across eligible text columns that the packaged client's search box
+performs. An empty string clears a stored search.
+
+`sort` replaces the ordering of the document's active table, the same terminal `sort`
+composable the packaged client's sort editor writes. An empty list clears the stored
+ordering. Each entry is:
+
+```graphql
+input InteractiveReportSortInput {
+  col: String!
+  dir: InteractiveReportSortDirection  # ASC (default) | DESC
+  nulls: InteractiveReportNullPlacement # FIRST | LAST; omitted keeps the dialect default
+}
+```
+
+`col` is a logical column name resolved against the report's live schema like any other
+report-state input. Saved reports degrade rather than fail, so an unknown or unsortable
+column is dropped and reported in the result's `ignored` list instead of raising an
+error — check `ignored` when an ordering appears not to have been applied. Ordering is a
+document declaration, so it needs a document table to live in: every default, configured,
+and packaged-client document declares one, but a hand-authored state with no `tables`
+returns `BAD_USER_INPUT` rather than being restructured.
+
+Report *features* (`InteractiveReport:Reports:{name}:Features`) are a client UI
+whitelist, not a query gate. As with `POST /api/reports/{name}/query`, these arguments
+are accepted regardless of which features a report enables for its toolbar.
 
 For example:
 
 ```graphql
-query ExecuteSavedReport($id: ID!, $page: Int, $pageSize: Int) {
-  report(id: $id, page: $page, pageSize: $pageSize) {
+query ExecuteSavedReport(
+  $id: ID!
+  $page: Int
+  $pageSize: Int
+  $search: String
+  $sort: [InteractiveReportSortInput!]
+) {
+  report(id: $id, page: $page, pageSize: $pageSize, search: $search, sort: $sort) {
     columns {
       name
       label
@@ -122,6 +210,10 @@ query ExecuteSavedReport($id: ID!, $page: Int, $pageSize: Int) {
       size
     }
     totalRows
+    ignored {
+      kind
+      detail
+    }
     elapsedMs
   }
 }
@@ -133,7 +225,9 @@ Variables:
 {
   "id": 42,
   "page": 1,
-  "pageSize": 100
+  "pageSize": 100,
+  "search": "acme",
+  "sort": [{ "col": "ORDER_DATE", "dir": "DESC", "nulls": "LAST" }]
 }
 ```
 
@@ -171,15 +265,24 @@ This is a recommendation rather than a security boundary. Origin never grants ac
 
 ## Authorization
 
-GraphQL execution is an alternate transport over the same resources, not an alternate
-authorization model. For every request the resolver:
+GraphQL is an alternate transport over the same resources, not an alternate
+authorization model. Every field calls the same transport-neutral server boundary the
+REST routes call, so the decisions below are made once and shared.
+
+`reports` requests `ViewReport` for each configured report and omits the ones denied.
+`savedReports` requests `ListSavedReports` (or `ListAllSavedReports` for the built-in
+saved-reports listing), then re-checks `ListAllSavedReports` to decide whether the caller
+sees the complete family or only public and owned documents.
+
+For `report`, the resolver:
 
 1. Gets the saved report from `ISavedReportStore`.
 2. Applies normal read visibility: public, owner, or administrator.
 3. Resolves and authorizes the underlying report definition.
 4. Requests `ReadSavedReport` and `Query` from every configured application authorizer.
 5. Resolves trusted context parameters from the current `ClaimsPrincipal`.
-6. Executes the stored report state through `ReportExecutor`.
+6. Executes the stored report state, with the requested overrides applied, through
+   `ReportExecutor`.
 
 The application authorization resource contains both `ReportName` and the saved-report
 metadata. Callbacks and ASP.NET Core resource handlers can therefore make the same
@@ -188,7 +291,7 @@ authorizers must grant both actions.
 
 Private reports denied to another caller use the same non-disclosure rule as the HTTP
 API and return the GraphQL error code `NOT_FOUND`. The transport does not reveal
-whether the id exists.
+whether the id exists, and such documents never appear in `savedReports`.
 
 ## Errors
 
@@ -197,12 +300,17 @@ appear in the `errors` array, normally with HTTP 200. Stable adapter error codes
 
 | Code | Meaning |
 |---|---|
-| `BAD_USER_INPUT` | A paging override is outside its allowed range. |
+| `BAD_USER_INPUT` | An argument is outside its allowed range or cannot apply to this document. |
 | `NOT_FOUND` | The saved report or underlying definition is absent, or access is hidden. |
 | `UNAUTHENTICATED` | The operation requires an authenticated principal. |
 | `FORBIDDEN` | The caller is known but the operation is denied without non-disclosure. |
-| `REPORT_VALIDATION_FAILED` | The stored state no longer validates against the live schema. |
-| `INTERNAL_SERVER_ERROR` | Authorization infrastructure or report execution failed. |
+| `REPORT_VALIDATION_FAILED` | The state, with any overrides applied, does not validate against the live schema. |
+| `INTERNAL_SERVER_ERROR` | Authorization infrastructure, saved-report storage, or report execution failed. |
+
+Errors raised by the server boundary also carry the REST API's stable `IR-` code in the
+`reportErrorCode` extension, and their message is the same English fallback text
+`GET /api/reports/...` returns for that code, so a localized client can key on one
+vocabulary across both transports.
 
 Validation details contain only report-state paths and validation messages. Unexpected
 failures are logged server-side and return a correlation `traceId`; database exception
@@ -216,10 +324,12 @@ using the code.
 
 ## Operational boundaries
 
-The adapter deliberately exposes no report-state input beyond paging. A caller cannot
-use GraphQL to add filters, projections, expressions, or arbitrary report state. To
-create or change a report, use Interactive Reports and its saved-report API, then
-execute the resulting id through GraphQL.
+The adapter deliberately exposes no report-state input beyond paging, search, and
+sorting. A caller cannot use GraphQL to add filters, computed columns, projections,
+expressions, or arbitrary report state, and the schema declares no mutation type: it
+creates, updates, and deletes nothing. To author or change a report, use Interactive
+Reports and its saved-report API, then discover and execute the resulting id through
+GraphQL.
 
 The underlying report definition still controls ordinary positive page sizes. Unpaged
 queries can return the complete filtered result, so hosts should prefer positive sizes

@@ -1,6 +1,7 @@
 // GraphQL validation boundary: independently limit fragment expansion, then expand reachable
-// selections just far enough to reject multiple executable report fields. This prevents aliases
-// and fragment DAGs from multiplying database work within one transport request.
+// selections just far enough to reject a second executable root field. Every root field this
+// schema exposes reaches the database, so this prevents aliases and fragment DAGs from
+// multiplying that work within one transport request.
 
 using GraphQL.Validation;
 using GraphQLParser.AST;
@@ -9,10 +10,11 @@ namespace InteractiveReport.Client.GraphQL;
 
 /// <summary>
 /// Prevents one GraphQL operation from turning a single HTTP request into many
-/// independent report executions through aliases or root-level fragments, and bounds
-/// fragment-DAG expansion before GraphQL.NET performs its own field collection.
+/// independent catalogue, listing, or report executions through aliases or root-level
+/// fragments, and bounds fragment-DAG expansion before GraphQL.NET performs its own field
+/// collection. Introspection meta-fields are exempt: they read the schema, not the database.
 /// </summary>
-internal sealed class SingleReportRootFieldValidationRule : ValidationRuleBase
+internal sealed class SingleRootFieldValidationRule : ValidationRuleBase
 {
     // Invariant: GraphQL.NET pre-counts recursively expanded fragment spreads before collecting
     // fields. Keep the adapter's explicit ceiling comfortably above ordinary queries, but low
@@ -21,7 +23,7 @@ internal sealed class SingleReportRootFieldValidationRule : ValidationRuleBase
     private const int ExceededFragmentExpansions = MaxFragmentExpansions + 1;
     private const string ErrorNumber = "IR-GQL-ROOT-FIELD-LIMIT";
     private const string ErrorMessage =
-        "Only one executable 'report' root field is allowed per operation.";
+        "Only one executable root field is allowed per operation.";
     private const string FragmentErrorNumber = "IR-GQL-FRAGMENT-LIMIT";
     private static readonly string FragmentErrorMessage =
         $"The operation exceeds the fragment expansion limit of {MaxFragmentExpansions}.";
@@ -59,7 +61,7 @@ internal sealed class SingleReportRootFieldValidationRule : ValidationRuleBase
 
         var responseKeys = new HashSet<string>(StringComparer.Ordinal);
         var visitedFragments = new HashSet<string>(StringComparer.Ordinal);
-        var offendingField = FindSecondReportField(
+        var offendingField = FindSecondRootField(
             context.Operation.SelectionSet,
             context,
             fragments,
@@ -79,15 +81,15 @@ internal sealed class SingleReportRootFieldValidationRule : ValidationRuleBase
     }
 
     /// <summary>
-    /// Traverses fields and fragments until it finds a second distinct report response key.
+    /// Traverses fields and fragments until it finds a second distinct executable response key.
     /// </summary>
     /// <param name="selectionSet">The GraphQL selection set to validate.</param>
     /// <param name="context">The GraphQL validation context containing the schema, document, and error sink.</param>
     /// <param name="fragments">The GraphQL fragment definitions available to the selection traversal.</param>
     /// <param name="responseKeys">The collection that receives distinct GraphQL response keys.</param>
     /// <param name="visitedFragments">The fragment names already traversed, used to prevent cycles.</param>
-    /// <returns>The second distinct executable <c>report</c> field, or <see langword="null"/> when the operation contains at most one.</returns>
-    private static GraphQLField? FindSecondReportField(
+    /// <returns>The second distinct executable root field, or <see langword="null"/> when the operation contains at most one.</returns>
+    private static GraphQLField? FindSecondRootField(
         GraphQLSelectionSet selectionSet,
         ValidationContext context,
         IReadOnlyDictionary<string, GraphQLFragmentDefinition> fragments,
@@ -103,7 +105,8 @@ internal sealed class SingleReportRootFieldValidationRule : ValidationRuleBase
 
             switch (selection)
             {
-                case GraphQLField field when field.Name.StringValue == "report":
+                // Introspection meta-fields answer from the schema and never reach a report.
+                case GraphQLField field when !field.Name.StringValue.StartsWith("__", StringComparison.Ordinal):
                     var responseKey = field.Alias?.Name.StringValue ?? field.Name.StringValue;
                     if (responseKeys.Add(responseKey) && responseKeys.Count > 1)
                     {
@@ -113,7 +116,7 @@ internal sealed class SingleReportRootFieldValidationRule : ValidationRuleBase
 
                 case GraphQLInlineFragment inlineFragment:
                 {
-                    var offendingField = FindSecondReportField(
+                    var offendingField = FindSecondRootField(
                         inlineFragment.SelectionSet,
                         context,
                         fragments,
@@ -136,7 +139,7 @@ internal sealed class SingleReportRootFieldValidationRule : ValidationRuleBase
                         break;
                     }
 
-                    var offendingField = FindSecondReportField(
+                    var offendingField = FindSecondRootField(
                         fragment.SelectionSet,
                         context,
                         fragments,

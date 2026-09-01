@@ -37,13 +37,19 @@ public static class InteractiveReportGraphQLExtensions
         services.AddHttpContextAccessor();
         services.TryAddScoped<InteractiveReportGraphQLExecutor>();
         services.TryAddSingleton<InteractiveReportQueryGraphType>();
+        services.TryAddSingleton<InteractiveReportConfigurationGraphType>();
+        services.TryAddSingleton<InteractiveReportSavedReportGraphType>();
         services.TryAddSingleton<InteractiveReportResultGraphType>();
         services.TryAddSingleton<InteractiveReportColumnGraphType>();
         services.TryAddSingleton<InteractiveReportPageGraphType>();
+        services.TryAddSingleton<InteractiveReportIgnoredGraphType>();
+        services.TryAddSingleton<InteractiveReportSortInputGraphType>();
+        services.TryAddSingleton<InteractiveReportSortDirectionGraphType>();
+        services.TryAddSingleton<InteractiveReportNullPlacementGraphType>();
         services.TryAddSingleton<ComplexScalarGraphType>();
         services.AddGraphQL(builder => builder
             .AddSchema<InteractiveReportGraphQLSchema>()
-            .AddValidationRule<SingleReportRootFieldValidationRule>(useForCachedDocuments: true)
+            .AddValidationRule<SingleRootFieldValidationRule>(useForCachedDocuments: true)
             .ConfigureExecutionOptions(options =>
             {
                 if (options.Schema is InteractiveReportGraphQLSchema)

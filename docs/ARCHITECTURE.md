@@ -74,7 +74,7 @@ the portability surface.
 | `src/InteractiveReport.Core` | State model, canonical planning, expression parser, SQLKata lowering, execution, schema discovery, highlight evaluation, and SQL-backed named-table Pivot. No ASP.NET dependencies. |
 | `src/InteractiveReport.AspNetCore` | Server composition, config-backed definitions, persistence, and the transport-neutral authorization/query boundary used by every client. It contains no route mapping. |
 | `src/InteractiveReport.Client.Json` | REST, saved-report, administration, viewer, OpenAPI metadata, coded JSON responses, and packaged UI assets. Maps with `MapInteractiveReportJson`. |
-| `src/InteractiveReport.Client.GraphQL` | Optional GraphQL.NET client. Loads an authorized saved document, mutates GraphQL paging in a detached copy, and submits it through the server query boundary. |
+| `src/InteractiveReport.Client.GraphQL` | Optional GraphQL.NET client. Lists the caller's report configurations and saved documents, then loads an authorized document, mutates paging/search/sort in a detached copy, and submits it through the server query boundary. Query-only: no mutation type. |
 | `src/InteractiveReport.Client.FileDownload` | Optional file client. Maps `/api/download/{name}/{format}`, mutates the posted document to disable paging, queries through the server, and renders CSV. |
 | `src/client` | Product UI source modules and the three browser-bundle entry points. |
 | `samples/Workbench` | Dev harness: SQLite sample DB. `index.html`, `fr.html`, and `admin.html` host the packaged report in English and Canadian French plus the administration element; Swagger UI and GraphiQL expose the REST and GraphQL developer surfaces. |
@@ -926,6 +926,11 @@ The execution path is split by responsibility rather than view mode:
   authorization plus server-trusted context parameters without HTTP types. Each client
   translates failures into its own transport. The JSON-specific `IReportAccessService`
   remains a thin HTTP result adapter for its larger route surface.
+- `IInteractiveReportServer` is the transport-neutral application boundary layered over
+  it: configuration listing, saved-document listing, document load, query, and download
+  query. Listing lives here rather than in the JSON routes so the REST and GraphQL
+  catalogues cannot drift in visibility, reconciliation, or ordering; each client only
+  maps `InteractiveReportFailure` onto its own error vocabulary.
 
 Derived queries run sequentially on one prepared connection per request. This keeps one
 transaction/session context and remains SQLite-friendly; provider-specific parallelism is
@@ -1345,7 +1350,8 @@ with AND semantics.
 `IReportAuthorizationService` is the shared server boundary. JSON report endpoints use
 an HTTP adapter over its definition-aware path; authorization administration and
 user-directory endpoints use its definition-free path before touching stores or
-providers. GraphQL and file clients call the neutral boundary directly. Application
+providers. GraphQL and file clients call the neutral boundary directly, as do the JSON
+listing routes through `IInteractiveReportServer`. Application
 code supplies decisions through either adapter above. The opt-in `whoami` bootstrap
 diagnostic remains outside application-operation authorization because it exists to
 discover the exact identity needed to configure that authorization and grants nothing.
