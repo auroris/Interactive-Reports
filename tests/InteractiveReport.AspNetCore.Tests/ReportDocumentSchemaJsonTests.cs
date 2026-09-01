@@ -59,4 +59,40 @@ public sealed class ReportDocumentSchemaJsonTests
         var serialized = JsonSerializer.Serialize(state, IrJson.Options);
         Assert.DoesNotContain("schema", serialized);
     }
+
+    [Fact]
+    public void Report_document_file_with_json_schema_link_deserializes_correctly()
+    {
+        var json = """
+            {
+              "$schema": "../../../schemas/report-document.schema.json",
+              "title": "Default",
+              "default": true,
+              "state": {
+                "activeTable": "orders",
+                "tables": {
+                  "orders": {
+                    "from": "definition",
+                    "schema": null,
+                    "composables": [
+                      { "kind": "select", "columns": [ "ORDER_ID", "CUSTOMER" ] }
+                    ]
+                  }
+                }
+              }
+            }
+            """;
+
+        var document = JsonSerializer.Deserialize<ReportDocumentFile>(json, IrJson.Options);
+        Assert.NotNull(document);
+        Assert.Equal("Default", document.Title);
+        Assert.True(document.Default);
+        Assert.NotNull(document.State);
+        Assert.Equal("orders", document.State.ActiveTable);
+        Assert.NotNull(document.State.Tables);
+        var ordersTable = document.State.Tables["orders"];
+        Assert.Equal("definition", ordersTable.From);
+        Assert.Single(ordersTable.Composables!);
+        Assert.Equal("select", ordersTable.Composables![0].Kind);
+    }
 }

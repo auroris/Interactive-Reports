@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../schemas/report-document.schema.json",
   "title": "Default",
   "default": true,
   "state": {

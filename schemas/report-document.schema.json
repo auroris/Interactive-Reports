@@ -1,0 +1,936 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://interactivereports.net/schemas/report-document.schema.json",
+  "title": "Interactive Report Document",
+  "description": "JSON schema for Interactive Reports documents, validating both source-controlled report document files and report state payloads.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/reportDocumentFile"
+    },
+    {
+      "$ref": "#/$defs/reportState"
+    }
+  ],
+  "$defs": {
+    "reportDocumentFile": {
+      "type": "object",
+      "description": "The source-controlled envelope stored in a report-document JSON file.",
+      "properties": {
+        "$schema": {
+          "type": "string",
+          "description": "URI or relative file path to this JSON schema."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Configured display name of the report document."
+        },
+        "default": {
+          "type": "boolean",
+          "description": "Selects this file as the report family's default document."
+        },
+        "state": {
+          "$ref": "#/$defs/reportState",
+          "description": "The versioned report-state document to publish."
+        }
+      },
+      "required": [
+        "title",
+        "state"
+      ],
+      "additionalProperties": false
+    },
+    "reportState": {
+      "type": "object",
+      "description": "The report-state document: query request body, saved report, and shareable view state.",
+      "properties": {
+        "$schema": {
+          "type": "string",
+          "description": "URI or relative file path to this JSON schema."
+        },
+        "search": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Toolbar search text applied as case-insensitive contains across eligible text columns."
+        },
+        "page": {
+          "$ref": "#/$defs/pageRequest",
+          "description": "Paging configuration for the active table."
+        },
+        "activeTable": {
+          "type": "string",
+          "description": "The identifier of the table rendered by this request (e.g., 'orders', 'groupBy', 'pivot', 'chart')."
+        },
+        "tables": {
+          "type": "object",
+          "description": "Named table compositions keyed by document-owned table identifier.",
+          "maxProperties": 64,
+          "propertyNames": {
+            "pattern": "^(?!definition$)[^\\s]+$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/reportTable"
+          }
+        }
+      },
+      "required": [
+        "tables"
+      ],
+      "additionalProperties": false
+    },
+    "pageRequest": {
+      "type": "object",
+      "description": "Requests one page from the active table.",
+      "properties": {
+        "index": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1,
+          "description": "The one-based page index."
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 50,
+          "description": "Rows per page. Zero requests all matching rows in one unpaged result."
+        }
+      },
+      "additionalProperties": false
+    },
+    "reportTable": {
+      "type": "object",
+      "description": "One named table: an explicit input relation plus composable declarations.",
+      "properties": {
+        "from": {
+          "type": "string",
+          "minLength": 1,
+          "description": "'definition' or another table identifier in this document as the input relation."
+        },
+        "schema": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "description": "Advisory cache of the output schema. Set to null to request the server to derive the output schema.",
+          "maxItems": 900,
+          "items": {
+            "$ref": "#/$defs/columnInfo"
+          }
+        },
+        "composables": {
+          "type": "array",
+          "description": "Authored operations composed over the input relation.",
+          "maxItems": 512,
+          "items": {
+            "$ref": "#/$defs/tableComposable"
+          }
+        }
+      },
+      "required": [
+        "from"
+      ],
+      "additionalProperties": false
+    },
+    "columnInfo": {
+      "type": "object",
+      "description": "Describes one public result column and its presentation lineage.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Logical case-insensitive column identifier."
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Display label."
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "text",
+            "number",
+            "date",
+            "bool",
+            "other"
+          ],
+          "description": "Protocol data type name."
+        },
+        "computed": {
+          "type": "boolean",
+          "description": "Whether the column was authored as a computed expression."
+        },
+        "formatSource": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Immediate input column whose inherited presentation mask applies to this result column."
+        },
+        "pivotMetricId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Stable metric identity for a data-derived pivot cell."
+        }
+      },
+      "required": [
+        "name",
+        "label",
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "tableComposable": {
+      "type": "object",
+      "description": "One operation composed onto a table, discriminated by 'kind'.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/selectComposable"
+        },
+        {
+          "$ref": "#/$defs/labelsComposable"
+        },
+        {
+          "$ref": "#/$defs/formatsComposable"
+        },
+        {
+          "$ref": "#/$defs/computeComposable"
+        },
+        {
+          "$ref": "#/$defs/filterComposable"
+        },
+        {
+          "$ref": "#/$defs/sortComposable"
+        },
+        {
+          "$ref": "#/$defs/highlightComposable"
+        },
+        {
+          "$ref": "#/$defs/breakComposable"
+        },
+        {
+          "$ref": "#/$defs/aggregateComposable"
+        },
+        {
+          "$ref": "#/$defs/groupComposable"
+        },
+        {
+          "$ref": "#/$defs/pivotComposable"
+        },
+        {
+          "$ref": "#/$defs/chartComposable"
+        }
+      ]
+    },
+    "selectComposable": {
+      "type": "object",
+      "description": "Selects and orders the visible columns in the relation.",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "select",
+            "Select"
+          ]
+        },
+        "columns": {
+          "type": "array",
+          "maxItems": 900,
+          "items": {
+            "type": "string"
+          },
+          "description": "Ordered list of visible logical column names."
+        }
+      },
+      "required": [
+        "kind",
+        "columns"
+      ],
+      "additionalProperties": false
+    },
+    "labelsComposable": {
+      "type": "object",
+      "description": "Applies custom presentation labels to columns.",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "labels",
+            "Labels"
+          ]
+        },
+        "labels": {
+          "type": "object",
+          "maxProperties": 900,
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Presentation labels keyed by logical column name."
+        }
+      },
+      "required": [
+        "kind",
+        "labels"
+      ],
+      "additionalProperties": false
+    },
+    "formatsComposable": {
+      "type": "object",
+      "description": "Applies presentation formats and renderers to columns.",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "formats",
+            "Formats"
+          ]
+        },
+        "formats": {
+          "type": "object",
+          "maxProperties": 900,
+          "additionalProperties": {
+            "$ref": "#/$defs/columnFormat"
+          },
+          "description": "Presentation formats keyed by logical column name."
+        }
+      },
+      "required": [
+        "kind",
+        "formats"
+      ],
+      "additionalProperties": false
+    },
+    "computeComposable": {
+      "type": "object",
+      "description": "Defines synthetic computed columns from portable expressions.",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "compute",
+            "Compute"
+          ]
+        },
+        "computed": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "$ref": "#/$defs/computedColumn"
+          },
+          "description": "Computed column definitions."
+        }
+      },
+      "required": [
+        "kind",
+        "computed"
+      ],
+      "additionalProperties": false
+    },
+    "filterComposable": {
+      "type": "object",
+      "description": "Filters rows using boolean expressions.",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "filter",
+            "Filter"
+          ]
+        },
+        "filters": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/filterRule"
+          },
+          "description": "Row filter rules."
+        }
+      },
+      "required": [
+        "kind",
+        "filters"
+      ],
+      "additionalProperties": false
+    },
+    "sortComposable": {
+      "type": "object",
+      "description": "Applies terminal sort order to rows.",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "sort",
+            "Sort"
+          ]
+        },
+        "sorts": {
+          "type": "array",
+          "maxItems": 900,
+          "items": {
+            "$ref": "#/$defs/sortRule"
+          },
+          "description": "Ordered sort rules."
+        }
+      },
+      "required": [
+        "kind",
+        "sorts"
+      ],
+      "additionalProperties": false
+    },
+    "highlightComposable": {
+      "type": "object",
+      "description": "Applies style highlights to matching rows or cells.",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "highlight",
+            "Highlight"
+          ]
+        },
+        "highlights": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/highlightRule"
+          },
+          "description": "Highlight rules."
+        }
+      },
+      "required": [
+        "kind",
+        "highlights"
+      ],
+      "additionalProperties": false
+    },
+    "breakComposable": {
+      "type": "object",
+      "description": "Applies control-break column grouping and group separators.",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "break",
+            "Break"
+          ]
+        },
+        "breaks": {
+          "type": "array",
+          "maxItems": 900,
+          "items": {
+            "type": "string"
+          },
+          "description": "Logical column names defining the break hierarchy."
+        }
+      },
+      "required": [
+        "kind",
+        "breaks"
+      ],
+      "additionalProperties": false
+    },
+    "aggregateComposable": {
+      "type": "object",
+      "description": "Calculates whole-set summary aggregates displayed in the report footer.",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "aggregate",
+            "Aggregate"
+          ]
+        },
+        "aggregates": {
+          "type": "array",
+          "maxItems": 900,
+          "items": {
+            "$ref": "#/$defs/aggregateRule"
+          },
+          "description": "Aggregate metric definitions."
+        }
+      },
+      "required": [
+        "kind",
+        "aggregates"
+      ],
+      "additionalProperties": false
+    },
+    "groupComposable": {
+      "type": "object",
+      "description": "Aggregates rows into groups defined by dimensions and metric values.",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "group",
+            "Group"
+          ]
+        },
+        "by": {
+          "type": "array",
+          "maxItems": 900,
+          "items": {
+            "type": "string"
+          },
+          "description": "Group dimensions from the previous relation."
+        },
+        "values": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/metricRule"
+          },
+          "description": "Aggregate metrics. Omission yields count(*) alone."
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "pivotComposable": {
+      "type": "object",
+      "description": "Pivots row data into a two-dimensional matrix.",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "pivot",
+            "Pivot"
+          ]
+        },
+        "rows": {
+          "type": "array",
+          "maxItems": 900,
+          "items": {
+            "type": "string"
+          },
+          "description": "Pivot row dimensions."
+        },
+        "cols": {
+          "type": "array",
+          "maxItems": 900,
+          "items": {
+            "type": "string"
+          },
+          "description": "Columns whose distinct values become cell columns."
+        },
+        "values": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/metricRule"
+          },
+          "description": "Pivot cell aggregate metrics."
+        },
+        "totals": {
+          "type": "boolean",
+          "description": "Whether to display re-aggregated total rows below the pivot matrix."
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "chartComposable": {
+      "type": "object",
+      "description": "Configures a chart visualization over the relation data.",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "chart",
+            "Chart"
+          ]
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "bar",
+            "line",
+            "area",
+            "pie",
+            "Bar",
+            "Line",
+            "Area",
+            "Pie"
+          ],
+          "description": "Chart visualization type."
+        },
+        "label": {
+          "type": "string",
+          "description": "Category column used for chart labels."
+        },
+        "value": {
+          "type": "string",
+          "description": "Metric source column."
+        },
+        "fn": {
+          "$ref": "#/$defs/aggregateFn",
+          "description": "Optional aggregation function grouped by category label."
+        },
+        "orientation": {
+          "type": "string",
+          "enum": [
+            "vertical",
+            "horizontal",
+            "Vertical",
+            "Horizontal"
+          ],
+          "default": "vertical",
+          "description": "Chart orientation."
+        },
+        "sort": {
+          "$ref": "#/$defs/chartSortSpec",
+          "description": "Point sort order."
+        },
+        "labelAxisTitle": {
+          "type": "string",
+          "description": "Optional category-axis title."
+        },
+        "valueAxisTitle": {
+          "type": "string",
+          "description": "Optional value-axis title."
+        }
+      },
+      "required": [
+        "kind",
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "columnFormat": {
+      "type": "object",
+      "description": "Per-column display and formatting settings.",
+      "properties": {
+        "mask": {
+          "type": "string",
+          "description": "Type-specific format mask (e.g. 'currency:CAD', 'number:2', 'date:short')."
+        },
+        "align": {
+          "type": "string",
+          "enum": [
+            "left",
+            "center",
+            "right",
+            "Left",
+            "Center",
+            "Right"
+          ],
+          "description": "Cell text alignment."
+        },
+        "bold": {
+          "type": "boolean",
+          "description": "Whether cell text is bold."
+        },
+        "italic": {
+          "type": "boolean",
+          "description": "Whether cell text is italic."
+        },
+        "fg": {
+          "type": "string",
+          "description": "Foreground text color (CSS color / hex)."
+        },
+        "bg": {
+          "type": "string",
+          "description": "Background color (CSS color / hex)."
+        },
+        "classes": {
+          "type": "array",
+          "maxItems": 900,
+          "items": {
+            "type": "string"
+          },
+          "description": "Trusted custom CSS class names from shadow-root stylesheet."
+        },
+        "displayAs": {
+          "type": "string",
+          "enum": [
+            "link",
+            "image",
+            "action",
+            "Link",
+            "Image",
+            "Action"
+          ],
+          "description": "Cell renderer mode."
+        },
+        "urlColumn": {
+          "type": "string",
+          "description": "Row column supplying the URL for link/image renderers."
+        },
+        "textColumn": {
+          "type": "string",
+          "description": "Row column supplying link display text."
+        },
+        "command": {
+          "type": "string",
+          "description": "Opaque host command token for action renderer."
+        },
+        "keyColumn": {
+          "type": "string",
+          "description": "Row column whose value the action event carries."
+        }
+      },
+      "additionalProperties": false
+    },
+    "computedColumn": {
+      "type": "object",
+      "description": "One synthetic output column defined by a portable expression.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Document-wide unique synthetic column identifier (e.g. 'ir1')."
+        },
+        "label": {
+          "type": "string",
+          "description": "Optional display label."
+        },
+        "expr": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Portable SQL-like value expression."
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether the computed column is active."
+        }
+      },
+      "required": [
+        "id",
+        "expr"
+      ],
+      "additionalProperties": false
+    },
+    "filterRule": {
+      "type": "object",
+      "description": "One row filter defined by a boolean expression.",
+      "properties": {
+        "expr": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Portable boolean filter expression."
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether the filter rule is active."
+        }
+      },
+      "required": [
+        "expr"
+      ],
+      "additionalProperties": false
+    },
+    "sortRule": {
+      "type": "object",
+      "description": "Orders terminal rows by one logical column.",
+      "properties": {
+        "col": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Logical column identifier."
+        },
+        "dir": {
+          "$ref": "#/$defs/sortDir",
+          "default": "asc",
+          "description": "Sort direction."
+        },
+        "nulls": {
+          "$ref": "#/$defs/nullPlacement",
+          "description": "Explicit null value ordering."
+        }
+      },
+      "required": [
+        "col"
+      ],
+      "additionalProperties": false
+    },
+    "highlightRule": {
+      "type": "object",
+      "description": "Applies formatting when a boolean expression matches a row or cell.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Report-wide unique highlight identifier."
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable rule name."
+        },
+        "sequence": {
+          "type": "integer",
+          "description": "Precedence value (higher sequence wins on conflict)."
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "row",
+            "cell",
+            "Row",
+            "Cell"
+          ],
+          "default": "row",
+          "description": "Whether the rule highlights the entire row or target cell."
+        },
+        "col": {
+          "type": "string",
+          "description": "Target column when scope is 'cell'."
+        },
+        "expr": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Portable boolean match expression."
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether the highlight rule is active."
+        },
+        "style": {
+          "$ref": "#/$defs/highlightStyle",
+          "description": "Colors applied on match."
+        }
+      },
+      "required": [
+        "id",
+        "expr"
+      ],
+      "additionalProperties": false
+    },
+    "highlightStyle": {
+      "type": "object",
+      "description": "Colors for a highlight rule.",
+      "properties": {
+        "bg": {
+          "type": "string",
+          "description": "Background color (e.g. '#ffebee')."
+        },
+        "fg": {
+          "type": "string",
+          "description": "Foreground text color (e.g. '#c62828')."
+        }
+      },
+      "additionalProperties": false
+    },
+    "aggregateRule": {
+      "type": "object",
+      "description": "Requests one aggregate over a terminal result column.",
+      "properties": {
+        "col": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Logical column identifier."
+        },
+        "fn": {
+          "$ref": "#/$defs/aggregateFn",
+          "description": "Aggregate function."
+        }
+      },
+      "required": [
+        "col",
+        "fn"
+      ],
+      "additionalProperties": false
+    },
+    "metricRule": {
+      "type": "object",
+      "description": "One aggregate metric for a group or pivot composable.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Document-wide stable synthetic output identifier (e.g. 'ir1')."
+        },
+        "col": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Source column to aggregate."
+        },
+        "fn": {
+          "$ref": "#/$defs/aggregateFn",
+          "description": "Aggregate function."
+        }
+      },
+      "required": [
+        "id",
+        "col",
+        "fn"
+      ],
+      "additionalProperties": false
+    },
+    "aggregateFn": {
+      "type": "string",
+      "enum": [
+        "count",
+        "sum",
+        "avg",
+        "median",
+        "min",
+        "max",
+        "countDistinct",
+        "Count",
+        "Sum",
+        "Avg",
+        "Median",
+        "Min",
+        "Max",
+        "CountDistinct"
+      ],
+      "description": "Supported aggregate function."
+    },
+    "sortDir": {
+      "type": "string",
+      "enum": [
+        "asc",
+        "desc",
+        "Asc",
+        "Desc"
+      ],
+      "description": "Direction for sorting."
+    },
+    "nullPlacement": {
+      "type": "string",
+      "enum": [
+        "first",
+        "last",
+        "First",
+        "Last"
+      ],
+      "description": "Null sorting placement."
+    },
+    "chartSortSpec": {
+      "type": "object",
+      "description": "Chart point sorting specification.",
+      "properties": {
+        "by": {
+          "type": "string",
+          "enum": [
+            "label",
+            "value",
+            "Label",
+            "Value"
+          ],
+          "default": "label",
+          "description": "Sort by category label or metric value."
+        },
+        "dir": {
+          "$ref": "#/$defs/sortDir",
+          "default": "asc",
+          "description": "Sort direction."
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

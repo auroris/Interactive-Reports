@@ -1,0 +1,11 @@
+{
+  "json.schemas": [
+    {
+      "fileMatch": [
+        "**/ReportDocuments/*.json",
+        "*.report.json"
+      ],
+      "url": "./schemas/report-document.schema.json"
+    }
+  ]
+}
