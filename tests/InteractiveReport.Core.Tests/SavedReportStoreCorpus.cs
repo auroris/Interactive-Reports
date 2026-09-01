@@ -88,53 +88,6 @@ public abstract class SavedReportStoreCorpus
     }
 
     [SkippableFact]
-    public async Task Put_preserves_an_insert_revision_and_advances_a_replacement_revision()
-    {
-        var report = Make("Synced", "alice");
-        var initialRevision = new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
-        report.ModifiedUtc = initialRevision;
-        await Store.Put(report);
-        Assert.Equal(initialRevision, (await Store.Get(report.Id))!.ModifiedUtc);
-
-        report.Title = "Synced v2";
-        report.ModifiedUtc = initialRevision;
-        await Store.Put(report);
-
-        var updated = await Store.Get(report.Id);
-        Assert.Equal("Synced v2", updated!.Title);
-        Assert.Equal(report.ModifiedUtc, updated.ModifiedUtc);
-        Assert.True(updated.ModifiedUtc > initialRevision);
-        Assert.Equal(SavedReportOrigin.User, updated.Origin);
-    }
-
-    [SkippableFact]
-    public async Task Conditional_Put_inserts_with_a_generated_id()
-    {
-        var winner = Make("Insert winner", "alice");
-        winner.ModifiedUtc = new DateTime(2026, 3, 4, 5, 6, 7, DateTimeKind.Utc);
-        Assert.True(await Store.Put(winner, expected: null));
-
-        var current = (await Store.Get(winner.Id))!;
-        Assert.Equal("Insert winner", current.Title);
-        Assert.Equal(winner.ModifiedUtc, current.ModifiedUtc);
-    }
-
-    [SkippableFact]
-    public async Task ListVisible_is_globals_plus_own_scoped_to_report()
-    {
-        await Store.Create(Make("Mine", "alice"));
-        await Store.Create(Make("Theirs", "bob"));
-        await Store.Create(Make("Published", "bob", global: true));
-        await Store.Create(Make("Other report", "alice", report: "big-orders"));
-
-        var alice = await Store.ListVisible("orders", "alice");
-        Assert.Equal(["Published", "Mine"], alice.Select(r => r.Title));
-
-        var anonymous = await Store.ListVisible("orders", null);
-        Assert.Equal(["Published"], anonymous.Select(r => r.Title));
-    }
-
-    [SkippableFact]
     public async Task ListFamily_returns_the_complete_unfiltered_named_family()
     {
         var anchor = Make("Anchor", "alice", global: true);
@@ -175,7 +128,7 @@ public abstract class SavedReportStoreCorpus
         Assert.NotNull(prior);
         Assert.False(prior.IsDefault);
         Assert.True(prior.IsGlobal);
-        Assert.Equal(2, (await Store.ListVisible("orders", null)).Count);
+        Assert.Equal(2, (await Store.ListFamily("orders")).Count);
     }
 
     [SkippableFact]
@@ -236,7 +189,9 @@ public abstract class SavedReportStoreCorpus
         // merely a repeat of the authorization metadata comparisons.
         var winner = expected with { StateJson = """{"search":"winner"}""" };
         Assert.True(await Store.Update(winner, expected));
-        Assert.NotEqual(expected.ModifiedUtc, winner.ModifiedUtc);
+        // Strictly newer, not merely different: a coarse clock must still yield a
+        // usable next CAS revision.
+        Assert.True(winner.ModifiedUtc > expected.ModifiedUtc);
 
         var stale = expected with { Title = "Stale overwrite", Owner = "mallory" };
         Assert.False(await Store.Update(stale, expected));
@@ -248,29 +203,6 @@ public abstract class SavedReportStoreCorpus
         Assert.Equal(winner.StateJson, current.StateJson);
         Assert.True(await Store.Delete(current));
         Assert.Null(await Store.Get(report.Id));
-    }
-
-    [SkippableFact]
-    public async Task Same_revision_Put_replacement_invalidates_the_prior_snapshot()
-    {
-        var report = Make("Put race", "alice");
-        await Store.Create(report);
-        var expected = (await Store.Get(report.Id))!;
-
-        var replacement = expected with
-        {
-            StateJson = """{"search":"replacement"}""",
-            ModifiedUtc = expected.ModifiedUtc,
-        };
-        Assert.True(await Store.Put(replacement, expected));
-        Assert.True(replacement.ModifiedUtc > expected.ModifiedUtc);
-
-        var staleWrite = expected with { Title = "stale" };
-        Assert.False(await Store.Update(staleWrite, expected));
-        Assert.False(await Store.Delete(expected));
-        Assert.Equal(
-            replacement.StateJson,
-            (await Store.Get(report.Id))!.StateJson);
     }
 
     [SkippableFact]
@@ -363,36 +295,23 @@ public abstract class SavedReportStoreCorpus
             SourceFile = "ReportDocuments/also-shared.json",
         });
 
-        Assert.Equal(3, (await Store.ListVisible("orders", "alice")).Count);
+        Assert.Equal(3, (await Store.ListFamily("orders")).Count);
     }
 
     [SkippableFact]
-    public async Task Put_propagates_non_uniqueness_insert_failures()
+    public async Task Create_rejects_a_structurally_invalid_row_before_it_reaches_the_database()
     {
-        // A broken row (null STATE_JSON) must never be reported as applied: treating
-        // every DbException as a lost insert race would let the synchronizer mark a
-        // missing row as synced. (Store is touched outside the assertion lambda so
-        // an unconfigured live target skips instead of failing the type check.)
+        // A broken row (null STATE_JSON) must be rejected outright rather than
+        // surfacing as a provider error the synchronizer could mistake for a lost
+        // insert race and mark as synced. (Store is touched outside the assertion
+        // lambda so an unconfigured live target skips instead of failing the type
+        // check.)
         var store = Store;
         var broken = Make("Broken", "alice");
         broken.StateJson = null!;
 
-        await Assert.ThrowsAsync<ArgumentException>(() => store.Put(broken));
+        await Assert.ThrowsAsync<ArgumentException>(() => store.Create(broken));
         Assert.Equal(0, broken.Id);
-    }
-
-    [SkippableFact]
-    public async Task ListVisible_matches_the_owner_exactly_on_every_dialect()
-    {
-        // Database equality is collation-dependent; visibility must use the same
-        // ordinal semantics as direct-resource authorization.
-        await Store.Create(Make("Cased", "Alice@Example.test"));
-
-        var wrongCase = await Store.ListVisible("orders", "alice@example.TEST");
-        var visible = await Store.ListVisible("orders", "Alice@Example.test");
-
-        Assert.Empty(wrongCase);
-        Assert.Equal("Cased", Assert.Single(visible).Title);
     }
 
     protected sealed class FixedConnectionFactory(Func<DbConnection> open) : IReportConnectionFactory

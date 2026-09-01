@@ -125,31 +125,6 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     }
 
     /// <summary>
-    /// Lists default, global, and caller-owned reports for one report definition.
-    /// </summary>
-    /// <param name="reportName">The configured report name whose definition or saved reports are being addressed.</param>
-    /// <param name="identity">The exact owner identity to include; <see langword="null"/> includes no private reports.</param>
-    /// <param name="ct">Signals that the operation should be canceled; defaults to <c>default</c>.</param>
-    /// <returns>Visible reports ordered with the default and global entries first, then by title.</returns>
-    /// <remarks>Ownership is filtered in memory with ordinal equality so database collations cannot change authorization behavior.</remarks>
-    public async Task<IReadOnlyList<SavedReport>> ListVisible(string reportName, string? identity, CancellationToken ct = default)
-    {
-        // Provider constraint: ownership filters in memory rather than in SQL: database string
-        // equality is collation-dependent (case-sensitive on SQLite and PostgreSQL by default),
-        // while every authorization decision compares identities ordinally
-        // (SavedReportAccessPolicy). One report's rows are few; identical semantics beat
-        // pushing the OR into the WHERE clause.
-        var rows = await Select(
-            q => q.Where("REPORT_NAME", reportName)
-                .OrderByDesc("IS_DEFAULT").OrderByDesc("IS_GLOBAL").OrderBy("TITLE"),
-            ct);
-        return rows
-            .Where(r => r.IsPublic
-                || (identity is not null && string.Equals(r.Owner, identity, StringComparison.Ordinal)))
-            .ToList();
-    }
-
-    /// <summary>
     /// Loads one configured report's complete document family in a single database query. No ownership or
     /// publication filtering is applied; callers reconcile this authoritative snapshot before
     /// filtering it in memory for the requesting identity.
@@ -167,28 +142,6 @@ public sealed class SqlSavedReportStore : ISavedReportStore
                 .OrderByDesc("IS_GLOBAL")
                 .OrderBy("TITLE"),
             ct);
-    }
-
-    /// <summary>
-    /// Lists metadata for default, global, and caller-owned reports without loading state JSON.
-    /// </summary>
-    /// <param name="reportName">The configured report name whose definition or saved reports are being addressed.</param>
-    /// <param name="identity">The exact owner identity to include; <see langword="null"/> includes no private reports.</param>
-    /// <param name="ct">Signals that the operation should be canceled; defaults to <c>default</c>.</param>
-    /// <returns>Visible metadata ordered with the default and global entries first, then by title.</returns>
-    public async Task<IReadOnlyList<SavedReportMetadata>> ListVisibleMetadata(
-        string reportName,
-        string? identity,
-        CancellationToken ct = default)
-    {
-        var rows = await SelectMetadata(
-            q => q.Where("REPORT_NAME", reportName)
-                .OrderByDesc("IS_DEFAULT").OrderByDesc("IS_GLOBAL").OrderBy("TITLE"),
-            ct);
-        return rows
-            .Where(r => r.IsPublic
-                || (identity is not null && string.Equals(r.Owner, identity, StringComparison.Ordinal)))
-            .ToList();
     }
 
     /// <summary>
@@ -311,108 +264,6 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     }
 
     /// <summary>
-    /// Repeatedly reads and upserts a saved report until it wins any concurrent revision race.
-    /// </summary>
-    /// <param name="report">The row to insert or use as the next replacement value.</param>
-    /// <param name="ct">Signals that the operation should be canceled; defaults to <c>default</c>.</param>
-    /// <returns>A task that completes after an insert or replacement commits.</returns>
-    /// <remarks>May retry database reads and writes. On replacement, advances <paramref name="report"/>'s <c>ModifiedUtc</c>.</remarks>
-    public async Task Put(SavedReport report, CancellationToken ct = default)
-    {
-        if (report.Id == 0)
-        {
-            var insertConfig = Validated(_config());
-            if (!await Put(insertConfig, report, expected: null, ct))
-                throw new InvalidOperationException("A generated saved-report insert did not commit.");
-            return;
-        }
-        var config = Validated(_config());
-        while (true)
-        {
-            var expected = await Get(config, report.Id, ct);
-            if (await Put(config, report, expected, ct)) return;
-        }
-    }
-
-    /// <summary>
-    /// Attempts one insert or revision-checked replacement against the supplied expected state.
-    /// </summary>
-    /// <param name="report">The row to insert or use as the replacement value.</param>
-    /// <param name="expected">The complete current snapshot, or <see langword="null"/> when the identifier is expected to be absent.</param>
-    /// <param name="ct">Signals that the operation should be canceled; defaults to <c>default</c>.</param>
-    /// <returns>A task whose result is <see langword="true"/> when the create or replacement committed against the expected snapshot; otherwise, <see langword="false"/>.</returns>
-    public Task<bool> Put(
-        SavedReport report,
-        SavedReport? expected,
-        CancellationToken ct = default)
-        => Put(Validated(_config()), report, expected, ct);
-
-    /// <summary>
-    /// Performs one insert or revision-checked replacement using an already validated configuration.
-    /// </summary>
-    /// <param name="config">The saved-report store connection, dialect, and table configuration.</param>
-    /// <param name="report">The row to insert or use as the replacement value.</param>
-    /// <param name="expected">The complete current snapshot, or <see langword="null"/> when the identifier is expected to be absent.</param>
-    /// <param name="ct">Signals that the operation should be canceled.</param>
-    /// <returns>A task whose result is <see langword="true"/> when the create or replacement committed against the expected snapshot; otherwise, <see langword="false"/>.</returns>
-    /// <remarks>Writes the database on success and updates <paramref name="report"/>'s <c>ModifiedUtc</c>. Returns <see langword="false"/> after a revision or identifier race.</remarks>
-    /// <exception cref="ArgumentException">Thrown when non-null expected and replacement identifiers differ.</exception>
-    /// <exception cref="SavedReportTitleConflictException">Thrown when another saved report already uses the title in the same visibility scope.</exception>
-    private async Task<bool> Put(
-        SavedReportStoreConfig config,
-        SavedReport report,
-        SavedReport? expected,
-        CancellationToken ct)
-    {
-        ValidateReport(report);
-        if (expected is not null && report.Id != expected.Id)
-            throw new ArgumentException(
-                "The replacement and expected saved-report snapshots must have the same id.",
-                nameof(expected));
-
-        if (expected is not null && !await IsCurrentSnapshot(config, expected, ct)) return false;
-
-        var modifiedUtc = expected is null
-            ? report.ModifiedUtc
-            : NextReplacementModifiedUtc(expected.ModifiedUtc, report.ModifiedUtc);
-        var row = ToRow(report with { ModifiedUtc = modifiedUtc });
-        try
-        {
-            bool applied;
-            if (expected is null)
-            {
-                if (report.Id != 0)
-                    throw new ArgumentException(
-                        "A new report document must leave its database-generated id unset.",
-                        nameof(report));
-                report.Id = await Insert(config, report with { ModifiedUtc = modifiedUtc }, ct);
-                applied = true;
-            }
-            else
-            {
-                row.Remove("ID");
-                applied = await Execute(
-                    config,
-                    cfg => MatchRevision(new Query(cfg.TableName), expected).AsUpdate(row),
-                    ct) == 1;
-            }
-
-            if (applied) report.ModifiedUtc = modifiedUtc;
-            return applied;
-        }
-        catch (DbException ex) when (DbErrorClassifier.IsUniqueViolation(config.Dialect, ex))
-        {
-            // Concurrency rule: when the expected-absent insert lost its id race, re-reading is the
-            // portable way to distinguish it even if the provider reports another unique index
-            // first. The caller must reconsider the replacement from that new snapshot. Other
-            // title conflicts keep their stable exception.
-            if (IsTitleUniqueViolation(config, ex))
-                throw new SavedReportTitleConflictException(report.ReportName, report.Title, ex);
-            throw;
-        }
-    }
-
-    /// <summary>
     /// Deletes a saved report only when the complete detached snapshot is still current.
     /// </summary>
     /// <param name="expected">The complete previously read snapshot used for optimistic concurrency.</param>
@@ -462,22 +313,6 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     {
         var now = DateTime.UtcNow;
         if (now > current) return now;
-        if (current == DateTime.MaxValue)
-            throw new InvalidOperationException(
-                "A saved report with DateTime.MaxValue cannot receive a later concurrency version.");
-        return current.AddTicks(1);
-    }
-
-    /// <summary>
-    /// Chooses a replacement timestamp strictly newer than both compared revisions.
-    /// </summary>
-    /// <param name="current">The stored concurrency timestamp that the replacement must exceed.</param>
-    /// <param name="requested">The replacement's requested timestamp.</param>
-    /// <returns><paramref name="requested"/> when it is newer; otherwise, one tick after <paramref name="current"/>.</returns>
-    /// <exception cref="InvalidOperationException">Thrown when a later value is required but <paramref name="current"/> is <see cref="DateTime.MaxValue"/>.</exception>
-    private static DateTime NextReplacementModifiedUtc(DateTime current, DateTime requested)
-    {
-        if (requested > current) return requested;
         if (current == DateTime.MaxValue)
             throw new InvalidOperationException(
                 "A saved report with DateTime.MaxValue cannot receive a later concurrency version.");

@@ -276,20 +276,15 @@ public sealed class SavedReportConcurrencyHttpTests
             if (replace is not null)
             {
                 var current = replace(snapshot!);
-                // Submit the same revision deliberately. A replacement Put must
-                // advance it before the endpoint's stale CAS reaches the database.
-                current.ModifiedUtc = snapshot!.ModifiedUtc;
-                await inner.Put(current, ct);
+                // The rival writes against the snapshot the endpoint just read, so its
+                // update commits and advances the revision before the endpoint's now-stale
+                // CAS reaches the database.
+                if (!await inner.Update(current, snapshot!, ct))
+                    throw new InvalidOperationException("The simulated rival write raced unexpectedly.");
                 ReplacementApplied = true;
             }
             return snapshot;
         }
-
-        public Task<IReadOnlyList<SavedReport>> ListVisible(
-            string reportName,
-            string? identity,
-            CancellationToken ct = default)
-            => inner.ListVisible(reportName, identity, ct);
 
         public Task<SavedReport?> FindDefault(
             string reportName,
@@ -323,15 +318,6 @@ public sealed class SavedReportConcurrencyHttpTests
             SavedReport currentDefault,
             CancellationToken ct = default)
             => inner.ReplaceDefault(report, expected, currentDefault, ct);
-
-        public Task Put(SavedReport report, CancellationToken ct = default)
-            => inner.Put(report, ct);
-
-        public Task<bool> Put(
-            SavedReport report,
-            SavedReport? expected,
-            CancellationToken ct = default)
-            => inner.Put(report, expected, ct);
 
         public Task<bool> Delete(SavedReport expected, CancellationToken ct = default)
             => inner.Delete(expected, ct);

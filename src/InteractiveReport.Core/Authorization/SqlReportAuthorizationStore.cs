@@ -87,28 +87,6 @@ public sealed class SqlReportAuthorizationStore : IReportAuthorizationStore
     }
 
     /// <summary>
-    /// Determines whether any database administrators are configured for report authorization.
-    /// </summary>
-    /// <param name="ct">Cancels persistence access.</param>
-    /// <returns>A task whose result is <see langword="true"/> when any database administrators are configured; otherwise, <see langword="false"/>.</returns>
-    public async Task<bool> HasAdministrators(CancellationToken ct = default)
-        => (await Select(query => query
-            .Where("ENTRY_KIND", KindText(ReportAuthorizationEntryKind.Administrator))
-            .Limit(1), ct)).Count != 0;
-
-    /// <summary>
-    /// Determines whether the identity is a database administrator for report authorization.
-    /// </summary>
-    /// <param name="identity">The canonical identity to compare ordinally.</param>
-    /// <param name="ct">Cancels persistence access.</param>
-    /// <returns>A task whose result is <see langword="true"/> when the identity is a database administrator; otherwise, <see langword="false"/>.</returns>
-    public async Task<bool> IsAdministrator(string identity, CancellationToken ct = default)
-        => (await Select(query => query
-                .Where("ID", EntryId(ReportAuthorizationEntryKind.Administrator, null, identity))
-                .Limit(1), ct))
-            .Any(row => string.Equals(row.Identity, identity, StringComparison.Ordinal));
-
-    /// <summary>
     /// Loads a report-user grant by report and identity.
     /// </summary>
     /// <param name="reportName">The configured report name compared through its case-insensitive key.</param>

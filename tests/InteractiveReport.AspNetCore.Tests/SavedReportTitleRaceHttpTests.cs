@@ -144,9 +144,6 @@ public sealed class SavedReportTitleRaceHttpTests : IAsyncLifetime
 
         public Task<SavedReport?> Get(long id, CancellationToken ct = default) => inner.Get(id, ct);
 
-        public Task<IReadOnlyList<SavedReport>> ListVisible(string reportName, string? identity, CancellationToken ct = default)
-            => inner.ListVisible(reportName, identity, ct);
-
         public Task<SavedReport?> FindTitleCollision(
             string reportName,
             string title,
@@ -169,13 +166,6 @@ public sealed class SavedReportTitleRaceHttpTests : IAsyncLifetime
             SavedReport currentDefault,
             CancellationToken ct = default)
             => inner.ReplaceDefault(report, expected, currentDefault, ct);
-
-        public Task Put(SavedReport report, CancellationToken ct = default) => inner.Put(report, ct);
-
-        public Task<bool> Put(
-            SavedReport report,
-            SavedReport? expected,
-            CancellationToken ct = default) => inner.Put(report, expected, ct);
 
         public Task<bool> Delete(SavedReport expected, CancellationToken ct = default)
             => inner.Delete(expected, ct);

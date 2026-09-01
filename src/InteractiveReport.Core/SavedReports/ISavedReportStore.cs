@@ -40,16 +40,6 @@ public interface ISavedReportStore
             && string.Equals(report.SourceFile, sourceFile, StringComparison.Ordinal));
 
     /// <summary>
-    /// Lists saved reports for one report definition visible to an identity: default and global rows
-    /// plus their own.
-    /// </summary>
-    /// <param name="reportName">The canonical report name that scopes the rows.</param>
-    /// <param name="identity">The optional canonical caller identity used for ownership visibility.</param>
-    /// <param name="ct">Cancels persistence access.</param>
-    /// <returns>Detached visible rows in the store's defined listing order.</returns>
-    Task<IReadOnlyList<SavedReport>> ListVisible(string reportName, string? identity, CancellationToken ct = default);
-
-    /// <summary>
     /// Lists the complete, unfiltered database family selected by one configured report name.
     /// Every public or private document is returned so reconciliation can
     /// compare appsettings with the database's whole view before caller visibility is applied.
@@ -70,26 +60,13 @@ public interface ISavedReportStore
     }
 
     /// <summary>
-    /// Returns the metadata-only counterpart to <see cref="ListVisible"/>.
-    /// </summary>
-    /// <param name="reportName">The canonical report name that scopes the rows.</param>
-    /// <param name="identity">The optional canonical caller identity used for ownership visibility.</param>
-    /// <param name="ct">Cancels persistence access.</param>
-    /// <returns>Detached visible metadata in the store's defined listing order.</returns>
-    async Task<IReadOnlyList<SavedReportMetadata>> ListVisibleMetadata(
-        string reportName,
-        string? identity,
-        CancellationToken ct = default)
-        => (await ListVisible(reportName, identity, ct)).Select(report => report.Metadata()).ToList();
-
-    /// <summary>
     /// Finds the specially flagged default document for one report family.
     /// </summary>
     /// <param name="reportName">The canonical report name that scopes the search.</param>
     /// <param name="ct">Cancels persistence access.</param>
     /// <returns>The flagged default document, or <see langword="null"/> when none exists.</returns>
     async Task<SavedReport?> FindDefault(string reportName, CancellationToken ct = default)
-        => (await ListVisible(reportName, identity: null, ct))
+        => (await ListFamily(reportName, ct))
             .Where(report => report.IsDefault)
             .FirstOrDefault();
 
@@ -159,32 +136,6 @@ public interface ISavedReportStore
         SavedReport report,
         SavedReport expected,
         SavedReport currentDefault,
-        CancellationToken ct = default);
-
-    /// <summary>
-    /// Inserts or replaces a row with internal compare-and-swap retries. Inserts preserve the supplied <c>ModifiedUtc</c>. Every
-    /// replacement advances ModifiedUtc beyond the stored version, even when the supplied value is unchanged
-    /// or older, so it remains a valid CAS revision. Implementations must retry conditional conflicts
-    /// without applying a stale replacement to a newer row.
-    /// </summary>
-    /// <param name="report">The desired row; replacement updates its modification timestamp to the committed revision.</param>
-    /// <param name="ct">Cancels persistence and retries.</param>
-    /// <returns>A task that completes after an insert or replacement commits.</returns>
-    Task Put(SavedReport report, CancellationToken ct = default);
-
-    /// <summary>
-    /// Atomically inserts <paramref name="report"/> when <paramref name="expected"/> is null and the id
-    /// is absent, or replaces the row when it still equals the detached <paramref name="expected"/>
-    /// snapshot. A replacement advances ModifiedUtc in storage and on <paramref name="report"/>. Returns
-    /// false on a concurrent insert, update, or delete. Snapshot strings use ordinal equality.
-    /// </summary>
-    /// <param name="report">The desired row; replacement updates its modification timestamp to the committed revision.</param>
-    /// <param name="expected">The expected detached row, or <see langword="null"/> to require an absent id.</param>
-    /// <param name="ct">Cancels persistence.</param>
-    /// <returns>A task whose result is <see langword="true"/> when the create or replacement committed against the expected snapshot; otherwise, <see langword="false"/>.</returns>
-    Task<bool> Put(
-        SavedReport report,
-        SavedReport? expected,
         CancellationToken ct = default);
 
     /// <summary>

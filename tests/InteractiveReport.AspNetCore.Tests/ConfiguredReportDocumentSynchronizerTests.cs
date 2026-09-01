@@ -173,7 +173,7 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
             StateJson = "{\"v\":3}",
             ModifiedUtc = DateTime.UtcNow,
         };
-        await store.Put(userRow);
+        await store.Create(userRow);
         await synchronizer.EnsureSynced();
         Assert.Equal(3, store.Rows.Count);
 
@@ -312,13 +312,6 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
             return Task.FromResult(Rows.TryGetValue(id, out var row) ? row with { } : null);
         }
 
-        public Task<IReadOnlyList<SavedReport>> ListVisible(string reportName, string? identity, CancellationToken ct = default)
-            => Task.FromResult<IReadOnlyList<SavedReport>>(Rows.Values
-                .Where(row => row.ReportName == reportName
-                    && (row.IsPublic || row.Owner == identity))
-                .Select(row => row with { })
-                .ToArray());
-
         public Task<IReadOnlyList<SavedReport>> ListFamily(string reportName, CancellationToken ct = default)
         {
             Calls.Add($"listFamily:{reportName}");
@@ -379,41 +372,6 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
                 ModifiedUtc = currentDefault.ModifiedUtc.AddTicks(1),
             };
             report.ModifiedUtc = current.ModifiedUtc.AddTicks(1);
-            Rows[report.Id] = report with { };
-            return Task.FromResult(true);
-        }
-
-        public async Task Put(SavedReport report, CancellationToken ct = default)
-        {
-            if (report.Id == 0)
-            {
-                await Create(report, ct);
-                return;
-            }
-            Rows.TryGetValue(report.Id, out var expected);
-            if (!await Put(report, expected, ct))
-                throw new InvalidOperationException("The recording-store write raced unexpectedly.");
-        }
-
-        public Task<bool> Put(
-            SavedReport report,
-            SavedReport? expected,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            Calls.Add($"put:{report.Id}");
-            var exists = Rows.TryGetValue(report.Id, out var current);
-            if (expected is null)
-            {
-                if (exists) return Task.FromResult(false);
-            }
-            else if (!exists || !SameSnapshot(current!, expected))
-            {
-                return Task.FromResult(false);
-            }
-
-            if (current is not null && report.ModifiedUtc <= current.ModifiedUtc)
-                report.ModifiedUtc = current.ModifiedUtc.AddTicks(1);
             Rows[report.Id] = report with { };
             return Task.FromResult(true);
         }

@@ -58,19 +58,6 @@ public interface IReportAuthorizationStore
         string? identity,
         CancellationToken ct = default);
     /// <summary>
-    /// Determines whether any database administrators are configured for report authorization.
-    /// </summary>
-    /// <param name="ct">Signals that the operation should be canceled; defaults to <c>default</c>.</param>
-    /// <returns>A task whose result is <see langword="true"/> when any database administrators are configured; otherwise, <see langword="false"/>.</returns>
-    Task<bool> HasAdministrators(CancellationToken ct = default);
-    /// <summary>
-    /// Determines whether the identity is a database administrator for report authorization.
-    /// </summary>
-    /// <param name="identity">The canonical identity to check.</param>
-    /// <param name="ct">Signals that the operation should be canceled; defaults to <c>default</c>.</param>
-    /// <returns>A task whose result is <see langword="true"/> when the identity is a database administrator; otherwise, <see langword="false"/>.</returns>
-    Task<bool> IsAdministrator(string identity, CancellationToken ct = default);
-    /// <summary>
     /// Loads a report-user grant by report and identity.
     /// </summary>
     /// <param name="reportName">The configured report name to check.</param>

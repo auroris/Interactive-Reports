@@ -498,54 +498,6 @@ public static class EndpointExtensions
         => ReportDocumentDefaults.Create(def);
 
     /// <summary>
-    /// Determines whether a composable changes the table shape and therefore requires schema recompilation.
-    /// </summary>
-    /// <param name="composable">The composable to classify.</param>
-    /// <returns><see langword="true"/> when the composable changes result shape; otherwise, <see langword="false"/>.</returns>
-    private static bool IsShapeComposable(TableComposable composable)
-        => IsComposableKind(composable, "group")
-            || IsComposableKind(composable, "pivot")
-            || IsComposableKind(composable, "chart");
-
-    /// <summary>
-    /// Determines whether a composable has the requested kind, ignoring casing and surrounding whitespace.
-    /// </summary>
-    /// <param name="composable">The composable whose kind should be tested.</param>
-    /// <param name="kind">The canonical operation name to compare.</param>
-    /// <returns><see langword="true"/> when the operation names match; otherwise, <see langword="false"/>.</returns>
-    private static bool IsComposableKind(TableComposable composable, string kind)
-        => string.Equals(composable.Kind?.Trim(), kind, StringComparison.OrdinalIgnoreCase);
-
-    /// <summary>
-    /// Follows the selected table's explicit ancestry to its definition input. This
-    /// deliberately ignores dictionary enumeration order: a document may contain several independent roots
-    /// and table identifiers carry no semantic role.
-    /// </summary>
-    /// <param name="state">The complete state whose active-table ancestry should be followed.</param>
-    /// <returns>The table that reads from <c>definition</c>, or <see langword="null"/> when the ancestry is missing, broken, or cyclic.</returns>
-    private static ReportTable? DefinitionInputTable(ReportState state)
-    {
-        if (state.Tables is not { Count: > 0 } tables
-            || string.IsNullOrWhiteSpace(state.ActiveTable))
-            return null;
-
-        var lookup = new Dictionary<string, ReportTable>(tables, StringComparer.OrdinalIgnoreCase);
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var current = state.ActiveTable;
-        while (!string.Equals(current, "definition", StringComparison.OrdinalIgnoreCase))
-        {
-            if (!seen.Add(current) || !lookup.TryGetValue(current, out var table))
-                return null;
-            if (string.Equals(table.From, "definition", StringComparison.OrdinalIgnoreCase))
-                return table;
-            if (string.IsNullOrWhiteSpace(table.From))
-                return null;
-            current = table.From;
-        }
-        return null;
-    }
-
-    /// <summary>
     /// Executes a posted report query through the shared request pipeline.
     /// </summary>
     /// <param name="name">The configured or built-in report-definition key from the route.</param>
