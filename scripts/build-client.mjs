@@ -10,7 +10,7 @@ const options = {
         "src/client/ir-admin.js",
         "src/client/ir-chart.js",
     ],
-    outdir: "src/InteractiveReport.AspNetCore/Ui/dist",
+    outdir: "src/InteractiveReport.Client.Json/Ui/dist",
     bundle: true,
     entryNames: "[name]",
     format: "esm",

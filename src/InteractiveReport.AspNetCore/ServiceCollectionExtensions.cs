@@ -2,7 +2,6 @@ using System.Data.Common;
 using InteractiveReport.Core.Authorization;
 using InteractiveReport.Core.Definitions;
 using InteractiveReport.Core.Execution;
-using InteractiveReport.Core.Export;
 using InteractiveReport.Core.Model;
 using InteractiveReport.Core.SavedReports;
 using InteractiveReport.Core.Schema;
@@ -15,11 +14,11 @@ using Microsoft.Extensions.Options;
 
 namespace InteractiveReport.AspNetCore;
 
-/// <summary>Registers the Interactive Reports service graph with an ASP.NET Core host.</summary>
+/// <summary>Registers the Interactive Reports server graph with an ASP.NET Core host.</summary>
 public static class ServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers Interactive Reports engine and transport services from one configuration section.
+    /// Registers the Interactive Reports engine, persistence, and transport-neutral client boundary.
     /// </summary>
     /// <param name="services">The service collection in which to register Interactive Reports dependencies.</param>
     /// <param name="configuration">The application configuration containing Interactive Reports settings.</param>
@@ -77,8 +76,8 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<IReportConnectionFactory>(),
             sp.GetRequiredService<SchemaCache>(),
             logging.For<ReportExecutor>()));
-        services.AddSingleton<IReportFileExporter, ReportFileExporter>();
-        services.AddSingleton<IReportAccessService, ReportAccessService>();
+        services.AddSingleton<IReportAuthorizationService, ReportAuthorizationService>();
+        services.AddSingleton<IInteractiveReportServer, InteractiveReportServer>();
         services.AddSingleton(sp => new DefaultReportDocumentService(
             sp.GetRequiredService<ISavedReportStore>(),
             logging.For<DefaultReportDocumentService>()));
@@ -128,7 +127,7 @@ public sealed class InteractiveReportBuilder
 
     /// <summary>
     /// Sends every Interactive Reports log event to one host-owned logger. Omitting this and the
-    /// logger argument on MapInteractiveReports keeps the package silent. The host remains responsible for
+    /// logger argument on MapInteractiveReportJson keeps the package silent. The host remains responsible for
     /// levels, providers, destinations, and scopes.
     /// </summary>
     /// <param name="logger">The host-provided logger that receives diagnostic events; <see langword="null"/> disables logging.</param>

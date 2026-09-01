@@ -1,5 +1,5 @@
 using System.Text;
-using InteractiveReport.Core.Export;
+using InteractiveReport.Client.FileDownload;
 using InteractiveReport.Core.Model;
 
 namespace InteractiveReport.Core.Tests;

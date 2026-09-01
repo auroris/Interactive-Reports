@@ -3,7 +3,9 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\InteractiveReport.Core\InteractiveReport.Core.csproj" />
     <ProjectReference Include="..\..\src\InteractiveReport.AspNetCore\InteractiveReport.AspNetCore.csproj" />
-    <ProjectReference Include="..\..\src\InteractiveReport.GraphQL\InteractiveReport.GraphQL.csproj" />
+    <ProjectReference Include="..\..\src\InteractiveReport.Client.Json\InteractiveReport.Client.Json.csproj" />
+    <ProjectReference Include="..\..\src\InteractiveReport.Client.FileDownload\InteractiveReport.Client.FileDownload.csproj" />
+    <ProjectReference Include="..\..\src\InteractiveReport.Client.GraphQL\InteractiveReport.Client.GraphQL.csproj" />
   </ItemGroup>
 
   <ItemGroup>

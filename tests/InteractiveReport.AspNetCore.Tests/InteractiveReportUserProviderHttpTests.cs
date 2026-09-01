@@ -130,7 +130,7 @@ public sealed class InteractiveReportUserProviderHttpTests
             }
             await next();
         });
-        app.MapInteractiveReports("/api/reports");
+        app.MapInteractiveReportJson("/api/reports");
         await app.StartAsync();
 
         var address = app.Services.GetRequiredService<IServer>()

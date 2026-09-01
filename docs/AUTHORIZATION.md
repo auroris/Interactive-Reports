@@ -5,9 +5,11 @@ authenticate users, issue cookies or tokens, or maintain a second user directory
 Authentication middleware populates `HttpContext.User`; Interactive Reports passes
 that `ClaimsPrincipal` to its authorization gates.
 
-The mapped server API is the security boundary. The caller may be the packaged web
-component, another application, a scheduled process, a hand-written HTTP client, or
-the optional GraphQL adapter.
+The central `IReportAuthorizationService` is the security boundary shared by mapped
+clients. JSON, GraphQL, and file-download packages translate their transports into an
+`InteractiveReportRequestContext`; the server makes definition, saved-resource,
+administrator, application-authorizer, feature, and trusted-context decisions without
+depending on `HttpContext` or an HTTP result type.
 
 These controls make internet exposure possible; they do not make it the preferred
 deployment. Keep the application on a trusted network when practical. If it must be
@@ -44,7 +46,7 @@ Application-operation authorization is one layer in a larger security model. A
 request may need to pass all of these gates:
 
 1. Host endpoint conventions, such as
-   `app.MapInteractiveReports(...).RequireAuthorization(...)`.
+   `app.MapInteractiveReportJson(...).RequireAuthorization(...)`.
 2. The report definition's `authorization` block.
 3. Built-in saved-report ownership, publication, and read-only rules.
 4. Every configured application-operation authorizer.
@@ -68,7 +70,7 @@ var app = builder.Build();
 app.UseAuthentication();
 app.UseAuthorization();
 
-app.MapInteractiveReports("/api/reports");
+app.MapInteractiveReportJson("/api/reports");
 ```
 
 Interactive Reports does not require a particular authentication scheme. The host
@@ -224,8 +226,9 @@ grants and the union of configured/database administrators. The application auth
 receives the operation facts so it can add restrictions or supply administrator
 authority only when both built-in administrator sources are empty.
 
-Authorization is centralized in `IReportAccessService`. Configuration
-stores expose a lightweight name/authorization envelope, allowing authentication,
+Authorization decisions are centralized in the server's transport-neutral
+`IReportAuthorizationService`. The JSON client's `IReportAccessService` is its HTTP
+response adapter over that boundary. Configuration stores expose a lightweight name/authorization envelope, allowing authentication,
 policy, administrator, and named-user gates to run before connection resolution and
 saved-default hydration. Saved-report listing and normalized title-collision queries
 occur only after that report-level gate succeeds. Definition-free security endpoints
@@ -236,8 +239,8 @@ use the same service before invoking their authorization store or user provider.
 | Action | Request that emits it | Built-in notes |
 |---|---|---|
 | `ViewReport` | Root configuration catalogue or schema for an ordinary report | Report-definition authentication and policy run first. The root catalogue returns names and titles only; it does not reconcile documents. |
-| `Query` | Process a client document through HTTP, or execute a stored document through GraphQL | HTTP processing authorizes only the resolved report definition and never supplies original document metadata. GraphQL loads a stored document and supplies `SavedReport` metadata. |
-| `Export` | CSV export | The report's `download` feature must also be enabled. Admin-list export emits `ListAllSavedReports` as well. |
+| `Query` | Process a client document through JSON, or execute a stored document through GraphQL | JSON processing authorizes only the resolved report definition and never supplies original document metadata. GraphQL loads a stored document and supplies `SavedReport` metadata. |
+| `Export` | File-client download | The report's `download` feature must also be enabled. Admin-list download emits `ListAllSavedReports` as well. |
 | `ListSavedReports` | List visible saved reports for one report definition | The server reconciles the complete family in one store query, then filters in memory. Administrators see all rows; other callers see public and exactly owned rows. |
 | `ReadSavedReport` | Load one saved report, or execute it through GraphQL | Public, owner, and administrator access are distinguished from `SavedReport` metadata and the principal. |
 | `CreateSavedReport` | Create a saved report | Requires an authenticated canonical owner and the `savedReports` feature. Receives the typed definition before publication actions are derived. |
@@ -246,7 +249,7 @@ use the same service before invoking their authorization store or user provider.
 | `PublishGlobalReport` | Effective definition changes public status | Emitted for both publishing and unpublishing after base-action mutation. Administrator action. |
 | `SelectDefaultReport` | Effective definition selects a new family default | Administrator action. The new default becomes global and the previous default remains global. A configured default cannot be replaced through the API. |
 | `ChangeSavedReportOwner` | Effective definition changes owner | Administrator action. |
-| `ListAllSavedReports` | Administrator view of a family list, or schema/query/export of the built-in `__saved-reports` definition | Administrator action. Its export also emits `Export`. |
+| `ListAllSavedReports` | Administrator view of a family list, or schema/query/download of the built-in `__saved-reports` definition | Administrator action. Its download also emits `Export`. |
 | `ListAuthorizationUsers` | Resolve the protected administration user directory | Administrator action. Directory entries are choices, not grants. |
 | `ManageAuthorization` | List or change database administrators, report restrictions, and report-user grants | Administrator action. Configuration grants remain read-only. |
 | `DownloadReportDocument` | Download the canonical admin JSON envelope | Administrator action. |

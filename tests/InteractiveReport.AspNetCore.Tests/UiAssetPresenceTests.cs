@@ -8,9 +8,9 @@ namespace InteractiveReport.AspNetCore.Tests;
 public sealed class UiAssetPresenceTests
 {
     [Theory]
-    [InlineData("InteractiveReport.AspNetCore.Ui.ir.js")]
-    [InlineData("InteractiveReport.AspNetCore.Ui.ir-admin.js")]
-    [InlineData("InteractiveReport.AspNetCore.Ui.ir-chart.js")]
+    [InlineData("InteractiveReport.Client.Json.Ui.ir.js")]
+    [InlineData("InteractiveReport.Client.Json.Ui.ir-admin.js")]
+    [InlineData("InteractiveReport.Client.Json.Ui.ir-chart.js")]
     public void The_browser_bundles_are_embedded_under_their_logical_names(string resource)
     {
         Assert.Contains(resource, typeof(UiEndpoints).Assembly.GetManifestResourceNames());

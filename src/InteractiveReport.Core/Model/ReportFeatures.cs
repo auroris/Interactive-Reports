@@ -52,7 +52,7 @@ public static class ReportFeatures
     /// </summary>
     public const string SavedReports = "savedReports";
 
-    /// <summary>Enables the Download menu. The export endpoint enforces this feature server-side.</summary>
+    /// <summary>Enables the Download menu. The file-download client enforces this feature server-side.</summary>
     public const string Download = "download";
 
     /// <summary>Gets every known feature token in stable client display order.</summary>

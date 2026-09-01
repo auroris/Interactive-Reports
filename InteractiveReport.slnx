@@ -4,8 +4,10 @@
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/InteractiveReport.AspNetCore/InteractiveReport.AspNetCore.csproj" />
+    <Project Path="src/InteractiveReport.Client.Json/InteractiveReport.Client.Json.csproj" />
+    <Project Path="src/InteractiveReport.Client.FileDownload/InteractiveReport.Client.FileDownload.csproj" />
     <Project Path="src/InteractiveReport.Core/InteractiveReport.Core.csproj" />
-    <Project Path="src/InteractiveReport.GraphQL/InteractiveReport.GraphQL.csproj" />
+    <Project Path="src/InteractiveReport.Client.GraphQL/InteractiveReport.Client.GraphQL.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/InteractiveReport.AspNetCore.Tests/InteractiveReport.AspNetCore.Tests.csproj" />

@@ -14,7 +14,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="Ui\dist\*" LogicalName="InteractiveReport.AspNetCore.Ui.%(Filename)%(Extension)" />
     <None Include="..\..\README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 
@@ -22,19 +21,8 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Description>APEX-style interactive reports for ASP.NET Core: add the package, configure a data source and a SELECT per report, map the endpoints, and open the packaged report page. Ships the embedded browser UI, saved reports, CSV export, and per-report authorization.</Description>
+    <Description>Interactive Reports server integration for ASP.NET Core: configuration, persistence, execution, and a transport-neutral authorization/query boundary for client adapters.</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
-
-  <!-- Invariant: the embedded-resource glob above is silent when Ui\dist is empty (bundles
-       are built by npm, not committed). A UI-less package or Release build is always a
-       mistake, so fail loudly. Debug builds stay guard-free: the Workbench's light-DOM "run
-       npm build" warning is the intended inner dev loop. -->
-  <Target Name="EnsureUiBundlesOnReleaseBuild" BeforeTargets="BeforeBuild" Condition="'$(Configuration)' == 'Release'">
-    <Error Condition="!Exists('$(MSBuildProjectDirectory)\Ui\dist\ir.js') or !Exists('$(MSBuildProjectDirectory)\Ui\dist\ir-admin.js') or !Exists('$(MSBuildProjectDirectory)\Ui\dist\ir-chart.js')" Text="InteractiveReport.AspNetCore: Ui\dist is missing the browser bundles (ir.js, ir-admin.js, ir-chart.js). Run 'npm ci &amp;&amp; npm run build' at the repository root first." />
-  </Target>
-  <Target Name="EnsureUiBundlesOnPack" BeforeTargets="GenerateNuspec">
-    <Error Condition="!Exists('$(MSBuildProjectDirectory)\Ui\dist\ir.js') or !Exists('$(MSBuildProjectDirectory)\Ui\dist\ir-admin.js') or !Exists('$(MSBuildProjectDirectory)\Ui\dist\ir-chart.js')" Text="InteractiveReport.AspNetCore: Ui\dist is missing the browser bundles (ir.js, ir-admin.js, ir-chart.js). Run 'npm ci &amp;&amp; npm run build' at the repository root first." />
-  </Target>
 
 </Project>

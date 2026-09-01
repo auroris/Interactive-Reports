@@ -30,6 +30,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\InteractiveReport.Core\InteractiveReport.Core.csproj" />
+    <ProjectReference Include="..\..\src\InteractiveReport.Client.FileDownload\InteractiveReport.Client.FileDownload.csproj" />
   </ItemGroup>
 
 </Project>

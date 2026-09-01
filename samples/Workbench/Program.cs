@@ -5,8 +5,10 @@
 
 using GraphQL.Server.Ui.GraphiQL;
 using InteractiveReport.AspNetCore;
+using InteractiveReport.Client.Json;
+using InteractiveReport.Client.FileDownload;
 using InteractiveReport.Core.Model;
-using InteractiveReport.GraphQL;
+using InteractiveReport.Client.GraphQL;
 using Microsoft.Data.Sqlite;
 using Workbench;
 
@@ -52,6 +54,8 @@ builder.Services.AddAuthorization(options =>
     options.AddPolicy("WorkbenchAdmins", policy =>
         policy.RequireAssertion(ctx => ctx.User.Identity?.Name == DevAuthHandler.DefaultUser)));
 builder.Services.AddInteractiveReportGraphQL();
+builder.Services.AddInteractiveReportJson();
+builder.Services.AddInteractiveReportFileDownload();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {
@@ -84,7 +88,8 @@ if (app.Environment.IsDevelopment())
 
 var interactiveReportLogger = app.Services.GetRequiredService<ILoggerFactory>()
     .CreateLogger("InteractiveReport");
-app.MapInteractiveReports("/api/reports", interactiveReportLogger);
+app.MapInteractiveReportJson("/api/reports", interactiveReportLogger);
+app.MapInteractiveReportFileDownload("/api/download");
 app.MapInteractiveReportGraphQL("/graphql");
 if (app.Environment.IsDevelopment())
     app.MapGraphQLGraphiQL("/graphiql", new GraphiQLOptions

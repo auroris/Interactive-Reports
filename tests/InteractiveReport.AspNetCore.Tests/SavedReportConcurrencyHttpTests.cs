@@ -3,7 +3,7 @@ using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text.Json;
 using InteractiveReport.Core.SavedReports;
-using InteractiveReport.GraphQL;
+using InteractiveReport.Client.GraphQL;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
@@ -226,7 +226,7 @@ public sealed class SavedReportConcurrencyHttpTests
             }
             await next();
         });
-        app.MapInteractiveReports("/api/reports");
+        app.MapInteractiveReportJson("/api/reports");
         app.MapInteractiveReportGraphQL("/graphql");
         await app.StartAsync();
 

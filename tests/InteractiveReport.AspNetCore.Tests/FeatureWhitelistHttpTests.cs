@@ -3,7 +3,6 @@ using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
-using InteractiveReport.Core.Export;
 using InteractiveReport.Core.Model;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -19,7 +18,7 @@ namespace InteractiveReport.AspNetCore.Tests;
 
 /// <summary>
 /// The feature whitelist over real HTTP: the schema payload always carries the
-/// resolved set, download 403s at the export endpoint, saved-report creation 403s,
+/// resolved set, download 403s at the file-client endpoint, saved-report creation 403s,
 /// and — deliberately — the query endpoint stays feature-blind (§4: presentation
 /// tokens are not a data boundary).
 /// </summary>
@@ -72,6 +71,7 @@ public sealed class FeatureWhitelistHttpTests : IAsyncLifetime
         builder.Services
             .AddInteractiveReports(builder.Configuration)
             .AddConnection("FeatureData", _ => new SqliteConnection(connectionString));
+        builder.Services.AddInteractiveReportFileDownload();
 
         _app = builder.Build();
         _app.Use(async (context, next) =>
@@ -81,7 +81,8 @@ public sealed class FeatureWhitelistHttpTests : IAsyncLifetime
                 authenticationType: "FeatureTest"));
             await next();
         });
-        _app.MapInteractiveReports("/api/reports");
+        _app.MapInteractiveReportJson("/api/reports");
+        _app.MapInteractiveReportFileDownload("/api/download");
         await _app.StartAsync();
 
         var address = _app.Services.GetRequiredService<IServer>()
@@ -122,34 +123,37 @@ public sealed class FeatureWhitelistHttpTests : IAsyncLifetime
     public async Task Export_is_refused_when_download_is_not_whitelisted()
     {
         using var refused = await _client.PostAsync(
-            "/api/reports/locked/export?format=csv", JsonContent.Create(new { }));
+            "/api/download/locked/csv", JsonContent.Create(new { }));
         Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
         var problem = await ReadJson(refused);
         Assert.Equal("IR-1100", problem.GetProperty("code").GetString());
         Assert.Contains("download", problem.GetProperty("details").GetString());
 
         using var allowed = await _client.PostAsync(
-            "/api/reports/open/export?format=csv", JsonContent.Create(new { }));
+            "/api/download/open/csv",
+            JsonContent.Create(new
+            {
+                page = new { index = 2, size = 1 },
+                activeTable = "base",
+                tables = new
+                {
+                    @base = new
+                    {
+                        from = "definition",
+                        composables = new object[]
+                        {
+                            new { kind = "labels", labels = new { LABEL = "Renamed" } },
+                        },
+                    },
+                },
+            }));
         Assert.Equal(HttpStatusCode.OK, allowed.StatusCode);
         Assert.Equal("text/csv", allowed.Content.Headers.ContentType?.MediaType);
-    }
-
-    [Fact]
-    public async Task In_process_file_exporter_returns_bytes_without_transport_authorization()
-    {
-        var exporter = _app!.Services.GetRequiredService<IReportFileExporter>();
-
-        // "locked" deliberately has no download feature. That feature gate belongs
-        // to the HTTP adapter; the host's in-process service is a trusted boundary.
-        var export = await exporter.Export("locked", new ReportState());
-
-        Assert.Equal("locked.csv", export.FileName);
-        Assert.Equal("text/csv; charset=utf-8", export.ContentType);
-        Assert.False(export.Truncated);
-        var csv = Encoding.UTF8.GetString(export.Bytes);
-        Assert.Contains("Id,Label", csv);
-        Assert.Contains("1,first", csv);
-        Assert.Contains("2,second", csv);
+        Assert.Equal("false", allowed.Headers.GetValues("X-IR-Truncated").Single());
+        var csv = await allowed.Content.ReadAsStringAsync();
+        Assert.Contains("Id,Renamed\r\n", csv);
+        Assert.Contains("1,first\r\n", csv);
+        Assert.Contains("2,second\r\n", csv);
     }
 
     [Fact]

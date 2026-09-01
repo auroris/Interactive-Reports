@@ -108,7 +108,7 @@ public sealed class DataSourceHttpTests : IAsyncLifetime
                 authenticationType: "DataSourceTest"));
             await next();
         });
-        _app.MapInteractiveReports("/api/reports");
+        _app.MapInteractiveReportJson("/api/reports");
         await _app.StartAsync();
 
         var address = _app.Services.GetRequiredService<IServer>()

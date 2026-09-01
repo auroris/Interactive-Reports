@@ -111,6 +111,13 @@ class ReportController {
             ?? defaultBase;
     }
     get base() { return this.apiBase.replace(/\/+$/, ""); }
+    get downloadBase() {
+        const configured = this.host.getAttribute("download-base")?.replace(/\/+$/, "");
+        if (configured) return configured;
+        return /\/reports$/i.test(this.base)
+            ? this.base.replace(/reports$/i, "download")
+            : "/api/download";
+    }
     get locale() { return resolveLocale(this.host); }
     getAttribute(name) { return this.host.getAttribute(name); }
     hasAttribute(name) { return this.host.hasAttribute(name); }
@@ -1159,6 +1166,14 @@ export class InteractiveReportElement extends HTMLElement {
     set apiBase(value) {
         if (value === null || value === undefined) this.removeAttribute("api-base");
         else this.setAttribute("api-base", String(value));
+    }
+
+    /** The file-client endpoint prefix; defaults beside an <c>api-base</c> ending in <c>/reports</c>. */
+    get downloadBase() { return controllerFor(this).downloadBase; }
+    /** @param {string|null|undefined} value - The new download prefix; nullish restores the default. */
+    set downloadBase(value) {
+        if (value === null || value === undefined) this.removeAttribute("download-base");
+        else this.setAttribute("download-base", String(value));
     }
 
     /**

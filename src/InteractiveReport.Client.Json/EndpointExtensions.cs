@@ -4,8 +4,8 @@
 // execution services.
 
 using System.Text.Json;
+using InteractiveReport.AspNetCore;
 using InteractiveReport.Core.Execution;
-using InteractiveReport.Core.Export;
 using InteractiveReport.Core.Expressions;
 using InteractiveReport.Core.Model;
 using InteractiveReport.Core.Validation;
@@ -15,7 +15,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace InteractiveReport.AspNetCore;
+namespace InteractiveReport.Client.Json;
 
 /// <summary>Provides the host entrypoint that maps the Interactive Reports HTTP surface.</summary>
 public static class EndpointExtensions
@@ -53,15 +53,15 @@ public static class EndpointExtensions
     /// <remarks>Adds routes and endpoint filters to <paramref name="endpoints"/>.</remarks>
     /// <example>
     /// <code><![CDATA[
-    /// app.MapInteractiveReports("/api/reports")
+    /// app.MapInteractiveReportJson("/api/reports")
     ///     .RequireAuthorization("ReportingUsers")
     ///     .RequireRateLimiting("reports");
     /// ]]></code>
     /// </example>
-    public static RouteGroupBuilder MapInteractiveReports(
+    public static RouteGroupBuilder MapInteractiveReportJson(
         this IEndpointRouteBuilder endpoints,
         string prefix = "/api/reports")
-        => MapInteractiveReportsCore(endpoints, prefix, logger: null);
+        => MapInteractiveReportJsonCore(endpoints, prefix, logger: null);
 
     /// <summary>
     /// Mounts the endpoints and sends package logging to the supplied
@@ -73,13 +73,13 @@ public static class EndpointExtensions
     /// <returns>The mapped route group, which the host can configure further.</returns>
     /// <exception cref="ArgumentNullException">Thrown when a required argument is <see langword="null"/>.</exception>
     /// <remarks>Adds routes and endpoint filters and installs <paramref name="logger"/> as the package logger.</remarks>
-    public static RouteGroupBuilder MapInteractiveReports(
+    public static RouteGroupBuilder MapInteractiveReportJson(
         this IEndpointRouteBuilder endpoints,
         string prefix,
         ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(logger);
-        return MapInteractiveReportsCore(endpoints, prefix, logger);
+        return MapInteractiveReportJsonCore(endpoints, prefix, logger);
     }
 
     /// <summary>
@@ -91,7 +91,7 @@ public static class EndpointExtensions
     /// <returns>The mapped route group, which the host can configure further.</returns>
     /// <remarks>Adds route handlers, metadata, and filters to <paramref name="endpoints"/> and optionally replaces the package logger.</remarks>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="endpoints"/> is <see langword="null"/>.</exception>
-    private static RouteGroupBuilder MapInteractiveReportsCore(
+    private static RouteGroupBuilder MapInteractiveReportJsonCore(
         IEndpointRouteBuilder endpoints,
         string prefix,
         ILogger? logger)
@@ -134,15 +134,6 @@ public static class EndpointExtensions
             .Accepts<ReportLovRequest>("application/json")
             .Produces<ReportLovResult>()
             .Produces<InteractiveReportError>(StatusCodes.Status400BadRequest);
-        ProtectedApi(
-                group.MapPost("/{name}/export", PostExport),
-                ReportsTag,
-                "Export a report",
-                "Executes the supplied report state without paging and returns CSV. A positive maxRows definition setting caps the output.")
-            .Accepts<ReportState>("application/json")
-            .Produces(StatusCodes.Status200OK, contentType: "text/csv")
-            .Produces<InteractiveReportError>(StatusCodes.Status400BadRequest);
-
         // Packaged UI assets. Anonymous even when the host locks the group — see UiEndpoints.
         group.MapGet("/ui/{file}", UiEndpoints.Serve)
             .AllowAnonymous()
@@ -504,36 +495,7 @@ public static class EndpointExtensions
     /// <param name="def">The definition supplying the synthetic fallback state and definition-level labels.</param>
     /// <returns>A detached, complete state with a definition-input table and layered default labels.</returns>
     internal static ReportState SchemaDefaultState(ReportDefinition def)
-    {
-        // Resolve against an empty request to get a detached copy; the
-        // store's definition (and its DefaultState) must not be mutated by response shaping.
-        var state = ReportStateResolver.Resolve(def.DefaultState, new ReportState());
-        if (state.Tables is not { Count: > 0 })
-        {
-            state.ActiveTable = "base";
-            state.Tables = new(StringComparer.OrdinalIgnoreCase)
-            {
-                ["base"] = new ReportTable { From = "definition" },
-            };
-        }
-        var source = DefinitionInputTable(state);
-        if (source is not null && def.GetEffectiveColumnLabels() is { } definitionLabels)
-        {
-            source.Composables ??= [];
-            var shapeIndex = source.Composables.FindIndex(IsShapeComposable);
-            var inputCount = shapeIndex < 0 ? source.Composables.Count : shapeIndex;
-            var labels = source.Composables
-                .Take(inputCount)
-                .FirstOrDefault(composable => IsComposableKind(composable, "labels"));
-            if (labels is null)
-            {
-                labels = new TableComposable { Kind = "labels" };
-                source.Composables.Insert(inputCount, labels);
-            }
-            labels.Labels ??= new(definitionLabels);
-        }
-        return state;
-    }
+        => ReportDocumentDefaults.Create(def);
 
     /// <summary>
     /// Determines whether a composable changes the table shape and therefore requires schema recompilation.
@@ -662,58 +624,15 @@ public static class EndpointExtensions
     }
 
     /// <summary>
-    /// Exports the posted state through the same authorization and validation pipeline as a query, without paging.
-    /// Rows are capped when the definition's MaxRows
-    /// is positive, with truncation signaled via X-IR-Truncated. Download is one of the two server-enforced
-    /// features because it creates an external artifact; hiding the menu client-side is not enough.
-    /// </summary>
-    /// <param name="name">The configured or built-in report-definition key from the route.</param>
-    /// <param name="ctx">The current HTTP request and response context.</param>
-    /// <param name="ct">Cancels authorization, body reading, context resolution, query execution, and rendering.</param>
-    /// <returns>The requested file result or a standardized feature, format, access, validation, or server-error result.</returns>
-    /// <remarks>Consumes the JSON request body, may execute database commands, and sets <c>X-IR-Truncated</c> on successful exports.</remarks>
-    private static Task<IResult> PostExport(string name, HttpContext ctx, CancellationToken ct)
-        => ExecuteStateOperation(
-            name,
-            ctx,
-            "export",
-            InteractiveReportAction.Export,
-            static (context, definition) =>
-            {
-                if (Access(context).RequireFeature(definition, ReportFeatures.Download) is { } disabled)
-                    return disabled;
-                var format = context.Request.Query["format"].FirstOrDefault() ?? "csv";
-                var exporter = context.RequestServices.GetRequiredService<IReportFileExporter>();
-                return exporter.SupportedFormats.Contains(format.Trim(), StringComparer.OrdinalIgnoreCase)
-                    ? null
-                    : Error(
-                        InteractiveReportErrorCodes.UnsupportedExportFormat,
-                        StatusCodes.Status400BadRequest,
-                        $"format '{format}' is not supported; supported formats: "
-                        + string.Join(", ", exporter.SupportedFormats));
-            },
-            static async (context, definition, _, state, contextParams, token) =>
-            {
-                var format = context.Request.Query["format"].FirstOrDefault() ?? "csv";
-                var export = await context.RequestServices
-                    .GetRequiredService<IReportFileExporter>()
-                    .Export(definition, state, contextParams, format, token);
-                context.Response.Headers["X-IR-Truncated"] = export.Truncated ? "true" : "false";
-                return Results.File(export.Bytes, export.ContentType, export.FileName);
-            },
-            ct);
-
-    /// <summary>
-    /// Runs the shared report-state request pipeline. Definition lookup and authorization
-    /// happen before body parsing, then both query and export receive identical context resolution,
-    /// validation error shaping, cancellation, and sanitization behavior.
+    /// Runs the JSON query request pipeline. Definition lookup and authorization happen
+    /// before body parsing, followed by context resolution, validation, and execution.
     /// </summary>
     /// <param name="name">The configured or built-in report-definition key from the route.</param>
     /// <param name="ctx">The current HTTP request and response context.</param>
     /// <param name="operationName">A diagnostic operation name used when logging unexpected failures.</param>
     /// <param name="action">The report action required from the caller.</param>
     /// <param name="preflight">An optional authorized-definition check performed before reading the body.</param>
-    /// <param name="operation">The query or export callback invoked after parsing and context resolution.</param>
+    /// <param name="operation">The query callback invoked after parsing and context resolution.</param>
     /// <param name="ct">Cancels authorization, body reading, context resolution, and execution.</param>
     /// <returns>The operation result or the first access, preflight, parse, validation, or server-error result.</returns>
     /// <remarks>Consumes the request body after authorization and may execute whatever side effects <paramref name="operation"/> defines.</remarks>
@@ -877,7 +796,9 @@ public static class EndpointExtensions
     /// <param name="context">The current HTTP request and response context.</param>
     /// <returns>The configured report access service.</returns>
     private static IReportAccessService Access(HttpContext context)
-        => context.RequestServices.GetRequiredService<IReportAccessService>();
+        => context.RequestServices.GetService<IReportAccessService>()
+            ?? new ReportAccessService(
+                context.RequestServices.GetRequiredService<IReportAuthorizationService>());
 
     /// <summary>
     /// Resolves the optional package logger associated with the current application.

@@ -118,7 +118,7 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
                 authenticationType: "ConfiguredDocumentTest"));
             await next();
         });
-        _app.MapInteractiveReports("/api/reports");
+        _app.MapInteractiveReportJson("/api/reports");
         await _app.StartAsync();
 
         var address = _app.Services.GetRequiredService<IServer>()

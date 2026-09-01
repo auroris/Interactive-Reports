@@ -123,7 +123,9 @@ public sealed class SqlKataRelationLowererTests
         Assert.Equal(
             ["search", "metadata", "filter(1)", "compute(ir1)", "source"],
             DebugOperators(search));
-        Assert.Equal(ExpectedPipelinePlan, BoundRelationPlanDebug.Render(search));
+        Assert.Equal(
+            ExpectedPipelinePlan.ReplaceLineEndings("\n"),
+            BoundRelationPlanDebug.Render(search));
     }
 
     [Theory]

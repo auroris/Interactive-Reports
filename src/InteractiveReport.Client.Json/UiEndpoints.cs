@@ -1,8 +1,9 @@
 using System.Security.Cryptography;
+using InteractiveReport.AspNetCore;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Net.Http.Headers;
 
-namespace InteractiveReport.AspNetCore;
+namespace InteractiveReport.Client.Json;
 
 /// <summary>
 /// Serves the packaged UI bundles and source maps from embedded resources at
@@ -13,7 +14,7 @@ namespace InteractiveReport.AspNetCore;
 /// </summary>
 internal static class UiEndpoints
 {
-    private const string ResourcePrefix = "InteractiveReport.AspNetCore.Ui.";
+    private const string ResourcePrefix = "InteractiveReport.Client.Json.Ui.";
 
     // ETags hash the content — an assembly-version tag would serve stale 304s across rebuilds
     // of the same version (bitten during development, would bite ops too).

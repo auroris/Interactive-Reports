@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\InteractiveReport.AspNetCore\InteractiveReport.AspNetCore.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Ui\dist\*" LogicalName="InteractiveReport.Client.Json.Ui.%(Filename)%(Extension)" />
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Description>JSON and browser client adapter for Interactive Reports: REST routes, saved reports, administration, packaged UI assets, and viewer pages.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <Target Name="EnsureUiBundlesOnReleaseBuild" BeforeTargets="BeforeBuild" Condition="'$(Configuration)' == 'Release'">
+    <Error Condition="!Exists('$(MSBuildProjectDirectory)\Ui\dist\ir.js') or !Exists('$(MSBuildProjectDirectory)\Ui\dist\ir-admin.js') or !Exists('$(MSBuildProjectDirectory)\Ui\dist\ir-chart.js')" Text="InteractiveReport.Client.Json: Ui\dist is missing the browser bundles (ir.js, ir-admin.js, ir-chart.js). Run 'npm ci &amp;&amp; npm run build' at the repository root first." />
+  </Target>
+  <Target Name="EnsureUiBundlesOnPack" BeforeTargets="GenerateNuspec">
+    <Error Condition="!Exists('$(MSBuildProjectDirectory)\Ui\dist\ir.js') or !Exists('$(MSBuildProjectDirectory)\Ui\dist\ir-admin.js') or !Exists('$(MSBuildProjectDirectory)\Ui\dist\ir-chart.js')" Text="InteractiveReport.Client.Json: Ui\dist is missing the browser bundles (ir.js, ir-admin.js, ir-chart.js). Run 'npm ci &amp;&amp; npm run build' at the repository root first." />
+  </Target>
+
+</Project>

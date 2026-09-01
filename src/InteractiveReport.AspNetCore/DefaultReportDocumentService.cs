@@ -146,7 +146,7 @@ internal sealed class DefaultReportDocumentService(
         IReadOnlyDictionary<string, object?> contextParameters,
         CancellationToken ct)
     {
-        var synthetic = EndpointExtensions.SchemaDefaultState(definition);
+        var synthetic = ReportDocumentDefaults.Create(definition);
         var refreshed = await executor.RefreshSchemaCaches(
             definition, synthetic, contextParameters, ct);
         var repaired = await Repair(expected, definition, refreshed, ct);
@@ -163,7 +163,7 @@ internal sealed class DefaultReportDocumentService(
         IsGlobal = true,
         IsDefault = true,
         StateJson = JsonSerializer.Serialize(
-            EndpointExtensions.SchemaDefaultState(definition),
+            ReportDocumentDefaults.Create(definition),
             IrJson.Options),
         ModifiedUtc = DateTime.UtcNow,
         Origin = SavedReportOrigin.Synthetic,

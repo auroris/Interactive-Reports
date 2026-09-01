@@ -60,7 +60,7 @@ public sealed class ViewerPageHttpTests : IAsyncLifetime
         builder.Services.AddInteractiveReports(builder.Configuration);
 
         _app = builder.Build();
-        _app.MapInteractiveReports("/api/reports");
+        _app.MapInteractiveReportJson("/api/reports");
         await _app.StartAsync();
 
         var address = _app.Services.GetRequiredService<IServer>()
@@ -162,7 +162,7 @@ public sealed class ViewerPageHttpTests : IAsyncLifetime
         builder.Services.AddInteractiveReports(builder.Configuration);
 
         await using var app = builder.Build();
-        app.MapInteractiveReports("/api/reports");
+        app.MapInteractiveReportJson("/api/reports");
         await app.StartAsync();
         var address = app.Services.GetRequiredService<IServer>()
             .Features.Get<IServerAddressesFeature>()!.Addresses.Single();

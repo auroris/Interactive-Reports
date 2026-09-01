@@ -1,4 +1,5 @@
 using System.Text.Json;
+using InteractiveReport.AspNetCore;
 using InteractiveReport.AspNetCore.Definitions;
 using InteractiveReport.Core.Authorization;
 using InteractiveReport.Core.Execution;
@@ -9,7 +10,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
-namespace InteractiveReport.AspNetCore;
+namespace InteractiveReport.Client.Json;
 
 /// <summary>
 /// Implements identity, saved-report, report-document, and authorization-user HTTP operations.
@@ -900,7 +901,9 @@ internal static class SavedReportEndpoints
     /// <param name="ctx">The current HTTP request and response context.</param>
     /// <returns>The configured report access service.</returns>
     private static IReportAccessService Access(HttpContext ctx)
-        => ctx.RequestServices.GetRequiredService<IReportAccessService>();
+        => ctx.RequestServices.GetService<IReportAccessService>()
+            ?? new ReportAccessService(
+                ctx.RequestServices.GetRequiredService<IReportAuthorizationService>());
 
     /// <summary>
     /// Resolves the configured document synchronizer from request services.

@@ -4,7 +4,7 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Description>Interactive Reports engine: report state model, validation, portable expression language, SqlKata composition, execution, schema discovery, and CSV export. Host-facing packages build on this; most applications reference InteractiveReport.AspNetCore instead.</Description>
+    <Description>Interactive Reports engine: report state model, validation, portable expression language, SqlKata composition, execution, and schema discovery. Host-facing packages build on this; most applications reference InteractiveReport.AspNetCore instead.</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 

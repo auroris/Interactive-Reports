@@ -11,7 +11,8 @@ public sealed class OpenApiMetadataTests
     public void Api_routes_publish_descriptions_tags_and_response_contracts()
     {
         using var app = WebApplication.CreateBuilder().Build();
-        app.MapInteractiveReports("/api/reports");
+        app.MapInteractiveReportJson("/api/reports");
+        app.MapInteractiveReportFileDownload("/api/download");
 
         var routes = Routes(app);
         var described = routes.Where(route => !IsExcluded(route)).ToArray();
@@ -54,13 +55,18 @@ public sealed class OpenApiMetadataTests
         Assert.Equal(
             typeof(AuthorizationIdentityRequest),
             grant.Metadata.GetMetadata<IAcceptsMetadata>()?.RequestType);
+
+        var download = Route(routes, "/api/download/{name}/{format}", "POST");
+        Assert.Equal(
+            typeof(ReportState),
+            download.Metadata.GetMetadata<IAcceptsMetadata>()?.RequestType);
     }
 
     [Fact]
     public void Packaged_pages_and_assets_are_excluded_but_whoami_is_documented()
     {
         using var app = WebApplication.CreateBuilder().Build();
-        app.MapInteractiveReports("/api/reports");
+        app.MapInteractiveReportJson("/api/reports");
 
         var routes = Routes(app);
         Assert.True(IsExcluded(Route(routes, "/api/reports/ui/{file}", "GET")));

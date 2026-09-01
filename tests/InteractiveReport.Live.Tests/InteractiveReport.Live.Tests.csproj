@@ -32,11 +32,16 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\InteractiveReport.AspNetCore\InteractiveReport.AspNetCore.csproj" />
+    <ProjectReference Include="..\..\src\InteractiveReport.Client.Json\InteractiveReport.Client.Json.csproj" />
     <ProjectReference Include="..\..\src\InteractiveReport.Core\InteractiveReport.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="InteractiveReport.Client.Json" />
   </ItemGroup>
 
   <ItemGroup>

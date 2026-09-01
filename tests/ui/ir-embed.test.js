@@ -82,7 +82,7 @@ globalThis.fetch = async (url, options = {}) => {
             ignored: [],
         });
     }
-    if (path.endsWith("/export?format=csv")) {
+    if (path.endsWith("/orders/csv")) {
         return new Response("\ufeffIdent\r\n1\r\n", {
             headers: {
                 "Content-Type": "text/csv; charset=utf-8",
@@ -94,7 +94,7 @@ globalThis.fetch = async (url, options = {}) => {
     return new Response(null, { status: 404 });
 };
 
-await import("../../src/InteractiveReport.AspNetCore/Ui/dist/ir.js");
+await import("../../src/InteractiveReport.Client.Json/Ui/dist/ir.js");
 
 test("the report is style-isolated and uses its explicit API base", async () => {
     document.head.append(Object.assign(document.createElement("style"), {
@@ -178,6 +178,7 @@ test("a host can retrieve the current export without initiating a browser downlo
     const report = document.createElement("interactive-report");
     report.setAttribute("report", "orders");
     report.setAttribute("api-base", "/custom-report-api");
+    report.setAttribute("download-base", "/custom-download-api");
     document.body.append(report);
 
     for (let attempt = 0; attempt < 20 && !requests.some(r => r.url.endsWith("/query")); attempt++)
@@ -190,8 +191,8 @@ test("a host can retrieve the current export without initiating a browser downlo
     // Blob.text() decodes and consumes the UTF-8 BOM; the raw Blob retains it.
     assert.equal(await artifact.blob.text(), "Ident\r\n1\r\n");
 
-    const request = requests.find(r => r.url.endsWith("/export?format=csv"));
-    assert.ok(request, "the public method uses the ordinary report export endpoint");
+    const request = requests.find(r => r.url === "/custom-download-api/orders/csv");
+    assert.ok(request, "the public method uses the file-download client endpoint");
     assert.equal(request.method, "POST");
     assert.equal("v" in JSON.parse(request.body), false);
     assert.equal(JSON.parse(request.body).tables.base.from, "definition");

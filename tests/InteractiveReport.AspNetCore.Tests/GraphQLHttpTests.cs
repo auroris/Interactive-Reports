@@ -4,7 +4,7 @@ using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text.Json;
 using InteractiveReport.Core.SavedReports;
-using InteractiveReport.GraphQL;
+using InteractiveReport.Client.GraphQL;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
@@ -102,7 +102,7 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
             }
             await next();
         });
-        _app.MapInteractiveReports("/api/reports");
+        _app.MapInteractiveReportJson("/api/reports");
         _app.MapInteractiveReportGraphQL("/graphql");
         await _app.StartAsync();
         _app.Services.GetRequiredService<InteractiveReportGraphQLSchema>().Initialize();

@@ -235,7 +235,7 @@ internal static class PersistenceHttpScenario
                 authenticationType: "PersistenceTest"));
             await next();
         });
-        app.MapInteractiveReports("/api/reports");
+        app.MapInteractiveReportJson("/api/reports");
         await app.StartAsync();
 
         var server = app.Services.GetRequiredService<IServer>();

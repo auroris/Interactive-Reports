@@ -1,6 +1,6 @@
 <Project>
 
-  <!-- Invariant: shared package identity for every project in the repository. Only the three
+  <!-- Invariant: shared package identity for every project in the repository. Only the five
        src\ projects are packable (samples and tests set IsPackable=false or are never
        packed); the metadata is harmless elsewhere. -->
   <PropertyGroup>

@@ -2,7 +2,7 @@
 // method hands the result to its host; the Actions-menu command is a browser-download wrapper
 // over the same request.
 
-import { download, saveBlob } from "../core/api.js";
+import { apiUrl, download, saveBlob } from "../core/api.js";
 
 /**
  * Creates the error used when an operation requires a valid report state.
@@ -35,7 +35,7 @@ export async function retrieveExport(w, format = "csv", { signal } = {}) {
         throw invalidState("The report must finish loading before it can be exported.");
 
     const { blob, filename, truncated, response } = await download(
-        `${w.definitionUrl("export")}?format=${encodeURIComponent(format)}`,
+        apiUrl(w.downloadBase, w.definitionName, format),
         w.serialize(),
         { signal });
     return {

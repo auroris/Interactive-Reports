@@ -158,7 +158,7 @@ globalThis.fetch = (url, options = {}) => {
     return Promise.resolve(new Response(null, { status: 404 }));
 };
 
-await import("../../src/InteractiveReport.AspNetCore/Ui/dist/ir.js");
+await import("../../src/InteractiveReport.Client.Json/Ui/dist/ir.js");
 
 const settle = async condition => {
     for (let attempt = 0; attempt < 60 && !condition(); attempt++)

@@ -8,7 +8,7 @@ using GraphQL.Types;
 using InteractiveReport.Core.Model;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace InteractiveReport.GraphQL;
+namespace InteractiveReport.Client.GraphQL;
 
 /// <summary>The schema exposed by <c>MapInteractiveReportGraphQL</c>.</summary>
 public sealed class InteractiveReportGraphQLSchema : Schema

@@ -21,10 +21,12 @@ For a server-first reference to registration, authorization, trusted context,
 in-process execution and export, REST routes, and the browser element, see the
 [Integration API guide](docs/API.md).
 
-1. Add the package:
+1. Add the server and JSON client packages. Add the file client when the browser should download CSV:
 
    ```sh
    dotnet add package InteractiveReport.AspNetCore
+   dotnet add package InteractiveReport.Client.Json
+   dotnet add package InteractiveReport.Client.FileDownload
    ```
 
 2. Configure a report — a data source and a SELECT. No dialect, ever: it is derived
@@ -65,16 +67,19 @@ in-process execution and export, REST routes, and the browser element, see the
    This is server-only definition configuration: it is never report state and never
    appears in schema or result payloads.
 
-3. Wire it up in `Program.cs` — two lines:
+3. Wire the server and clients up in `Program.cs`:
 
    ```csharp
    builder.Services.AddInteractiveReports(builder.Configuration);
+   builder.Services.AddInteractiveReportJson();
+   builder.Services.AddInteractiveReportFileDownload();
    // …
-   app.MapInteractiveReports("/reports");
+   app.MapInteractiveReportJson("/api/reports");
+   app.MapInteractiveReportFileDownload("/api/download");
    ```
 
-4. Done — call **`GET /reports/orders`** and select its `isDefault` document, or
-   browse `/reports/orders/view`. The packaged page hosts the report;
+4. Done — call **`GET /api/reports/orders`** and select its `isDefault` document, or
+   browse `/api/reports/orders/view`. The packaged page hosts the report;
    embedding `<interactive-report>` in your own pages (below) remains the primary
    path for real applications. Saved reports and administration require the explicit
    storage configuration below. The administration page is at `/reports/admin`;
@@ -88,7 +93,7 @@ in-process execution and export, REST routes, and the browser element, see the
    `admin`, and `whoami`, which collide with the endpoint namespace. The packaged
     pages can be turned off with `InteractiveReport:ViewerPagesEnabled: false`.
 
-`MapInteractiveReports` publishes standard ASP.NET Core endpoint summaries, tags,
+`MapInteractiveReportJson` publishes standard ASP.NET Core endpoint summaries, tags,
 request-body types, response types, and coded-error response metadata. A host can add its
 preferred OpenAPI generator without the Interactive Reports package depending on one.
 The Workbench demonstrates this with Swagger UI at `/swagger` in Development.
@@ -437,11 +442,13 @@ or `InteractiveReportAuthorizationDeniedException` is an
 expected denial; cancellation remains cancellation, and other exceptions are logged
 and returned as a sanitized 500 response.
 
-All mapped report and security-administration endpoints enter `IReportAccessService`
-once before their protected work. Host-owned endpoints can resolve that service to use
-the same boundary. The opt-in `whoami` bootstrap diagnostic is the deliberate
-exception: it reports the current principal while an operator is still determining
-which exact identity value belongs in configuration, and it grants no authority.
+Every client delegates authorization to the server's transport-neutral
+`IReportAuthorizationService`. JSON, GraphQL, and file-download packages own their HTTP
+mapping and response semantics; the central service owns definition gates, saved-report
+resources, application authorizers, administrator decisions, feature gates, and trusted
+context parameters without depending on `HttpContext` or `IResult`. The opt-in `whoami`
+bootstrap diagnostic is the deliberate exception: it reports the current principal while
+an operator is determining which identity belongs in configuration, and grants no authority.
 
 Saved-report decisions are resource-based: public, owner, or administrator may read;
 owner or administrator may update title/state or delete; and the explicit global,
@@ -457,19 +464,21 @@ resolution, denial status codes, UI hints, migration guidance, and recommended t
 
 ## GraphQL adapter
 
-`InteractiveReport.GraphQL` is an optional query-only adapter built on GraphQL.NET.
+`InteractiveReport.Client.GraphQL` is an optional query-only adapter built on GraphQL.NET.
 It executes any saved report from the same `ISavedReportStore` used by the HTTP API;
 database-authored and configured file-backed reports follow the same lookup and access
 rules. Add and map it separately so applications that do not use GraphQL acquire no
 GraphQL dependency:
 
 ```csharp
-using InteractiveReport.GraphQL;
+using InteractiveReport.Client.GraphQL;
+using InteractiveReport.Client.Json;
 
 builder.Services.AddInteractiveReports(builder.Configuration);
+builder.Services.AddInteractiveReportJson();
 builder.Services.AddInteractiveReportGraphQL();
 
-app.MapInteractiveReports("/api/reports");
+app.MapInteractiveReportJson("/api/reports");
 app.MapInteractiveReportGraphQL("/graphql");
 ```
 
@@ -503,7 +512,7 @@ pipeline. Supply it when mapping the endpoints:
 ```csharp
 var reportLogger = app.Services.GetRequiredService<ILoggerFactory>()
     .CreateLogger("InteractiveReport");
-app.MapInteractiveReports("/api/reports", reportLogger);
+app.MapInteractiveReportJson("/api/reports", reportLogger);
 ```
 
 An already-created logger may instead be supplied during service registration with
@@ -864,29 +873,23 @@ report.disabled = false;
 shadow-root link immediately; assigning `null` removes it. The stylesheet belongs to
 the host element and remains in place when `report` changes.
 
-Server-side integrations should use the registered `IReportFileExporter` directly,
-not make an HTTP request back into their own application:
+File downloads are a peer client, not an engine endpoint. Register and map the optional
+package independently:
 
 ```csharp
-var exporter = serviceProvider.GetRequiredService<IReportFileExporter>();
-var artifact = await exporter.Export(
-    "open-orders",
-    state,
-    contextParameters,
-    format: "csv",
-    ct: ct);
+using InteractiveReport.Client.FileDownload;
 
-await store.Put(artifact.FileName, artifact.ContentType, artifact.Bytes, ct);
+builder.Services.AddInteractiveReportFileDownload();
+// …
+app.MapInteractiveReportFileDownload("/api/download");
 ```
 
-The in-process exporter is transport-neutral and returns `Bytes`, `FileName`,
-`ContentType`, and `Truncated`. It does not invoke HTTP authorization, apply the
-endpoint's `download` feature gate, or infer context from a user; the calling
-application is the trust boundary and supplies any context parameters explicitly. It
-still resolves the configured definition and runs the same state validation, query
-composition, row caps, and CSV renderer. The browser export endpoint performs its
-existing authorization and `download` feature checks, resolves request context
-parameters, and then delegates to this same exporter.
+The JavaScript client posts its current report document to
+`POST /api/download/{name}/csv`. The file client detaches the document, sets paging to
+all rows, applies the central `Export` authorization and `download` feature gate, then
+submits the mutated document through `IInteractiveReportServer.QueryForDownload` before
+rendering CSV. Set the element's `download-base` attribute when the route is mounted at
+a non-default prefix.
 
 Without a client override, the widget follows the definition's `features` suggestion
 (docs/ARCHITECTURE.md §4): menu entries, view buttons, the search bar, and the
@@ -950,7 +953,7 @@ available while they are open. Short destructive confirmations remain modal.
 ## Developing
 
 The client-side source is in `src/client`; generated browser assets are written to
-`src/InteractiveReport.AspNetCore/Ui/dist` for embedding by the server project. Install
+`src/InteractiveReport.Client.Json/Ui/dist` for embedding by the server project. Install
 the toolchain and create the browser bundles with:
 
 ```sh
@@ -963,13 +966,13 @@ DOM unit tests. Browser automation is configured with Playwright; install Chromi
 once with `npx playwright install chromium`, then run `npm run test:ui`.
 `npm run verify` runs both test layers.
 
-The generated `src/InteractiveReport.AspNetCore/Ui/dist/ir.js`, `ir-admin.js`, and
+The generated `src/InteractiveReport.Client.Json/Ui/dist/ir.js`, `ir-admin.js`, and
 `ir-chart.js` files are embedded in the ASP.NET Core assembly and are deliberately
 not committed. A source checkout must run the client build before a Release build,
 a pack, or a run of the packaged UI — `dotnet pack` and `dotnet build -c Release`
 fail with instructions when the bundles are missing, so a UI-less package cannot
 ship silently. `scripts/pack.ps1` (also `npm run pack`) chains the client build, the
-fast test layers, and `dotnet pack` for the three distributable projects into
+fast test layers, and `dotnet pack` for the five distributable projects into
 `artifacts/packages`; publishing beyond that is currently a manual
 `dotnet nuget push` (release automation is deliberately still open).
 Package consumers never need Node.js. `ir-chart.js` (the Chart.js-based chart

@@ -75,7 +75,7 @@ public sealed class SavedReportTitleRaceHttpTests : IAsyncLifetime
                 authenticationType: "RaceTest"));
             await next();
         });
-        _app.MapInteractiveReports("/api/reports");
+        _app.MapInteractiveReportJson("/api/reports");
         await _app.StartAsync();
 
         var address = _app.Services.GetRequiredService<IServer>()

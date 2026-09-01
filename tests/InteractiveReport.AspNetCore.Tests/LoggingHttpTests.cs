@@ -87,7 +87,7 @@ public sealed class LoggingHttpTests
                 .AddConnection("Data", _ => new SqliteConnection(connectionString));
 
             app = builder.Build();
-            app.MapInteractiveReports("/api/reports", logger);
+            app.MapInteractiveReportJson("/api/reports", logger);
             await app.StartAsync();
 
             var address = app.Services.GetRequiredService<IServer>()

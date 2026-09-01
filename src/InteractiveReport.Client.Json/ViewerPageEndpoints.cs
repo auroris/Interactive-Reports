@@ -1,10 +1,11 @@
 using System.Text.Encodings.Web;
+using InteractiveReport.AspNetCore;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Localization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
-namespace InteractiveReport.AspNetCore;
+namespace InteractiveReport.Client.Json;
 
 /// <summary>
 /// Renders the packaged browser pages: a viewer shell per report and one admin shell. They are served

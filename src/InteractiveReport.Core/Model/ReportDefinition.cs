@@ -96,7 +96,7 @@ public sealed class ReportDefinition
     /// Gets or sets the whitelist of end-user feature tokens from <see cref="ReportFeatures"/>. Null
     /// the default — enables everything. When present, only the listed features exist:
     /// the client hides the rest of its chrome, and the server refuses the two that
-    /// persist or egress data (download at the export endpoint, savedReports at
+    /// persist or egress data (download at the file-client endpoint, savedReports at
     /// saved-report creation). The other tokens are presentation-level only — the query
     /// endpoint still accepts any valid state document, because hiding a dialog is not
     /// a data-security boundary (trusted context parameters are). Note the JSON config binder

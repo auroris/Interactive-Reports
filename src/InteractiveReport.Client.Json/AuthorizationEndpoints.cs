@@ -1,11 +1,12 @@
 using System.Text.Json;
+using InteractiveReport.AspNetCore;
 using InteractiveReport.Core.Authorization;
 using InteractiveReport.Core.Model;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
-namespace InteractiveReport.AspNetCore;
+namespace InteractiveReport.Client.Json;
 
 /// <summary>
 /// Implements administrator-only HTTP operations for database-authored administrators,
@@ -338,7 +339,9 @@ internal static class AuthorizationEndpoints
         HttpContext context,
         string resourceReportName,
         CancellationToken ct)
-        => context.RequestServices.GetRequiredService<IReportAccessService>()
+        => (context.RequestServices.GetService<IReportAccessService>()
+                ?? new ReportAccessService(
+                    context.RequestServices.GetRequiredService<IReportAuthorizationService>()))
             .AuthorizeEndpoint(new EndpointAccessRequest
             {
                 Actions = [InteractiveReportAction.ManageAuthorization],

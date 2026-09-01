@@ -94,7 +94,7 @@ public sealed class BoundRelationPlanDebugTests
                       source path=definition output=orders
                         REGION:text label=Region lineage=source:REGION mask=- formatSource=-
                         AMOUNT:number label=Amount lineage=source:AMOUNT mask=- formatSource=-
-            """,
+            """.ReplaceLineEndings("\n"),
             BoundRelationPlanDebug.Render(table.Export.Bound.Relation));
     }
 }

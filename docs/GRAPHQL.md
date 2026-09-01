@@ -1,23 +1,25 @@
 # GraphQL adapter
 
-`InteractiveReport.GraphQL` is an optional, query-only GraphQL.NET transport for
+`InteractiveReport.Client.GraphQL` is an optional, query-only GraphQL.NET transport for
 executing saved Interactive Reports. It does not replace the HTTP API, report engine,
 saved-report store, or authorization system.
 
 ## Installation and mapping
 
-Reference the `InteractiveReport.GraphQL` package in addition to
+Reference the `InteractiveReport.Client.GraphQL` package in addition to
 `InteractiveReport.AspNetCore`, then register and map its schema:
 
 ```csharp
 using InteractiveReport.AspNetCore;
-using InteractiveReport.GraphQL;
+using InteractiveReport.Client.GraphQL;
+using InteractiveReport.Client.Json;
 
 var reports = builder.Services.AddInteractiveReports(builder.Configuration);
+builder.Services.AddInteractiveReportJson();
 builder.Services.AddInteractiveReportGraphQL();
 
 var app = builder.Build();
-app.MapInteractiveReports("/api/reports");
+app.MapInteractiveReportJson("/api/reports");
 app.MapInteractiveReportGraphQL("/graphql");
 ```
 

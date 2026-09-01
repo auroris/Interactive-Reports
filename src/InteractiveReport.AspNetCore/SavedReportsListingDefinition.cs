@@ -5,7 +5,7 @@ namespace InteractiveReport.AspNetCore;
 
 /// <summary>
 /// Defines the built-in, administrators-only report over the saved-report store. The admin
-/// widget's listing IS a report, riding the ordinary schema/query/export pipeline.
+/// widget's listing IS a report, riding the ordinary schema/query/download pipeline.
 /// Synthesized from the live SavedReports options (never from configuration — the
 /// name is reserved), it works because configured documents sync into the same table
 /// (ConfiguredReportDocumentSynchronizer) and provenance is a column.

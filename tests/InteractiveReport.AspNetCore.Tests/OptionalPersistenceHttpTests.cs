@@ -54,7 +54,7 @@ public sealed class OptionalPersistenceHttpTests
             Assert.Equal(HttpStatusCode.OK, lov.StatusCode);
 
             using var export = await host.Client.PostAsJsonAsync(
-                "/api/reports/items/export?format=csv",
+                "/api/download/items/csv",
                 new { v = 3 });
             Assert.Equal(HttpStatusCode.OK, export.StatusCode);
 
@@ -165,6 +165,7 @@ public sealed class OptionalPersistenceHttpTests
         builder.Services
             .AddInteractiveReports(builder.Configuration)
             .AddConnection("Data", _ => new SqliteConnection(connectionString));
+        builder.Services.AddInteractiveReportFileDownload();
 
         var app = builder.Build();
         app.Use(async (context, next) =>
@@ -174,7 +175,8 @@ public sealed class OptionalPersistenceHttpTests
                 authenticationType: "OptionalPersistenceTest"));
             await next();
         });
-        app.MapInteractiveReports("/api/reports");
+        app.MapInteractiveReportJson("/api/reports");
+        app.MapInteractiveReportFileDownload("/api/download");
         await app.StartAsync();
 
         var address = app.Services.GetRequiredService<IServer>()

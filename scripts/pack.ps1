@@ -1,5 +1,5 @@
 # Local packaging pipeline: installs and builds the browser client, runs the fast test suites,
-# and packs all three distributable projects into artifacts\packages. It mirrors the release
+# and packs all five distributable projects into artifacts\packages. It mirrors the release
 # workflow closely enough to validate package contents before publishing.
 
 $ErrorActionPreference = "Stop"
@@ -26,11 +26,18 @@ $output = Join-Path $root "artifacts\packages"
 foreach ($project in @(
     "src\InteractiveReport.Core",
     "src\InteractiveReport.AspNetCore",
-    "src\InteractiveReport.GraphQL")) {
+    "src\InteractiveReport.Client.Json",
+    "src\InteractiveReport.Client.GraphQL",
+    "src\InteractiveReport.Client.FileDownload")) {
     Invoke-Step "dotnet pack $project" { dotnet pack $project -c Release -o $output --nologo }
 }
 
-$missing = @("InteractiveReport.Core", "InteractiveReport.AspNetCore", "InteractiveReport.GraphQL") |
+$missing = @(
+    "InteractiveReport.Core",
+    "InteractiveReport.AspNetCore",
+    "InteractiveReport.Client.Json",
+    "InteractiveReport.Client.GraphQL",
+    "InteractiveReport.Client.FileDownload") |
     Where-Object {
         -not (Test-Path (Join-Path $output "$_.*.nupkg")) -or
         -not (Test-Path (Join-Path $output "$_.*.snupkg"))

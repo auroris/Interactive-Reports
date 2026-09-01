@@ -82,6 +82,7 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
         builder.Services
             .AddInteractiveReports(builder.Configuration)
             .AddConnection("Data", _ => new SqliteConnection(connectionString));
+        builder.Services.AddInteractiveReportFileDownload();
 
         _app = builder.Build();
         _app.Use(async (context, next) =>
@@ -95,7 +96,8 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
             }
             await next();
         });
-        _app.MapInteractiveReports("/api/reports");
+        _app.MapInteractiveReportJson("/api/reports");
+        _app.MapInteractiveReportFileDownload("/api/download");
         await _app.StartAsync();
 
         var address = _app.Services.GetRequiredService<IServer>()
@@ -440,7 +442,7 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
 
         using var export = await _client.SendAsync(Request(
             HttpMethod.Post,
-            $"/api/reports/{SavedReportsListingDefinition.Name}/export?format=csv",
+            $"/api/download/{SavedReportsListingDefinition.Name}/csv",
             Admin,
             state));
         Assert.Equal(HttpStatusCode.OK, export.StatusCode);

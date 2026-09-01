@@ -637,7 +637,7 @@ public sealed class ReportExecutor
     /// <param name="ct">Cancels validation, database execution, reading, and rendering.</param>
     /// <returns>Visible columns, rendered export rows, and non-chart truncation state.</returns>
     /// <remarks>Opens one connection/read scope, may execute pivot discovery and totals, and emits a completion log.</remarks>
-    public async Task<ExportResult> Export(
+    internal async Task<ExportResult> Export(
         ReportDefinition definition,
         ReportState state,
         IReadOnlyDictionary<string, object?> contextParams,
@@ -864,7 +864,7 @@ public sealed class ReportExecutor
 }
 
 /// <summary>Contains an unpaged rendered export; <c>Truncated</c> means a positive <c>MaxRows</c> cap was exceeded.</summary>
-public sealed record ExportResult(
+internal sealed record ExportResult(
     IReadOnlyList<ColumnInfo> Columns,
     IReadOnlyList<IReadOnlyDictionary<string, object?>> Rows,
     bool Truncated);

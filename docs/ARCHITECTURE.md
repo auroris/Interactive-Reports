@@ -71,9 +71,11 @@ the portability surface.
 
 | Project | Responsibility |
 |---|---|
-| `src/InteractiveReport.Core` | State model, canonical planning, expression parser, SQLKata lowering, execution, schema discovery, highlight evaluation, SQL-backed named-table Pivot, export. No ASP.NET dependencies. |
-| `src/InteractiveReport.AspNetCore` | Endpoint mapping (`MapInteractiveReports`), standard OpenAPI metadata and public wire contracts, config-backed definition store, auth integration, JSON protocol shaping, coded errors. `Ui/dist` holds the generated client assets (§14), embedded and served by the same mapping. |
-| `src/InteractiveReport.GraphQL` | Optional GraphQL.NET transport over saved reports. Looks up every origin through `ISavedReportStore` and reuses ASP.NET authorization, context resolution, validation, and execution. |
+| `src/InteractiveReport.Core` | State model, canonical planning, expression parser, SQLKata lowering, execution, schema discovery, highlight evaluation, and SQL-backed named-table Pivot. No ASP.NET dependencies. |
+| `src/InteractiveReport.AspNetCore` | Server composition, config-backed definitions, persistence, and the transport-neutral authorization/query boundary used by every client. It contains no route mapping. |
+| `src/InteractiveReport.Client.Json` | REST, saved-report, administration, viewer, OpenAPI metadata, coded JSON responses, and packaged UI assets. Maps with `MapInteractiveReportJson`. |
+| `src/InteractiveReport.Client.GraphQL` | Optional GraphQL.NET client. Loads an authorized saved document, mutates GraphQL paging in a detached copy, and submits it through the server query boundary. |
+| `src/InteractiveReport.Client.FileDownload` | Optional file client. Maps `/api/download/{name}/{format}`, mutates the posted document to disable paging, queries through the server, and renders CSV. |
 | `src/client` | Product UI source modules and the three browser-bundle entry points. |
 | `samples/Workbench` | Dev harness: SQLite sample DB. `index.html`, `fr.html`, and `admin.html` host the packaged report in English and Canadian French plus the administration element; Swagger UI and GraphiQL expose the REST and GraphQL developer surfaces. |
 | `tests/InteractiveReport.Core.Tests` | Composer golden tests (state doc → expected SQL, ×4 dialects), expression parser tests, SQLite end-to-end integration tests. |
@@ -83,7 +85,7 @@ Target framework: `net8.0` (Umbraco 13 LTS floor; builds under SDK 8/10). Packag
 dependencies pin 8.0.x for the same reason. Shared NuGet metadata (MIT, repo URL,
 Source Link, snupkg symbols, version) lives in the root `Directory.Build.props`;
 `scripts/pack.ps1` (`npm run pack`) builds the client bundles, runs the fast test
-layers, and packs the three `src/` projects — an MSBuild guard fails Release builds
+layers, and packs the five `src/` projects — an MSBuild guard fails Release builds
 and packs when `Ui/dist` is empty, so a UI-less package cannot ship. Publish
 automation is deliberately undecided (owner discussion pending); packing is the
 scripted boundary today.
@@ -209,7 +211,7 @@ Notes:
   saved report already carries still displays, as locked chips). Embedding JavaScript may
   force any packaged control on or off; this changes only client presentation. Two tokens are also
   server-enforced with 403s because they persist or egress data: `download` at the
-  export endpoint and `savedReports` at saved-report creation (existing saved reports
+  file-download endpoint and `savedReports` at saved-report creation (existing saved reports
   stay governed by the §13 matrix so a config change never strands rows). The rest is
   deliberately presentation-level: the query endpoint accepts any valid state
   document, because hiding a dialog is not a data boundary — context params (§12) are.
@@ -545,15 +547,12 @@ provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
   never offers them, but preserves them across unrelated restyles. The server
   consumes only renderer source names: it schema-binds them and adds valid
   dependencies to the terminal row projection without adding them to displayed column
-  metadata. Unknown dependencies become `ignored[]`. The client constructs DOM nodes
+  metadata. Unknown dependencies become `ignored[]`. The browser client constructs DOM nodes
   directly and permits relative/HTTP(S) URLs, plus `mailto:`/`tel:` for links;
-  active-content and embedded-content schemes fall back to text. Every terminal-table
-  CSV export
-  serialize Display As cells to the same encoded `<a class="ir-cell-link">` /
-  `<img class="ir-cell-image">` fragments the browser constructs; action cells export
-  their raw label text (a command button has no CSV shape); ordinary cells stay raw
-  apart from the CSV formula guard (§6), and hidden renderer sources never become
-  exported columns. Highlight styles win over column styles where
+  active-content and embedded-content schemes fall back to text. The file client
+  serializes the query result's visible scalar values with effective label headers;
+  browser-only link, image, action, style, and mask presentation is not transported
+  into CSV. Hidden renderer sources never become exported columns. Highlight styles win over column styles where
   both apply. Text is the base renderer and owns masks; link text composes the base
   renderer, including the selected text source column's own mask. A format declaration
   binds against its table's completed public schema; its array position is not a schema
@@ -684,7 +683,7 @@ back transactionally. Presentation maps are exempt from column drift errors: unk
 
 ## 6. HTTP protocol
 
-Mounted by the host: `app.MapInteractiveReports("/api/reports").RequireAuthorization(...)`.
+Mounted by the host: `app.MapInteractiveReportJson("/api/reports").RequireAuthorization(...)`.
 
 | Endpoint | Purpose |
 |---|---|
@@ -702,7 +701,7 @@ Mounted by the host: `app.MapInteractiveReports("/api/reports").RequireAuthoriza
 | `POST /api/reports/admin/{id}/documents` | Administrator: validate a source-file envelope against the id's report family and import a private saved copy for testing. |
 | `GET  /api/reports/admin/users` | Administrator: invoke the optional host user-directory provider after endpoint authorization. |
 | `/api/reports/admin/authorization/**` | Administrator: list or change database administrator and report-user grants through the centralized endpoint boundary. |
-| `POST /api/reports/{name}/export` | Same client state and definition gate, with no saved-report lookup and no paging → CSV (UTF-8 BOM; headers are the posted document's display labels, §5), capped when `maxRows` is positive with `X-IR-Truncated` header. Text-sourced cells (labels included) that would trigger spreadsheet formula evaluation — leading `=` `+` `-` `@` tab CR — get the OWASP apostrophe guard by default, since RFC 4180 quoting does not stop Excel from evaluating them; non-text values (negative numbers, dates) are never altered, and `CsvWriter`'s `CsvCellPolicy.Verbatim` opts hosts with non-spreadsheet consumers out. 403 when the configured `download` policy is absent (§4), independently of client controls. XLSX/HTML later. |
+| `POST /api/download/{name}/{format}` | File-client endpoint. It detaches the posted document, sets page index 1 and size 0, applies central `Export` authorization and the `download` feature gate, submits the mutated document through the ordinary server query boundary, and renders CSV with `X-IR-Truncated`. |
 | `GET  /api/reports/ui/{file}` | Packaged UI assets (§14). Anonymous by design; content-hash ETags. |
 
 POST is the primary verb deliberately: state documents outgrow querystrings, and GET puts
@@ -922,10 +921,10 @@ The execution path is split by responsibility rather than view mode:
 - Highlight processing consumes database-computed private markers from the active
   completed relation. It orders row hits before cell hits and, within each scope,
   applies lower sequences before higher sequences.
-- In the ASP.NET Core adapter, `IReportAccessService` owns definition-aware and
-  definition-free endpoint authorization plus server-trusted context parameters. Query
-  and export share one state-request pipeline so their validation and sanitized error
-  behavior stay aligned.
+- The server's `IReportAuthorizationService` owns definition-aware and definition-free
+  authorization plus server-trusted context parameters without HTTP types. Each client
+  translates failures into its own transport. The JSON-specific `IReportAccessService`
+  remains a thin HTTP result adapter for its larger route surface.
 
 Derived queries run sequentially on one prepared connection per request. This keeps one
 transaction/session context and remains SQLite-friendly; provider-specific parallelism is
@@ -1197,7 +1196,7 @@ the authored pattern into SQL text.
 Layered, default-deny:
 
 1. **Endpoint gate** — host chains `.RequireAuthorization(...)` on
-   `MapInteractiveReports`; standard ASP.NET Core, so it composes with whatever auth the
+   `MapInteractiveReportJson`; standard ASP.NET Core, so it composes with whatever auth the
    host already has (Umbraco members, cookies, OIDC). The engine has no auth mechanism of
    its own — deliberately.
 2. **Per-report policy** — `authorization.policy` in the definition, checked via
@@ -1342,11 +1341,11 @@ to `IAuthorizationService` as an `InteractiveReportAuthorizationRequirement` plu
 pipeline, not separate security models. Multiple adapters and multiple actions compose
 with AND semantics.
 
-`IReportAccessService` is the single endpoint-facing boundary. Report endpoints use
-its definition-aware path; authorization administration and user-directory endpoints
-use its definition-free path before touching their stores or providers. Application
-code supplies decisions through either adapter above, and host-owned endpoints can
-resolve the service when they need the same contract. The opt-in `whoami` bootstrap
+`IReportAuthorizationService` is the shared server boundary. JSON report endpoints use
+an HTTP adapter over its definition-aware path; authorization administration and
+user-directory endpoints use its definition-free path before touching stores or
+providers. GraphQL and file clients call the neutral boundary directly. Application
+code supplies decisions through either adapter above. The opt-in `whoami` bootstrap
 diagnostic remains outside application-operation authorization because it exists to
 discover the exact identity needed to configure that authorization and grants nothing.
 
@@ -1429,7 +1428,7 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 ```
 
 - Custom elements with no runtime dependencies: bundled ES modules are embedded in
-  the assembly and served at `{prefix}/ui/{file}` by `MapInteractiveReports`. `base`
+  the assembly and served at `{prefix}/ui/{file}` by `MapInteractiveReportJson`. `base`
   defaults to the prefix the script was loaded from. The explicit `api-base`
   attribute overrides that inference; `base` remains its compatibility alias.
   `report` is the required appsettings configuration name. Loading it calls the family
@@ -1574,16 +1573,13 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   a hard 50-item distinct limit, and uses the ordinary Query authorization decision. It
   adds no independent column permission layer.
 - **Host export API**: after the initial query, `interactive-report.getExport(format,
-  { signal })` posts the current canonical state to the ordinary export endpoint and
+  { signal })` posts the current canonical state to the file-client endpoint and
   resolves to `{ blob, filename, contentType, truncated }` without causing browser
   navigation or download UI. The CSV menu command is a thin retrieval-plus-`saveBlob`
   wrapper over that method. Format is an open string carried to the endpoint, so future
-  exporters do not change the element API. Server-side integrators resolve the
-  transport-neutral `IReportFileExporter` and receive `ReportExportFile` bytes and
-  metadata directly. That in-process boundary does not authorize, apply the endpoint
-  feature gate, or infer a user; the host supplies explicit context parameters. The HTTP
-  endpoint retains its authorization and `download` feature gates, resolves request
-  context, then delegates its already-resolved definition and state to the same exporter.
+  exporters do not change the element API. The file client owns transport and rendering;
+  the server remains responsible for transport-neutral authorization, trusted context,
+  validation, and query execution.
 - **Chart rendering**: `ir-chart.js` is a third self-contained bundle (Chart.js
   tree-shaken to bar/line/area/pie plus scales, tooltip, legend, filler) that the
   main bundle loads with a runtime-computed dynamic `import()` the first time chart
@@ -1638,9 +1634,9 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 - **M3 — Expressions** ✅ *(2026-08-05)*: computed-column grammar/AST/emitters with the
   ir_calc second wrap (computed columns filter/sort/aggregate/break uniformly);
   highlights evaluated server-side with SQL-parity NULL semantics.
-- **M4 — Views & export** ✅ *(2026-08-05; revised 2026-08-29)*: Group composable
+- **M4 — Views & export** ✅ *(2026-08-05; revised 2026-09-01)*: Group composable
   (pushed down, group-count pagination), capped Pivot relation with implicit-count
-  default, and CSV export through the same completed-table response path.
+  default, and CSV download by posting the completed document through the file client.
 - **M5 — Persistence & proof:** ~~saved reports (private/public, per user)~~ *(done
   early — see §13, including administration/whoami)*; SQL Server + Oracle verification
   passes; hardening (timeouts, caps, logging discipline). *Prep complete 2026-08-05:
@@ -1721,8 +1717,8 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 - **M15 — Column renderers** ✅ *(2026-08-07)*: the grid owns a per-column renderer
   seam with text, link, and image implementations. Column Settings selects the display
   mode and its URL/text source columns. Hidden dependencies are schema-bound server-side
-  and projected only as renderer inputs. Grid CSV exports use the same encoded HTML
-  fragments as browser cells while leaving ordinary values raw. DOM construction,
+  and projected only as renderer inputs. CSV downloads retain visible scalar values
+  while browser-only link/image presentation remains in the JavaScript client. DOM construction,
   HTML encoding, and a URL protocol allowlist keep report data out of active-content surfaces.
 - **M16 — Actions pagination** ✅ *(2026-08-07)*: Actions → Pagination owns the
   report document's page limit with APEX choices 10, 50, 100, 500, 1000, and All.
@@ -1825,10 +1821,10 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 | One metric per Chart composable (APEX model) | multi-series charts | Covers the dominant reporting ask with a small state surface; another relation or Chart can still follow it. Multi-series, click-to-filter, legends-as-controls, image export, and "Other" folding stay open as explicit increments. |
 | Chart.js in a lazily imported third bundle | Apache ECharts; server-rendered SVG | Chart.js covers exactly bar/line/area/pie, tree-shakes small, MIT. ECharts earns its size only when multi-series/zoom/dense-data arrive. The lazy chunk keeps grid-only pages at their old weight; embedding keeps the no-CDN packaging story. |
 | CSV: UTF-8 BOM, label headers, X-IR-Truncated header | bare UTF-8, name headers, silent truncation | Excel needs the BOM to detect encoding; users recognize labels, not internal names; silent truncation reads as complete data. |
-| Views share the export pipeline | grid-only export | Exporting "what the view shows" falls out of running the same validated state unpaged — no special cases. |
+| Views share the query pipeline | grid-only export | Downloading "what the view shows" falls out of mutating the same validated state to unpaged delivery and querying it — no separate engine endpoint. |
 | Oracle BindByName via reflection in CommandBuilder | reference ODP.NET from Core | ODP.NET binds by position by default; context params appear first in SQL but are added last, so positional binding silently misbinds. Reflection keeps Core provider-free. |
 | UI: packaged vanilla ES modules as custom elements | React/Vite application | Package consumers need no frontend toolchain; hosts embed one script tag + one element. The repository uses esbuild only to produce the release bundles, and the protocol keeps the JS small enough that a framework buys little. |
-| UI assets embedded in the AspNetCore assembly, served under the mapped prefix | RCL static web assets | Zero host setup (`UseStaticFiles`/`_content` not required), one mapping call delivers API + UI, works identically in any host. |
+| UI assets embedded in the Client.Json assembly, served under the mapped prefix | RCL static web assets | Zero host setup (`UseStaticFiles`/`_content` not required), one JSON-client mapping call delivers API + UI, works identically in any host. |
 | UI asset endpoint `AllowAnonymous` | inherit group auth | Assets are public package code (readable on any feed); an auth-gated script tag turns "session expired" into a blank region that can't even say "sign in". Data endpoints keep the full gate. |
 | Asset ETags hash content | assembly version tag | Version-tagged ETags 304 stale content across rebuilds of the same version (bitten in dev; would bite ops on patch releases). |
 | Shadow DOM + theme properties + host-owned inner stylesheet | Light DOM + `.ir-*` prefix | Isolation keeps host resets out and report rules in. Theme tokens cover broad branding; an integrator-owned stylesheet inside the root supports deliberate internal and per-column styling without adding CSS configuration to report definitions. |
@@ -1855,12 +1851,12 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 | Bare dates rejected in concatenation | implicit rendering; auto-wrap in TO_STRING | Implicit date-to-text is the one place engine settings (session language, NLS, DateStyle) would leak into output, and it differs per engine. Rejection matches the language's explicit-conversion rule (TO_DATE inbound, TO_STRING outbound); auto-wrapping would pick a format silently. |
 | Friendly names live in the document; the server delivers `columnLabels` as the default report's `labels` and keeps query/cache surfaces neutral | apply labels at discovery/validation so all results carry them | Display naming is metadata: live schemas, per-table caches, validation, and query metadata retain structural labels, while each child receives the completed parent metadata and may override it directly. No executable surface depends on a caption. |
 | Report `labels` keys are not schema-validated; canonical planning rejects only conflicting declarations | ignored[]/errors for unknown or blank entries | Unknown keys are unused display data, exactly as resilient as a saved report is entitled to be. Two different labels for the same case-insensitive key have no order-independent meaning and therefore fail. (Config-side `columnLabels` still fail fast on blank/case-colliding entries — config mistakes, not state.) |
-| Export consumes the posted document's completed active relation, inheritable metadata, and owner-local terminal response | neutral export headers; look up the user's saved report server-side | An export is the server rendering the user's screen, and the active document may never have been saved. A child receives only its parent's Export contract; the shared renderer applies the active table's own visibility and cell presentation without leaking those local choices across `from`. |
+| File download consumes the posted document through an unpaged query | look up the user's saved report server-side | The active document may never have been saved. The file client mutates a detached copy, while the server applies the same completed-relation validation and execution used by the JavaScript client. |
 | Schema endpoint synthesizes an empty `defaultState` | nullable `defaultState` | Every client would otherwise invent its own "no default configured" behavior. An empty state already *means* the right thing — all columns, database order — and it is also the delivery vehicle: the definition's mapping rides down as its `labels`. |
 | Feature control is a flat server suggestion plus client-authoritative overrides | APEX-style per-action objects; treat the server list as a client ceiling | One `features` array supplies useful default chrome while an embedding application can force packaged controls on or off without rewriting schema payloads. Absent means everything is suggested. Per-column definition overrides and current-relation LOVs layer beside this contract without reshaping it. |
-| The control suggestion is presentation-level except server policies for `download` and `savedReports` creation | validate all posted state docs against the suggested controls | Hiding or force-showing a dialog is not a data boundary: the query endpoint accepts any valid document, and context params (§12) are the security story. The two independently enforced policies are the operations that egress (unpaged export) or persist (saved-report rows); enforcing at creation only keeps existing saved reports manageable after a config change. |
+| The control suggestion is presentation-level except server policies for `download` and `savedReports` creation | validate all posted state docs against the suggested controls | Hiding or force-showing a dialog is not a data boundary: the query endpoint accepts any valid document, and context params (§12) are the security story. The two independently enforced policies are the operations that egress (unpaged file query) or persist (saved-report rows); enforcing at creation only keeps existing saved reports manageable after a config change. |
 | Locked chips: state from a client-disabled or unsuggested feature displays read-only | hide the chips; let them stay editable | The chip strip is the doc made visible. Hiding active filters would misrepresent the data shown, and editing them would reopen controls the effective client policy removed. Leaving a locked view for the grid stays possible: it abandons the feature rather than using it. |
-| Column formatting is a `formats` composable; only scalar mask lineage crosses `from` | inherit every style and renderer; apply every mask/style server-side | The active owner keeps its full presentation contract, while a child inherits only safe masks. Link/image/action dependencies are schema-bound owner-local inputs. One text renderer owns scalar masks; link/image compose it, and synthetic metric metadata retains its format source. Every terminal-table CSV export intentionally serializes Display As modes as browser-like encoded HTML; hidden inputs never become columns. |
+| Column formatting is a `formats` composable; only scalar mask lineage crosses `from` | inherit every style and renderer; apply every mask/style server-side | The active owner keeps its full presentation contract, while a child inherits only safe masks. Link/image/action dependencies are schema-bound owner-local inputs. Browser rendering owns those modes; file downloads serialize visible query scalars and never expose hidden inputs. |
 | Masks are closed per-type tokens (Intl-backed) | freeform mask strings (APEX FML/999G999D99) | Same rule as TO_STRING: a portable vocabulary has stable meaning while `Intl` supplies the user's separators, symbols, and ordering; it cannot smuggle anything. Unknown tokens fall through to default rendering instead of erroring, because a display mask must never break a report. |
 | Int64/UInt64/Decimal travel as invariant JSON strings; all numeric columns use bundled `big.js` | send every numeric database value as a JSON number; maintain separate integer/decimal formatters | JavaScript parses JSON numbers as IEEE-754 doubles. Typed metadata retains numeric behavior, while one arbitrary-precision path handles parsing, comparison, scaling, and rounding without silent digit loss. |
 | Column classes select a host-owned shadow-root stylesheet | freeform style/CSS in report state; definition-owned or page-level CSS | The integrator owns the URL and CSS; saved reports carry only conservative class tokens and cannot select reserved `ir-*` behavior. Report definitions cannot choose a CSS source, page CSS cannot cross the shadow boundary, and freeform report CSS would be an injection surface. |

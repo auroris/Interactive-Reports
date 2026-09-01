@@ -12,7 +12,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
-namespace InteractiveReport.GraphQL;
+namespace InteractiveReport.Client.GraphQL;
 
 /// <summary>Registers and maps the optional GraphQL transport for Interactive Reports.</summary>
 public static class InteractiveReportGraphQLExtensions
@@ -94,9 +94,12 @@ public static class InteractiveReportGraphQLExtensions
                 || isWebSocketUpgrade)
             {
                 context.Response.Headers.Allow = "GET, POST";
-                return EndpointExtensions.Error(
-                    InteractiveReportErrorCodes.GraphQlTransportUnsupported,
-                    StatusCodes.Status405MethodNotAllowed);
+                const string code = InteractiveReportErrorCodes.GraphQlTransportUnsupported;
+                var (title, description) = InteractiveReportErrorCatalog.Find(code);
+                return Results.Json(
+                    new InteractiveReportError(code, description, title),
+                    IrJson.Options,
+                    statusCode: StatusCodes.Status405MethodNotAllowed);
             }
 
             return await next(invocation);

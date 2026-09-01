@@ -485,5 +485,5 @@ $RECYCLE.BIN/
 playwright-report/
 test-results/
 blob-report/
-/src/InteractiveReport.AspNetCore/Ui/dist
+/src/InteractiveReport.Client.Json/Ui/dist
 /samples/Workbench/App_Data

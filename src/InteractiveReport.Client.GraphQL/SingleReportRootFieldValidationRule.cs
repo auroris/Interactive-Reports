@@ -5,7 +5,7 @@
 using GraphQL.Validation;
 using GraphQLParser.AST;
 
-namespace InteractiveReport.GraphQL;
+namespace InteractiveReport.Client.GraphQL;
 
 /// <summary>
 /// Prevents one GraphQL operation from turning a single HTTP request into many

@@ -13,9 +13,11 @@ see [GraphQL adapter](GRAPHQL.md).
 
 | Package | Primary namespace | Use it for |
 |---|---|---|
-| `InteractiveReport.AspNetCore` | `InteractiveReport.AspNetCore` | Registration, REST endpoints, authorization integration, HTTP contracts, and the packaged client. |
-| `InteractiveReport.Core` | `InteractiveReport.Core.*` | Report definitions and state, direct execution, export, definition stores, and persistence contracts. This is referenced transitively by the ASP.NET Core package. |
-| `InteractiveReport.GraphQL` | `InteractiveReport.GraphQL` | Optional query-only execution of saved reports through GraphQL.NET. |
+| `InteractiveReport.AspNetCore` | `InteractiveReport.AspNetCore` | Server registration, transport-neutral request/authorization boundary, configuration, execution, and persistence integration. |
+| `InteractiveReport.Client.Json` | `InteractiveReport.Client.Json` | REST, saved-report, administration, viewer, and packaged-browser routes. |
+| `InteractiveReport.Client.FileDownload` | `InteractiveReport.Client.FileDownload` | Authorized file-download routes and CSV rendering. |
+| `InteractiveReport.Core` | `InteractiveReport.Core.*` | Report definitions and state, execution, definition stores, and persistence contracts. This is referenced transitively by the server package. |
+| `InteractiveReport.Client.GraphQL` | `InteractiveReport.Client.GraphQL` | Optional query-only execution of saved reports through GraphQL.NET. |
 
 ## Register and map the server
 
@@ -23,13 +25,15 @@ The smallest application uses configuration-backed definitions:
 
 ```csharp
 using InteractiveReport.AspNetCore;
+using InteractiveReport.Client.Json;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddInteractiveReports(builder.Configuration);
+builder.Services.AddInteractiveReportJson();
 
 var app = builder.Build();
-app.MapInteractiveReports("/api/reports");
+app.MapInteractiveReportJson("/api/reports");
 app.Run();
 ```
 
@@ -59,14 +63,14 @@ builder.Services.AddInteractiveReports(builder.Configuration, "Reporting");
 }
 ```
 
-`MapInteractiveReports` returns a `RouteGroupBuilder`, so normal endpoint conventions
+`MapInteractiveReportJson` returns a `RouteGroupBuilder`, so normal endpoint conventions
 can be applied to the complete surface:
 
 ```csharp
 app.UseAuthentication();
 app.UseAuthorization();
 
-app.MapInteractiveReports("/api/reports")
+app.MapInteractiveReportJson("/api/reports")
     .RequireAuthorization("ReportingUsers")
     .RequireRateLimiting("reports");
 ```
@@ -164,18 +168,21 @@ logged and returns 404; the next family-list request retries from the current da
 
 | API | Purpose |
 |---|---|
-| `IServiceCollection.AddInteractiveReports(...)` | Registers definitions, execution, persistence, authorization, export, and HTTP support. Returns `InteractiveReportBuilder`. |
+| `IServiceCollection.AddInteractiveReports(...)` | Registers definitions, execution, persistence, and the transport-neutral server/authorization boundary. Returns `InteractiveReportBuilder`. |
+| `IServiceCollection.AddInteractiveReportJson()` | Registers the JSON/browser client adapter. |
+| `IServiceCollection.AddInteractiveReportFileDownload()` | Registers file writers; currently CSV. |
 | `InteractiveReportBuilder.AddConnection(...)` | Registers an unopened ADO.NET connection factory, with inferred or explicit dialect. |
 | `InteractiveReportBuilder.UseLogger(...)` | Sends package diagnostics to a host-owned `ILogger`. The package is silent when no logger is supplied. |
 | `InteractiveReportBuilder.UseContextParameterResolver<T>()` | Replaces claim-based trusted-context resolution with a singleton application resolver. |
 | `InteractiveReportBuilder.UseUserProvider<T>()` | Adds a scoped application user directory for administration choices. |
 | `InteractiveReportBuilder.UseAuthorization(...)` | Adds a direct application authorization callback. |
 | `InteractiveReportBuilder.UseAspNetCoreAuthorization()` | Adds an adapter to ASP.NET Core resource-based authorization. |
-| `IEndpointRouteBuilder.MapInteractiveReports(...)` | Maps REST, saved-report, administration, packaged asset, and optional viewer routes. |
-| `IReportAccessService` | Reuses the packaged authorization and trusted-context boundary in host-owned HTTP endpoints. |
+| `IEndpointRouteBuilder.MapInteractiveReportJson(...)` | Maps REST, saved-report, administration, packaged asset, and optional viewer routes. |
+| `IEndpointRouteBuilder.MapInteractiveReportFileDownload(...)` | Maps `POST {prefix}/{name}/{format}` file requests. |
+| `IReportAuthorizationService` | Central transport-neutral definition, resource, administrator, feature, and application-authorization boundary. |
+| `IInteractiveReportServer` | Loads saved documents and executes authorized client-submitted report documents without HTTP response types. |
 | `IReportDefinitionStore` | Resolves executable report definitions. `IReportDefinitionAuthorizationStore` is its optional lightweight authorization companion. |
-| `ReportExecutor` | Validates and executes a resolved definition and `ReportState`; `Query`, `Lov`, and export paths perform no HTTP authorization themselves. |
-| `IReportFileExporter` | Resolves and exports report state to a transport-neutral `ReportExportFile`. |
+| `ReportExecutor` | Validates and executes a resolved definition and `ReportState`; engine calls perform no transport authorization themselves. |
 | `ISavedReportStore` | Replaceable persistence contract. It stores data but does not make authorization decisions. |
 | `IrJson.Options` | Shared JSON protocol options for host-owned endpoints. |
 | `ReportFeatures` | Canonical client-control feature names and server feature checks. |
@@ -310,6 +317,7 @@ authorization and context-parameter boundary as the packaged endpoints:
 
 ```csharp
 using InteractiveReport.AspNetCore;
+using InteractiveReport.Client.Json;
 using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Model;
 
@@ -380,26 +388,19 @@ This path does not perform HTTP authorization or infer context from a principal.
 an HTTP request, use `IReportAccessService` as shown above. In a background process,
 the application itself is the trust and authorization boundary.
 
-For files, prefer the registered `IReportFileExporter`. It resolves the definition,
-executes without paging, applies report export limits, and currently supports CSV:
+For browser-facing files, register and map the file client:
 
 ```csharp
-using InteractiveReport.Core.Export;
+using InteractiveReport.Client.FileDownload;
 
-var file = await exporter.Export(
-    reportName: "orders",
-    state: state,
-    contextParams: contextParams,
-    format: "csv",
-    ct: ct);
-
-await storage.Put(file.FileName, file.ContentType, file.Bytes, ct);
-if (file.Truncated)
-    logger.LogWarning("The report export reached its row limit.");
+builder.Services.AddInteractiveReportFileDownload();
+// ...
+app.MapInteractiveReportFileDownload("/api/download");
 ```
 
-Like direct query execution, this API does not run HTTP authorization or the endpoint's
-`download` feature check.
+The file client accepts the JavaScript client's current document, turns paging off in a
+detached copy, runs central `Export` authorization and the `download` feature check, then
+submits the document as an ordinary query and renders the returned rows.
 
 ## Replace a definition or saved-report store
 
@@ -425,8 +426,8 @@ document synchronization through that lookup, and its built-in definition behavi
 Treat this as an advanced application boundary, not as a way to append one report.
 
 `ISavedReportStore` is separately replaceable for custom persistence. Its methods are
-storage-only; endpoint ownership and authorization policy remain in
-`IReportAccessService`. Implementations must honor the documented detached-snapshot
+storage-only; ownership and authorization policy remain in
+`IReportAuthorizationService`. Implementations must honor the documented detached-snapshot
 and compare-and-swap contracts.
 
 ## Supply administration user choices
@@ -470,7 +471,7 @@ With the default prefix, the principal routes are:
 | `GET /api/reports/{name}/schema` | Definition schema, presentation hints, limits, features, and client capabilities for a configured definition key. |
 | `POST /api/reports/{name}/query` | Accepts the client's `ReportState`; returns `ReportResult` with rows and the accepted server-enriched `document`. |
 | `POST /api/reports/{name}/lov` | Accepts a required current `document`, its active `table`, one `column`, and optional `search`; returns at most 50 distinct values. |
-| `POST /api/reports/{name}/export` | Accepts the client's `ReportState`; returns the requested file format. CSV is currently supported. |
+| `POST /api/download/{name}/{format}` | File-client endpoint. Accepts the current `ReportState`; CSV is currently supported. |
 | `POST /api/reports/{id}/saved` | Creates a private or global saved report from `SaveReportRequest` in that family. |
 | `GET /api/reports/{name}/{id}` | Returns `SavedReportDocument` after authorizing the named configuration and confirming that the numeric id belongs to it. |
 | `PUT /api/reports/{id}` | Applies `UpdateSavedReportRequest`; `isDefault: true` atomically selects a new default. |
@@ -486,7 +487,7 @@ addressed through the wrong configured family, and a document the caller may not
 return 404. The ordinary component starts with the appsettings name: it lists that family,
 selects `isDefault`, then loads `/api/reports/{name}/{id}`. It never calls the root catalogue.
 The administration component uses the root catalogue to enumerate appsettings families,
-then loops over the same family-list route. Schema, query, LOV, and export also use the
+then loops over the same family-list route. Schema, query, LOV, and download also use the
 configured definition key. These processing endpoints authorize that definition and do
 not read the saved-report store. A submitted `ReportState` has no required ID or stored
 provenance; it may be a mutated default, another retrieved document, or a document made
@@ -497,9 +498,10 @@ as default also publishes it globally and retains the previous default as a glob
 The default cannot be unset directly. When a configured file declares `default: true`,
 configuration owns the selection and API attempts to replace it return 409.
 
-All data and management routes enter `IReportAccessService`. Packaged assets and page
+All data and management routes enter the central authorization boundary through the
+JSON client's `IReportAccessService`. Packaged assets and page
 shells are intentionally anonymous; the page's API calls are still authorized.
-`MapInteractiveReports` supplies standard endpoint summaries, tags, request and
+`MapInteractiveReportJson` supplies standard endpoint summaries, tags, request and
 response types, and error metadata for the host's OpenAPI generator.
 
 A minimal query document looks like this:
@@ -583,7 +585,7 @@ The optional adapter executes saved reports by id. It does not accept arbitrary
 report-state input.
 
 ```csharp
-using InteractiveReport.GraphQL;
+using InteractiveReport.Client.GraphQL;
 
 builder.Services.AddInteractiveReports(builder.Configuration);
 builder.Services.AddInteractiveReportGraphQL();

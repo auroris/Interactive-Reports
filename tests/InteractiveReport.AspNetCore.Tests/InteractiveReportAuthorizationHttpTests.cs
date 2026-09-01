@@ -41,7 +41,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
             HttpMethod.Post, "/api/reports/orders/query", "action-admin", state));
         Assert.Equal(HttpStatusCode.OK, query.StatusCode);
         using var export = await host.Client.SendAsync(Request(
-            HttpMethod.Post, "/api/reports/orders/export", "action-admin", state));
+            HttpMethod.Post, "/api/download/orders/csv", "action-admin", state));
         Assert.Equal(HttpStatusCode.OK, export.StatusCode);
         using var list = await host.Client.SendAsync(Request(
             HttpMethod.Get, "/api/reports/orders", "action-admin"));
@@ -654,6 +654,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
             .AddInteractiveReports(builder.Configuration)
             .AddConnection("Data", _ => new SqliteConnection(connectionString));
         configure?.Invoke(reports, builder.Services);
+        builder.Services.AddInteractiveReportFileDownload();
 
         var app = builder.Build();
         app.Use(async (context, next) =>
@@ -670,7 +671,8 @@ public sealed class InteractiveReportAuthorizationHttpTests
             }
             await next();
         });
-        app.MapInteractiveReports("/api/reports");
+        app.MapInteractiveReportJson("/api/reports");
+        app.MapInteractiveReportFileDownload("/api/download");
         await app.StartAsync();
 
         var address = app.Services.GetRequiredService<IServer>()
