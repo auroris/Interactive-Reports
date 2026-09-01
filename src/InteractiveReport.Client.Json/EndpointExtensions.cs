@@ -346,7 +346,7 @@ public static class EndpointExtensions
     {
         var schema = await Server(ctx).GetSchema(name, Context(ctx), ct);
         return schema.Failure is not null
-            ? Failure(schema.Failure)
+            ? Failure(schema.Failure, ctx)
             : Results.Json(schema.Value, IrJson.Options);
     }
 
@@ -377,7 +377,7 @@ public static class EndpointExtensions
 
         var queried = await Server(ctx).Query(name, state, Context(ctx), ct);
         return queried.Failure is not null
-            ? Failure(queried.Failure)
+            ? Failure(queried.Failure, ctx)
             : Results.Json(queried.Value, IrJson.Options);
     }
 
@@ -409,7 +409,7 @@ public static class EndpointExtensions
 
         var resolved = await Server(ctx).Lov(name, request, Context(ctx), ct);
         return resolved.Failure is not null
-            ? Failure(resolved.Failure)
+            ? Failure(resolved.Failure, ctx)
             : Results.Json(resolved.Value, IrJson.Options);
     }
 
@@ -435,66 +435,13 @@ public static class EndpointExtensions
         };
 
     /// <summary>
-    /// Resolves the transport-neutral authorization service for the current request. Endpoints that
-    /// need only an endpoint-level decision use it directly; there is no HTTP-shaped wrapper.
-    /// </summary>
-    internal static IReportAuthorizationService Authorization(HttpContext ctx)
-        => ctx.RequestServices.GetRequiredService<IReportAuthorizationService>();
-
-    /// <summary>
-    /// Translates an authorization decision into this adapter's coded JSON response.
-    /// </summary>
-    /// <param name="failure">The classified authorization failure.</param>
-    /// <returns>The HTTP result carrying the failure's stable code.</returns>
-    internal static IResult AuthorizationFailure(ReportAuthorizationFailure failure)
-        => failure.Kind switch
-        {
-            ReportAuthorizationFailureKind.Unauthenticated => AuthenticationRequired(),
-            ReportAuthorizationFailureKind.NotFound => ReportNotFound(),
-            ReportAuthorizationFailureKind.Forbidden => Error(
-                failure.Code,
-                StatusCodes.Status403Forbidden,
-                failure.Details,
-                failure.TraceIdentifier),
-            _ => Error(
-                failure.Code,
-                StatusCodes.Status500InternalServerError,
-                failure.Details,
-                failure.TraceIdentifier),
-        };
-
-    /// <summary>
-    /// Translates a transport-neutral server failure into this adapter's coded JSON response.
+    /// Translates a transport-neutral server failure into its HTTP response.
     /// </summary>
     /// <param name="failure">The classified server failure.</param>
+    /// <param name="ctx">The active HTTP exchange.</param>
     /// <returns>The HTTP result carrying the failure's stable code.</returns>
-    internal static IResult Failure(InteractiveReportFailure failure) => failure.Kind switch
-    {
-        InteractiveReportFailureKind.Unauthenticated => EndpointExtensions.AuthenticationRequired(),
-        InteractiveReportFailureKind.NotFound => EndpointExtensions.Error(
-            failure.Code,
-            StatusCodes.Status404NotFound),
-        InteractiveReportFailureKind.Forbidden => EndpointExtensions.Error(
-            failure.Code,
-            StatusCodes.Status403Forbidden,
-            failure.Details,
-            failure.TraceIdentifier),
-        InteractiveReportFailureKind.Conflict => EndpointExtensions.Error(
-            failure.Code,
-            StatusCodes.Status409Conflict,
-            failure.Details,
-            failure.TraceIdentifier),
-        InteractiveReportFailureKind.Invalid => EndpointExtensions.Error(
-            failure.Code,
-            StatusCodes.Status400BadRequest,
-            failure.Details,
-            failure.TraceIdentifier),
-        _ => EndpointExtensions.Error(
-            failure.Code,
-            StatusCodes.Status500InternalServerError,
-            failure.Details,
-            failure.TraceIdentifier),
-    };
+    internal static IResult Failure(InteractiveReportFailure failure, HttpContext ctx)
+        => InteractiveReportHttpResult.Failure(failure, ctx);
 
     /// <summary>
     /// Builds an Interactive Reports HTTP error using the shared catalog and wire type.
@@ -509,13 +456,7 @@ public static class EndpointExtensions
         int statusCode,
         string? details = null,
         string? traceId = null)
-    {
-        var (title, description) = InteractiveReportErrorCatalog.Find(code);
-        return Results.Json(
-            new InteractiveReportError(code, description, title, details, traceId),
-            IrJson.Options,
-            statusCode: statusCode);
-    }
+        => InteractiveReportHttpResult.Error(code, statusCode, details, traceId);
 
     /// <summary>
     /// Creates the standardized authentication-required response.

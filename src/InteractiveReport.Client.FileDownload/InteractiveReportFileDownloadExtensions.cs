@@ -114,7 +114,7 @@ public static class InteractiveReportFileDownloadExtensions
     {
         format = format.Trim();
         if (!writer.SupportedFormats.Contains(format, StringComparer.OrdinalIgnoreCase))
-            return Error(
+            return InteractiveReportHttpResult.Error(
                 InteractiveReportErrorCodes.UnsupportedExportFormat,
                 StatusCodes.Status400BadRequest,
                 $"format '{format}' is not supported; supported formats: "
@@ -128,7 +128,7 @@ public static class InteractiveReportFileDownloadExtensions
         }
         catch (JsonException ex)
         {
-            return Error(
+            return InteractiveReportHttpResult.Error(
                 InteractiveReportErrorCodes.MalformedReportState,
                 StatusCodes.Status400BadRequest,
                 ex.Message);
@@ -155,31 +155,5 @@ public static class InteractiveReportFileDownloadExtensions
     }
 
     private static IResult Failure(InteractiveReportFailure failure, HttpContext http)
-    {
-        var status = failure.Kind switch
-        {
-            InteractiveReportFailureKind.Invalid => StatusCodes.Status400BadRequest,
-            InteractiveReportFailureKind.Unauthenticated => StatusCodes.Status401Unauthorized,
-            InteractiveReportFailureKind.Forbidden => StatusCodes.Status403Forbidden,
-            InteractiveReportFailureKind.NotFound => StatusCodes.Status404NotFound,
-            InteractiveReportFailureKind.Conflict => StatusCodes.Status409Conflict,
-            _ => StatusCodes.Status500InternalServerError,
-        };
-        if (status == StatusCodes.Status401Unauthorized)
-            http.Response.Headers.WWWAuthenticate = "InteractiveReport";
-        return Error(failure.Code, status, failure.Details, failure.TraceIdentifier);
-    }
-
-    private static IResult Error(
-        string code,
-        int status,
-        string? details = null,
-        string? traceIdentifier = null)
-    {
-        var (title, description) = InteractiveReportErrorCatalog.Find(code);
-        return Results.Json(
-            new InteractiveReportError(code, description, title, details, traceIdentifier),
-            IrJson.Options,
-            statusCode: status);
-    }
+        => InteractiveReportHttpResult.Failure(failure, http);
 }

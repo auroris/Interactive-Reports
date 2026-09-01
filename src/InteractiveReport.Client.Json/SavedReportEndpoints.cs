@@ -33,54 +33,13 @@ internal static class SavedReportEndpoints
     /// <param name="ctx">The current HTTP request and response context.</param>
     /// <param name="ct">Cancels database administrator lookup.</param>
     /// <returns>Identity diagnostics as JSON, a disabled-endpoint 404, or a sanitized lookup failure.</returns>
-    /// <remarks>May read administrator persistence; it does not mutate identity or authorization state.</remarks>
     internal static async Task<IResult> Whoami(HttpContext ctx, CancellationToken ct)
     {
-        var opts = Options(ctx);
-        if (!opts.WhoamiEnabled)
-            return EndpointExtensions.Error(
-                InteractiveReportErrorCodes.EndpointNotFound,
-                StatusCodes.Status404NotFound);
-
-        var identity = ReportIdentity.Resolve(ctx.User, opts.IdentityClaim);
-        var database = new DatabaseAdministratorAccess(false, false);
-        if (ReportConnectionRegistry.IsStoreConfigured(opts.SavedReports))
-        {
-            try
-            {
-                database = await ctx.RequestServices.GetRequiredService<IReportAuthorizationStore>()
-                    .GetAdministratorAccess(identity, ct);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                return EndpointExtensions.ServerError(
-                    ctx, SavedReportsListingDefinition.Name, "identity authorization lookup", ex);
-            }
-        }
-
-        var configuredAdministrator = ReportIdentity.IsAdministrator(
-            ctx.User, opts.IdentityClaim, opts.Administrators);
-        var administratorListConfigured = opts.Administrators.Count > 0 || database.Configured;
-        var applicationAuthorizationConfigured = ctx.RequestServices
-            .GetServices<IInteractiveReportAuthorizer>()
-            .Any();
-        return Results.Json(new InteractiveReportIdentity(
-            Authenticated: ctx.User.Identity?.IsAuthenticated == true,
-            // Expose the exact value an operator would place in InteractiveReport:Administrators.
-            Identity: identity,
-            IsAdministrator: configuredAdministrator || database.UserGranted,
-            ConfiguredAdministrator: configuredAdministrator,
-            DatabaseAdministrator: database.UserGranted,
-            AdministratorListConfigured: administratorListConfigured,
-            ApplicationAuthorizationConfigured: applicationAuthorizationConfigured,
-            Name: ctx.User.Identity?.Name,
-            AuthenticationType: ctx.User.Identity?.AuthenticationType,
-            Claims: ctx.User.Claims.Select(c => new InteractiveReportClaim(c.Type, c.Value)).ToArray()),
-            IrJson.Options);
+        var described = await EndpointExtensions.Server(ctx).DescribeIdentity(
+            EndpointExtensions.Context(ctx), ct);
+        return described.Failure is not null
+            ? EndpointExtensions.Failure(described.Failure, ctx)
+            : Results.Json(described.Value, IrJson.Options);
     }
 
     // Application-provided authorization user directory.
@@ -91,65 +50,13 @@ internal static class SavedReportEndpoints
     /// <param name="ctx">The current HTTP request and response context.</param>
     /// <param name="ct">Cancels authorization and user-provider lookup.</param>
     /// <returns>A normalized JSON user list, a hidden-denial result, or a sanitized provider failure.</returns>
-    /// <remarks>Invokes the optional host user provider and rejects blank or duplicate identity values.</remarks>
-    internal static async Task<IResult> AdminListUsers(
-        HttpContext ctx,
-        CancellationToken ct)
+    internal static async Task<IResult> AdminListUsers(HttpContext ctx, CancellationToken ct)
     {
-        var denied = await EndpointExtensions.Authorization(ctx).AuthorizeEndpoint(
-            [InteractiveReportAction.ListAuthorizationUsers],
-            new InteractiveReportAuthorizationResource
-            {
-                ReportName = SavedReportsListingDefinition.Name,
-            },
-            administratorRequired: true,
-            hideDenied: true,
-            denialDetail: null,
-            EndpointExtensions.Context(ctx),
-            ct);
-        if (denied is not null) return EndpointExtensions.AuthorizationFailure(denied);
-
-        var provider = ctx.RequestServices.GetService<IInteractiveReportUserProvider>();
-        if (provider is null)
-            return Results.Json(Array.Empty<InteractiveReportUser>(), IrJson.Options);
-
-        try
-        {
-            var supplied = await provider.GetUsers(ctx.User, ct);
-            if (supplied is null || supplied.Count == 0)
-                return Results.Json(Array.Empty<InteractiveReportUser>(), IrJson.Options);
-
-            var users = new List<InteractiveReportUser>(supplied.Count);
-            var values = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var user in supplied)
-            {
-                if (user is null
-                    || string.IsNullOrWhiteSpace(user.Display)
-                    || string.IsNullOrWhiteSpace(user.Value))
-                    throw new InvalidOperationException(
-                        "The Interactive Reports user provider returned an entry with an empty display or value.");
-
-                var normalized = new InteractiveReportUser(user.Display.Trim(), user.Value.Trim());
-                if (!values.Add(normalized.Value))
-                    throw new InvalidOperationException(
-                        $"The Interactive Reports user provider returned duplicate value '{normalized.Value}'.");
-                users.Add(normalized);
-            }
-
-            return Results.Json(users, IrJson.Options);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return EndpointExtensions.ServerError(
-                ctx,
-                SavedReportsListingDefinition.Name,
-                "administration user lookup",
-                ex);
-        }
+        var listed = await EndpointExtensions.Server(ctx).ListAuthorizationUsers(
+            EndpointExtensions.Context(ctx), ct);
+        return listed.Failure is not null
+            ? EndpointExtensions.Failure(listed.Failure, ctx)
+            : Results.Json(listed.Value, IrJson.Options);
     }
 
     // End-user saved-report surface.
@@ -162,7 +69,7 @@ internal static class SavedReportEndpoints
     {
         var listed = await EndpointExtensions.Server(ctx).ListConfigurations(EndpointExtensions.Context(ctx), ct);
         return listed.Failure is not null
-            ? EndpointExtensions.Failure(listed.Failure)
+            ? EndpointExtensions.Failure(listed.Failure, ctx)
             : Results.Json(listed.Value, IrJson.Options);
     }
 
@@ -178,7 +85,7 @@ internal static class SavedReportEndpoints
     {
         var listed = await EndpointExtensions.Server(ctx).ListSavedReports(name, EndpointExtensions.Context(ctx), ct);
         return listed.Failure is not null
-            ? EndpointExtensions.Failure(listed.Failure)
+            ? EndpointExtensions.Failure(listed.Failure, ctx)
             : Results.Json(listed.Value, IrJson.Options);
     }
 
@@ -199,7 +106,7 @@ internal static class SavedReportEndpoints
             EndpointExtensions.Context(ctx),
             ct);
         return saved.Failure is not null
-            ? EndpointExtensions.Failure(saved.Failure)
+            ? EndpointExtensions.Failure(saved.Failure, ctx)
             : Results.Json(saved.Value, IrJson.Options, statusCode: StatusCodes.Status201Created);
     }
 
@@ -223,7 +130,7 @@ internal static class SavedReportEndpoints
         CancellationToken ct)
     {
         var loaded = await EndpointExtensions.Server(ctx).LoadDocument(name, id, EndpointExtensions.Context(ctx), ct);
-        if (loaded.Failure is not null) return EndpointExtensions.Failure(loaded.Failure);
+        if (loaded.Failure is not null) return EndpointExtensions.Failure(loaded.Failure, ctx);
         var document = loaded.Value!;
         return Results.Json(
             new SavedReportDocument(
@@ -249,7 +156,7 @@ internal static class SavedReportEndpoints
             EndpointExtensions.Context(ctx),
             ct);
         return updated.Failure is not null
-            ? EndpointExtensions.Failure(updated.Failure)
+            ? EndpointExtensions.Failure(updated.Failure, ctx)
             : Results.Json(updated.Value, IrJson.Options);
     }
 
@@ -266,7 +173,7 @@ internal static class SavedReportEndpoints
         var deleted = await EndpointExtensions.Server(ctx).DeleteDocument(
             id, EndpointExtensions.Context(ctx), ct);
         return deleted.Failure is not null
-            ? EndpointExtensions.Failure(deleted.Failure)
+            ? EndpointExtensions.Failure(deleted.Failure, ctx)
             : Results.NoContent();
     }
 
@@ -289,7 +196,7 @@ internal static class SavedReportEndpoints
     {
         var exported = await EndpointExtensions.Server(ctx).ExportDocument(
             id, EndpointExtensions.Context(ctx), ct);
-        if (exported.Failure is not null) return EndpointExtensions.Failure(exported.Failure);
+        if (exported.Failure is not null) return EndpointExtensions.Failure(exported.Failure, ctx);
 
         var export = exported.Value!;
         var jsonOptions = new JsonSerializerOptions(IrJson.Options) { WriteIndented = true };
@@ -319,7 +226,7 @@ internal static class SavedReportEndpoints
             EndpointExtensions.Context(ctx),
             ct);
         return imported.Failure is not null
-            ? EndpointExtensions.Failure(imported.Failure)
+            ? EndpointExtensions.Failure(imported.Failure, ctx)
             : Results.Json(imported.Value, IrJson.Options, statusCode: StatusCodes.Status201Created);
     }
 

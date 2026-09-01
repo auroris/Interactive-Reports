@@ -1,11 +1,13 @@
 using System.Text.Json;
 using InteractiveReport.AspNetCore.Definitions;
+using InteractiveReport.Core.Authorization;
 using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Expressions;
 using InteractiveReport.Core.Identity;
 using InteractiveReport.Core.Model;
 using InteractiveReport.Core.SavedReports;
 using InteractiveReport.Core.Validation;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -188,6 +190,69 @@ public interface IInteractiveReportServer
         CancellationToken ct = default);
 
     /// <summary>
+    /// Describes the identity and administrator sources the engine sees for the caller. Opt-in: when
+    /// the diagnostic is disabled this reports not-found rather than an empty answer.
+    /// </summary>
+    Task<InteractiveReportServerResult<InteractiveReportIdentity>> DescribeIdentity(
+        InteractiveReportRequestContext context,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Lists the host-supplied identity choices offered for authorization administration.
+    /// Administrator-only; a host with no user provider reports an empty list.
+    /// </summary>
+    Task<InteractiveReportServerResult<IReadOnlyList<InteractiveReportUser>>> ListAuthorizationUsers(
+        InteractiveReportRequestContext context,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Lists configured and database-authored authorization state. Administrator-only.
+    /// </summary>
+    Task<InteractiveReportServerResult<InteractiveReportAuthorizationState>> ListAuthorizationState(
+        InteractiveReportRequestContext context,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Grants database-authored administrator authority. The identity is read through
+    /// <paramref name="readIdentity"/> only after administration has been authorized, so an
+    /// unauthorized request is hidden whether or not the supplied value is well formed.
+    /// </summary>
+    Task<InteractiveReportServerResult<bool>> GrantAdministrator(
+        Func<CancellationToken, Task<string?>> readIdentity,
+        InteractiveReportRequestContext context,
+        CancellationToken ct = default);
+
+    /// <summary>Revokes database-authored administrator authority.</summary>
+    Task<InteractiveReportServerResult<bool>> RevokeAdministrator(
+        Func<CancellationToken, Task<string?>> readIdentity,
+        InteractiveReportRequestContext context,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Enables or disables the database-authored restriction on one configured report. A report that
+    /// allows anonymous access, or that only administrators may reach, cannot be restricted.
+    /// </summary>
+    Task<InteractiveReportServerResult<bool>> SetReportRestriction(
+        string reportName,
+        Func<CancellationToken, Task<bool?>> readRestricted,
+        InteractiveReportRequestContext context,
+        CancellationToken ct = default);
+
+    /// <summary>Grants one identity database-authored access to one restricted report.</summary>
+    Task<InteractiveReportServerResult<bool>> GrantReportUser(
+        string reportName,
+        Func<CancellationToken, Task<string?>> readIdentity,
+        InteractiveReportRequestContext context,
+        CancellationToken ct = default);
+
+    /// <summary>Revokes one identity's database-authored access to one restricted report.</summary>
+    Task<InteractiveReportServerResult<bool>> RevokeReportUser(
+        string reportName,
+        Func<CancellationToken, Task<string?>> readIdentity,
+        InteractiveReportRequestContext context,
+        CancellationToken ct = default);
+
+    /// <summary>
     /// Deletes a user-authored document the caller may modify. Documents are addressed by their
     /// database id — the only stable handle a document has — and a configured document is refused
     /// because its declaring file, not the database, is authoritative.
@@ -200,6 +265,7 @@ public interface IInteractiveReportServer
 
 internal sealed class InteractiveReportServer(
     IReportAuthorizationService authorization,
+    IReportAuthorizationStore authorizationStore,
     ISavedReportStore savedReports,
     ConfiguredReportDocumentSynchronizer synchronizer,
     ConfiguredReportDocumentStore configuredDocuments,
@@ -783,6 +849,414 @@ internal sealed class InteractiveReportServer(
             return InteractiveReportServerResult<bool>.Failed(
                 Internal(report.ReportName, "saved-report deletion", context, ex));
         }
+    }
+
+    public async Task<InteractiveReportServerResult<InteractiveReportIdentity>> DescribeIdentity(
+        InteractiveReportRequestContext context,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        var current = options.CurrentValue;
+        // The diagnostic is opt-in: when it is off the route must be indistinguishable from one
+        // that was never mapped.
+        if (!current.WhoamiEnabled)
+            return InteractiveReportServerResult<InteractiveReportIdentity>.Failed(new(
+                InteractiveReportFailureKind.NotFound,
+                InteractiveReportErrorCodes.EndpointNotFound));
+
+        var identity = ReportIdentity.Resolve(context.User, current.IdentityClaim);
+        var database = new DatabaseAdministratorAccess(false, false);
+        if (ReportConnectionRegistry.IsStoreConfigured(current.SavedReports))
+        {
+            try
+            {
+                database = await authorizationStore.GetAdministratorAccess(identity, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                return InteractiveReportServerResult<InteractiveReportIdentity>.Failed(Internal(
+                    SavedReportsListingDefinition.Name, "identity authorization lookup", context, ex));
+            }
+        }
+
+        var configuredAdministrator = ReportIdentity.IsAdministrator(
+            context.User, current.IdentityClaim, current.Administrators);
+        return InteractiveReportServerResult<InteractiveReportIdentity>.Success(new InteractiveReportIdentity(
+            Authenticated: context.User.Identity?.IsAuthenticated == true,
+            // Expose the exact value an operator would place in InteractiveReport:Administrators.
+            Identity: identity,
+            IsAdministrator: configuredAdministrator || database.UserGranted,
+            ConfiguredAdministrator: configuredAdministrator,
+            DatabaseAdministrator: database.UserGranted,
+            AdministratorListConfigured: current.Administrators.Count > 0 || database.Configured,
+            ApplicationAuthorizationConfigured: context.RequestServices
+                .GetServices<IInteractiveReportAuthorizer>()
+                .Any(),
+            Name: context.User.Identity?.Name,
+            AuthenticationType: context.User.Identity?.AuthenticationType,
+            Claims: context.User.Claims
+                .Select(claim => new InteractiveReportClaim(claim.Type, claim.Value))
+                .ToArray()));
+    }
+
+    public async Task<InteractiveReportServerResult<IReadOnlyList<InteractiveReportUser>>> ListAuthorizationUsers(
+        InteractiveReportRequestContext context,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        if (await AuthorizeAdministration(
+                InteractiveReportAction.ListAuthorizationUsers,
+                SavedReportsListingDefinition.Name,
+                context,
+                ct) is { } denied)
+            return InteractiveReportServerResult<IReadOnlyList<InteractiveReportUser>>.Failed(denied);
+
+        var provider = context.RequestServices.GetService<IInteractiveReportUserProvider>();
+        if (provider is null)
+            return InteractiveReportServerResult<IReadOnlyList<InteractiveReportUser>>.Success([]);
+
+        try
+        {
+            var supplied = await provider.GetUsers(context.User, ct);
+            if (supplied is null || supplied.Count == 0)
+                return InteractiveReportServerResult<IReadOnlyList<InteractiveReportUser>>.Success([]);
+
+            var users = new List<InteractiveReportUser>(supplied.Count);
+            var values = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var user in supplied)
+            {
+                if (user is null
+                    || string.IsNullOrWhiteSpace(user.Display)
+                    || string.IsNullOrWhiteSpace(user.Value))
+                    throw new InvalidOperationException(
+                        "The Interactive Reports user provider returned an entry with an empty display or value.");
+
+                var normalized = new InteractiveReportUser(user.Display.Trim(), user.Value.Trim());
+                if (!values.Add(normalized.Value))
+                    throw new InvalidOperationException(
+                        $"The Interactive Reports user provider returned duplicate value '{normalized.Value}'.");
+                users.Add(normalized);
+            }
+
+            return InteractiveReportServerResult<IReadOnlyList<InteractiveReportUser>>.Success(users);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return InteractiveReportServerResult<IReadOnlyList<InteractiveReportUser>>.Failed(Internal(
+                SavedReportsListingDefinition.Name, "administration user lookup", context, ex));
+        }
+    }
+
+    public async Task<InteractiveReportServerResult<InteractiveReportAuthorizationState>> ListAuthorizationState(
+        InteractiveReportRequestContext context,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        if (await AuthorizeAdministration(InteractiveReportAction.ManageAuthorization, SavedReportsListingDefinition.Name, context, ct) is { } denied)
+            return InteractiveReportServerResult<InteractiveReportAuthorizationState>.Failed(denied);
+
+        IReadOnlyList<ReportAuthorizationEntry> entries;
+        try
+        {
+            entries = await authorizationStore.ListAll(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return InteractiveReportServerResult<InteractiveReportAuthorizationState>.Failed(
+                Internal(SavedReportsListingDefinition.Name, "authorization listing", context, ex));
+        }
+
+        var current = options.CurrentValue;
+        var databaseAdministrators = entries
+            .Where(entry => entry.Kind == ReportAuthorizationEntryKind.Administrator)
+            .Select(entry => entry.Identity!)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var databaseRestrictions = entries
+            .Where(entry => entry.Kind == ReportAuthorizationEntryKind.ReportRestriction)
+            .Select(entry => entry.ReportName!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var databaseUsers = entries
+            .Where(entry => entry.Kind == ReportAuthorizationEntryKind.ReportUser)
+            .GroupBy(entry => entry.ReportName!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(entry => entry.Identity!)
+                    .Order(StringComparer.OrdinalIgnoreCase)
+                    .ToArray(),
+                StringComparer.OrdinalIgnoreCase);
+
+        var reports = current.Reports.Select(pair =>
+        {
+            var authorization = pair.Value.Authorization;
+            var databaseRestricted = databaseRestrictions.Contains(pair.Key);
+            return new InteractiveReportAuthorizationReport(
+                Name: pair.Key,
+                Title: pair.Value.Title ?? ColumnModel.Prettify(pair.Key),
+                Restricted: authorization?.Restricted == true || databaseRestricted,
+                ConfiguredRestricted: authorization?.Restricted == true,
+                DatabaseRestricted: databaseRestricted,
+                CanRestrict: authorization?.AllowAnonymous != true
+                    && authorization?.AdministratorsOnly != true,
+                ConfiguredUsers: authorization?.Users?.Select(identity => identity.Trim())
+                    .Order(StringComparer.OrdinalIgnoreCase)
+                    .ToArray() ?? [],
+                DatabaseUsers: databaseUsers.GetValueOrDefault(pair.Key) ?? []);
+        }).OrderBy(report => report.Title, StringComparer.OrdinalIgnoreCase).ToArray();
+
+        return InteractiveReportServerResult<InteractiveReportAuthorizationState>.Success(
+            new InteractiveReportAuthorizationState(
+                ConfiguredAdministrators: current.Administrators
+                    .Select(identity => identity.Trim())
+                    .Order(StringComparer.OrdinalIgnoreCase)
+                    .ToArray(),
+                DatabaseAdministrators: databaseAdministrators,
+                Reports: reports));
+    }
+
+    public Task<InteractiveReportServerResult<bool>> GrantAdministrator(
+        Func<CancellationToken, Task<string?>> readIdentity,
+        InteractiveReportRequestContext context,
+        CancellationToken ct = default)
+        => MutateIdentity(
+            SavedReportsListingDefinition.Name,
+            readIdentity,
+            (identity, token) => authorizationStore.GrantAdministrator(identity, token),
+            "administrator authorization update",
+            context,
+            ct);
+
+    public Task<InteractiveReportServerResult<bool>> RevokeAdministrator(
+        Func<CancellationToken, Task<string?>> readIdentity,
+        InteractiveReportRequestContext context,
+        CancellationToken ct = default)
+        => MutateIdentity(
+            SavedReportsListingDefinition.Name,
+            readIdentity,
+            async (identity, token) => await authorizationStore.RevokeAdministrator(identity, token),
+            "administrator authorization update",
+            context,
+            ct);
+
+    public async Task<InteractiveReportServerResult<bool>> SetReportRestriction(
+        string reportName,
+        Func<CancellationToken, Task<bool?>> readRestricted,
+        InteractiveReportRequestContext context,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(readRestricted);
+        ArgumentNullException.ThrowIfNull(context);
+
+        var (canonicalName, report) = FindConfiguredReport(reportName);
+        if (canonicalName is null || report is null) return NotFoundReport<bool>();
+        if (await AuthorizeAdministration(InteractiveReportAction.ManageAuthorization, canonicalName, context, ct) is { } denied)
+            return InteractiveReportServerResult<bool>.Failed(denied);
+
+        bool? restricted;
+        try
+        {
+            restricted = await readRestricted(ct);
+        }
+        catch (JsonException ex)
+        {
+            return InteractiveReportServerResult<bool>.Failed(
+                Invalid(InteractiveReportErrorCodes.MalformedAuthorizationRequest, ex.Message));
+        }
+        if (restricted is null)
+            return InteractiveReportServerResult<bool>.Failed(
+                Invalid(InteractiveReportErrorCodes.AuthorizationRestrictionRequired));
+        // A report nobody has to authenticate for, or one only administrators may reach, has no
+        // per-user surface for a restriction to govern.
+        if (restricted == true
+            && (report.Authorization?.AllowAnonymous == true
+                || report.Authorization?.AdministratorsOnly == true))
+            return InteractiveReportServerResult<bool>.Failed(
+                Invalid(InteractiveReportErrorCodes.ReportRestrictionConflict));
+
+        try
+        {
+            await authorizationStore.SetReportRestricted(canonicalName, restricted.Value, ct);
+            return InteractiveReportServerResult<bool>.Success(true);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return InteractiveReportServerResult<bool>.Failed(
+                Internal(canonicalName, "report restriction update", context, ex));
+        }
+    }
+
+    public Task<InteractiveReportServerResult<bool>> GrantReportUser(
+        string reportName,
+        Func<CancellationToken, Task<string?>> readIdentity,
+        InteractiveReportRequestContext context,
+        CancellationToken ct = default)
+        => MutateReportIdentity(
+            reportName,
+            readIdentity,
+            (canonical, identity, token) => authorizationStore.GrantReportUser(canonical, identity, token),
+            context,
+            ct);
+
+    public Task<InteractiveReportServerResult<bool>> RevokeReportUser(
+        string reportName,
+        Func<CancellationToken, Task<string?>> readIdentity,
+        InteractiveReportRequestContext context,
+        CancellationToken ct = default)
+        => MutateReportIdentity(
+            reportName,
+            readIdentity,
+            async (canonical, identity, token) =>
+                await authorizationStore.RevokeReportUser(canonical, identity, token),
+            context,
+            ct);
+
+    /// <summary>
+    /// Runs an identity mutation that is scoped to the whole installation rather than one report.
+    /// The caller clears administration before the identity is read, so an unauthorized request is
+    /// hidden whether or not its body is well formed.
+    /// </summary>
+    private async Task<InteractiveReportServerResult<bool>> MutateIdentity(
+        string resourceReportName,
+        Func<CancellationToken, Task<string?>> readIdentity,
+        Func<string, CancellationToken, Task> mutation,
+        string operation,
+        InteractiveReportRequestContext context,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(readIdentity);
+        ArgumentNullException.ThrowIfNull(context);
+
+        if (await AuthorizeAdministration(InteractiveReportAction.ManageAuthorization, resourceReportName, context, ct) is { } denied)
+            return InteractiveReportServerResult<bool>.Failed(denied);
+
+        var (identity, failure) = await ReadIdentity(readIdentity, ct);
+        if (failure is not null) return InteractiveReportServerResult<bool>.Failed(failure);
+
+        try
+        {
+            await mutation(identity!, ct);
+            return InteractiveReportServerResult<bool>.Success(true);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return InteractiveReportServerResult<bool>.Failed(
+                Internal(resourceReportName, operation, context, ex));
+        }
+    }
+
+    /// <summary>Runs an identity mutation scoped to one configured report that supports user grants.</summary>
+    private async Task<InteractiveReportServerResult<bool>> MutateReportIdentity(
+        string reportName,
+        Func<CancellationToken, Task<string?>> readIdentity,
+        Func<string, string, CancellationToken, Task> mutation,
+        InteractiveReportRequestContext context,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(readIdentity);
+        ArgumentNullException.ThrowIfNull(context);
+
+        var (canonicalName, report) = FindConfiguredReport(reportName);
+        if (canonicalName is null || report is null) return NotFoundReport<bool>();
+        if (await AuthorizeAdministration(InteractiveReportAction.ManageAuthorization, canonicalName, context, ct) is { } denied)
+            return InteractiveReportServerResult<bool>.Failed(denied);
+        if (report.Authorization?.AllowAnonymous == true
+            || report.Authorization?.AdministratorsOnly == true)
+            return InteractiveReportServerResult<bool>.Failed(
+                Invalid(InteractiveReportErrorCodes.ReportUserGrantConflict));
+
+        var (identity, failure) = await ReadIdentity(readIdentity, ct);
+        if (failure is not null) return InteractiveReportServerResult<bool>.Failed(failure);
+
+        try
+        {
+            await mutation(canonicalName, identity!, ct);
+            return InteractiveReportServerResult<bool>.Success(true);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return InteractiveReportServerResult<bool>.Failed(
+                Internal(canonicalName, "report user authorization update", context, ex));
+        }
+    }
+
+    /// <summary>Reads and validates a supplied identity; a valid one is 1 to 400 characters trimmed.</summary>
+    private static async Task<(string? Identity, InteractiveReportFailure? Failure)> ReadIdentity(
+        Func<CancellationToken, Task<string?>> readIdentity,
+        CancellationToken ct)
+    {
+        string? supplied;
+        try
+        {
+            supplied = await readIdentity(ct);
+        }
+        catch (JsonException ex)
+        {
+            return (null, Invalid(InteractiveReportErrorCodes.MalformedAuthorizationRequest, ex.Message));
+        }
+
+        var identity = supplied?.Trim();
+        return string.IsNullOrEmpty(identity) || identity.Length > 400
+            ? (null, Invalid(InteractiveReportErrorCodes.AuthorizationIdentityInvalid))
+            : (identity, null);
+    }
+
+    /// <summary>Requires administrator authority for an administration operation, hiding denials.</summary>
+    private async Task<InteractiveReportFailure?> AuthorizeAdministration(
+        InteractiveReportAction action,
+        string resourceReportName,
+        InteractiveReportRequestContext context,
+        CancellationToken ct)
+    {
+        var denied = await authorization.AuthorizeEndpoint(
+            [action],
+            new InteractiveReportAuthorizationResource { ReportName = resourceReportName },
+            administratorRequired: true,
+            hideDenied: true,
+            denialDetail: null,
+            context,
+            ct);
+        return denied is null ? null : Failure(denied);
+    }
+
+    /// <summary>
+    /// Finds a configured report case-insensitively while preserving its canonical configured name —
+    /// the only stable identifier a report has, and the spelling every stored row was written from.
+    /// </summary>
+    private (string? Name, ReportDefinition? Report) FindConfiguredReport(string name)
+    {
+        var reports = options.CurrentValue.Reports;
+        if (string.IsNullOrWhiteSpace(name) || !reports.TryGetValue(name, out var report))
+            return (null, null);
+        var canonicalName = reports.Keys.First(key =>
+            string.Equals(key, name, StringComparison.OrdinalIgnoreCase));
+        return (canonicalName, report);
     }
 
     public async Task<InteractiveReportServerResult<InteractiveReportDocumentExport>> ExportDocument(
