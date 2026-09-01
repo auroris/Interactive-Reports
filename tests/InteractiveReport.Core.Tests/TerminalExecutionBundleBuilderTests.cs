@@ -133,7 +133,9 @@ public sealed class TerminalExecutionBundleBuilderTests
 
         AssertUnpaged(bundle.Count);
         AssertUnpaged(footer.Query);
-        AssertUnpaged(breakTotals.Query);
+        // Subtotals are one row per break group on every request; the definition's row ceiling
+        // bounds that query (a break cannot have more groups than rows), never a page window.
+        AssertWindow(breakTotals.Query, definition.MaxRows, expectedOffset: null);
 
         var compiled = BundleSnapshot(bundle, dialect);
         Assert.Equal(4, compiled.Count);

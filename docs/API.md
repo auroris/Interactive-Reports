@@ -508,6 +508,9 @@ configuration owns the selection and API attempts to replace it return 409.
 All data and management routes enter the central authorization boundary through the
 JSON client's `IReportAccessService`. Packaged assets and page
 shells are intentionally anonymous; the page's API calls are still authorized.
+Every request body must be declared as `Content-Type: application/json`; any other
+declared type is refused by the framework with an empty 415 before a handler runs, on
+the JSON and file-download routes alike.
 `MapInteractiveReportJson` supplies standard endpoint summaries, tags, request and
 response types, and error metadata for the host's OpenAPI generator.
 

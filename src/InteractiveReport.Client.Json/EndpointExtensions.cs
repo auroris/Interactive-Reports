@@ -427,12 +427,7 @@ public static class EndpointExtensions
     /// <param name="ctx">The current HTTP request and response context.</param>
     /// <returns>The request context consumed by the server boundary.</returns>
     internal static InteractiveReportRequestContext Context(HttpContext ctx)
-        => new()
-        {
-            User = ctx.User,
-            RequestServices = ctx.RequestServices,
-            TraceIdentifier = ctx.TraceIdentifier,
-        };
+        => InteractiveReportHttpRequest.Context(ctx);
 
     /// <summary>
     /// Translates a transport-neutral server failure into its HTTP response.
@@ -457,33 +452,6 @@ public static class EndpointExtensions
         string? details = null,
         string? traceId = null)
         => InteractiveReportHttpResult.Error(code, statusCode, details, traceId);
-
-    /// <summary>
-    /// Creates the standardized authentication-required response.
-    /// </summary>
-    /// <returns>The HTTP result to send to the client.</returns>
-    internal static IResult AuthenticationRequired()
-        => Error(
-            InteractiveReportErrorCodes.AuthenticationRequired,
-            StatusCodes.Status401Unauthorized);
-
-    /// <summary>
-    /// Creates the standardized report-not-found response.
-    /// </summary>
-    /// <returns>The HTTP result to send to the client.</returns>
-    internal static IResult ReportNotFound()
-        => Error(
-            InteractiveReportErrorCodes.ReportNotFound,
-            StatusCodes.Status404NotFound);
-
-    /// <summary>
-    /// Creates the standardized saved-report-not-found response.
-    /// </summary>
-    /// <returns>The HTTP result to send to the client.</returns>
-    internal static IResult SavedReportNotFound()
-        => Error(
-            InteractiveReportErrorCodes.SavedReportNotFound,
-            StatusCodes.Status404NotFound);
 
     /// <summary>
     /// Logs an unexpected exception with the request trace id and returns a sanitized server error.

@@ -64,11 +64,17 @@ public sealed class ReportExecutor
         IReadOnlyDictionary<string, object?> contextParams,
         CancellationToken ct = default)
     {
-        return await _schemaCache.GetOrDiscover(definition, async () =>
+        // One discovery task is shared by every concurrent caller of the same key, so it must not
+        // be tied to the first caller's request: if that caller aborts, the others would fault with
+        // a cancellation they never asked for and be reported as server errors. Discovery runs under
+        // the command timeout instead, and each caller observes only its own token while waiting.
+        var discovery = _schemaCache.GetOrDiscover(definition, async () =>
         {
-            await using var connection = await _connections.Open(definition, ct);
-            return await SchemaDiscovery.Discover(connection, definition, contextParams, _logger, ct);
+            await using var connection = await _connections.Open(definition, CancellationToken.None);
+            return await SchemaDiscovery.Discover(
+                connection, definition, contextParams, _logger, CancellationToken.None);
         });
+        return await discovery.WaitAsync(ct);
     }
 
     /// <summary>
@@ -645,7 +651,33 @@ public sealed class ReportExecutor
     /// <param name="value">The numeric provider value to test.</param>
     /// <returns><see langword="true"/> when the numeric value is negative; otherwise, <see langword="false"/>.</returns>
     private static bool IsNegative(object? value)
-        => value is not null && Convert.ToDouble(value, System.Globalization.CultureInfo.InvariantCulture) < 0;
+    {
+        // A metric column whose provider type is unknown (SQLite expression columns) may arrive as
+        // text; a value that is not a number is simply not negative rather than a conversion error.
+        switch (value)
+        {
+            case null:
+                return false;
+            case string text:
+                return decimal.TryParse(
+                        text,
+                        System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out var parsed)
+                    && parsed < 0;
+            case IConvertible convertible:
+                try
+                {
+                    return convertible.ToDouble(System.Globalization.CultureInfo.InvariantCulture) < 0;
+                }
+                catch (Exception ex) when (ex is FormatException or InvalidCastException or OverflowException)
+                {
+                    return false;
+                }
+            default:
+                return false;
+        }
+    }
 
     /// <summary>
     /// Determines whether two projected rows have equal values for every break column.

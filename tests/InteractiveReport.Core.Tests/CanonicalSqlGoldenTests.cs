@@ -39,7 +39,7 @@ public sealed class CanonicalSqlGoldenTests
         var compiled = await Compile(ReportDialect.SqlServer, sorted: false);
 
         Assert.Equal(
-            "SELECT [__irc0] FROM (SELECT * FROM (SELECT * FROM (SELECT [CUSTOMER] AS [__irc0], [NOTES] AS [__irc1], [AMOUNT] AS [__irc2] FROM (SELECT CUSTOMER, NOTES, AMOUNT FROM ORDERS) ir_base) AS [ir_rel_0] WHERE ([__irc2] >= @p0)) AS [ir_rel_1] WHERE (LOWER([__irc0]) like @p1 OR LOWER([__irc1]) like @p2)) AS [ir_rel_0] ORDER BY (SELECT 0) OFFSET @p3 ROWS FETCH NEXT @p4 ROWS ONLY",
+            "SELECT [__irc0] FROM (SELECT * FROM (SELECT * FROM (SELECT [CUSTOMER] AS [__irc0], [NOTES] AS [__irc1], [AMOUNT] AS [__irc2] FROM (SELECT CUSTOMER, NOTES, AMOUNT FROM ORDERS) ir_base) AS [ir_rel_0] WHERE ([__irc2] >= @p0)) AS [ir_rel_1] WHERE (LOWER([__irc0]) LIKE @p1 ESCAPE '\\' OR LOWER([__irc1]) LIKE @p2 ESCAPE '\\')) AS [ir_rel_0] ORDER BY (SELECT 0) OFFSET @p3 ROWS FETCH NEXT @p4 ROWS ONLY",
             compiled.Main.Sql);
         Assert.Equal([10m, "%acme%", "%acme%", 5L, 5], compiled.Main.Bindings);
     }
@@ -48,24 +48,24 @@ public sealed class CanonicalSqlGoldenTests
         => dialect switch
         {
             ReportDialect.Sqlite => new(
-                "SELECT \"__irc0\" FROM (SELECT * FROM (SELECT * FROM (SELECT \"CUSTOMER\" AS \"__irc0\", \"NOTES\" AS \"__irc1\", \"AMOUNT\" AS \"__irc2\" FROM (SELECT CUSTOMER, NOTES, AMOUNT FROM ORDERS) ir_base) AS \"ir_rel_0\" WHERE (\"__irc2\" >= @p0)) AS \"ir_rel_1\" WHERE (LOWER(\"__irc0\") like @p1 OR LOWER(\"__irc1\") like @p2)) AS \"ir_rel_0\" ORDER BY \"__irc1\" DESC NULLS FIRST LIMIT @p3 OFFSET @p4",
+                "SELECT \"__irc0\" FROM (SELECT * FROM (SELECT * FROM (SELECT \"CUSTOMER\" AS \"__irc0\", \"NOTES\" AS \"__irc1\", \"AMOUNT\" AS \"__irc2\" FROM (SELECT CUSTOMER, NOTES, AMOUNT FROM ORDERS) ir_base) AS \"ir_rel_0\" WHERE (\"__irc2\" >= @p0)) AS \"ir_rel_1\" WHERE (LOWER(\"__irc0\") LIKE @p1 ESCAPE '\\' OR LOWER(\"__irc1\") LIKE @p2 ESCAPE '\\')) AS \"ir_rel_0\" ORDER BY \"__irc1\" DESC NULLS FIRST LIMIT @p3 OFFSET @p4",
                 [10m, "%acme%", "%acme%", 5, 5L],
-                "SELECT COUNT(*) AS \"count\" FROM (SELECT * FROM (SELECT * FROM (SELECT \"CUSTOMER\" AS \"__irc0\", \"NOTES\" AS \"__irc1\", \"AMOUNT\" AS \"__irc2\" FROM (SELECT CUSTOMER, NOTES, AMOUNT FROM ORDERS) ir_base) AS \"ir_rel_0\" WHERE (\"__irc2\" >= @p0)) AS \"ir_rel_1\" WHERE (LOWER(\"__irc0\") like @p1 OR LOWER(\"__irc1\") like @p2)) AS \"ir_rel_0\"",
+                "SELECT COUNT(*) AS \"count\" FROM (SELECT * FROM (SELECT * FROM (SELECT \"CUSTOMER\" AS \"__irc0\", \"NOTES\" AS \"__irc1\", \"AMOUNT\" AS \"__irc2\" FROM (SELECT CUSTOMER, NOTES, AMOUNT FROM ORDERS) ir_base) AS \"ir_rel_0\" WHERE (\"__irc2\" >= @p0)) AS \"ir_rel_1\" WHERE (LOWER(\"__irc0\") LIKE @p1 ESCAPE '\\' OR LOWER(\"__irc1\") LIKE @p2 ESCAPE '\\')) AS \"ir_rel_0\"",
                 [10m, "%acme%", "%acme%"]),
             ReportDialect.SqlServer => new(
-                "SELECT [__irc0] FROM (SELECT * FROM (SELECT * FROM (SELECT [CUSTOMER] AS [__irc0], [NOTES] AS [__irc1], [AMOUNT] AS [__irc2] FROM (SELECT CUSTOMER, NOTES, AMOUNT FROM ORDERS) ir_base) AS [ir_rel_0] WHERE ([__irc2] >= @p0)) AS [ir_rel_1] WHERE (LOWER([__irc0]) like @p1 OR LOWER([__irc1]) like @p2)) AS [ir_rel_0] ORDER BY CASE WHEN [__irc1] IS NULL THEN 0 ELSE 1 END, [__irc1] DESC OFFSET @p3 ROWS FETCH NEXT @p4 ROWS ONLY",
+                "SELECT [__irc0] FROM (SELECT * FROM (SELECT * FROM (SELECT [CUSTOMER] AS [__irc0], [NOTES] AS [__irc1], [AMOUNT] AS [__irc2] FROM (SELECT CUSTOMER, NOTES, AMOUNT FROM ORDERS) ir_base) AS [ir_rel_0] WHERE ([__irc2] >= @p0)) AS [ir_rel_1] WHERE (LOWER([__irc0]) LIKE @p1 ESCAPE '\\' OR LOWER([__irc1]) LIKE @p2 ESCAPE '\\')) AS [ir_rel_0] ORDER BY CASE WHEN [__irc1] IS NULL THEN 0 ELSE 1 END, [__irc1] DESC OFFSET @p3 ROWS FETCH NEXT @p4 ROWS ONLY",
                 [10m, "%acme%", "%acme%", 5L, 5],
-                "SELECT COUNT(*) AS [count] FROM (SELECT * FROM (SELECT * FROM (SELECT [CUSTOMER] AS [__irc0], [NOTES] AS [__irc1], [AMOUNT] AS [__irc2] FROM (SELECT CUSTOMER, NOTES, AMOUNT FROM ORDERS) ir_base) AS [ir_rel_0] WHERE ([__irc2] >= @p0)) AS [ir_rel_1] WHERE (LOWER([__irc0]) like @p1 OR LOWER([__irc1]) like @p2)) AS [ir_rel_0]",
+                "SELECT COUNT(*) AS [count] FROM (SELECT * FROM (SELECT * FROM (SELECT [CUSTOMER] AS [__irc0], [NOTES] AS [__irc1], [AMOUNT] AS [__irc2] FROM (SELECT CUSTOMER, NOTES, AMOUNT FROM ORDERS) ir_base) AS [ir_rel_0] WHERE ([__irc2] >= @p0)) AS [ir_rel_1] WHERE (LOWER([__irc0]) LIKE @p1 ESCAPE '\\' OR LOWER([__irc1]) LIKE @p2 ESCAPE '\\')) AS [ir_rel_0]",
                 [10m, "%acme%", "%acme%"]),
             ReportDialect.Postgres => new(
-                "SELECT \"__irc0\" FROM (SELECT * FROM (SELECT * FROM (SELECT \"CUSTOMER\" AS \"__irc0\", \"NOTES\" AS \"__irc1\", \"AMOUNT\" AS \"__irc2\" FROM (SELECT CUSTOMER, NOTES, AMOUNT FROM ORDERS) ir_base) AS \"ir_rel_0\" WHERE (\"__irc2\" >= @p0)) AS \"ir_rel_1\" WHERE (\"__irc0\" ilike @p1 OR \"__irc1\" ilike @p2)) AS \"ir_rel_0\" ORDER BY \"__irc1\" DESC NULLS FIRST LIMIT @p3 OFFSET @p4",
-                [10m, "%Acme%", "%Acme%", 5, 5L],
-                "SELECT COUNT(*) AS \"count\" FROM (SELECT * FROM (SELECT * FROM (SELECT \"CUSTOMER\" AS \"__irc0\", \"NOTES\" AS \"__irc1\", \"AMOUNT\" AS \"__irc2\" FROM (SELECT CUSTOMER, NOTES, AMOUNT FROM ORDERS) ir_base) AS \"ir_rel_0\" WHERE (\"__irc2\" >= @p0)) AS \"ir_rel_1\" WHERE (\"__irc0\" ilike @p1 OR \"__irc1\" ilike @p2)) AS \"ir_rel_0\"",
-                [10m, "%Acme%", "%Acme%"]),
+                "SELECT \"__irc0\" FROM (SELECT * FROM (SELECT * FROM (SELECT \"CUSTOMER\" AS \"__irc0\", \"NOTES\" AS \"__irc1\", \"AMOUNT\" AS \"__irc2\" FROM (SELECT CUSTOMER, NOTES, AMOUNT FROM ORDERS) ir_base) AS \"ir_rel_0\" WHERE (\"__irc2\" >= @p0)) AS \"ir_rel_1\" WHERE (LOWER(\"__irc0\") LIKE @p1 ESCAPE '\\' OR LOWER(\"__irc1\") LIKE @p2 ESCAPE '\\')) AS \"ir_rel_0\" ORDER BY \"__irc1\" DESC NULLS FIRST LIMIT @p3 OFFSET @p4",
+                [10m, "%acme%", "%acme%", 5, 5L],
+                "SELECT COUNT(*) AS \"count\" FROM (SELECT * FROM (SELECT * FROM (SELECT \"CUSTOMER\" AS \"__irc0\", \"NOTES\" AS \"__irc1\", \"AMOUNT\" AS \"__irc2\" FROM (SELECT CUSTOMER, NOTES, AMOUNT FROM ORDERS) ir_base) AS \"ir_rel_0\" WHERE (\"__irc2\" >= @p0)) AS \"ir_rel_1\" WHERE (LOWER(\"__irc0\") LIKE @p1 ESCAPE '\\' OR LOWER(\"__irc1\") LIKE @p2 ESCAPE '\\')) AS \"ir_rel_0\"",
+                [10m, "%acme%", "%acme%"]),
             ReportDialect.Oracle => new(
-                "SELECT \"__irc0\" FROM (SELECT * FROM (SELECT * FROM (SELECT \"CUSTOMER\" AS \"__irc0\", \"NOTES\" AS \"__irc1\", \"AMOUNT\" AS \"__irc2\" FROM (SELECT CUSTOMER, NOTES, AMOUNT FROM ORDERS) ir_base) \"ir_rel_0\" WHERE (\"__irc2\" >= :p0)) \"ir_rel_1\" WHERE (LOWER(\"__irc0\") like :p1 OR LOWER(\"__irc1\") like :p2)) \"ir_rel_0\" ORDER BY \"__irc1\" DESC NULLS FIRST OFFSET :p3 ROWS FETCH NEXT :p4 ROWS ONLY",
+                "SELECT \"__irc0\" FROM (SELECT * FROM (SELECT * FROM (SELECT \"CUSTOMER\" AS \"__irc0\", \"NOTES\" AS \"__irc1\", \"AMOUNT\" AS \"__irc2\" FROM (SELECT CUSTOMER, NOTES, AMOUNT FROM ORDERS) ir_base) \"ir_rel_0\" WHERE (\"__irc2\" >= :p0)) \"ir_rel_1\" WHERE (LOWER(\"__irc0\") LIKE :p1 ESCAPE '\\' OR LOWER(\"__irc1\") LIKE :p2 ESCAPE '\\')) \"ir_rel_0\" ORDER BY \"__irc1\" DESC NULLS FIRST OFFSET :p3 ROWS FETCH NEXT :p4 ROWS ONLY",
                 [10m, "%acme%", "%acme%", 5L, 5],
-                "SELECT COUNT(*) \"count\" FROM (SELECT * FROM (SELECT * FROM (SELECT \"CUSTOMER\" AS \"__irc0\", \"NOTES\" AS \"__irc1\", \"AMOUNT\" AS \"__irc2\" FROM (SELECT CUSTOMER, NOTES, AMOUNT FROM ORDERS) ir_base) \"ir_rel_0\" WHERE (\"__irc2\" >= :p0)) \"ir_rel_1\" WHERE (LOWER(\"__irc0\") like :p1 OR LOWER(\"__irc1\") like :p2)) \"ir_rel_0\"",
+                "SELECT COUNT(*) \"count\" FROM (SELECT * FROM (SELECT * FROM (SELECT \"CUSTOMER\" AS \"__irc0\", \"NOTES\" AS \"__irc1\", \"AMOUNT\" AS \"__irc2\" FROM (SELECT CUSTOMER, NOTES, AMOUNT FROM ORDERS) ir_base) \"ir_rel_0\" WHERE (\"__irc2\" >= :p0)) \"ir_rel_1\" WHERE (LOWER(\"__irc0\") LIKE :p1 ESCAPE '\\' OR LOWER(\"__irc1\") LIKE :p2 ESCAPE '\\')) \"ir_rel_0\"",
                 [10m, "%acme%", "%acme%"]),
             _ => throw new ArgumentOutOfRangeException(nameof(dialect), dialect, null),
         };

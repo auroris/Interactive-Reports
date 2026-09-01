@@ -1,3 +1,4 @@
+using System.Globalization;
 using GraphQL;
 using InteractiveReport.AspNetCore;
 using InteractiveReport.Core.Model;
@@ -51,7 +52,7 @@ internal sealed class InteractiveReportGraphQLExecutor(
     /// Executes one saved report after applying the requested view arguments.
     /// </summary>
     /// <param name="reportName">The configuration the document must belong to, or <see langword="null"/> to take the document's own family.</param>
-    /// <param name="id">The saved-report document id.</param>
+    /// <param name="rawId">The saved-report document id as supplied; it must parse as a positive integer.</param>
     /// <param name="page">An optional 1-based page override.</param>
     /// <param name="pageSize">An optional page-size override; zero selects the engine's unpaged mode.</param>
     /// <param name="search">Optional replacement toolbar search text; blank clears the stored search.</param>
@@ -61,14 +62,15 @@ internal sealed class InteractiveReportGraphQLExecutor(
     /// <exception cref="ExecutionError">Thrown for out-of-range arguments and for every server failure.</exception>
     public async Task<ReportResult?> Query(
         string? reportName,
-        long id,
+        string? rawId,
         int? page,
         int? pageSize,
         string? search,
         IReadOnlyList<SortRule>? sorts,
         CancellationToken ct)
     {
-        if (id < 1) throw Error("id must be a positive saved-report id.", "BAD_USER_INPUT");
+        if (!long.TryParse(rawId, NumberStyles.None, CultureInfo.InvariantCulture, out var id) || id < 1)
+            throw Error("id must be a positive saved-report id.", "BAD_USER_INPUT");
         if (page is < 1) throw Error("page must be at least 1.", "BAD_USER_INPUT");
         if (pageSize is < 0) throw Error("pageSize cannot be negative.", "BAD_USER_INPUT");
         if (sorts is not null && sorts.Any(sort => string.IsNullOrWhiteSpace(sort.Col)))
@@ -157,16 +159,8 @@ internal sealed class InteractiveReportGraphQLExecutor(
     /// <returns>The request context consumed by the server boundary.</returns>
     /// <exception cref="InvalidOperationException">Thrown when no HTTP request is in flight.</exception>
     private InteractiveReportRequestContext Context()
-    {
-        var http = httpContextAccessor.HttpContext
-            ?? throw new InvalidOperationException("GraphQL report execution requires an active HTTP request.");
-        return new InteractiveReportRequestContext
-        {
-            User = http.User,
-            RequestServices = http.RequestServices,
-            TraceIdentifier = http.TraceIdentifier,
-        };
-    }
+        => InteractiveReportHttpRequest.Context(httpContextAccessor.HttpContext
+            ?? throw new InvalidOperationException("GraphQL report execution requires an active HTTP request."));
 
     /// <summary>
     /// Translates a transport-neutral server failure into a GraphQL execution error. The

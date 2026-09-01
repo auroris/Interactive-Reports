@@ -495,7 +495,9 @@ scope, matching rules apply from lower to higher sequence, so the highest sequen
 when rules set the same style. Cell highlighting has priority over row highlighting.
 When sequence is omitted, canonical planning assigns unused ten-step values in stable
 highlight-id order; array position is never precedence. `CONTAINS`, `STARTS_WITH`, and
-`ENDS_WITH` are case-insensitive; `WILDCARD_MATCH(text, pattern)` is the case-insensitive
+`ENDS_WITH` are case-insensitive and match their search text literally — LIKE
+metacharacters in the text (`%`, `_`, `\`, and `[` on SQL Server) are escaped, whether the
+text is a literal or a column; `WILDCARD_MATCH(text, pattern)` is the case-insensitive
 asterisk-pattern predicate used by filter and highlight LOV authoring; `IN_LIST`
 provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
 `IS NULL OR col = ''` when empty text should also count.
@@ -503,7 +505,10 @@ provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
   `contains` across eligible text columns in the
   completed active relation. It runs after the active table's Shape, computed columns,
   and filters. This request overlay is neither stored nor inherited like a table
-  composable and does not participate in schema discovery or cache invalidation.
+  composable and does not participate in schema discovery or cache invalidation. The
+  text is a literal substring (LIKE metacharacters are escaped) and is capped at 200
+  characters — the list-of-values ceiling — because it binds once per eligible text
+  column.
 - A `labels` composable maps current column names to display labels. It is
   presentation, never a program: unknown keys are unused display data, and query
   responses keep server-derived labels. The compiler carries completed column metadata
@@ -1077,6 +1082,8 @@ and emit. The emitter is the only dialect-specific function surface outside oper
 | `a || b` / `CONCAT` | `CONCAT(a,b,…)` | `(a || b || …)` | `CONCAT(a,b,…)` (3.44+) | `CONCAT(a,b,…)` |
 | `LENGTH(s)` | `LEN(s)` | `LENGTH(s)` | `LENGTH(s)` | `LENGTH(s)` |
 | `ROUND(x,n)` | `ROUND(x,n)` | `ROUND(x,n)` | `ROUND(x,n)` | `ROUND(CAST(x AS NUMERIC), CAST(n AS INT))` |
+| `ROUND(x)` | `ROUND(x, 0)` (T-SQL has no one-argument form) | `ROUND(x)` | `ROUND(x)` | `ROUND(x)` |
+| `CONTAINS(s,t)` | `LOWER(s) LIKE LOWER(?) ESCAPE '\'` — `t` escaped and bound as `%t%`; a column-valued `t` is escaped in SQL with a `REPLACE` chain | same | same | same |
 | `WILDCARD_MATCH(s,p)` | `LOWER(s) LIKE LOWER(p) ESCAPE '\'` | same | same | same |
 | `YEAR(d)` | `YEAR(d)` | `EXTRACT(YEAR FROM d)` | `CAST(strftime('%Y',d) AS INTEGER)` | `EXTRACT(YEAR FROM d)` |
 | `COALESCE` | `COALESCE` | `COALESCE` | `COALESCE` | `COALESCE` |
@@ -1091,9 +1098,11 @@ as a parameter.)
 
 `WILDCARD_MATCH` requires its pattern to be a text literal. Its public pattern language
 has one metacharacter: unescaped `*` matches any run of characters, while `\*` is a
-literal asterisk and `\\` is a literal backslash. SQL LIKE's `%` and `_` remain literal.
-The emitter performs that translation and binds the resulting pattern; it never inserts
-the authored pattern into SQL text.
+literal asterisk and `\\` is a literal backslash. SQL LIKE's `%` and `_` remain literal,
+and so does `[` on SQL Server, where it opens a character class even under an `ESCAPE`
+clause. The emitter performs that translation and binds the resulting pattern; it never
+inserts the authored pattern into SQL text. The toolbar and list-of-values searches use
+the same escaping.
 
 - The emitter produces SQL fragments **we** wrote, injected via `SelectRaw` with `?`
   bindings for every literal — client text never reaches SQL; only the AST does. The one
@@ -1170,7 +1179,9 @@ the authored pattern into SQL text.
 - Multi-query consistency is an explicit per-definition policy. `none` is the default:
   count, aggregate, break-total, and page statements remain independent and no
   transaction is opened. `snapshot` requests one versioned view and is exact rather
-  than best-effort: Postgres uses `REPEATABLE READ`, SQLite a read transaction, and SQL
+  than best-effort: Postgres uses `REPEATABLE READ`, SQLite a *deferred* read transaction
+  (Microsoft.Data.Sqlite's non-deferred form is `BEGIN IMMEDIATE`, which would hold the
+  file's single write reservation for the whole report), and SQL
   Server `SNAPSHOT` (which fails with guidance if `ALLOW_SNAPSHOT_ISOLATION` is off).
   The engine never substitutes locking serializable behavior or silently downgrades.
   The setting belongs only to server configuration; report state and every HTTP or
@@ -1190,7 +1201,9 @@ the authored pattern into SQL text.
   uses `maxChartPoints` and rejects overflow instead of truncating.
 - `maxRows` (per definition): positive values are a hard response cap for **All**
   non-Chart table queries and exports, regardless of the client request. Zero and negative
-  values mean unlimited. Export truncation under a positive cap remains explicit.
+  values mean unlimited. Export truncation under a positive cap remains explicit. The
+  same cap bounds the control-break subtotal query, which otherwise returns one row per
+  break group on every page request (a break cannot have more groups than rows).
 - Command timeout per definition (default modest, e.g. 30s); `CancellationToken` flows
   from the HTTP request so abandoned browsers stop occupying the database.
 - Logging: the final `DbCommand.CommandText` for report queries, schema probes, and
@@ -1219,9 +1232,13 @@ Layered, default-deny:
    explicit `"allowAnonymous": true`. The lazy path is the safe path.
 5. **Row-level security** — server-resolved `contextParams` (§4).
 6. **Hygiene** — sanitized errors (§6), read-only principal (§11), no-SQL-over-the-wire
-   (§1), CSRF: hosts using cookie auth should apply their antiforgery convention to the
-   POST endpoints (documented host responsibility; the mapping API accepts additional
-   endpoint conventions so this is one chained call).
+   (§1), CSRF: every body-reading route declares `Accepts("application/json")`, which
+   the framework enforces with an (uncoded) 415 before any handler runs, so a
+   cross-site HTML form — which can only post form or text content types without a
+   CORS preflight — never reaches a body reader; hosts using cookie auth should still
+   apply their antiforgery convention to the POST endpoints (documented host
+   responsibility; the mapping API accepts additional endpoint conventions so this is
+   one chained call).
 
 ## 13. Saved reports & administration
 
@@ -1246,7 +1263,13 @@ persistence/administration operations fail until one is configured. An optional
 `savedReports.tablePrefix` is prepended to both store table names. Each operation uses
 one validated configuration snapshot, and auto-creation is tracked per
 connection/dialect/table target so live configuration changes cannot mix query and storage
-targets or inherit stale initialization state.
+targets or inherit stale initialization state. Dialect notes for auto-creation: on
+Oracle the table name is quoted in DDL (so it names the same object the quoted query
+identifiers do, whatever its case), text columns use `CHAR` length semantics, the
+configured-source index is a `CASE` projection because a plain composite unique index
+would treat every user row's `NULL` source file as a duplicate, and the identity column
+requires the storage schema to hold `CREATE SEQUENCE`; on SQL Server `TITLE_KEY` and
+`TITLE_SCOPE` collate binary so the unique index agrees with the ordinal owner comparison.
 `OWNER` remains row metadata; it is not embedded in `STATE_JSON` or the canonical
 `ReportDocumentFile` envelope. Ordinary list/load/save responses return `mine` instead
 of the owner identity. The administrator listing and authorization resource retain the
@@ -1334,6 +1357,9 @@ synthetic default merely because their state is invalid.
 
 Denials hide existence (404) except where the caller provably knows the resource — an
 owner reaching for admin-only powers (default selection, publish, reassign) gets an explicit 403.
+Routes that address a saved report by id alone must read the row before its family gate
+can run; a family the caller may not see is then reported with the saved-report code
+(`IR-1002`), exactly like a missing row, so hidden reports' id space is not enumerable.
 Default selection, global publication, and ownership changes are administrator-only. Publication
 does not remove the owner's ability to update the report's title/state or delete it.
 Saved-report loads still pass the underlying report definition's authorization gate.

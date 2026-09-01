@@ -20,7 +20,8 @@ public sealed class InteractiveReportOptions
     /// <summary>
     /// Gets or sets identity values, as resolved by ReportIdentity and shown by whoami, granted
     /// administrator rights: list all saved reports, publish/unpublish globals,
-    /// reassign or delete anyone's saved reports. Case-insensitive exact match.
+    /// reassign or delete anyone's saved reports. Matched by ordinal, case-sensitive equality
+    /// against the resolved identity value (use whoami to see the exact value).
     /// These source-controlled grants are additive with database administrators
     /// created in the administration center. When either source contains entries, the
     /// union is authoritative and application authorization may only restrict it.

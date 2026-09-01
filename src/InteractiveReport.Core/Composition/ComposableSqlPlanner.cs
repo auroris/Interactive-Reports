@@ -112,7 +112,8 @@ internal static class ComposableSqlPlanner
     /// <remarks>Allocates a relation alias from <paramref name="source"/>'s physical-name allocator.</remarks>
     public static ComposableSqlRelation ApplySearch(
         ComposableSqlRelation source,
-        string? search)
+        string? search,
+        ReportDialect dialect)
     {
         if (string.IsNullOrWhiteSpace(search)) return source;
         var textColumns = source.Schema.Columns
@@ -120,14 +121,15 @@ internal static class ComposableSqlPlanner
             .ToList();
         if (textColumns.Count == 0) return source;
 
+        // The toolbar text is a literal substring, never a pattern: one escaped binding per column.
+        var pattern = SqlLikePattern.Contains(search.Trim(), dialect).ToLowerInvariant();
         var query = Addressable(source);
         query.Where(nested =>
         {
             foreach (var column in textColumns)
-                nested.OrWhereContains(
-                    source.PhysicalColumns[column.Name],
-                    search.Trim(),
-                    caseSensitive: false);
+                nested.OrWhereRaw(
+                    $"LOWER({SqlKataSyntax.Identifier(dialect, source.PhysicalColumns[column.Name])}) LIKE ?{SqlLikePattern.EscapeClause}",
+                    pattern);
             return nested;
         });
         return source with { Query = query, NestingDepth = source.NestingDepth + 1 };

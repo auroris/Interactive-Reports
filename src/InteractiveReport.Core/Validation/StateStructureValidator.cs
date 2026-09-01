@@ -25,6 +25,7 @@ internal static class StateStructureValidator
     internal const int MaxHighlightRules = 50;
     internal const int MaxShapeMetrics = 256;
     internal const int MaxNestedCollectionEntries = 900;
+    internal const int MaxSearchLength = 200;
 
     /// <summary>
     /// Collects structural errors for table identities, ancestry inputs, composables, and nested rule values.
@@ -34,6 +35,12 @@ internal static class StateStructureValidator
     public static List<ValidationError> Collect(ReportState state)
     {
         var errors = new List<ValidationError>();
+        // The search overlay is bound once per text column of the active relation, so its length
+        // multiplies; the same ceiling the list-of-values search uses keeps that product bounded.
+        if (state.Search is { Length: > MaxSearchLength })
+            errors.Add(new ValidationError(
+                "search",
+                $"search cannot exceed {MaxSearchLength} characters"));
         if (state.Tables is null) return errors;
 
         if (state.Tables.Count > MaxTables)

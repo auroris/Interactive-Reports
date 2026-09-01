@@ -48,7 +48,44 @@ public class OperatorMatrixTests
 
         Assert.Contains("LOWER", compiled.Sql, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("LIKE", compiled.Sql, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(["%", "Acme", "%"], compiled.NamedBindings.Values.Take(3));
+        Assert.Contains("ESCAPE '\\'", compiled.Sql, StringComparison.Ordinal);
+        Assert.Equal(["%Acme%"], compiled.NamedBindings.Values.Take(1));
+    }
+
+    [Theory]
+    [InlineData(ReportDialect.Sqlite, "100%", "%100\\%%")]
+    [InlineData(ReportDialect.Postgres, "a_b", "%a\\_b%")]
+    [InlineData(ReportDialect.Oracle, "back\\slash", "%back\\\\slash%")]
+    [InlineData(ReportDialect.SqlServer, "[urgent]", "%\\[urgent]%")]
+    [InlineData(ReportDialect.Postgres, "[urgent]", "%[urgent]%")]
+    public void Text_predicates_match_metacharacters_literally(ReportDialect dialect, string search, string expected)
+    {
+        // The user's text is a substring, never a pattern: %, _, and \ are escaped everywhere, and
+        // [ on SQL Server, where it opens a character class even under an ESCAPE clause.
+        var compiled = Compile(dialect, $"CONTAINS(CUSTOMER, '{search}')");
+
+        Assert.Equal([expected], compiled.NamedBindings.Values.Take(1));
+    }
+
+    [Theory]
+    [InlineData(ReportDialect.Sqlite)]
+    [InlineData(ReportDialect.SqlServer)]
+    [InlineData(ReportDialect.Oracle)]
+    [InlineData(ReportDialect.Postgres)]
+    public void Text_predicates_over_a_column_pattern_escape_in_sql(ReportDialect dialect)
+    {
+        // When the search text is a column, escaping has to happen in SQL: a REPLACE chain makes
+        // the column's own metacharacters literal before the wildcards are concatenated on.
+        var compiled = Compile(dialect, "STARTS_WITH(CUSTOMER, STATUS)");
+
+        Assert.Contains("REPLACE(REPLACE(REPLACE(", compiled.Sql, StringComparison.Ordinal);
+        Assert.Contains("ESCAPE '\\'", compiled.Sql, StringComparison.Ordinal);
+        var bindings = compiled.NamedBindings.Values.Select(value => (string)value!).ToList();
+        Assert.Contains("\\\\", bindings);
+        Assert.Contains("\\%", bindings);
+        Assert.Contains("\\_", bindings);
+        Assert.Equal(dialect == ReportDialect.SqlServer, bindings.Contains("\\["));
+        Assert.Equal("%", bindings[^1]);
     }
 
     [Theory]
@@ -62,7 +99,7 @@ public class OperatorMatrixTests
 
         Assert.Contains("LOWER", compiled.Sql, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("LIKE", compiled.Sql, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("ESCAPE", compiled.Sql, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("ESCAPE '\\'", compiled.Sql, StringComparison.Ordinal);
         Assert.Contains(@"Ac%50\%\_*\\", compiled.NamedBindings.Values);
     }
 

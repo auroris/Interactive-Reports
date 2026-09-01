@@ -34,33 +34,40 @@ public sealed class ConfiguredReportDocumentStore : IDisposable
     }
 
     /// <summary>
-    /// Loads the configured documents associated with a report definition.
+    /// Enforces the one-default-per-family rule over the declared files that are present and
+    /// parse. Absent or invalid files are left to the per-request paths, which already tolerate
+    /// them (warning, or removal of the optimistic identity); two present files both claiming
+    /// <c>default: true</c> would otherwise only collide on the database's default index during
+    /// reconciliation, leaving the family a permanent not-found.
     /// </summary>
-    /// <param name="definition">The report definition containing document-file declarations.</param>
-    /// <returns>The configured documents in declaration order.</returns>
-    internal IReadOnlyList<ConfiguredReportDocument> List(ReportDefinition definition)
-        => Load(definition.Name, definition.DocumentFiles);
-
-    /// <summary>
-    /// Loads the configured documents associated with a report name.
-    /// </summary>
-    /// <param name="reportName">The configured report name whose definition or saved reports are being addressed.</param>
-    /// <returns>The configured documents in declaration order, or an empty list for an unknown report.</returns>
-    internal IReadOnlyList<ConfiguredReportDocument> List(string reportName)
-        => _options.CurrentValue.Reports.TryGetValue(reportName, out var definition)
-            ? Load(reportName, definition.DocumentFiles)
-            : [];
-
-    /// <summary>
-    /// Lists every configured report document in deterministic order.
-    /// </summary>
-    /// <returns>Every configured document ordered first by report configuration and then file declaration.</returns>
-    internal IReadOnlyList<ConfiguredReportDocument> ListAll()
+    /// <param name="reportName">The configured report name used for family identity and diagnostics.</param>
+    /// <param name="configuredPaths">The declared document paths.</param>
+    /// <exception cref="InvalidOperationException">Thrown when more than one present file is marked default.</exception>
+    internal void ValidateDefaults(string reportName, IReadOnlyCollection<string>? configuredPaths)
     {
-        var documents = new List<ConfiguredReportDocument>();
-        foreach (var (reportName, definition) in _options.CurrentValue.Reports)
-            documents.AddRange(Load(reportName, definition.DocumentFiles));
-        return documents;
+        if (configuredPaths is null || configuredPaths.Count == 0) return;
+
+        string? defaultFile = null;
+        foreach (var configuredPath in configuredPaths)
+        {
+            if (string.IsNullOrWhiteSpace(configuredPath)) continue;
+            ConfiguredReportDocument? document;
+            try
+            {
+                document = Find(reportName, configuredPath);
+            }
+            catch (InvalidOperationException)
+            {
+                continue;
+            }
+
+            if (document is not { Default: true }) continue;
+            if (defaultFile is not null)
+                throw new InvalidOperationException(
+                    $"Report '{reportName}': only one configured report document may be marked as default "
+                    + $"('{defaultFile}' and '{document.SourceFile}' both are).");
+            defaultFile = document.SourceFile;
+        }
     }
 
     /// <summary>
@@ -110,46 +117,6 @@ public sealed class ConfiguredReportDocumentStore : IDisposable
         {
             return null;
         }
-    }
-
-    /// <summary>
-    /// Validates and loads one report's configured document-file collection in declaration order.
-    /// </summary>
-    /// <param name="reportName">The configured report name used for family identity and diagnostics.</param>
-    /// <param name="configuredPaths">The authoritative configured-document paths retained during reconciliation.</param>
-    /// <returns>Loaded documents in configured path order.</returns>
-    /// <exception cref="InvalidOperationException">Thrown for blank or duplicate paths, invalid files, or missing state.</exception>
-    private IReadOnlyList<ConfiguredReportDocument> Load(
-        string reportName,
-        IReadOnlyCollection<string>? configuredPaths)
-    {
-        if (configuredPaths is null || configuredPaths.Count == 0) return [];
-
-        var documents = new List<ConfiguredReportDocument>(configuredPaths.Count);
-        var paths = new HashSet<string>(PathComparer);
-        var hasDefault = false;
-
-        foreach (var configuredPath in configuredPaths)
-        {
-            if (string.IsNullOrWhiteSpace(configuredPath))
-                throw new InvalidOperationException(
-                    $"Report '{reportName}': documentFiles contains a blank path.");
-
-            var sourceFile = configuredPath.Trim();
-            var fullPath = ResolvePath(sourceFile);
-            if (!paths.Add(fullPath))
-                throw new InvalidOperationException(
-                    $"Report '{reportName}': documentFiles references '{configuredPath}' more than once.");
-
-            var document = LoadOne(reportName, sourceFile);
-            if (document.Default && hasDefault)
-                throw new InvalidOperationException(
-                    $"Report '{reportName}': only one configured report document may be marked as default.");
-            hasDefault |= document.Default;
-            documents.Add(document);
-        }
-
-        return documents;
     }
 
     /// <summary>Loads and parses one persisted source-file reference.</summary>

@@ -148,6 +148,58 @@ public sealed class ConsistentReadTests : IDisposable
     }
 
     [Fact]
+    public async Task Sqlite_snapshot_scope_is_a_deferred_read_that_does_not_reserve_the_writer()
+    {
+        // Microsoft.Data.Sqlite turns every non-deferred isolation level into BEGIN IMMEDIATE,
+        // which holds the file's single write reservation for the whole report. A read scope
+        // must begin deferred: a concurrent writer on the same file proceeds, and the scope still
+        // pins one snapshot from its first read on.
+        var path = Path.Combine(Path.GetTempPath(), $"ir-deferred-{Guid.NewGuid():n}.db");
+        var cs = $"Data Source={path};Pooling=False";
+        try
+        {
+            await using (var setup = new SqliteConnection(cs))
+            {
+                await setup.OpenAsync();
+                await using var create = setup.CreateCommand();
+                create.CommandText = "CREATE TABLE T (X INTEGER)";
+                await create.ExecuteNonQueryAsync();
+            }
+
+            var manager = new ReportConnectionManager(new FileFactory(cs));
+            var definition = new ReportDefinition
+            {
+                Name = "sqlite-deferred",
+                Connection = "file",
+                Dialect = ReportDialect.Sqlite,
+                Consistency = ReportConsistency.Snapshot,
+                Sql = "SELECT X FROM T",
+            };
+            await using var reading = await manager.Open(definition, CancellationToken.None);
+            await using var scope = await manager.BeginReadScope(reading, definition, CancellationToken.None);
+            Assert.NotNull(scope.Transaction);
+
+            await using var writer = new SqliteConnection(cs);
+            await writer.OpenAsync();
+            await using var insert = writer.CreateCommand();
+            insert.CommandText = "INSERT INTO T VALUES (1)";
+            insert.CommandTimeout = 1;   // BEGIN IMMEDIATE on the reader would make this wait, then fail
+            await insert.ExecuteNonQueryAsync();
+
+            await using var count = reading.CreateCommand();
+            count.Transaction = scope.Transaction;
+            count.CommandText = "SELECT COUNT(*) FROM T";
+            Assert.Equal(1L, await count.ExecuteScalarAsync());
+            await scope.CompleteAsync(CancellationToken.None);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
     public async Task Sql_server_snapshot_disabled_fails_before_opening_a_transaction()
     {
         var manager = new ReportConnectionManager(new UnusedFactory());
@@ -203,6 +255,11 @@ public sealed class ConsistentReadTests : IDisposable
     private sealed class UnusedFactory : IReportConnectionFactory
     {
         public DbConnection CreateConnection(string name) => throw new NotSupportedException();
+    }
+
+    private sealed class FileFactory(string connectionString) : IReportConnectionFactory
+    {
+        public DbConnection CreateConnection(string name) => new SqliteConnection(connectionString);
     }
 
     private sealed class ControlStatementConnection(object? scalarResult = null) : DbConnection

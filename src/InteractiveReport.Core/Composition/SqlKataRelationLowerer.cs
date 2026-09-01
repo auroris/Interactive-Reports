@@ -246,7 +246,8 @@ internal sealed class SqlKataRelationLowerer
         var input = Lower(node.Input);
         var relation = ComposableSqlPlanner.ApplySearch(
             input.AsComposable(),
-            node.Search);
+            node.Search,
+            _dialect);
         return FromComposable(relation, node.Output);
     }
 

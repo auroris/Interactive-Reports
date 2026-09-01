@@ -96,11 +96,8 @@ public sealed class SqlKataRelationLowererTests
         Assert.IsType<BoundMetadataRelation>(metadata);
         Assert.Equal(sql.Sql, repeatedSql.Sql);
         Assert.Equal(sql.Bindings, repeatedSql.Bindings);
-        Assert.Equal(
-            dialect is ReportDialect.Postgres
-                ? [2m, 10m, "%Acme%", "%Acme%"]
-                : [2m, 10m, "%acme%", "%acme%"],
-            sql.Bindings);
+        // The search binding is lower-cased and LIKE-escaped in managed code on every dialect.
+        Assert.Equal([2m, 10m, "%acme%", "%acme%"], sql.Bindings);
         Assert.Equal(ExpectedPipelineSql, CanonicalizeSql(sql.Sql));
         Assert.Equal(4, lowered.StageCount);
         Assert.Equal(
@@ -494,7 +491,7 @@ public sealed class SqlKataRelationLowererTests
         + "(SELECT CUSTOMER AS __irc0, STATUS AS __irc1, AMOUNT AS __irc2 FROM "
         + "(SELECT CUSTOMER, STATUS, AMOUNT FROM ORDERS) ir_base) ir_rel_0) ir_rel_1) "
         + "ir_rel_2 WHERE (__irc3 >= ?)) ir_rel_3 WHERE "
-        + "(LOWER(__irc0) LIKE ? OR LOWER(__irc1) LIKE ?)";
+        + "(LOWER(__irc0) LIKE ? ESCAPE '\\' OR LOWER(__irc1) LIKE ? ESCAPE '\\')";
 
     private const string ExpectedPipelinePlan =
         """

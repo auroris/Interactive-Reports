@@ -177,7 +177,7 @@ public sealed class ComposablePipelineSafetyTests : IClassFixture<SqliteE2EFixtu
             [TestFixtures.Col("STATUS", typeof(string)), TestFixtures.Col("AMOUNT", typeof(decimal))]);
         var source = ComposableSqlRelation.Definition(definition, schema);
 
-        var searched = ComposableSqlPlanner.ApplySearch(source, "open");
+        var searched = ComposableSqlPlanner.ApplySearch(source, "open", ReportDialect.Sqlite);
         var grouped = ComposableSqlPlanner.Group(
             searched,
             "median",
@@ -505,7 +505,12 @@ public sealed class ComposablePipelineSafetyTests : IClassFixture<SqliteE2EFixtu
             "ir1",
             query.Document!.Tables![state.ActiveTable!].Schema!
                 .Single(column => column.Name == "ir2").FormatSource);
-        Assert.Equal(6000m, Convert.ToDecimal(export.Rows[0]["ir2"]));
+        Assert.Equal(
+            6000m,
+            decimal.Parse(
+                Convert.ToString(export.Rows[0]["ir2"])!,
+                System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture));
         Assert.DoesNotContain("<a", Convert.ToString(export.Rows[0]["ir2"]));
     }
 

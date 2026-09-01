@@ -73,14 +73,16 @@ internal sealed record BoundRequestOverlay(
     {
         var requestedSize = document.Page?.Size ?? definition.DefaultPageSize;
         var pageAll = requestedSize == 0;
+        var pageSize = pageAll ? 0 : Math.Clamp(requestedSize, 1, definition.MaxPageSize);
+        // The offset is (index - 1) * size in the query builder's int arithmetic; an index past the
+        // last representable offset is clamped there rather than wrapping around to page one.
+        var maxIndex = pageAll ? 1 : int.MaxValue / pageSize;
         return new BoundRequestOverlay(
             Search: string.IsNullOrWhiteSpace(document.Search)
                 ? null
                 : document.Search.Trim(),
-            PageIndex: pageAll ? 1 : Math.Max(1, document.Page?.Index ?? 1),
-            PageSize: pageAll
-                ? 0
-                : Math.Clamp(requestedSize, 1, definition.MaxPageSize),
+            PageIndex: pageAll ? 1 : Math.Clamp(document.Page?.Index ?? 1, 1, maxIndex),
+            PageSize: pageSize,
             PageAll: pageAll);
     }
 }

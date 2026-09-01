@@ -1,3 +1,4 @@
+using InteractiveReport.Client.FileDownload;
 using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Model;
 using InteractiveReport.Core.Schema;
@@ -46,7 +47,7 @@ public sealed class FormatInheritanceBoundaryTests : IClassFixture<SqliteE2EFixt
         Assert.All(result.Rows, row => Assert.Equal(["AMOUNT"], row.Keys));
         Assert.All(export.Rows, row =>
         {
-            var value = Assert.IsType<string>(row["AMOUNT"]);
+            var value = Assert.IsType<CsvFormattedValue>(row["AMOUNT"]).Text;
             Assert.StartsWith("$", value, StringComparison.Ordinal);
             Assert.DoesNotContain("<a", value, StringComparison.Ordinal);
         });
@@ -203,7 +204,7 @@ public sealed class FormatInheritanceBoundaryTests : IClassFixture<SqliteE2EFixt
         Assert.All(result.Rows, row => Assert.Equal(["AMOUNT", "NOTES"], row.Keys));
         Assert.All(export.Rows, row =>
         {
-            var text = Assert.IsType<string>(row["AMOUNT"]);
+            var text = Assert.IsType<CsvFormattedValue>(row["AMOUNT"]).Text;
             Assert.StartsWith("$", text, StringComparison.Ordinal);
             Assert.DoesNotContain("<a", text, StringComparison.Ordinal);
         });
@@ -327,8 +328,9 @@ public sealed class FormatInheritanceBoundaryTests : IClassFixture<SqliteE2EFixt
 
         Assert.All(export.Rows, row =>
         {
-            Assert.NotEmpty(Assert.IsType<string>(row["AMOUNT"]));
-            Assert.DoesNotContain("<a", Assert.IsType<string>(row["AMOUNT"]), StringComparison.Ordinal);
+            // A masked number renders as typed text: the writer must never formula-guard it.
+            Assert.NotEmpty(Assert.IsType<CsvFormattedValue>(row["AMOUNT"]).Text);
+            Assert.DoesNotContain("<a", Assert.IsType<CsvFormattedValue>(row["AMOUNT"]).Text, StringComparison.Ordinal);
             Assert.IsNotType<string>(row["ir1"]);
         });
     }

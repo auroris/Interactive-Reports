@@ -267,12 +267,5 @@ internal static class SavedReportEndpoints
     /// <param name="title">The saved-report display title.</param>
     /// <returns>A sanitized filename suitable for Content-Disposition.</returns>
     private static string DownloadFileName(string reportName, string title)
-    {
-        var stem = $"{reportName}.{title}";
-        var safe = new string(stem.Select(character =>
-            char.IsLetterOrDigit(character) || character is '.' or '-' or '_'
-                ? character
-                : '-').ToArray()).Trim('.', '-');
-        return (safe.Length == 0 ? "report" : safe) + ".json";
-    }
+        => InteractiveReportHttpRequest.SafeFileName($"{reportName}.{title}", ".json");
 }

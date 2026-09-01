@@ -56,17 +56,8 @@ internal sealed class CsvInteractiveReportDownloadWriter : IInteractiveReportDow
         return new(
             (stream, token) => CsvWriter.WriteToAsync(
                 stream, table.Columns, table.Rows, CsvCellPolicy.SafeText, token),
-            $"{SafeName(reportName)}.csv",
+            InteractiveReportHttpRequest.SafeFileName(reportName, ".csv"),
             "text/csv; charset=utf-8");
-    }
-
-    private static string SafeName(string reportName)
-    {
-        var safe = new string(reportName.Select(character =>
-            char.IsLetterOrDigit(character) || character is '.' or '-' or '_'
-                ? character
-                : '-').ToArray()).Trim('.', '-');
-        return safe.Length == 0 ? "report" : safe;
     }
 }
 
@@ -142,17 +133,19 @@ public static class InteractiveReportFileDownloadExtensions
                 ex.Message);
         }
 
+        // The detached copy that carries the paging override is made by the same deep copy the
+        // executor uses, and that copy assumes the structural pass has run: a null table or a pair
+        // of case-colliding table ids must be the documented per-path 400, not a copy failure.
+        var structural = ReportStateResolver.CollectStructuralErrors(posted);
+        if (structural.Count > 0)
+            return Failure(InteractiveReportServer.Validation(new ReportValidationException(structural)), http);
+
         var document = ReportStateResolver.Resolve(defaults: null, posted);
         document.Page ??= new PageRequest();
         document.Page.Index = 1;
         document.Page.Size = 0;
 
-        var request = new InteractiveReportRequestContext
-        {
-            User = http.User,
-            RequestServices = http.RequestServices,
-            TraceIdentifier = http.TraceIdentifier,
-        };
+        var request = InteractiveReportHttpRequest.Context(http);
         var queried = await server.QueryForDownload(name, document, request, ct);
         if (queried.Failure is not null)
             return Failure(queried.Failure, http);

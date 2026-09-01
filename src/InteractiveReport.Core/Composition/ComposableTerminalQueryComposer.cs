@@ -55,7 +55,8 @@ internal static class ComposableTerminalQueryComposer
                 terminal.Breaks,
                 terminal.Aggregates,
                 effectiveSorts,
-                dialect);
+                dialect,
+                definition.MaxRows);
 
         var projection = terminal.ProjectionColumns.ToList();
 
@@ -129,20 +130,13 @@ internal static class ComposableTerminalQueryComposer
                 _ => $"CAST({identifier} AS TEXT)",
             };
             query.WhereRaw(
-                $"LOWER({searchable}) LIKE ? ESCAPE '\\'",
-                LovPattern(search));
+                $"LOWER({searchable}) LIKE ?{SqlLikePattern.EscapeClause}",
+                SqlLikePattern.Contains(search, dialect).ToLowerInvariant());
         }
 
         query.OrderBy(physicalName).Limit(maxItems + 1);
         return new MappedQuery(query, [column.Name]);
     }
-
-    /// <summary>Escapes LIKE metacharacters and wraps one literal substring search in wildcards.</summary>
-    private static string LovPattern(string search)
-        => $"%{search.Replace("\\", "\\\\", StringComparison.Ordinal)
-            .Replace("%", "\\%", StringComparison.Ordinal)
-            .Replace("_", "\\_", StringComparison.Ordinal)
-            .ToLowerInvariant()}%";
 
     /// <summary>
     /// Composes the request-local aggregate query for the terminal relation.
@@ -183,13 +177,15 @@ internal static class ComposableTerminalQueryComposer
     /// <param name="aggregates">Validated terminal aggregates in result ordinal order.</param>
     /// <param name="effectiveSorts">Final sorts; the leading break-key sorts order subtotal rows.</param>
     /// <param name="dialect">The database dialect whose SQL rules apply.</param>
+    /// <param name="maxRows">The definition's row ceiling, which also bounds the number of break groups materialized; zero is unbounded.</param>
     /// <returns>A grouped query projecting break keys, generated count, and generated aggregate aliases.</returns>
     private static Query BreakQuery(
         ComposableSqlRelation relation,
         IReadOnlyList<ColumnModel> breaks,
         IReadOnlyList<ValidAggregate> aggregates,
         IReadOnlyList<ValidSort> effectiveSorts,
-        ReportDialect dialect)
+        ReportDialect dialect,
+        int maxRows)
     {
         var used = new HashSet<string>(
             breaks.Select(column => column.Name),
@@ -216,6 +212,10 @@ internal static class ComposableTerminalQueryComposer
         var query = ComposableSqlPlanner.Project(grouped, projected);
         foreach (var sort in effectiveSorts.Take(breaks.Count))
             ApplySort(query, sort, grouped.PhysicalColumns[sort.Column.Name], dialect);
+        // Every page request materializes the whole subtotal set, one row per group. A break on a
+        // high-cardinality column cannot produce more groups than the relation has rows, so the
+        // definition's row ceiling bounds this query exactly as it bounds an unpaged export.
+        if (maxRows > 0) query.Limit(maxRows);
         return query;
     }
 

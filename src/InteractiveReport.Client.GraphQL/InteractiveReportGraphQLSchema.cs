@@ -77,7 +77,9 @@ public sealed class InteractiveReportQueryGraphType : ObjectGraphType
                 + "clears the saved ordering; null keeps it.")
             .ResolveAsync(async context => await Executor(context).Query(
                 context.GetArgument<string?>("report"),
-                context.GetArgument<long>("id"),
+                // ID accepts any string; the executor parses it so a non-numeric id is reported as
+                // BAD_USER_INPUT like every other argument problem rather than as a resolver fault.
+                context.GetArgument<string>("id"),
                 context.GetArgument<int?>("page"),
                 context.GetArgument<int?>("pageSize"),
                 context.GetArgument<string?>("search"),

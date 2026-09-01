@@ -13,6 +13,26 @@ public sealed class StateStructureValidatorTests : IClassFixture<SqliteE2EFixtur
         => _executor = new ReportExecutor(database, new SchemaCache());
 
     [Fact]
+    public void Collect_bounds_the_search_overlay_length()
+    {
+        // The search text is bound once per text column, so its length multiplies; the cap is
+        // the same one the list-of-values search already applies.
+        var tooLong = StateStructureValidator.Collect(new ReportState
+        {
+            Search = new string('a', StateStructureValidator.MaxSearchLength + 1),
+        });
+        var atLimit = StateStructureValidator.Collect(new ReportState
+        {
+            Search = new string('a', StateStructureValidator.MaxSearchLength),
+        });
+
+        var error = Assert.Single(tooLong);
+        Assert.Equal("search", error.Path);
+        Assert.Contains("200", error.Message);
+        Assert.Empty(atLimit);
+    }
+
+    [Fact]
     public void Collect_reports_null_tables_composables_schema_and_list_members()
     {
         var state = new ReportState

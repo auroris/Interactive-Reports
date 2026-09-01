@@ -109,6 +109,19 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
                     reference.SourceFile);
         }
 
+        // Startup validation rejects two default files in one family; a live configuration reload
+        // can still introduce them, and the database's default index would then reject the second
+        // insert as an opaque provider error. Name the mistake instead.
+        foreach (var family in missingDocuments.Where(document => document.Default)
+                     .GroupBy(document => document.ReportName, StringComparer.OrdinalIgnoreCase)
+                     .Where(group => group.Count() > 1))
+            throw LogBootstrapFailure(
+                family.Key,
+                "configured report documents",
+                new InvalidOperationException(
+                    $"Report '{family.Key}': only one configured report document may be marked as default "
+                    + $"({string.Join(", ", family.Select(document => $"'{document.SourceFile}'"))} all are)."));
+
         // A newly discovered configured default replaces the database selection. Internal
         // removals are unconditional by numeric id; deleting an already-absent row is harmless.
         foreach (var configuredDefault in missingDocuments.Where(document => document.Default))

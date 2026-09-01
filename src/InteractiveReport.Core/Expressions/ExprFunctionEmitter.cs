@@ -1,3 +1,4 @@
+using InteractiveReport.Core.Composition;
 using InteractiveReport.Core.Model;
 
 namespace InteractiveReport.Core.Expressions;
@@ -70,6 +71,15 @@ internal static class ExprFunctionEmitter
             return;
         }
 
+        if (context.Dialect == ReportDialect.SqlServer && arguments.Count == 1)
+        {
+            // T-SQL ROUND has no one-argument form; the portable ROUND(x) means "to a whole number".
+            context.Append("ROUND(");
+            context.Visit(arguments[0]);
+            context.Append(", 0)");
+            return;
+        }
+
         EmitPlain(context, "ROUND", arguments);
     }
 
@@ -106,7 +116,10 @@ internal static class ExprFunctionEmitter
     }
 
     /// <summary>
-    /// Emits a portable case-insensitive LIKE predicate with wildcard pieces represented as bound literals.
+    /// Emits a portable case-insensitive LIKE predicate whose search text is matched literally: the
+    /// only wildcards are the ones this emitter adds. A literal search is escaped in managed code and
+    /// bound as one pattern; a search that is itself a SQL expression (a column, say) is escaped in
+    /// SQL with a REPLACE chain, so a value containing <c>%</c> or <c>_</c> still matches only itself.
     /// </summary>
     /// <param name="context">The mutable SQL and binding accumulator.</param>
     /// <param name="arguments">The bound candidate text and search text.</param>
@@ -122,12 +135,58 @@ internal static class ExprFunctionEmitter
         context.Visit(arguments[0]);
         context.Append(") LIKE LOWER(");
 
-        var pattern = new List<ExprNode>(3);
-        if (leadingWildcard) pattern.Add(new StringLit("%"));
-        pattern.Add(arguments[1]);
-        if (trailingWildcard) pattern.Add(new StringLit("%"));
-        EmitConcat(context, pattern);
-        context.Append("))");
+        var leading = leadingWildcard ? "%" : "";
+        var trailing = trailingWildcard ? "%" : "";
+        if (arguments[1] is StringLit literal)
+        {
+            context.AppendBinding(leading + SqlLikePattern.Escape(literal.Value, context.Dialect) + trailing);
+        }
+        else if (arguments[1] is NullLit)
+        {
+            context.Append("NULL");
+        }
+        else if (context.Dialect == ReportDialect.Oracle)
+        {
+            // Oracle CONCAT is two-argument only; native || already treats NULL as empty.
+            context.Append('(');
+            if (leadingWildcard) context.AppendBinding(leading).Append(" || ");
+            EmitLikeEscaped(context, arguments[1]);
+            if (trailingWildcard) context.Append(" || ").AppendBinding(trailing);
+            context.Append(')');
+        }
+        else
+        {
+            context.Append("CONCAT(");
+            if (leadingWildcard) context.AppendBinding(leading).Append(", ");
+            EmitLikeEscaped(context, arguments[1]);
+            if (trailingWildcard) context.Append(", ").AppendBinding(trailing);
+            context.Append(')');
+        }
+
+        context.Append(')');
+        context.Append(SqlLikePattern.EscapeClause);
+        context.Append(')');
+    }
+
+    /// <summary>
+    /// Emits a text expression wrapped in the REPLACE chain that makes its LIKE metacharacters
+    /// literal for the current dialect, innermost replacement first.
+    /// </summary>
+    /// <param name="context">The mutable SQL and binding accumulator.</param>
+    /// <param name="operand">The bound text expression to neutralize.</param>
+    public static void EmitLikeEscaped(EmitContext context, ExprNode operand)
+    {
+        var replacements = SqlLikePattern.Replacements(context.Dialect);
+        for (var i = 0; i < replacements.Count; i++) context.Append("REPLACE(");
+        context.Visit(operand);
+        foreach (var (from, to) in replacements)
+        {
+            context.Append(", ");
+            context.AppendBinding(from);
+            context.Append(", ");
+            context.AppendBinding(to);
+            context.Append(')');
+        }
     }
 
     /// <summary>
@@ -142,15 +201,17 @@ internal static class ExprFunctionEmitter
         context.Append("(LOWER(");
         context.Visit(arguments[0]);
         context.Append(") LIKE LOWER(");
-        context.AppendBinding(ToSqlLikePattern(pattern.Value));
-        context.Append(") ESCAPE '\\')");
+        context.AppendBinding(ToSqlLikePattern(pattern.Value, context.Dialect));
+        context.Append(')');
+        context.Append(SqlLikePattern.EscapeClause);
+        context.Append(')');
     }
 
     /// <summary>
     /// Converts the public asterisk pattern to a SQL LIKE pattern while making SQL's
     /// native wildcard and escape characters literal.
     /// </summary>
-    private static string ToSqlLikePattern(string value)
+    private static string ToSqlLikePattern(string value, ReportDialect dialect)
     {
         var pattern = new System.Text.StringBuilder(value.Length);
         for (var i = 0; i < value.Length; i++)
@@ -158,7 +219,7 @@ internal static class ExprFunctionEmitter
             var c = value[i];
             if (c == '\\' && i + 1 < value.Length && value[i + 1] is '*' or '\\')
             {
-                AppendLikeLiteral(pattern, value[++i]);
+                SqlLikePattern.AppendLiteral(pattern, value[++i], dialect);
                 continue;
             }
 
@@ -168,15 +229,9 @@ internal static class ExprFunctionEmitter
                 continue;
             }
 
-            AppendLikeLiteral(pattern, c);
+            SqlLikePattern.AppendLiteral(pattern, c, dialect);
         }
         return pattern.ToString();
-    }
-
-    private static void AppendLikeLiteral(System.Text.StringBuilder pattern, char value)
-    {
-        if (value is '%' or '_' or '\\') pattern.Append('\\');
-        pattern.Append(value);
     }
 
     /// <summary>

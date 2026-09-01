@@ -140,9 +140,12 @@ WHERE name = N'irtest';  -- must be ON, not IN_TRANSITION_TO_ON
 
 ```sql
 CREATE USER irtest IDENTIFIED BY "YourStrongPassword1!";
-GRANT CREATE SESSION, CREATE TABLE TO irtest;
+GRANT CREATE SESSION, CREATE TABLE, CREATE SEQUENCE TO irtest;
 ALTER USER irtest QUOTA UNLIMITED ON USERS;
 ```
+
+   `CREATE SEQUENCE` backs the identity column of the saved-report table; without it the
+   store's auto-create fails with ORA-01031 and every Oracle saved-report test fails.
 
 3. The battery connects as `irtest` and works in that user's own schema.
 

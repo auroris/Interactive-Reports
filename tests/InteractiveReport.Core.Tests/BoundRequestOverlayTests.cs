@@ -21,7 +21,10 @@ public sealed class BoundRequestOverlayTests
     [InlineData(-7, -3, 1, 1)]
     [InlineData(0, 1, 1, 1)]
     [InlineData(3, 101, 3, 100)]
-    [InlineData(int.MaxValue, int.MaxValue, int.MaxValue, 100)]
+    // The query builder computes the offset in int arithmetic; an index past the last
+    // representable offset is clamped instead of wrapping negative and serving page one.
+    [InlineData(int.MaxValue, int.MaxValue, int.MaxValue / 100, 100)]
+    [InlineData(int.MaxValue / 100, 100, int.MaxValue / 100, 100)]
     public void From_clamps_requested_index_and_size(
         int requestedIndex,
         int requestedSize,

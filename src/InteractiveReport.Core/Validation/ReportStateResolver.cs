@@ -10,6 +10,20 @@ namespace InteractiveReport.Core.Validation;
 public static class ReportStateResolver
 {
     /// <summary>
+    /// Runs the structural pre-validation pass a document must clear before it is deep-copied
+    /// or compiled: null tables, composables, and list members; case-colliding table ids; and
+    /// the document-wide ceilings. Adapters that copy a document before submitting it call this
+    /// first so a structurally broken document is a per-path validation error, not a copy fault.
+    /// </summary>
+    /// <param name="state">The deserialized report-state document.</param>
+    /// <returns>All structural errors in document order; empty when the document may be copied and compiled.</returns>
+    public static IReadOnlyList<ValidationError> CollectStructuralErrors(ReportState state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        return StateStructureValidator.Collect(state);
+    }
+
+    /// <summary>
     /// Overlays a partial request on report defaults and returns a detached state document.
     /// </summary>
     /// <param name="defaults">The optional definition-owned default state.</param>

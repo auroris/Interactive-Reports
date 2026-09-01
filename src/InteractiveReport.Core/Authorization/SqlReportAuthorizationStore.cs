@@ -386,15 +386,17 @@ public sealed class SqlReportAuthorizationStore : IReportAuthorizationStore
                     MODIFIED_UTC   NVARCHAR(40) NOT NULL
                 )
                 """,
+            // Quoted so DDL and SqlKata's quoted query identifiers name one object; CHAR semantics
+            // because the endpoint validates character counts (see the saved-report store).
             ReportDialect.Oracle => $"""
                 BEGIN
-                    EXECUTE IMMEDIATE 'CREATE TABLE {config.TableName} (
+                    EXECUTE IMMEDIATE 'CREATE TABLE "{config.TableName}" (
                         ID             VARCHAR2(80) PRIMARY KEY,
                         ENTRY_KIND     VARCHAR2(30) NOT NULL,
-                        REPORT_NAME    VARCHAR2(200) NULL,
-                        REPORT_KEY     VARCHAR2(200) NULL,
-                        IDENTITY_VALUE VARCHAR2(400) NULL,
-                        IDENTITY_KEY   VARCHAR2(400) NULL,
+                        REPORT_NAME    VARCHAR2(200 CHAR) NULL,
+                        REPORT_KEY     VARCHAR2(200 CHAR) NULL,
+                        IDENTITY_VALUE VARCHAR2(400 CHAR) NULL,
+                        IDENTITY_KEY   VARCHAR2(400 CHAR) NULL,
                         MODIFIED_UTC   VARCHAR2(40) NOT NULL
                     )';
                 EXCEPTION WHEN OTHERS THEN

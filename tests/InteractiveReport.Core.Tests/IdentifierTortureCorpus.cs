@@ -143,6 +143,12 @@ internal static class IdentifierTortureCorpus
     private static IReadOnlyList<TortureColumn> ColumnsForRuntime(ReportDialect dialect)
     {
         IEnumerable<TortureColumn> columns = PortableColumns;
+        // Provider constraint: ODP.NET's bind scanner reads "--" inside a quoted identifier as a
+        // comment and drops every bind name that follows (ORA-01008), so a bound predicate after
+        // such a column can never execute; LiveDialectTests documents the misread in isolation.
+        // The compiler corpus still covers the name — only live execution excludes it.
+        if (dialect == ReportDialect.Oracle)
+            columns = columns.Where(column => !column.Name.Contains("--", StringComparison.Ordinal));
         if (dialect is ReportDialect.SqlServer or ReportDialect.Postgres)
             columns = columns.Append(new TortureColumn("STATUS", EmbeddedQuoteName));
         if (dialect == ReportDialect.Sqlite)

@@ -87,6 +87,47 @@ public class CsvWriterTests
     }
 
     [Fact]
+    public void Rendered_numbers_and_dates_keep_their_leading_sign_without_the_guard()
+    {
+        // The presentation layer renders masks to text; a rendered negative still is not user text.
+        var csv = WriteString(
+            Row("x", new CsvFormattedValue("-$1,234.50")),
+            Row("y", new CsvFormattedValue("-12.5%")));
+
+        Assert.Contains("x,\"-$1,234.50\"\r\n", csv);
+        Assert.Contains("y,-12.5%\r\n", csv);
+        Assert.DoesNotContain("'-", csv);
+    }
+
+    [Fact]
+    public void Offset_dates_day_dates_and_binary_values_have_stable_invariant_forms()
+    {
+        var csv = WriteString(
+            Row("x", new DateTimeOffset(2026, 8, 5, 14, 30, 0, TimeSpan.FromHours(-6))),
+            Row("y", new DateOnly(2026, 8, 5)),
+            Row("z", new byte[] { 1, 2, 3 }));
+
+        Assert.Contains("x,2026-08-05 14:30:00 -06:00\r\n", csv);
+        Assert.Contains("y,2026-08-05\r\n", csv);
+        Assert.Contains("z,AQID\r\n", csv);
+        Assert.DoesNotContain("System.Byte[]", csv);
+    }
+
+    [Fact]
+    public async Task A_record_wider_than_the_streaming_chunk_is_written_intact()
+    {
+        // The writer flushes in fixed-size slices; one cell can be far wider than a slice (a CLOB
+        // notes column), and three-byte characters make the byte form wider still.
+        var wide = new string('é', 70_000) + "|" + new string('中', 40_000);
+        using var destination = new MemoryStream();
+
+        await CsvWriter.WriteToAsync(destination, Columns, [Row(wide, 1m), Row("after", 2m)]);
+
+        var csv = Encoding.UTF8.GetString(destination.ToArray(), 3, (int)destination.Length - 3);
+        Assert.Equal("Customer Name,Amount\r\n" + wide + ",1\r\nafter,2\r\n", csv);
+    }
+
+    [Fact]
     public void Dangerous_header_labels_are_guarded_too()
     {
         var columns = new List<ColumnInfo> { new("A", "=EvilLabel", "text", false) };

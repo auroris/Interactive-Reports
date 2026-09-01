@@ -323,7 +323,11 @@ internal sealed class InteractiveReportServer(
                 definition.Title ?? ColumnModel.Prettify(definition.Name)));
         }
 
-        if (summaries.Count == 0 && firstDenial is not null)
+        // An anonymous caller on an all-authenticated catalogue is told to sign in; an authenticated
+        // caller who can see nothing gets the honest answer, an empty catalogue — every hidden entry
+        // was already dropped one at a time, so the whole list is not a "report not found".
+        if (summaries.Count == 0
+            && firstDenial is { Kind: InteractiveReportFailureKind.Unauthenticated })
             return InteractiveReportServerResult<IReadOnlyList<ReportConfigurationSummary>>
                 .Failed(firstDenial);
         return InteractiveReportServerResult<IReadOnlyList<ReportConfigurationSummary>>.Success(
@@ -470,12 +474,10 @@ internal sealed class InteractiveReportServer(
 
         if (definition is null)
         {
-            var resolved = await authorization.ResolveDefinition(saved.ReportName, context, ct);
-            if (resolved.Failure is not null)
-                return InteractiveReportServerResult<InteractiveReportLoadedDocument>.Failed(
-                    Failure(resolved.Failure));
-            if (resolved.Definition is null) return NotFoundDocument<InteractiveReportLoadedDocument>();
-            definition = resolved.Definition;
+            var (family, hidden) = await ResolveRowFamily(saved.ReportName, context, ct);
+            if (hidden is not null)
+                return InteractiveReportServerResult<InteractiveReportLoadedDocument>.Failed(hidden);
+            definition = family!;
         }
         else if (!string.Equals(saved.ReportName, definition.Name, StringComparison.Ordinal))
         {
@@ -802,20 +804,19 @@ internal sealed class InteractiveReportServer(
         }
         if (report is null) return NotFoundDocument<bool>();
 
-        var resolved = await authorization.ResolveDefinition(report.ReportName, context, ct);
-        if (resolved.Failure is not null)
-            return InteractiveReportServerResult<bool>.Failed(Failure(resolved.Failure));
-        if (resolved.Definition is null) return NotFoundDocument<bool>();
+        var (family, hidden) = await ResolveRowFamily(report.ReportName, context, ct);
+        if (hidden is not null) return InteractiveReportServerResult<bool>.Failed(hidden);
+        var resolvedDefinition = family!;
 
         var metadata = report.Metadata();
         var identity = ReportIdentity.Resolve(context.User, options.CurrentValue.IdentityClaim);
         var builtIn = SavedReportAccessPolicy.Modify(metadata, identity, administrator: false);
         var denied = await AuthorizeActions(
-            resolved.Definition,
+            resolvedDefinition,
             [InteractiveReportAction.DeleteSavedReport],
             new InteractiveReportAuthorizationResource
             {
-                ReportName = resolved.Definition.Name,
+                ReportName = resolvedDefinition.Name,
                 SavedReport = metadata,
             },
             administratorRequired: report.Origin != SavedReportOrigin.Configured
@@ -1288,12 +1289,10 @@ internal sealed class InteractiveReportServer(
         if (report is null) return NotFoundDocument<InteractiveReportDocumentExport>();
 
         var metadata = report.Metadata();
-        var resolved = await authorization.ResolveDefinition(metadata.ReportName, context, ct);
-        if (resolved.Failure is not null)
-            return InteractiveReportServerResult<InteractiveReportDocumentExport>.Failed(
-                Failure(resolved.Failure));
-        if (resolved.Definition is null) return NotFoundDocument<InteractiveReportDocumentExport>();
-        var definition = resolved.Definition;
+        var (family, hidden) = await ResolveRowFamily(metadata.ReportName, context, ct);
+        if (hidden is not null)
+            return InteractiveReportServerResult<InteractiveReportDocumentExport>.Failed(hidden);
+        var definition = family!;
 
         var denied = await AuthorizeActions(
             definition,
@@ -1318,9 +1317,23 @@ internal sealed class InteractiveReportServer(
             {
                 // The export is the source-controlled envelope, so a configured document is taken
                 // from its declaring file as authored — schema caches are deliberately not refreshed.
-                state = report.SourceFile is null
-                    ? null
-                    : configuredDocuments.Find(report.ReportName, report.SourceFile)?.State;
+                // A present file that no longer parses is handled exactly as a load handles it: the
+                // optimistic identity is removed and the id reads as not found, not as a server error.
+                try
+                {
+                    state = report.SourceFile is null
+                        ? null
+                        : configuredDocuments.Find(report.ReportName, report.SourceFile)?.State;
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    await synchronizer.RemoveInvalid(report, ex, ct);
+                    return NotFoundDocument<InteractiveReportDocumentExport>();
+                }
                 if (state is null)
                 {
                     await synchronizer.RemoveMissing(report, ct);
@@ -1482,11 +1495,9 @@ internal sealed class InteractiveReportServer(
         }
         if (anchor is null) return NotFoundDocument<SavedReportSummary>();
 
-        var resolved = await authorization.ResolveDefinition(anchor.ReportName, context, ct);
-        if (resolved.Failure is not null)
-            return InteractiveReportServerResult<SavedReportSummary>.Failed(Failure(resolved.Failure));
-        if (resolved.Definition is null) return NotFoundDocument<SavedReportSummary>();
-        var definition = resolved.Definition;
+        var (family, hidden) = await ResolveRowFamily(anchor.ReportName, context, ct);
+        if (hidden is not null) return InteractiveReportServerResult<SavedReportSummary>.Failed(hidden);
+        var definition = family!;
 
         // Enforce the saved-reports feature at creation only. Existing rows stay governed by the
         // ownership matrix, so a config change never strands them.
@@ -1544,9 +1555,16 @@ internal sealed class InteractiveReportServer(
         if (await ValidateSubmittedState(definition, candidate, shape.Operation, context, ct) is { } stateFailure)
             return InteractiveReportServerResult<SavedReportSummary>.Failed(stateFailure);
 
-        var candidateIsPublic = candidate.Public;
+        // An authorizer may have reassigned the owner, promoted the save to public, or selected it
+        // as the family default; the candidate it left behind is what is validated and persisted,
+        // so the collision scope and the stored row follow the candidate, not the caller.
+        var effectiveOwner = candidate.Owner?.Trim();
+        if (candidate.Default && !candidate.Public)
+            return InteractiveReportServerResult<SavedReportSummary>.Failed(
+                Invalid(InteractiveReportErrorCodes.DefaultReportCannotBeUnset));
+        var candidateIsPublic = candidate.Public || candidate.Default;
         if (await savedReports.FindTitleCollision(
-                definition.Name, candidate.Title, identity, candidateIsPublic, exceptId: null, ct) is { } collision)
+                definition.Name, candidate.Title, effectiveOwner, candidateIsPublic, exceptId: null, ct) is { } collision)
             return InteractiveReportServerResult<SavedReportSummary>.Failed(
                 TitleConflict(collision, candidate.Title));
 
@@ -1555,22 +1573,50 @@ internal sealed class InteractiveReportServer(
             Id = 0,
             ReportName = definition.Name,
             Title = candidate.Title.Trim(),
-            Owner = candidate.Owner,
-            IsGlobal = candidate.Public,
+            Owner = effectiveOwner,
+            IsGlobal = candidateIsPublic,
             StateJson = JsonSerializer.Serialize(candidate.State, IrJson.Options),
         };
         try
         {
+            SavedReport? currentDefault = null;
+            if (candidate.Default)
+            {
+                currentDefault = await savedReports.FindDefault(definition.Name, ct)
+                    ?? await defaultDocuments.CreateMissing(definition, ct);
+                if (currentDefault.Origin == SavedReportOrigin.Configured)
+                    return InteractiveReportServerResult<SavedReportSummary>.Failed(new(
+                        InteractiveReportFailureKind.Conflict,
+                        InteractiveReportErrorCodes.ConfiguredDefaultControlled));
+            }
+
             await savedReports.Create(report, ct);
+
+            if (currentDefault is not null)
+            {
+                var promoted = report with { IsDefault = true };
+                if (await savedReports.ReplaceDefault(promoted, report, currentDefault, ct))
+                    report = promoted;
+                else
+                    logging.Logger?.LogWarning(
+                        "Report {Report}: saved report {Id} was created but a concurrent default change prevented its default selection (traceId {TraceId})",
+                        definition.Name,
+                        report.Id,
+                        context.TraceIdentifier);
+            }
         }
         catch (SavedReportTitleConflictException conflict)
         {
             return InteractiveReportServerResult<SavedReportSummary>.Failed(
-                await TitleConflictFromStore(conflict, identity, candidateIsPublic, exceptId: null, ct));
+                await TitleConflictFromStore(conflict, effectiveOwner, candidateIsPublic, exceptId: null, ct));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             throw;
+        }
+        catch (ReportDocumentBootstrapException)
+        {
+            return NotFoundDocument<SavedReportSummary>();
         }
         catch (Exception ex)
         {
@@ -1609,11 +1655,9 @@ internal sealed class InteractiveReportServer(
         var metadata = current.Metadata();
 
         var identity = ReportIdentity.Resolve(context.User, options.CurrentValue.IdentityClaim);
-        var resolved = await authorization.ResolveDefinition(metadata.ReportName, context, ct);
-        if (resolved.Failure is not null)
-            return InteractiveReportServerResult<SavedReportSummary>.Failed(Failure(resolved.Failure));
-        if (resolved.Definition is null) return NotFoundDocument<SavedReportSummary>();
-        var definition = resolved.Definition;
+        var (family, hidden) = await ResolveRowFamily(metadata.ReportName, context, ct);
+        if (hidden is not null) return InteractiveReportServerResult<SavedReportSummary>.Failed(hidden);
+        var definition = family!;
 
         UpdateSavedReportRequest? request;
         try
@@ -2016,7 +2060,7 @@ internal sealed class InteractiveReportServer(
     }
 
     /// <summary>Flattens structured report-state validation errors into one transport-neutral failure.</summary>
-    private static InteractiveReportFailure Validation(ReportValidationException ex)
+    public static InteractiveReportFailure Validation(ReportValidationException ex)
         => new(
             InteractiveReportFailureKind.Invalid,
             InteractiveReportErrorCodes.ReportStateInvalid,
@@ -2075,4 +2119,24 @@ internal sealed class InteractiveReportServer(
         => InteractiveReportServerResult<T>.Failed(new(
             InteractiveReportFailureKind.NotFound,
             InteractiveReportErrorCodes.SavedReportNotFound));
+
+    /// <summary>
+    /// Resolves the report family of a row addressed by id alone. The row is the only thing that
+    /// names its family, so it is read before the report gate runs; a family the caller cannot see
+    /// must then read exactly like a missing row — the saved-report not-found code, never the
+    /// report not-found code — or the id space of hidden reports becomes enumerable.
+    /// </summary>
+    private async Task<(ReportDefinition? Definition, InteractiveReportFailure? Failure)> ResolveRowFamily(
+        string reportName,
+        InteractiveReportRequestContext context,
+        CancellationToken ct)
+    {
+        var resolved = await authorization.ResolveDefinition(reportName, context, ct);
+        if (resolved.Failure is not null)
+            return (null, resolved.Failure.Kind == ReportAuthorizationFailureKind.NotFound
+                ? NotFoundDocument<object>().Failure
+                : Failure(resolved.Failure));
+        if (resolved.Definition is null) return (null, NotFoundDocument<object>().Failure);
+        return (resolved.Definition, null);
+    }
 }

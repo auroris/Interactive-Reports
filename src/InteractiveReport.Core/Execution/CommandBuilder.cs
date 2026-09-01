@@ -96,8 +96,8 @@ internal static class CommandBuilder
     /// <summary>
     /// Builds one anonymous Oracle PL/SQL block whose ordered OUT REF CURSORs
     /// carry several report datasets. Named composer bindings are shared when their names and values agree;
-    /// disagreement is an internal composition error rather than a reason to submit a command with ambiguous
-    /// parameter meaning.
+    /// a name whose value differs between statements is renamed for the later statement, so no command is
+    /// ever submitted with an ambiguous parameter meaning.
     /// </summary>
     /// <param name="connection">The Oracle connection that creates and will execute the command.</param>
     /// <param name="resultSets">The Oracle cursor result sets to combine into one executable batch.</param>
@@ -105,7 +105,7 @@ internal static class CommandBuilder
     /// <param name="def">Supplies the required Oracle dialect and command timeout.</param>
     /// <param name="logger">Receives final PL/SQL text; <see langword="null"/> disables logging.</param>
     /// <returns>A configured, unexecuted Oracle command owned by the caller.</returns>
-    /// <exception cref="InvalidOperationException">Thrown for a non-Oracle definition or conflicting binding values across result sets.</exception>
+    /// <exception cref="InvalidOperationException">Thrown for a non-Oracle definition or a context parameter that conflicts with a composer binding.</exception>
     /// <exception cref="ArgumentException">Thrown when <paramref name="resultSets"/> is empty.</exception>
     /// <exception cref="ReportValidationException">Thrown when input and output parameters exceed <see cref="MaxParameters"/>.</exception>
     /// <remarks>Creates one command, input parameters, and ordered output cursor parameters; it does not open the connection or execute the batch.</remarks>
@@ -121,17 +121,32 @@ internal static class CommandBuilder
         if (resultSets.Count == 0)
             throw new ArgumentException("At least one result set is required.", nameof(resultSets));
 
+        // Each result set numbers its bindings positionally (p0, p1, …), so two statements that
+        // share a prefix of bindings share those names; where their tails diverge (the page window
+        // versus the break-total ceiling, say) the same name carries different values. Such a
+        // binding is renamed for that statement instead of being shared, so every input keeps
+        // exactly one meaning.
         var inputs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-        foreach (var resultSet in resultSets)
+        var statements = new List<string>(resultSets.Count);
+        for (var i = 0; i < resultSets.Count; i++)
         {
-            foreach (var (rawName, value) in resultSet.NamedBindings)
+            var text = resultSets[i].Sql;
+            foreach (var (rawName, value) in resultSets[i].NamedBindings)
             {
                 var name = Normalize(rawName);
                 if (inputs.TryGetValue(name, out var existing) && !Equals(existing, value))
-                    throw new InvalidOperationException(
-                        $"Oracle report batch binding '{name}' has conflicting values across result sets.");
+                {
+                    var renamed = $"{name}_r{i}";
+                    while (inputs.ContainsKey(renamed)) renamed += "_";
+                    text = System.Text.RegularExpressions.Regex.Replace(
+                        text,
+                        $@":{System.Text.RegularExpressions.Regex.Escape(name)}(?![A-Za-z0-9_])",
+                        ":" + renamed);
+                    name = renamed;
+                }
                 inputs[name] = value;
             }
+            statements.Add(text);
         }
 
         foreach (var (name, value) in contextParams)
@@ -159,7 +174,7 @@ internal static class CommandBuilder
         for (var i = 0; i < resultSets.Count; i++)
         {
             sql.Append("  OPEN :").Append(cursorNames[i]).Append(" FOR\n    ")
-                .Append(resultSets[i].Sql.Replace("\n", "\n    ", StringComparison.Ordinal))
+                .Append(statements[i].Replace("\n", "\n    ", StringComparison.Ordinal))
                 .Append(";\n");
         }
         sql.Append("END;");

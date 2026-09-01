@@ -102,8 +102,34 @@ internal sealed class ReportConnectionManager(
             _ => throw new ArgumentOutOfRangeException(nameof(dialect), dialect, null),
         };
 
-        var readTransaction = await connection.BeginTransactionAsync(isolation, ct);
+        var readTransaction = dialect == ReportDialect.Sqlite
+            ? await BeginDeferredSqliteTransaction(connection, isolation, ct)
+            : await connection.BeginTransactionAsync(isolation, ct);
         return ReportReadScope.FromTransaction(readTransaction, logger);
+    }
+
+    /// <summary>
+    /// Begins the SQLite read scope as a deferred transaction. Microsoft.Data.Sqlite maps every
+    /// non-deferred isolation level to <c>BEGIN IMMEDIATE</c>, which takes the database's single
+    /// write reservation: concurrent report reads would serialize and a co-located saved-report
+    /// write would wait for the whole report. A deferred <c>BEGIN</c> still pins one read snapshot
+    /// from the first statement on, which is all a read scope needs. The deferred overload is
+    /// provider-specific, so it is reached reflectively; a wrapper connection without it keeps the
+    /// portable call.
+    /// </summary>
+    private static async Task<DbTransaction> BeginDeferredSqliteTransaction(
+        DbConnection connection,
+        IsolationLevel isolation,
+        CancellationToken ct)
+    {
+        var deferred = connection.GetType().GetMethod(
+            "BeginTransaction",
+            [typeof(IsolationLevel), typeof(bool)]);
+        if (deferred is null || !typeof(DbTransaction).IsAssignableFrom(deferred.ReturnType))
+            return await connection.BeginTransactionAsync(isolation, ct);
+
+        ct.ThrowIfCancellationRequested();
+        return (DbTransaction)deferred.Invoke(connection, [isolation, true])!;
     }
 
     /// <summary>

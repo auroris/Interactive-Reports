@@ -45,10 +45,14 @@ public static class CsvWriter
 
         // One encoder spans every chunk, so a surrogate pair split across a boundary stays intact.
         var encoder = BodyEncoding.GetEncoder();
-        var capacity = ChunkChars + 1024;
-        var text = new StringBuilder(capacity);
-        var chars = ArrayPool<char>.Shared.Rent(capacity);
-        var bytes = ArrayPool<byte>.Shared.Rent(BodyEncoding.GetMaxByteCount(capacity));
+        var text = new StringBuilder(ChunkChars + 1024);
+        // The pooled buffers bound one encoding pass, not one record: a record is appended whole
+        // before the threshold is checked, and a single wide cell (a CLOB column, say) can exceed any
+        // fixed size, so the flush walks the pending text in buffer-sized slices instead of assuming
+        // it fits. The byte buffer is sized from the char buffer actually rented, which may be larger
+        // than requested.
+        var chars = ArrayPool<char>.Shared.Rent(ChunkChars);
+        var bytes = ArrayPool<byte>.Shared.Rent(BodyEncoding.GetMaxByteCount(chars.Length));
         try
         {
             AppendRecord(text, columns, policy, row: null);
@@ -112,7 +116,10 @@ public static class CsvWriter
         text.Append("\r\n");
     }
 
-    /// <summary>Encodes the pending text into the pooled buffer, writes it, and clears it.</summary>
+    /// <summary>
+    /// Encodes the pending text through the pooled buffers one slice at a time, writes each slice,
+    /// and clears the text. Pending text of any length is handled; only the slice is bounded.
+    /// </summary>
     private static async Task FlushAsync(
         Stream destination,
         Encoder encoder,
@@ -122,13 +129,19 @@ public static class CsvWriter
         bool flush,
         CancellationToken ct)
     {
-        if (text.Length > 0)
+        var offset = 0;
+        while (offset < text.Length)
         {
-            text.CopyTo(0, chars, text.Length);
-            var count = encoder.GetBytes(chars.AsSpan(0, text.Length), bytes.AsSpan(), flush);
-            text.Clear();
+            var take = Math.Min(chars.Length, text.Length - offset);
+            text.CopyTo(offset, chars, 0, take);
+            offset += take;
+            var count = encoder.GetBytes(
+                chars.AsSpan(0, take),
+                bytes.AsSpan(),
+                flush: flush && offset == text.Length);
             await destination.WriteAsync(bytes.AsMemory(0, count), ct);
         }
+        text.Clear();
 
         if (flush) await destination.FlushAsync(ct);
     }
@@ -156,8 +169,15 @@ public static class CsvWriter
         null => ("", false),
         string text => (text, true),
         char character => (character.ToString(), true),
+        // A value the presentation layer already rendered from a typed source keeps that source's
+        // exemption from the formula guard: "-$1,234.50" is a number, not text a user typed.
+        CsvFormattedValue formatted => (formatted.Text, false),
         DateTime date => (date.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture), false),
+        DateTimeOffset date => (date.ToString("yyyy-MM-dd HH:mm:ss zzz", CultureInfo.InvariantCulture), false),
+        DateOnly date => (date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), false),
+        TimeOnly time => (time.ToString("HH:mm:ss", CultureInfo.InvariantCulture), false),
         bool boolean => (boolean ? "true" : "false", false),
+        byte[] binary => (Convert.ToBase64String(binary), false),
         IFormattable formattable => (formattable.ToString(null, CultureInfo.InvariantCulture) ?? "", false),
         _ => (value.ToString() ?? "", true),
     };
@@ -169,6 +189,18 @@ public static class CsvWriter
            && field[0] is '=' or '+' or '-' or '@' or '\t' or '\r'
             ? "'" + field
             : field;
+}
+
+/// <summary>
+/// Text already rendered from a typed (number, date, or boolean) source value. <see cref="CsvWriter"/>
+/// writes it verbatim and never applies the formula guard, because the leading character of a
+/// rendered negative number or a masked date is the renderer's, not a user's.
+/// </summary>
+/// <param name="Text">The rendered cell text.</param>
+public sealed record CsvFormattedValue(string Text)
+{
+    /// <summary>Returns the rendered text so any other consumer of the row sees the value, not the wrapper.</summary>
+    public override string ToString() => Text;
 }
 
 /// <summary>Specifies how <see cref="CsvWriter"/> treats formula-like text.</summary>

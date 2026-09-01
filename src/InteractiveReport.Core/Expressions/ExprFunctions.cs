@@ -169,7 +169,13 @@ internal static class ExprFunctions
                 if (a.Args[0] is NullLit)
                     throw new ExprError("IN_LIST cannot infer a type from a NULL first argument");
                 for (var i = 1; i < a.Args.Count; i++)
+                {
+                    // x IN (..., NULL) is UNKNOWN for every non-member, so NOT IN_LIST would match
+                    // nothing; the same rule that rejects '= NULL' applies to list members.
+                    if (a.Args[i] is NullLit)
+                        throw new ExprError($"IN_LIST argument {i + 1} cannot be NULL — use IS NULL");
                     a.Require(i, $"the same type as argument 1 ({a.Args[0].Kind.ToString().ToLowerInvariant()})", a.Args[0].Kind);
+                }
                 return ColumnKind.Bool;
             },
             ExprFunctionEmitter.EmitInList);

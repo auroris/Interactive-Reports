@@ -87,7 +87,7 @@ public static class CsvReportPresentation
             var text = RawString(url).Trim();
             return IsAllowedUrl(text, image: true)
                 ? text
-                : RenderText(value, column, decimalColumn, format.Mask);
+                : Formatted(value, RenderText(value, column, decimalColumn, format.Mask));
         }
 
         if (string.Equals(renderer, "link", StringComparison.OrdinalIgnoreCase))
@@ -114,13 +114,22 @@ public static class CsvReportPresentation
                 return IsAllowedUrl(url, image: false)
                     ? url
                     : text;
-            return text;
+            return Formatted(textValue, text);
         }
 
         return format?.Mask is null
             ? value
-            : RenderText(value, column, decimalColumn, format.Mask);
+            : Formatted(value, RenderText(value, column, decimalColumn, format.Mask));
     }
+
+    /// <summary>
+    /// Marks text rendered from a typed source so the writer exempts it from the formula guard;
+    /// text rendered from text stays text.
+    /// </summary>
+    private static object? Formatted(object? source, string? text)
+        => text is null || source is string or char
+            ? text
+            : new CsvFormattedValue(text);
 
     private static object? SourceValue(
         IReadOnlyDictionary<string, object?> row,

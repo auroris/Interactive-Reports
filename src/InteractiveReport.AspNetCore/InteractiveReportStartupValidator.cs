@@ -20,6 +20,7 @@ namespace InteractiveReport.AspNetCore;
 internal sealed class InteractiveReportStartupValidator(
     IOptionsMonitor<InteractiveReportOptions> options,
     ReportConnectionRegistry registry,
+    ConfiguredReportDocumentStore configuredDocuments,
     InteractiveReportLogging logging) : IHostedService
 {
     /// <summary>
@@ -66,6 +67,7 @@ internal sealed class InteractiveReportStartupValidator(
             ConfigurationReportDefinitionStore.Validate(snapshot);
             ConfigurationReportDefinitionStore.ResolveConnection(snapshot, registry);
             ActivationCheck(snapshot.Connection);
+            configuredDocuments.ValidateDefaults(snapshot.Name, snapshot.DocumentFiles);
         }
 
         var savedTable = ReportConnectionRegistry.ResolveTableName(

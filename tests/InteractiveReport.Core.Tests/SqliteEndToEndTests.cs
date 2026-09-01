@@ -259,7 +259,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
             },
         }), NoParams);
 
-        Assert.Equal("$9,000.00", Assert.Single(export.Rows)["CUSTOMER"]);
+        Assert.Equal("$9,000.00", Convert.ToString(Assert.Single(export.Rows)["CUSTOMER"]));
     }
 
     [Fact]
@@ -1460,7 +1460,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         var export = await _executor.Download(Definition, state, NoParams);
         Assert.Equal(["Customer", "Shipped Revenue"], export.Columns.Select(column => column.Label));
         var acme = export.Rows.Single(row => Equals(row["CUSTOMER"], "Acme Corp"));
-        Assert.Equal("$12,000.00", acme[shipped]);
+        Assert.Equal("$12,000.00", Convert.ToString(acme[shipped]));
         Assert.Equal(["CUSTOMER", shipped], acme.Keys);
     }
 
@@ -1681,7 +1681,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
 
         var export = await _executor.Download(Definition, state, NoParams);
 
-        Assert.Equal("$6,000.00", export.Rows[0]["ir1"]);
+        Assert.Equal("$6,000.00", Convert.ToString(export.Rows[0]["ir1"]));
         Assert.DoesNotContain("<a", Convert.ToString(export.Rows[0]["ir1"]));
     }
 
@@ -1740,7 +1740,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         var inherited = await _executor.Download(Definition, inheritedState, NoParams);
 
         Assert.Equal("Ancestor revenue", Assert.Single(inherited.Columns).Label);
-        Assert.Equal("$6,000.00", inherited.Rows[0]["ir1"]);
+        Assert.Equal("$6,000.00", Convert.ToString(inherited.Rows[0]["ir1"]));
         Assert.DoesNotContain("<a", Convert.ToString(inherited.Rows[0]["ir1"]));
 
         var clearedState = Doc(
@@ -2195,7 +2195,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         Assert.Equal(["STATUS", "v0"], export.Columns.Select(c => c.Name));
         Assert.Equal(["Status", "Chart revenue"], export.Columns.Select(c => c.Label));
         Assert.Equal(4, export.Rows.Count);
-        Assert.Equal("$6,000.00", export.Rows[0]["v0"]);
+        Assert.Equal("$6,000.00", Convert.ToString(export.Rows[0]["v0"]));
         Assert.All(export.Rows, row => Assert.Equal(["STATUS", "v0"], row.Keys));
     }
 

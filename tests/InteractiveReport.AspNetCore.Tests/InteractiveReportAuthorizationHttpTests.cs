@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Json;
 using System.Security.Claims;
+using System.Text;
 using System.Text.Json;
 using InteractiveReport.AspNetCore.Definitions;
 using InteractiveReport.Core.Model;
@@ -613,6 +614,107 @@ public sealed class InteractiveReportAuthorizationHttpTests
         Assert.False(string.IsNullOrWhiteSpace(problem.GetProperty("description").GetString()));
         Assert.False(string.IsNullOrWhiteSpace(problem.GetProperty("traceId").GetString()));
         Assert.DoesNotContain("MissingPolicyInfrastructure", problem.ToString());
+    }
+
+    [Fact]
+    public async Task Id_only_routes_report_a_hidden_family_exactly_like_a_missing_row()
+    {
+        // The built-in listing is administrators-only, so its family is hidden from everyone
+        // else; listing it as an administrator materializes a row whose id an outsider can probe.
+        await using var host = await Start(administrators: ["admin"]);
+        using var listing = await host.Client.SendAsync(Request(
+            HttpMethod.Get, "/api/reports/__saved-reports", "admin"));
+        Assert.Equal(HttpStatusCode.OK, listing.StatusCode);
+        var hiddenId = (await ReadJson(listing)).EnumerateArray().First().GetProperty("id").GetInt64();
+
+        foreach (var (method, path, body) in new (HttpMethod, string, object?)[]
+                 {
+                     (HttpMethod.Put, "/api/reports/{0}", new { title = "probe" }),
+                     (HttpMethod.Delete, "/api/reports/{0}", null),
+                     (HttpMethod.Post, "/api/reports/{0}/saved", new { title = "probe", state = new { } }),
+                     (HttpMethod.Get, "/api/reports/admin/saved/{0}/document", null),
+                 })
+        {
+            using var hidden = await host.Client.SendAsync(Request(
+                method, string.Format(path, hiddenId), "outsider", body));
+            using var missing = await host.Client.SendAsync(Request(
+                method, string.Format(path, 987654321), "outsider", body));
+
+            Assert.Equal(HttpStatusCode.NotFound, hidden.StatusCode);
+            Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+            Assert.Equal("IR-1002", (await ReadJson(hidden)).GetProperty("code").GetString());
+            Assert.Equal("IR-1002", (await ReadJson(missing)).GetProperty("code").GetString());
+        }
+    }
+
+    [Fact]
+    public async Task The_catalogue_is_empty_for_a_caller_who_may_see_nothing()
+    {
+        await using var host = await Start((reports, _) =>
+            reports.UseAuthorization((request, _) => ValueTask.FromResult(
+                request.User.FindFirstValue(ClaimTypes.NameIdentifier) == "insider")));
+
+        using var insider = await host.Client.SendAsync(Request(HttpMethod.Get, "/api/reports", "insider"));
+        using var outsider = await host.Client.SendAsync(Request(HttpMethod.Get, "/api/reports", "outsider"));
+        using var anonymous = await host.Client.SendAsync(Request(HttpMethod.Get, "/api/reports", null));
+
+        Assert.Equal(HttpStatusCode.OK, insider.StatusCode);
+        Assert.Single((await ReadJson(insider)).EnumerateArray());
+        // Every hidden entry is dropped one at a time; nothing visible is an empty catalogue,
+        // not a not-found. No caller at all is still told to sign in.
+        Assert.Equal(HttpStatusCode.OK, outsider.StatusCode);
+        Assert.Empty((await ReadJson(outsider)).EnumerateArray());
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+    }
+
+    [Fact]
+    public async Task Bodies_not_declared_as_json_are_refused_before_any_handler_runs()
+    {
+        // Every body-reading route declares Accepts("application/json"); the framework enforces
+        // it with a 415 before the handler, so a cross-site HTML form (form or text content types
+        // only, without a CORS preflight) can never reach a body reader on a cookie-auth host.
+        await using var host = await Start();
+
+        foreach (var path in new[]
+                 {
+                     "/api/reports/orders/query",
+                     "/api/reports/orders/lov",
+                     "/api/download/orders/csv",
+                     "/api/reports/admin/authorization/administrators",
+                     $"/api/reports/{host.OrdersId}/saved",
+                 })
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, path)
+            {
+                Content = new StringContent("{}", Encoding.UTF8, "text/plain"),
+            };
+            request.Headers.Add("X-Test-Identity", "anyone");
+            using var refused = await host.Client.SendAsync(request);
+
+            Assert.Equal(HttpStatusCode.UnsupportedMediaType, refused.StatusCode);
+        }
+
+        using var accepted = await host.Client.SendAsync(Request(
+            HttpMethod.Post, "/api/reports/orders/query", null, new { }));
+        Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+    }
+
+    [Fact]
+    public async Task Download_reports_structural_nulls_as_the_coded_validation_400()
+    {
+        await using var host = await Start();
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/download/orders/csv")
+        {
+            Content = new StringContent(
+                """{"activeTable":"a","tables":{"a":null}}""", Encoding.UTF8, "application/json"),
+        };
+
+        using var response = await host.Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var error = await ReadJson(response);
+        Assert.Equal("IR-1201", error.GetProperty("code").GetString());
+        Assert.Contains("tables.a", error.GetProperty("details").GetString());
     }
 
     private static async Task<RunningHost> Start(

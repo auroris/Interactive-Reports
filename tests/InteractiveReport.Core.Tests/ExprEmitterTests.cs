@@ -44,6 +44,15 @@ public class ExprEmitterTests
     }
 
     [Fact]
+    public void One_arg_round_gets_the_precision_t_sql_requires()
+    {
+        // T-SQL ROUND has no one-argument form; the portable ROUND(x) means "to a whole number".
+        Assert.Equal("ROUND([AMOUNT], 0)", Emit("ROUND(AMOUNT)", ReportDialect.SqlServer).Sql);
+        Assert.Equal("ROUND([AMOUNT])", Emit("ROUND(AMOUNT)", ReportDialect.Oracle).Sql);
+        Assert.Equal("ROUND([AMOUNT])", Emit("ROUND(AMOUNT)", ReportDialect.Sqlite).Sql);
+    }
+
+    [Fact]
     public void Concat_is_variadic_concat_except_oracle_native_pipes()
     {
         Assert.Equal("CONCAT(UPPER([CUSTOMER]), ?)", Emit("UPPER(CUSTOMER) || '!'", ReportDialect.SqlServer).Sql);
