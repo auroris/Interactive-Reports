@@ -36,7 +36,7 @@ internal static class ExprFunctionEmitter
     /// <remarks>Appends SQL and nested bindings to <paramref name="context"/>.</remarks>
     public static void EmitConcat(EmitContext context, IReadOnlyList<ExprNode> arguments)
     {
-        if (context.Dialect == ReportDialect.Oracle)
+        if (context.Dialect is ReportDialect.Oracle or ReportDialect.Oracle11g)
         {
             // Oracle CONCAT is two-argument only; native || already treats
             // NULL as empty.
@@ -145,7 +145,7 @@ internal static class ExprFunctionEmitter
         {
             context.Append("NULL");
         }
-        else if (context.Dialect == ReportDialect.Oracle)
+        else if (context.Dialect is ReportDialect.Oracle or ReportDialect.Oracle11g)
         {
             // Oracle CONCAT is two-argument only; native || already treats NULL as empty.
             context.Append('(');
@@ -297,7 +297,7 @@ internal static class ExprFunctionEmitter
                 context.Visit(argument);
                 context.Append(" AS DATETIME2)");
                 break;
-            case ReportDialect.Oracle or ReportDialect.Postgres:
+            case ReportDialect.Oracle or ReportDialect.Oracle11g or ReportDialect.Postgres:
                 context.Append("TO_DATE(");
                 context.Visit(argument);
                 context.Append(", 'YYYY-MM-DD')");
@@ -330,7 +330,7 @@ internal static class ExprFunctionEmitter
             case ReportDialect.SqlServer:
                 EmitSqlServerDateTrunc(context, unit, date);
                 break;
-            case ReportDialect.Oracle:
+            case ReportDialect.Oracle or ReportDialect.Oracle11g:
                 context.Append("TRUNC(");
                 context.Visit(date);
                 context.Append(unit switch
@@ -381,7 +381,7 @@ internal static class ExprFunctionEmitter
                 context.AppendBinding(mask);
                 context.Append(", 'en-US')");
                 break;
-            case ReportDialect.Oracle or ReportDialect.Postgres:
+            case ReportDialect.Oracle or ReportDialect.Oracle11g or ReportDialect.Postgres:
                 context.Append("TO_CHAR(");
                 context.Visit(date);
                 context.Append(", ");
@@ -417,7 +417,7 @@ internal static class ExprFunctionEmitter
                 context.Visit(node.Date);
                 context.Append(')');
                 break;
-            case ReportDialect.Oracle:
+            case ReportDialect.Oracle or ReportDialect.Oracle11g:
                 context.Append('(');
                 context.Visit(node.Date);
                 context.Append(subtract ? " - " : " + ");
@@ -465,7 +465,7 @@ internal static class ExprFunctionEmitter
             case ReportDialect.SqlServer:
                 EmitPlain(context, part, arguments);
                 break;
-            case ReportDialect.Oracle:
+            case ReportDialect.Oracle or ReportDialect.Oracle11g:
                 context.Append("EXTRACT(").Append(part).Append(" FROM ");
                 if (textual)
                 {
@@ -541,7 +541,7 @@ internal static class ExprFunctionEmitter
         => context.Append(context.Dialect switch
         {
             ReportDialect.SqlServer => "CAST(NULL AS DATETIME2)",
-            ReportDialect.Oracle => "CAST(NULL AS DATE)",
+            ReportDialect.Oracle or ReportDialect.Oracle11g => "CAST(NULL AS DATE)",
             ReportDialect.Postgres => "CAST(NULL AS TIMESTAMP)",
             _ => "NULL",
         });
@@ -554,7 +554,7 @@ internal static class ExprFunctionEmitter
         => context.Append(context.Dialect switch
         {
             ReportDialect.SqlServer => "CAST(NULL AS NVARCHAR(30))",
-            ReportDialect.Oracle => "CAST(NULL AS VARCHAR2(30))",
+            ReportDialect.Oracle or ReportDialect.Oracle11g => "CAST(NULL AS VARCHAR2(30))",
             ReportDialect.Postgres => "CAST(NULL AS TEXT)",
             _ => "NULL",
         });

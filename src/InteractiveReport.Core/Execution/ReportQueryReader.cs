@@ -359,7 +359,7 @@ internal sealed class ReportQueryReader(
 
     /// <summary>Gets whether snapshot consistency on Oracle requires one REF CURSOR batch.</summary>
     private bool UseOracleCursorBatch
-        => definition.GetEffectiveDialect() == ReportDialect.Oracle
+        => definition.GetEffectiveDialect() is ReportDialect.Oracle or ReportDialect.Oracle11g
             && definition.Consistency == ReportConsistency.Snapshot;
 
     /// <summary>

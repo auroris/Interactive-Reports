@@ -33,6 +33,17 @@ internal sealed class ReportConnectionRegistry : IReportConnectionFactory
     private readonly IConfiguration _configuration;
     private readonly ConcurrentDictionary<string, SyntheticEntry> _synthetic = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ReportDialect> _sniffed = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, ReportDialect> _detected = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Records a runtime-detected dialect for a connection (e.g. Oracle 11g detected via driver ServerVersion).
+    /// </summary>
+    /// <param name="name">The registered connection name.</param>
+    /// <param name="dialect">The detected SQL dialect.</param>
+    public void SetDetectedDialect(string name, ReportDialect dialect)
+    {
+        _detected[name] = dialect;
+    }
 
     /// <summary>
     /// Initializes the registry over the live code-registration dictionaries and application configuration.
@@ -113,15 +124,17 @@ internal sealed class ReportConnectionRegistry : IReportConnectionFactory
     }
 
     /// <summary>
-    /// Resolves a dialect declared at registration, implied by a data-source provider, or sniffed from the
-    /// factory's connection type.
+    /// Resolves the dialect for a connection. Explicit registrations take precedence, then synthetic
+    /// entries, and finally the connection factory is invoked once to sniff the dialect from its type.
     /// </summary>
-    /// <param name="name">The registered or synthesized connection name.</param>
+    /// <param name="name">The registered connection name.</param>
     /// <returns>The SQL dialect used to compile reports for the connection.</returns>
     /// <exception cref="InvalidOperationException">Thrown when the connection is unknown or its provider type is unsupported.</exception>
     /// <remarks>The first sniff of a code-registered factory creates and disposes one unopened connection, then caches the result.</remarks>
     public ReportDialect ResolveDialect(string name)
     {
+        if (_detected.TryGetValue(name, out var detected))
+            return detected;
         if (_declaredDialects.TryGetValue(name, out var declared))
             return declared;
         if (_synthetic.TryGetValue(name, out var entry))
@@ -134,7 +147,6 @@ internal sealed class ReportConnectionRegistry : IReportConnectionFactory
     /// <summary>
     /// Maps saved-report options to the single concrete store target used by persistence, synchronization,
     /// and the built-in listing report. The
-    /// store, the configured-document synchronizer, and the built-in saved-reports listing definition must
     /// all agree on it. The dialect is always derived.
     /// </summary>
     /// <param name="saved">The saved-report storage options to validate and resolve.</param>

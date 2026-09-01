@@ -126,7 +126,7 @@ internal static class ComposableTerminalQueryComposer
             var searchable = dialect switch
             {
                 ReportDialect.SqlServer => $"CONVERT(NVARCHAR(4000), {identifier})",
-                ReportDialect.Oracle => $"TO_CHAR({identifier})",
+                ReportDialect.Oracle or ReportDialect.Oracle11g => $"TO_CHAR({identifier})",
                 _ => $"CAST({identifier} AS TEXT)",
             };
             query.WhereRaw(

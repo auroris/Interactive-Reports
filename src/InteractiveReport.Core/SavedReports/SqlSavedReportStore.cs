@@ -438,11 +438,29 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     }
 
     /// <summary>
+    /// Builds an identifier name guaranteed to be &lt;= 30 characters for Oracle 11g / Oracle compatibility.
+    /// </summary>
+    internal static string OracleIdentifier(string tableName, string suffix)
+    {
+        const int maxLen = 30;
+        var candidate = tableName + suffix;
+        if (candidate.Length <= maxLen) return candidate;
+        var hash = Math.Abs(tableName.GetHashCode()).ToString("X4");
+        var prefixMax = maxLen - suffix.Length - hash.Length - 1;
+        var prefix = prefixMax > 0 ? tableName[..Math.Min(tableName.Length, prefixMax)] : "IR";
+        return $"{prefix}_{hash}{suffix}";
+    }
+
+    /// <summary>
     /// Builds the dialect-safe name of the title-uniqueness index.
     /// </summary>
     /// <param name="tableName">The validated physical table name used for saved-report persistence.</param>
+    /// <param name="dialect">The target database dialect.</param>
     /// <returns>The dialect-safe name of the title uniqueness index.</returns>
-    internal static string TitleIndexName(string tableName) => tableName + "_TITLE_UX";
+    internal static string TitleIndexName(string tableName, ReportDialect dialect = ReportDialect.SqlServer)
+        => (dialect is ReportDialect.Oracle or ReportDialect.Oracle11g)
+            ? OracleIdentifier(tableName, "_TITLE_UX")
+            : tableName + "_TITLE_UX";
 
     /// <summary>
     /// Determines whether a database exception represents a saved-report title conflict.
@@ -453,7 +471,7 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     private static bool IsTitleUniqueViolation(SavedReportStoreConfig config, DbException ex)
     {
         return DbErrorClassifier.IsUniqueViolation(config.Dialect, ex)
-            && (ex.Message.Contains(TitleIndexName(config.TableName), StringComparison.OrdinalIgnoreCase)
+            && (ex.Message.Contains(TitleIndexName(config.TableName, config.Dialect), StringComparison.OrdinalIgnoreCase)
                 // Provider constraint: SQLite reports the violated COLUMNS, not the index name.
                 || ex.Message.Contains("TITLE_SCOPE", StringComparison.OrdinalIgnoreCase));
     }
@@ -651,7 +669,7 @@ public sealed class SqlSavedReportStore : ISavedReportStore
 
         try
         {
-            if (config.Dialect == ReportDialect.Oracle)
+            if (config.Dialect is ReportDialect.Oracle or ReportDialect.Oracle11g)
             {
                 command.CommandText += " RETURNING ID INTO :ir_generated_id";
                 var output = command.CreateParameter();
@@ -711,6 +729,18 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         try
         {
             await conn.OpenAsync(ct);
+            if (cfg.Dialect == ReportDialect.Oracle)
+            {
+                if (int.TryParse(conn.ServerVersion.Split('.')[0], out var major) && major < 12)
+                {
+                    cfg = cfg with { Dialect = ReportDialect.Oracle11g };
+                    _connections.SetDetectedDialect(cfg.ConnectionName, ReportDialect.Oracle11g);
+                    _logger?.LogInformation(
+                        "Detected Oracle Database server version {ServerVersion} for saved reports store on connection '{Connection}'. Enabled Oracle 11g compatibility mode (ROWNUM pagination and sequence-backed persistence).",
+                        conn.ServerVersion,
+                        cfg.ConnectionName);
+                }
+            }
             if (cfg.AutoCreate)
                 await EnsureCreated(conn, cfg, ct);
             return conn;
@@ -749,6 +779,35 @@ public sealed class SqlSavedReportStore : ISavedReportStore
             try
             {
                 await cmd.ExecuteNonQueryAsync(ct);
+
+                if (cfg.Dialect == ReportDialect.Oracle11g)
+                {
+                    var seqName = OracleIdentifier(cfg.TableName, "_SEQ");
+                    var trgName = OracleIdentifier(cfg.TableName, "_TRG");
+                    cmd.CommandText = $"""
+                        BEGIN
+                            EXECUTE IMMEDIATE 'CREATE SEQUENCE "{seqName}" START WITH 1 INCREMENT BY 1 NOCACHE';
+                        EXCEPTION WHEN OTHERS THEN
+                            IF SQLCODE != -955 THEN RAISE; END IF;
+                        END;
+                        """;
+                    CommandBuilder.Log(cmd, _logger);
+                    await cmd.ExecuteNonQueryAsync(ct);
+
+                    cmd.CommandText = $"""
+                        CREATE OR REPLACE TRIGGER "{trgName}"
+                        BEFORE INSERT ON "{cfg.TableName}"
+                        FOR EACH ROW
+                        BEGIN
+                            IF :NEW.ID IS NULL THEN
+                                SELECT "{seqName}".NEXTVAL INTO :NEW.ID FROM DUAL;
+                            END IF;
+                        END;
+                        """;
+                    CommandBuilder.Log(cmd, _logger);
+                    await cmd.ExecuteNonQueryAsync(ct);
+                }
+
                 await CreateIndexes(cmd, cfg, ct);
             }
             catch (Exception ex) when (!ct.IsCancellationRequested)
@@ -834,6 +893,26 @@ public sealed class SqlSavedReportStore : ISavedReportStore
             BEGIN
                 EXECUTE IMMEDIATE 'CREATE TABLE "{cfg.TableName}" (
                     ID           NUMBER(19) GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                    REPORT_NAME  VARCHAR2(200 CHAR) NOT NULL,
+                    SOURCE_FILE  VARCHAR2(400 CHAR) NULL,
+                    TITLE        VARCHAR2(200 CHAR) NOT NULL,
+                    TITLE_KEY    VARCHAR2(400 CHAR) NOT NULL,
+                    TITLE_SCOPE  VARCHAR2(420 CHAR) NOT NULL,
+                    OWNER        VARCHAR2(400 CHAR) NULL,
+                    IS_GLOBAL    NUMBER(1) NOT NULL,
+                    IS_DEFAULT   NUMBER(1) NOT NULL,
+                    STATE_JSON   CLOB NULL,
+                    MODIFIED_UTC VARCHAR2(40) NOT NULL,
+                    ORIGIN       VARCHAR2(20) DEFAULT ''user'' NOT NULL
+                )';
+            EXCEPTION WHEN OTHERS THEN
+                IF SQLCODE != -955 THEN RAISE; END IF;
+            END;
+            """,
+        ReportDialect.Oracle11g => $"""
+            BEGIN
+                EXECUTE IMMEDIATE 'CREATE TABLE "{cfg.TableName}" (
+                    ID           NUMBER(19) PRIMARY KEY,
                     REPORT_NAME  VARCHAR2(200 CHAR) NOT NULL,
                     SOURCE_FILE  VARCHAR2(400 CHAR) NULL,
                     TITLE        VARCHAR2(200 CHAR) NOT NULL,
@@ -996,7 +1075,7 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="cfg"/> contains an unsupported dialect.</exception>
     private static string CreateTitleIndexSql(SavedReportStoreConfig cfg)
     {
-        var index = TitleIndexName(cfg.TableName);
+        var index = TitleIndexName(cfg.TableName, cfg.Dialect);
         return cfg.Dialect switch
         {
             ReportDialect.Sqlite => $"""
@@ -1012,7 +1091,7 @@ public sealed class SqlSavedReportStore : ISavedReportStore
             // Provider constraint: oracle has no partial indexes; the CASE projections index
             // user rows only (rows where every keyed expression is NULL are not indexed). -955:
             // name already used; -1408: column list already indexed.
-            ReportDialect.Oracle => $"""
+            ReportDialect.Oracle or ReportDialect.Oracle11g => $"""
                 BEGIN
                     EXECUTE IMMEDIATE 'CREATE UNIQUE INDEX {index} ON "{cfg.TableName}"
                         (REPORT_NAME, TITLE_KEY, TITLE_SCOPE)';
@@ -1030,7 +1109,9 @@ public sealed class SqlSavedReportStore : ISavedReportStore
 
     private static string CreateSourceKeyIndexSql(SavedReportStoreConfig cfg)
     {
-        var index = cfg.TableName + "_SOURCE_UX";
+        var index = (cfg.Dialect is ReportDialect.Oracle or ReportDialect.Oracle11g)
+            ? OracleIdentifier(cfg.TableName, "_SRC_UX")
+            : cfg.TableName + "_SOURCE_UX";
         return cfg.Dialect switch
         {
             ReportDialect.Sqlite => $"CREATE UNIQUE INDEX IF NOT EXISTS {index} ON {cfg.TableName} (REPORT_NAME, SOURCE_FILE) WHERE SOURCE_FILE IS NOT NULL",
@@ -1040,7 +1121,7 @@ public sealed class SqlSavedReportStore : ISavedReportStore
             // SOURCE_FILE) index would reject the second user row of every family (SOURCE_FILE is
             // NULL for all of them). The CASE projections index configured rows only, exactly as
             // the default index below does.
-            ReportDialect.Oracle => $"""
+            ReportDialect.Oracle or ReportDialect.Oracle11g => $"""
                 BEGIN
                     EXECUTE IMMEDIATE 'CREATE UNIQUE INDEX {index} ON "{cfg.TableName}"
                         (CASE WHEN SOURCE_FILE IS NOT NULL THEN REPORT_NAME ELSE NULL END, SOURCE_FILE)';
@@ -1055,12 +1136,14 @@ public sealed class SqlSavedReportStore : ISavedReportStore
 
     private static string CreateDefaultIndexSql(SavedReportStoreConfig cfg)
     {
-        var index = cfg.TableName + "_DEFAULT_UX";
+        var index = (cfg.Dialect is ReportDialect.Oracle or ReportDialect.Oracle11g)
+            ? OracleIdentifier(cfg.TableName, "_DEF_UX")
+            : cfg.TableName + "_DEFAULT_UX";
         return cfg.Dialect switch
         {
             ReportDialect.Sqlite => $"CREATE UNIQUE INDEX IF NOT EXISTS {index} ON {cfg.TableName} (REPORT_NAME) WHERE IS_DEFAULT = 1",
             ReportDialect.SqlServer => $"IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'{index}' AND object_id = OBJECT_ID(N'{cfg.TableName}')) CREATE UNIQUE INDEX {index} ON {cfg.TableName} (REPORT_NAME) WHERE IS_DEFAULT = 1",
-            ReportDialect.Oracle => $"""
+            ReportDialect.Oracle or ReportDialect.Oracle11g => $"""
                 BEGIN
                     EXECUTE IMMEDIATE 'CREATE UNIQUE INDEX {index} ON "{cfg.TableName}"
                         (CASE WHEN IS_DEFAULT = 1 THEN REPORT_NAME ELSE NULL END)';

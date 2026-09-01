@@ -1,4 +1,5 @@
 using System.Data.Common;
+using InteractiveReport.Core.Model;
 
 namespace InteractiveReport.Core.Execution;
 
@@ -16,4 +17,11 @@ public interface IReportConnectionFactory
     /// <param name="name">The registered connection name from the resolved report definition.</param>
     /// <returns>A new unopened connection owned by the caller.</returns>
     DbConnection CreateConnection(string name);
+
+    /// <summary>
+    /// Records a runtime-detected dialect for a named connection.
+    /// </summary>
+    /// <param name="name">The registered connection name.</param>
+    /// <param name="dialect">The detected SQL dialect.</param>
+    void SetDetectedDialect(string name, ReportDialect dialect) { }
 }

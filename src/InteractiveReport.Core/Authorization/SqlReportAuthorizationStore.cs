@@ -310,14 +310,24 @@ public sealed class SqlReportAuthorizationStore : IReportAuthorizationStore
     /// <param name="ct">Cancels opening and table creation.</param>
     /// <returns>An open connection owned by the caller.</returns>
     /// <remarks>Disposes the connection before rethrowing when preparation fails.</remarks>
-    private async Task<DbConnection> OpenConnection(
-        ReportAuthorizationStoreConfig config,
-        CancellationToken ct)
+    private async Task<DbConnection> OpenConnection(ReportAuthorizationStoreConfig config, CancellationToken ct)
     {
         var connection = _connections.CreateConnection(config.ConnectionName);
         try
         {
             await connection.OpenAsync(ct);
+            if (config.Dialect == ReportDialect.Oracle)
+            {
+                if (int.TryParse(connection.ServerVersion.Split('.')[0], out var major) && major < 12)
+                {
+                    config = config with { Dialect = ReportDialect.Oracle11g };
+                    _connections.SetDetectedDialect(config.ConnectionName, ReportDialect.Oracle11g);
+                    _logger?.LogInformation(
+                        "Detected Oracle Database server version {ServerVersion} for authorization store on connection '{Connection}'. Enabled Oracle 11g compatibility mode.",
+                        connection.ServerVersion,
+                        config.ConnectionName);
+                }
+            }
             if (config.AutoCreate) await EnsureCreated(connection, config, ct);
             return connection;
         }
@@ -434,7 +444,7 @@ public sealed class SqlReportAuthorizationStore : IReportAuthorizationStore
                 """,
             // Quoted so DDL and SqlKata's quoted query identifiers name one object; CHAR semantics
             // because the endpoint validates character counts (see the saved-report store).
-            ReportDialect.Oracle => $"""
+            ReportDialect.Oracle or ReportDialect.Oracle11g => $"""
                 BEGIN
                     EXECUTE IMMEDIATE 'CREATE TABLE "{config.TableName}" (
                         ID             VARCHAR2(80) PRIMARY KEY,

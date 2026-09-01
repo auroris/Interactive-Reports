@@ -14,6 +14,7 @@ internal static class ExprDateRules
     /// <summary>Gets the default portable date-only format tokens.</summary>
     public static IReadOnlyList<string> DefaultFormat { get; } = ["YYYY", "-", "MM", "-", "DD"];
 
+
     /// <summary>
     /// Validates and returns a DATE_TRUNC unit literal.
     /// </summary>
@@ -107,7 +108,7 @@ internal static class ExprDateRules
                     });
                     break;
 
-                case ReportDialect.Oracle or ReportDialect.Postgres:
+                case ReportDialect.Oracle or ReportDialect.Oracle11g or ReportDialect.Postgres:
                     result.Append(part == "T" ? "\"T\"" : part);
                     break;
 

@@ -136,7 +136,7 @@ internal static class SavedReportsListingDefinition
     /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="dialect"/> is not supported.</exception>
     private static string Sql(ReportDialect dialect, string table) => dialect switch
     {
-        ReportDialect.Sqlite or ReportDialect.Oracle => $"""
+        ReportDialect.Sqlite or ReportDialect.Oracle or ReportDialect.Oracle11g => $"""
             SELECT ID, REPORT_NAME, TITLE, OWNER, IS_GLOBAL, IS_DEFAULT,
                 CASE WHEN ORIGIN = 'configured' THEN 'Read only'
                      WHEN IS_GLOBAL = 1 THEN 'Global' ELSE 'Private' END AS "SCOPE",

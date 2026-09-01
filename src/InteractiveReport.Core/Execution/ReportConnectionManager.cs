@@ -27,6 +27,18 @@ internal sealed class ReportConnectionManager(
         try
         {
             await connection.OpenAsync(ct);
+            if (definition.GetEffectiveDialect() == ReportDialect.Oracle)
+            {
+                if (int.TryParse(connection.ServerVersion.Split('.')[0], out var major) && major < 12)
+                {
+                    definition.Dialect = ReportDialect.Oracle11g;
+                    connections.SetDetectedDialect(definition.Connection, ReportDialect.Oracle11g);
+                    logger?.LogInformation(
+                        "Detected Oracle Database server version {ServerVersion} on connection '{Connection}'. Enabled Oracle 11g compatibility mode (ROWNUM pagination and sequence-backed persistence).",
+                        connection.ServerVersion,
+                        definition.Connection);
+                }
+            }
             await ApplySessionTimeZone(connection, definition, ct);
             return connection;
         }
@@ -78,7 +90,7 @@ internal sealed class ReportConnectionManager(
                 $"Report '{definition.Name}': unsupported consistency strategy '{definition.Consistency}'.");
 
         var dialect = definition.GetEffectiveDialect();
-        if (dialect == ReportDialect.Oracle)
+        if (dialect is ReportDialect.Oracle or ReportDialect.Oracle11g)
         {
             // Provider constraint: ODP.NET auto-commits commands executed outside an explicit
             // local transaction. Start one first so SET TRANSACTION remains in force for every
@@ -248,7 +260,7 @@ internal sealed class ReportConnectionManager(
         var timeZone = definition.TimeZone.Trim().Replace("'", "''");
         var sql = definition.GetEffectiveDialect() switch
         {
-            ReportDialect.Oracle => $"ALTER SESSION SET TIME_ZONE = '{timeZone}'",
+            ReportDialect.Oracle or ReportDialect.Oracle11g => $"ALTER SESSION SET TIME_ZONE = '{timeZone}'",
             ReportDialect.Postgres => $"SET TIME ZONE '{timeZone}'",
             _ => null,
         };

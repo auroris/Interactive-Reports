@@ -5,8 +5,10 @@ public enum ReportDialect
 {
     /// <summary>Microsoft SQL Server.</summary>
     SqlServer,
-    /// <summary>Oracle Database.</summary>
+    /// <summary>Oracle Database (12c and newer).</summary>
     Oracle,
+    /// <summary>Oracle Database (11g and older, using ROWNUM pagination and sequence-backed primary keys).</summary>
+    Oracle11g,
     /// <summary>SQLite.</summary>
     Sqlite,
     /// <summary>PostgreSQL.</summary>

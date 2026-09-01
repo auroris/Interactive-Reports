@@ -20,6 +20,7 @@ public static class DialectSupport
     {
         ReportDialect.SqlServer => new InteractiveReportSqlServerCompiler(),
         ReportDialect.Oracle => new InteractiveReportOracleCompiler(),
+        ReportDialect.Oracle11g => new InteractiveReportOracle11gCompiler(),
         ReportDialect.Sqlite => new InteractiveReportSqliteCompiler(),
         ReportDialect.Postgres => new InteractiveReportPostgresCompiler(),
         _ => throw new ArgumentOutOfRangeException(nameof(dialect), dialect, null),
@@ -131,6 +132,38 @@ public static class DialectSupport
         /// <returns>An Oracle result with executable and debug SQL decoded.</returns>
         public override SqlResult Compile(IEnumerable<Query> queries)
             => RestoreLiteralQuestionMarks(base.Compile(queries));
+        /// <summary>
+        /// Quotes an Oracle identifier after protecting literal question marks from SqlKata parsing.
+        /// </summary>
+        /// <param name="value">The identifier segment to protect and quote.</param>
+        /// <returns>The Oracle-quoted identifier.</returns>
+        public override string WrapValue(string value)
+            => base.WrapValue(SqlKataSyntax.ProtectQuestionMarks(value));
+    }
+
+    private sealed class InteractiveReportOracle11gCompiler : OracleCompiler
+    {
+        public InteractiveReportOracle11gCompiler()
+        {
+            UseLegacyPagination = true;
+        }
+
+        /// <summary>
+        /// Compiles one Oracle 11g query with ROWNUM pagination and restores literal question marks protected in raw fragments.
+        /// </summary>
+        /// <param name="query">The SqlKata query to compile.</param>
+        /// <returns>An Oracle result with executable and debug SQL decoded.</returns>
+        public override SqlResult Compile(Query query)
+            => RestoreLiteralQuestionMarks(base.Compile(query));
+
+        /// <summary>
+        /// Compiles an Oracle 11g query batch and restores literal question marks protected in raw fragments.
+        /// </summary>
+        /// <param name="queries">The query collection to combine or execute.</param>
+        /// <returns>An Oracle result with executable and debug SQL decoded.</returns>
+        public override SqlResult Compile(IEnumerable<Query> queries)
+            => RestoreLiteralQuestionMarks(base.Compile(queries));
+
         /// <summary>
         /// Quotes an Oracle identifier after protecting literal question marks from SqlKata parsing.
         /// </summary>

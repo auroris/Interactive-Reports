@@ -79,7 +79,7 @@ internal static class CommandBuilder
         // parameters appear first in the SQL text (inside the base subquery) but are added last
         // here, so positional binding would silently misbind them. Set BindByName via
         // reflection to avoid a hard Oracle provider dependency.
-        if (dialect == ReportDialect.Oracle)
+        if (dialect is ReportDialect.Oracle or ReportDialect.Oracle11g)
             EnableBindByName(cmd);
 
         foreach (var (name, value) in compiled.NamedBindings)
@@ -116,8 +116,8 @@ internal static class CommandBuilder
         ReportDefinition def,
         ILogger? logger = null)
     {
-        if (def.GetEffectiveDialect() != ReportDialect.Oracle)
-            throw new InvalidOperationException("Oracle REF CURSOR batches require the Oracle dialect.");
+        if (def.GetEffectiveDialect() is not (ReportDialect.Oracle or ReportDialect.Oracle11g))
+            throw new InvalidOperationException("Oracle REF CURSOR batches require an Oracle dialect.");
         if (resultSets.Count == 0)
             throw new ArgumentException("At least one result set is required.", nameof(resultSets));
 

@@ -92,7 +92,7 @@ public static class DbErrorClassifier
     public static bool IsUniqueViolation(ReportDialect dialect, DbException exception) => dialect switch
     {
         ReportDialect.SqlServer => IntProperty(exception, "Number") is 2627 or 2601,
-        ReportDialect.Oracle => IntProperty(exception, "Number") == 1,
+        ReportDialect.Oracle or ReportDialect.Oracle11g => IntProperty(exception, "Number") == 1,
         ReportDialect.Postgres => string.Equals(GetSqlState(exception), "23505", StringComparison.Ordinal),
         ReportDialect.Sqlite => IntProperty(exception, "SqliteExtendedErrorCode") is 1555 or 2067,
         _ => false,
@@ -112,7 +112,7 @@ public static class DbErrorClassifier
             var classified = dialect switch
             {
                 ReportDialect.SqlServer => ClassifySqlServer(dbEx),
-                ReportDialect.Oracle => ClassifyOracle(dbEx),
+                ReportDialect.Oracle or ReportDialect.Oracle11g => ClassifyOracle(dbEx),
                 ReportDialect.Postgres => ClassifyPostgres(dbEx),
                 ReportDialect.Sqlite => ClassifySqlite(dbEx),
                 _ => null,

@@ -595,7 +595,7 @@ internal static class ComposableSqlPlanner
     /// <param name="dialect">The database dialect whose SQL rules apply.</param>
     /// <returns>The SQL expression for one median row position.</returns>
     private static string HalfPosition(string countAlias, int add, ReportDialect dialect)
-        => dialect == ReportDialect.Oracle
+        => dialect is ReportDialect.Oracle or ReportDialect.Oracle11g
             ? $"FLOOR(({Identifier(dialect, countAlias)} + {add}) / 2)"
             : $"(({Identifier(dialect, countAlias)} + {add}) / 2)";
 
