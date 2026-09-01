@@ -125,6 +125,16 @@ public static class EndpointExtensions
             .Produces<ReportResult>()
             .Produces<InteractiveReportError>(StatusCodes.Status400BadRequest);
         ProtectedApi(
+                group.MapPost("/{name}/lov", PostLov),
+                ReportsTag,
+                "List values for one report column",
+                $"Compiles the supplied current report document and returns at most {ReportExecutor.MaxLovItems} "
+                + "distinct values for one column of its active table. Optional search text performs a "
+                + "case-insensitive partial match before the limit; no wildcard is required.")
+            .Accepts<ReportLovRequest>("application/json")
+            .Produces<ReportLovResult>()
+            .Produces<InteractiveReportError>(StatusCodes.Status400BadRequest);
+        ProtectedApi(
                 group.MapPost("/{name}/export", PostExport),
                 ReportsTag,
                 "Export a report",
@@ -589,6 +599,62 @@ public static class EndpointExtensions
             ct);
 
     /// <summary>
+    /// Executes a list-of-values request through the same definition and query authorization path as
+    /// the current report table.
+    /// </summary>
+    /// <param name="name">The configured or built-in report name from the route.</param>
+    /// <param name="ctx">The current HTTP request and response context.</param>
+    /// <param name="ct">Cancels authorization, body reading, context resolution, and lookup execution.</param>
+    /// <returns>The bounded LOV JSON or a standardized access, validation, or server-error result.</returns>
+    private static async Task<IResult> PostLov(string name, HttpContext ctx, CancellationToken ct)
+    {
+        var accessService = Access(ctx);
+        var access = await accessService.Authorize(new ReportAccessRequest
+        {
+            ReportName = name,
+            Actions = OperationActions(name, InteractiveReportAction.Query),
+        }, ctx, ct);
+        if (access.Error is not null) return access.Error;
+        var definition = access.Definition!;
+
+        ReportLovRequest request;
+        try
+        {
+            request = await JsonSerializer.DeserializeAsync<ReportLovRequest>(
+                ctx.Request.Body,
+                IrJson.Options,
+                ct) ?? new ReportLovRequest();
+        }
+        catch (JsonException ex)
+        {
+            return Error(
+                InteractiveReportErrorCodes.MalformedReportState,
+                StatusCodes.Status400BadRequest,
+                ex.Message);
+        }
+
+        try
+        {
+            var executor = ctx.RequestServices.GetRequiredService<ReportExecutor>();
+            var contextParams = await accessService.ResolveContextParameters(definition, ctx, ct);
+            var result = await executor.Lov(definition, request, contextParams, ct);
+            return Results.Json(result, IrJson.Options);
+        }
+        catch (ReportValidationException ex)
+        {
+            return ValidationProblem(ex);
+        }
+        catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return ServerError(ctx, definition.Name, "list of values", ex);
+        }
+    }
+
+    /// <summary>
     /// Exports the posted state through the same authorization and validation pipeline as a query, without paging.
     /// Rows are capped when the definition's MaxRows
     /// is positive, with truncation signaled via X-IR-Truncated. Download is one of the two server-enforced
@@ -654,16 +720,10 @@ public static class EndpointExtensions
         CancellationToken ct)
     {
         var accessService = Access(ctx);
-        IReadOnlyCollection<InteractiveReportAction> actions =
-            SavedReportsListingDefinition.Matches(name)
-                ? action == InteractiveReportAction.Export
-                    ? [InteractiveReportAction.ListAllSavedReports, InteractiveReportAction.Export]
-                    : [InteractiveReportAction.ListAllSavedReports]
-                : [action];
         var access = await accessService.Authorize(new ReportAccessRequest
         {
             ReportName = name,
-            Actions = actions,
+            Actions = OperationActions(name, action),
         }, ctx, ct);
         if (access.Error is not null) return access.Error;
         var definition = access.Definition!;
@@ -703,6 +763,16 @@ public static class EndpointExtensions
             return ServerError(ctx, definition.Name, operationName, ex);
         }
     }
+
+    /// <summary>Returns the action set shared by report-state operations for one route name.</summary>
+    private static IReadOnlyCollection<InteractiveReportAction> OperationActions(
+        string name,
+        InteractiveReportAction action)
+        => SavedReportsListingDefinition.Matches(name)
+            ? action == InteractiveReportAction.Export
+                ? [InteractiveReportAction.ListAllSavedReports, InteractiveReportAction.Export]
+                : [InteractiveReportAction.ListAllSavedReports]
+            : [action];
 
     /// <summary>
     /// Converts structured report-state validation errors into the public HTTP 400 error shape.

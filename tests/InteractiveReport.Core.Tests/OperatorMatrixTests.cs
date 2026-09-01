@@ -56,6 +56,21 @@ public class OperatorMatrixTests
     [InlineData(ReportDialect.SqlServer)]
     [InlineData(ReportDialect.Oracle)]
     [InlineData(ReportDialect.Postgres)]
+    public void User_wildcard_match_is_case_insensitive_escaped_and_bound(ReportDialect dialect)
+    {
+        var compiled = Compile(dialect, @"WILDCARD_MATCH(CUSTOMER, 'Ac*50%_\*\\')");
+
+        Assert.Contains("LOWER", compiled.Sql, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("LIKE", compiled.Sql, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("ESCAPE", compiled.Sql, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(@"Ac%50\%\_*\\", compiled.NamedBindings.Values);
+    }
+
+    [Theory]
+    [InlineData(ReportDialect.Sqlite)]
+    [InlineData(ReportDialect.SqlServer)]
+    [InlineData(ReportDialect.Oracle)]
+    [InlineData(ReportDialect.Postgres)]
     public void Logical_and_null_conditions_compose(ReportDialect dialect)
     {
         var compiled = Compile(dialect, "NOTES IS NULL OR (AMOUNT BETWEEN 100 AND 500 AND STATUS <> 'CANCELLED')");

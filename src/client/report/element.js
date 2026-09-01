@@ -480,6 +480,42 @@ class ReportController {
     }
 
     /**
+     * Requests the bounded distinct values for one column of a submitted current report document.
+     *
+     * @param {{document?: object, table?: string, column: string, search?: string, signal?: AbortSignal}} options - The document lookup coordinates and optional cancellation.
+     * @returns {Promise<{table: string, column: string, type: string, items: Array<unknown>, truncated: boolean}>} The server-bounded LOV result.
+     * @throws {Error} When the report is not loaded, the coordinates are missing, or the request fails.
+     *
+     * Side effects: posts the complete document to the report's query-authorized LOV endpoint.
+     */
+    async getListOfValues(options = {}) {
+        if (!this.reportName || !this.schema || !this.doc || !this.lastResult)
+            throw invalidState("The report must finish loading before values can be requested.");
+        const {
+            document = this.serialize(),
+            table = this.doc.activeTable ?? "definition",
+            column,
+            search = "",
+            signal,
+        } = options;
+        if (typeof table !== "string" || !table.trim()) throw new TypeError("A current table is required.");
+        if (typeof column !== "string" || !column.trim()) throw new TypeError("A current-table column is required.");
+        if (typeof search !== "string") throw new TypeError("LOV search text must be a string.");
+
+        const result = await api(this.reportUrl("lov"), {
+            method: "POST",
+            body: {
+                document: copyReportDocument(document),
+                table: table.trim(),
+                column: column.trim(),
+                search,
+            },
+            signal,
+        });
+        return structuredClone(result);
+    }
+
+    /**
      * Replaces the working document, submits it through the ordinary query pipeline, and adopts the
      * server-enriched response atomically.
      *
@@ -1147,6 +1183,15 @@ export class InteractiveReportElement extends HTMLElement {
      * @throws {Error} When the initial query has not completed successfully.
      */
     getReportDocument() { return controllerFor(this).getReportDocument(); }
+
+    /**
+     * Returns up to 50 distinct values for one column of the supplied current report document.
+     * Defaults use this element's accepted, possibly unsaved document and its active table.
+     *
+     * @param {{document?: object, table?: string, column: string, search?: string, signal?: AbortSignal}} options - Lookup coordinates, optional document/search, and cancellation.
+     * @returns {Promise<{table: string, column: string, type: string, items: Array<unknown>, truncated: boolean}>} The bounded LOV result.
+     */
+    getListOfValues(options) { return controllerFor(this).getListOfValues(options); }
 
     /**
      * Replaces the working document and submits it through the ordinary query pipeline.

@@ -150,7 +150,7 @@ trusted context, and the `download` and saved-report-creation feature checks.
 | `IEndpointRouteBuilder.MapInteractiveReports(...)` | Maps REST, saved-report, administration, packaged asset, and optional viewer routes. |
 | `IReportAccessService` | Reuses the packaged authorization and trusted-context boundary in host-owned HTTP endpoints. |
 | `IReportDefinitionStore` | Resolves executable report definitions. `IReportDefinitionAuthorizationStore` is its optional lightweight authorization companion. |
-| `ReportExecutor` | Validates and executes a resolved definition and `ReportState`; it performs no HTTP authorization. |
+| `ReportExecutor` | Validates and executes a resolved definition and `ReportState`; `Query`, `Lov`, and export paths perform no HTTP authorization themselves. |
 | `IReportFileExporter` | Resolves and exports report state to a transport-neutral `ReportExportFile`. |
 | `ISavedReportStore` | Replaceable persistence contract. It stores data but does not make authorization decisions. |
 | `IrJson.Options` | Shared JSON protocol options for host-owned endpoints. |
@@ -338,6 +338,20 @@ var contextParams = new Dictionary<string, object?>
 var result = await executor.Query(definition, state, contextParams, ct);
 ```
 
+For an in-process list of values, pass the complete current document explicitly:
+
+```csharp
+var values = await executor.Lov(definition, new ReportLovRequest
+{
+    Document = state,
+    Table = state.ActiveTable ?? "definition",
+    Column = "STATUS",
+    Search = "pen"
+}, contextParams, ct);
+```
+
+`values.Items` contains no more than `ReportExecutor.MaxLovItems` (50) entries.
+
 This path does not perform HTTP authorization or infer context from a principal. In
 an HTTP request, use `IReportAccessService` as shown above. In a background process,
 the application itself is the trust and authorization boundary.
@@ -429,6 +443,7 @@ With the default prefix, the principal routes are:
 |---|---|
 | `GET /api/reports/{name}/schema` | Definition schema, default state, presentation hints, limits, features, and client capabilities. |
 | `POST /api/reports/{name}/query` | Accepts `ReportState`; returns `ReportResult` with rows and the accepted server-enriched `document`. |
+| `POST /api/reports/{name}/lov` | Accepts a required current `document`, its active `table`, one `column`, and optional `search`; returns at most 50 distinct values. |
 | `POST /api/reports/{name}/export` | Accepts `ReportState`; returns the requested file format. CSV is currently supported. |
 | `GET /api/reports/{name}/saved` | Lists saved reports visible to the caller. |
 | `POST /api/reports/{name}/saved` | Creates a saved report from `SaveReportRequest`. |
@@ -471,6 +486,55 @@ Content-Type: application/json
 
 Use the `document` in the successful response as the accepted state. The server may
 populate advisory schema caches or remove stale state into `ignored`.
+
+The LOV endpoint executes against the complete document currently held by the client,
+including unsaved changes. `table` must identify that document's active table, and only
+the named column is read. The optional case-insensitive search is applied before the hard
+50-item limit. The endpoint uses the same `InteractiveReportAction.Query` authorization
+as the report table; there is no second column authorization check.
+
+The packaged LOV is an editable combobox shared by filter and highlight authoring.
+Its search is a case-insensitive partial match by default: `ac` finds values containing
+`ac`, without requiring wildcard syntax. Selecting a returned text item creates a
+case-insensitive exact condition. Pressing Enter or **Use Typed Value** without selecting
+an item accepts the search text as the condition value and follows the same exact rule.
+An unescaped `*` in typed text changes that condition to a case-insensitive partial
+match; `Ac*Corp` matches text beginning with `Ac` and ending with `Corp`, while `Ac\*Corp`
+matches the literal text `Ac*Corp`. SQL wildcard characters `%` and `_` are ordinary
+literal characters in this syntax. Numeric, boolean, date, and null LOV values retain
+their typed exact-match behavior.
+
+```http
+POST /api/reports/orders/lov HTTP/1.1
+Content-Type: application/json
+
+{
+  "document": {
+    "activeTable": "base",
+    "tables": {
+      "base": {
+        "from": "definition",
+        "composables": [
+          { "kind": "filter", "filters": [ { "expr": "STATUS <> 'CANCELLED'" } ] }
+        ]
+      }
+    }
+  },
+  "table": "base",
+  "column": "CUSTOMER",
+  "search": "ac"
+}
+```
+
+```json
+{
+  "table": "base",
+  "column": "CUSTOMER",
+  "type": "text",
+  "items": ["Acme Corp", "Acme Services"],
+  "truncated": false
+}
+```
 
 ## GraphQL transport
 
@@ -525,6 +589,7 @@ only the supported element interface; mutable controller state remains private.
 |---|---|
 | `getReportDocument()` | Detached, JSON-compatible accepted report document. Requires a completed initial query. |
 | `submitReportDocument(document)` | Replaces, queries, adopts, and renders a document. Resolves to a detached result, or `undefined` when canceled or superseded. |
+| `getListOfValues({ document, table, column, search, signal })` | Posts a complete current document and returns `{ table, column, type, items, truncated }`; `document` and `table` default to the element's current values. |
 | `getExport(format = "csv", { signal } = {})` | Resolves to `{ blob, filename, contentType, truncated }` without starting a browser download. |
 | `setControlEnabled(name, enabled)` | Sets one client override. Use `null` to resume the server suggestion. Returns the effective state. |
 | `setControlOverrides(overrides)` | Atomically applies several overrides and returns the detached override map. |
@@ -544,7 +609,20 @@ document.page.index = 1;
 
 const result = await report.submitReportDocument(document);
 console.log(result?.rows);
+
+const lov = await report.getListOfValues({
+  document,
+  table: document.activeTable,
+  column: "CUSTOMER",
+  search: "ac"
+});
+console.log(lov.items); // never more than 50
 ```
+
+The `search` argument above is the LOV lookup text and is partial-match by default.
+When the packaged filter or highlight picker accepts a text value, it authors
+`LOWER(column) = LOWER(value)` for an exact case-insensitive match, or
+`WILDCARD_MATCH(column, pattern)` when typed text contains an unescaped `*`.
 
 ### Query lifecycle events
 

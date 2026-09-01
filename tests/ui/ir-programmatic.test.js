@@ -49,6 +49,16 @@ globalThis.fetch = async (url, options = {}) => {
     }
     if (request.url.endsWith("/whoami")) return json({ identity: "test-user" });
     if (request.url.endsWith("/saved")) return json([]);
+    if (request.url.endsWith("/lov")) {
+        const body = JSON.parse(request.body);
+        return json({
+            table: body.table,
+            column: body.column,
+            type: "number",
+            items: [1, 2],
+            truncated: false,
+        });
+    }
     if (request.url.endsWith("/query")) {
         if (failNextQuery) {
             const failure = failNextQuery;
@@ -121,6 +131,21 @@ test("the public document API is detached, transactional, and emits query lifecy
     assert.equal(report.getReportDocument().search, "initial hook");
     assert.equal(JSON.parse(requests.find(request => request.url.endsWith("/query")).body).search, "initial hook");
 
+    const lovDocument = report.getReportDocument();
+    lovDocument.search = "unpersisted LOV state";
+    const lov = await report.getListOfValues({
+        document: lovDocument,
+        table: lovDocument.activeTable,
+        column: "ID",
+        search: "1",
+    });
+    const lovRequest = JSON.parse(requests.find(request => request.url.endsWith("/lov")).body);
+    assert.equal(lovRequest.document.search, "unpersisted LOV state");
+    assert.equal(lovRequest.table, "base");
+    assert.equal(lovRequest.column, "ID");
+    assert.equal(lovRequest.search, "1");
+    assert.deepEqual(lov.items, [1, 2]);
+
     const snapshot = report.getReportDocument();
     snapshot.search = "local only";
     assert.equal(report.getReportDocument().search, "initial hook", "the getter must not leak the working object");
@@ -184,6 +209,37 @@ test("client control overrides win over server suggestions and global disabled i
             .some(item => item.textContent.includes("Filter")),
         true,
         "a client can expose a control the server did not suggest");
+
+    const queriesBeforeLov = requests.filter(request => request.url.endsWith("/query")).length;
+    report.shadowRoot.querySelector("th.ir-th-menu .ir-th-button").click();
+    [...report.shadowRoot.querySelectorAll(".ir-menu-item")]
+        .find(item => item.textContent.includes("Filter by Value"))
+        .click();
+    await settle(() => report.shadowRoot.querySelectorAll(".ir-lov-item").length === 2);
+    const lovRequest = JSON.parse(requests.findLast(request => request.url.endsWith("/lov")).body);
+    assert.equal(lovRequest.document.activeTable, "base");
+    assert.equal(lovRequest.table, "base");
+    assert.equal(lovRequest.column, "ID");
+    report.shadowRoot.querySelector(".ir-lov-item").click();
+    await settle(() => requests.filter(request => request.url.endsWith("/query")).length > queriesBeforeLov);
+    assert.equal(
+        report.getReportDocument().tables.base.composables
+            .find(composable => composable.kind === "filter").filters.at(-1).expr,
+        "ID = 1");
+
+    report.shadowRoot.querySelector(".ir-actionsbtn").click();
+    [...report.shadowRoot.querySelectorAll(".ir-menu-item")]
+        .find(item => item.textContent.trim() === "Filter…")
+        .click();
+    report.shadowRoot.querySelector(".ir-lov-picker .ir-btn").click();
+    await settle(() => report.shadowRoot.querySelectorAll(".ir-dialog").length === 2);
+    const lovWindow = report.shadowRoot.querySelectorAll(".ir-dialog")[1];
+    const typedValue = lovWindow.querySelector('.ir-input[type="search"]');
+    typedValue.value = "17";
+    lovWindow.querySelector(".ir-btn-primary").click();
+    await settle(() => report.shadowRoot.querySelectorAll(".ir-dialog").length === 1);
+    assert.equal(report.shadowRoot.querySelector(".ir-dialog .ir-textarea").value, "ID = 17");
+    report.shadowRoot.querySelector(".ir-dialog .ir-dialog-footer .ir-btn").click();
 
     report.setControlOverrides({ search: false, sort: true, filter: false });
     assert.equal(report.shadowRoot.querySelector(".ir-search").hidden, true);

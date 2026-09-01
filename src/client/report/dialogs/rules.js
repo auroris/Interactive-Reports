@@ -13,6 +13,7 @@ import {
     normalizedHighlightRules,
 } from "../state.js";
 import { colorPick, expressionColumnToken, expressionEditor, colOptions } from "./parts.js";
+import { lovDialog, valueFilterExpression } from "../lov.js";
 
 /**
  * Returns the normalized kind of a composable operation.
@@ -53,12 +54,29 @@ export function filterDialog(w, { editIndex, col } = {}) {
         result: "predicate",
         columns: ctx.filterColumns ?? ctx.columns,
     });
+    const lovColumns = ctx.filterColumns ?? ctx.columns;
+    const initialLovColumn = lovColumns.find(column =>
+        column.name.toLowerCase() === String(col ?? "").toLowerCase())?.name
+        ?? lovColumns[0]?.name
+        ?? "";
+    const lovColumn = sel(colOptions(w, { columns: lovColumns }), initialLovColumn);
+    const chooseValue = el("button", {
+        type: "button",
+        class: "ir-btn",
+        disabled: !initialLovColumn,
+        onclick: () => lovDialog(w, lovColumn.value, {
+            onPick: (value, column, details) =>
+                condition._set(valueFilterExpression(column, value, details)),
+        }),
+    }, w.t("lov.choose"));
+    const lovPicker = labeled(w.t("lov.column"),
+        el("div", { class: "ir-lov-picker" }, lovColumn, chooseValue));
 
     openDialog({
         owner: w,
         title: w.t(editIndex !== undefined ? "filter.editTitle" : "filter.addTitle"),
         width: "30rem",
-        build: body => body.append(condition),
+        build: body => body.append(lovPicker, condition),
         onApply: () => {
             const rule = { expr: condition._read(), enabled: existing?.enabled ?? true };
             return w.apply(d => {
@@ -175,6 +193,18 @@ export function highlightDialog(w, editIndex) {
         result: "predicate",
         columns: ctx.columns,
     });
+    const conditionColumn = sel(colOptions(w, { columns: ctx.columns }), ctx.columns[0]?.name);
+    const chooseConditionValue = el("button", {
+        type: "button",
+        class: "ir-btn",
+        disabled: !ctx.columns[0],
+        onclick: () => lovDialog(w, conditionColumn.value, {
+            onPick: (value, column, details) =>
+                condition._set(valueFilterExpression(column, value, details)),
+        }),
+    }, w.t("lov.choose"));
+    const conditionLov = labeled(w.t("lov.column"),
+        el("div", { class: "ir-lov-picker" }, conditionColumn, chooseConditionValue));
 
     const bgPick = colorPick(
         w.t("common.background"),
@@ -194,6 +224,7 @@ export function highlightDialog(w, editIndex) {
             labeled(w.t("highlight.applyTo"), scopeSel),
             targetField,
             el("div", { class: "ir-field-label ir-condition-head" }, w.t("highlight.when")),
+            conditionLov,
             condition,
             el("div", { class: "ir-colors" },
                 bgPick.node,

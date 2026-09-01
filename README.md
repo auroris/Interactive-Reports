@@ -747,7 +747,28 @@ const result = await report.submitReportDocument(state);
 console.log(result.rows, report.getReportDocument());
 ```
 
-Both methods require the initial query to have completed. Their arguments and return
+Column headers, the filter editor, and the highlight editor use a searchable list of
+values from the currently viewed table. Each lookup posts the complete current report document, so unsaved filters
+and computed state participate, then requests one column and optional search text. The
+server applies ordinary query authorization and returns at most 50 distinct values. Host
+JavaScript can use the same path. The chooser is editable: selecting a result uses it,
+while Enter or **Use Typed Value** accepts the search text without another input field.
+Lookup search is case-insensitive and partial by default. An accepted text value is an
+exact case-insensitive filter or highlight condition unless typed text contains `*`.
+For example, `Ac*Corp` is a wildcard match and `Ac\*Corp` matches a literal asterisk.
+The characters `%` and `_` have no wildcard meaning in this user-facing syntax:
+
+```js
+const document = report.getReportDocument();
+const values = await report.getListOfValues({
+  document,
+  table: document.activeTable,
+  column: "STATUS",
+  search: "pen"
+});
+```
+
+These methods require the initial query to have completed. Their arguments and return
 values never expose the widget's mutable working objects. Input must be a JSON-compatible
 object; a JSON string should be parsed by the caller first.
 

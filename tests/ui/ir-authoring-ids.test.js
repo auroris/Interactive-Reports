@@ -74,6 +74,10 @@ function widget() {
             this.doc = next;
             return Promise.resolve();
         },
+        serialize() { return structuredClone(this.doc); },
+        getListOfValues() {
+            return Promise.resolve({ items: ["OPEN", "CLOSED"], truncated: false });
+        },
     };
 }
 
@@ -155,4 +159,25 @@ test("highlight authoring reserves ids and precedence across repeated-node permu
 
         w.host.remove();
     }
+});
+
+test("highlight authoring accepts a selected or typed LOV condition", async () => {
+    const w = widget();
+
+    highlightDialog(w);
+    const highlight = w.shadowRoot.querySelector(".ir-dialog");
+    highlight.querySelector(".ir-lov-picker .ir-btn").click();
+    await settle(() => w.shadowRoot.querySelectorAll(".ir-dialog").length === 2);
+
+    const lov = w.shadowRoot.querySelectorAll(".ir-dialog")[1];
+    const search = lov.querySelector('input[type="search"]');
+    search.value = "op*";
+    lov.querySelector(".ir-btn-primary").click();
+    await settle(() => w.shadowRoot.querySelectorAll(".ir-dialog").length === 1);
+
+    assert.equal(
+        highlight.querySelector("textarea").value,
+        "WILDCARD_MATCH(STATUS, 'op*')");
+    highlight.querySelector(".ir-dialog-footer .ir-btn").click();
+    w.host.remove();
 });

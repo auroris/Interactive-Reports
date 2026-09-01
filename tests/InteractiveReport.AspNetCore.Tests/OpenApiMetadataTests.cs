@@ -37,6 +37,14 @@ public sealed class OpenApiMetadataTests
             query.Metadata.GetOrderedMetadata<IProducesResponseTypeMetadata>(),
             response => response.StatusCode == 200 && response.Type == typeof(ReportResult));
 
+        var lov = Route(routes, "/api/reports/{name}/lov", "POST");
+        Assert.Equal(
+            typeof(ReportLovRequest),
+            lov.Metadata.GetMetadata<IAcceptsMetadata>()?.RequestType);
+        Assert.Contains(
+            lov.Metadata.GetOrderedMetadata<IProducesResponseTypeMetadata>(),
+            response => response.StatusCode == 200 && response.Type == typeof(ReportLovResult));
+
         var create = Route(routes, "/api/reports/{name}/saved", "POST");
         Assert.Equal(
             typeof(SaveReportRequest),

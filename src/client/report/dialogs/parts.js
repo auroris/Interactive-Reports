@@ -208,7 +208,7 @@ export function expressionColumnToken(name) {
  *
  * @param {object} w - The report controller providing columns, function capabilities, localization, and validation text.
  * @param {{initial?: string, placeholder?: string, result: 'predicate'|'value', columns?: Array<object>}} options - Initial text, expected result kind, and optional column universe.
- * @returns {HTMLDivElement} A detached editor whose `_read()` method returns trimmed non-empty expression text.
+ * @returns {HTMLDivElement} A detached editor whose `_read()` method returns trimmed non-empty expression text and whose `_set()` method replaces it.
  *
  * Side effects: creates controls and token-button handlers that edit and focus the textarea.
  */
@@ -259,6 +259,12 @@ export function expressionEditor(w, { initial, placeholder, result, columns }) {
         const expr = exprInp.value.trim();
         if (!expr) throw new Error(w.t(result === "predicate" ? "expression.enterCondition" : "expression.enterExpression"));
         return expr;
+    };
+    /** Replaces the complete expression and returns focus to its textarea. */
+    wrap._set = value => {
+        exprInp.value = String(value ?? "");
+        exprInp.focus();
+        exprInp.setSelectionRange(exprInp.value.length, exprInp.value.length);
     };
     return wrap;
 }

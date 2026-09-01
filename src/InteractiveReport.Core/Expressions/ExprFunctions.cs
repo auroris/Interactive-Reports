@@ -153,6 +153,16 @@ internal static class ExprFunctions
             (ctx, args) => ExprFunctionEmitter.EmitTextMatch(ctx, args, leadingWildcard: false, trailingWildcard: true));
         Add("ENDS_WITH", 2, 2, TextPredicateBind("ENDS_WITH"),
             (ctx, args) => ExprFunctionEmitter.EmitTextMatch(ctx, args, leadingWildcard: true, trailingWildcard: false));
+        Add("WILDCARD_MATCH", 2, 2,
+            a =>
+            {
+                a.Require(0, "text", ColumnKind.Text);
+                a.Require(1, "a text literal", ColumnKind.Text);
+                if (a.Args[1] is not StringLit)
+                    throw new ExprError("WILDCARD_MATCH argument 2 must be a text literal");
+                return ColumnKind.Bool;
+            },
+            ExprFunctionEmitter.EmitWildcardMatch);
         Add("IN_LIST", 2, 1001,
             a =>
             {

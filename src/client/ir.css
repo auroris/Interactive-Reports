@@ -518,6 +518,32 @@ dialog.ir-dialog::backdrop {
 .ir-value-and { color: var(--ir-text-muted); font-size: 12px; }
 .ir-value-editor .ir-input { min-width: 9rem; }
 
+.ir-lov-picker { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.ir-lov-picker .ir-select { min-width: 12rem; }
+.ir-lov-status { min-height: 1.25em; margin: 8px 0 5px; }
+.ir-lov-items {
+    display: flex;
+    flex-direction: column;
+    max-height: 20rem;
+    overflow: auto;
+    border: 1px solid var(--ir-border-light);
+    border-radius: var(--ir-radius);
+    background: var(--ir-bg);
+}
+.ir-lov-item {
+    width: 100%;
+    padding: 7px 9px;
+    border: 0;
+    border-bottom: 1px solid var(--ir-border-light);
+    background: transparent;
+    color: var(--ir-text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.ir-lov-item:last-child { border-bottom: 0; }
+.ir-lov-item:hover, .ir-lov-item:focus-visible { background: var(--ir-bg-soft); outline: none; }
+
 .ir-fieldset { min-width: 0; margin: 0 0 12px; padding: 0; border: 0; }
 .ir-fieldset > legend { padding: 0; margin-bottom: 5px; }
 .ir-dlgrow { display: flex; align-items: flex-end; gap: 6px; margin-bottom: 7px; }

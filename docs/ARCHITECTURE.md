@@ -494,10 +494,12 @@ scope, matching rules apply from lower to higher sequence, so the highest sequen
 when rules set the same style. Cell highlighting has priority over row highlighting.
 When sequence is omitted, canonical planning assigns unused ten-step values in stable
 highlight-id order; array position is never precedence. `CONTAINS`, `STARTS_WITH`, and
-`ENDS_WITH` are case-insensitive; `IN_LIST`
+`ENDS_WITH` are case-insensitive; `WILDCARD_MATCH(text, pattern)` is the case-insensitive
+asterisk-pattern predicate used by filter and highlight LOV authoring; `IN_LIST`
 provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
 `IS NULL OR col = ''` when empty text should also count.
-- `search` is the toolbar search: OR of `contains` across eligible text columns in the
+- `search` is the toolbar search: a case-insensitive partial match, implemented as OR of
+  `contains` across eligible text columns in the
   completed active relation. It runs after the active table's Shape, computed columns,
   and filters. This request overlay is neither stored nor inherited like a table
   composable and does not participate in schema discovery or cache invalidation.
@@ -691,6 +693,7 @@ Mounted by the host: `app.MapInteractiveReports("/api/reports").RequireAuthoriza
 |---|---|
 | `GET  /api/reports/{name}/schema` | Column metadata + default state + capabilities + resolved packaged-control suggestion (§4). |
 | `POST /api/reports/{name}/query` | Body = state document → enriched document (null table caches filled) + page of results. |
+| `POST /api/reports/{name}/lov` | Required complete current document + active table + one column + optional search → at most 50 distinct values. Uses the Query action and the submitted, possibly unsaved active relation. |
 | `GET  /api/reports/whoami` | Bootstrap diagnostic for the caller's canonical identity value (only when `whoamiEnabled`); grants no authority. |
 | `GET  /api/reports/{name}/saved` | Visible reports: primary and global reports + configured read-only alternatives + the caller's own. Configured titles win. |
 | `POST /api/reports/{name}/saved` | Refresh null table caches, then save the posted state under a title (global/primary publication = admin). 403 when the configured `savedReports` policy is absent (§4), independently of client controls. |
@@ -961,7 +964,7 @@ factor      := number | 'string' | NULL | column | func '(' args ')'
 case        := CASE [expr] (WHEN expr THEN expr)+ [ELSE expr] END
 func        := UPPER | LOWER | TRIM | LENGTH | SUBSTR | CONCAT
              | ROUND | ABS | COALESCE
-             | CONTAINS | STARTS_WITH | ENDS_WITH | IN_LIST
+             | CONTAINS | STARTS_WITH | ENDS_WITH | WILDCARD_MATCH | IN_LIST
              | YEAR | MONTH | DAY                  (date part extraction)
              | NOW | TO_DATE | TO_STRING | DATE_TRUNC
 args        := expr (',' args)*
@@ -1068,6 +1071,7 @@ and emit. The emitter is the only dialect-specific function surface outside oper
 | `a || b` / `CONCAT` | `CONCAT(a,b,…)` | `(a || b || …)` | `CONCAT(a,b,…)` (3.44+) | `CONCAT(a,b,…)` |
 | `LENGTH(s)` | `LEN(s)` | `LENGTH(s)` | `LENGTH(s)` | `LENGTH(s)` |
 | `ROUND(x,n)` | `ROUND(x,n)` | `ROUND(x,n)` | `ROUND(x,n)` | `ROUND(CAST(x AS NUMERIC), CAST(n AS INT))` |
+| `WILDCARD_MATCH(s,p)` | `LOWER(s) LIKE LOWER(p) ESCAPE '\'` | same | same | same |
 | `YEAR(d)` | `YEAR(d)` | `EXTRACT(YEAR FROM d)` | `CAST(strftime('%Y',d) AS INTEGER)` | `EXTRACT(YEAR FROM d)` |
 | `COALESCE` | `COALESCE` | `COALESCE` | `COALESCE` | `COALESCE` |
 | `NOW()` | `?` (bound UTC `DateTime`) | `?` (bound UTC `DateTime`) | `?` (bound UTC `DateTime`) | `?` (bound UTC `DateTime`) |
@@ -1078,6 +1082,12 @@ and emit. The emitter is the only dialect-specific function surface outside oper
 
 (ƒ is the portable mask translated into that engine's format vocabulary and bound
 as a parameter.)
+
+`WILDCARD_MATCH` requires its pattern to be a text literal. Its public pattern language
+has one metacharacter: unescaped `*` matches any run of characters, while `\*` is a
+literal asterisk and `\\` is a literal backslash. SQL LIKE's `%` and `_` remain literal.
+The emitter performs that translation and binds the resulting pattern; it never inserts
+the authored pattern into SQL text.
 
 - The emitter produces SQL fragments **we** wrote, injected via `SelectRaw` with `?`
   bindings for every literal — client text never reaches SQL; only the AST does. The one
@@ -1525,6 +1535,21 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   element. None of these client choices
   bypass endpoint authorization, context resolution, document validation, or the
   server-enforced download and saved-report policies.
+- **Active-table LOV**: column headers, filter creation, and highlight creation share one
+  debounced picker.
+  Every lookup submits the complete current document plus its active table, one logical
+  column, and the user's current search text. A newer keystroke aborts the prior lookup.
+  The search input is also the editable-combobox value. Lookup search is a
+  case-insensitive substring match by default. A returned item may be selected, or the
+  user's unselected text may be accepted directly without a second value field. A
+  selected text item always authors a case-insensitive exact condition. Unselected typed
+  text is also exact unless it contains an unescaped `*`,
+  which becomes a partial-match wildcard; `\*` means a literal asterisk. The expression
+  emitter translates that deliberately smaller syntax to bound SQL LIKE patterns while
+  escaping SQL's `%`, `_`, and `\` metacharacters.
+  The server compiles that possibly unsaved active relation, applies the LOV search before
+  a hard 50-item distinct limit, and uses the ordinary Query authorization decision. It
+  adds no independent column permission layer.
 - **Host export API**: after the initial query, `interactive-report.getExport(format,
   { signal })` posts the current canonical state to the ordinary export endpoint and
   resolves to `{ blob, filename, contentType, truncated }` without causing browser
@@ -1645,9 +1670,8 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   schema payload, and applied by default by the packaged UI (chrome removal + locked chips),
   with embedding JavaScript able to override the presentation.
   `download` and `savedReports` creation are server-enforced 403s; everything else
-  stays presentation-level by design. Per-column attributes (alignment, format
-  masks, LOVs, per-column sort/filter permissions…) remain the next configuration
-  increment.
+  stays presentation-level by design. M20 later added per-column definition overrides;
+  M22 added current-relation LOVs and the host control-override API.
 - **M12 — Source-controlled report documents** ✅ *(2026-08-07)*: per-definition
   `documentFiles` load `{ title, primary, state }` envelopes from the host content
   root. All documents share the saved-report store with stable opaque ids and
@@ -1659,8 +1683,8 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   bold/italic, text/background colors — plus a Column Settings dialog (feature token
   `columnSettings`) whose Visible checkbox writes the active table's `select` composable.
   Masks and styling remain client-only; definitions ship default formatting through the effective Default state,
-  with no new config surface. Remaining per-column configuration candidates: LOVs,
-  help text, per-column sort/filter permissions.
+  with no new config surface. M20 later added help text and sort/filter permissions;
+  M22 added active-relation LOVs without per-column configuration.
 - **M14 — Host-owned custom CSS** ✅ *(2026-08-07; revised 2026-08-31)*: the
   application integrator's `stylesheet` attribute / `styleSheet` property links one URL
   inside the report's shadow root; report definitions and documents have no CSS source.
@@ -1737,6 +1761,17 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   Playwright e2e (three new packaged-page scenarios; Workbench reports run
   dialect-less, one via a `_ProviderName` dataSource), pack smoke with nuspec
   inspection and a negative guard check.
+- **M22 — Host integration + current-relation LOVs** ✅ *(2026-08-31)*: closure-owned
+  client state behind a documented custom-element API for detached document retrieval,
+  whole-document replacement/query, before-query mutation/cancellation, completion
+  observation, direct export, and client-authoritative control overrides over server
+  suggestions. Ordinary UI edits use a 200 ms trailing-edge debounce and abort stale
+  requests. Host CSS has one `stylesheet` attribute / `styleSheet` property and the old
+  foreign-CSS paths are retired. Filter headers, filter creation, and highlight creation
+  share a debounced current-table/one-column LOV backed by the submitted complete,
+  possibly unsaved report document and ordinary Query authorization. Search is a
+  case-insensitive substring; accepted text is an exact case-insensitive condition unless
+  unselected typed input uses the portable `*` wildcard. Responses are capped at 50.
 
 ## Appendix: decision log
 
@@ -1795,7 +1830,7 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 | Report `labels` keys are not schema-validated; canonical planning rejects only conflicting declarations | ignored[]/errors for unknown or blank entries | Unknown keys are unused display data, exactly as resilient as a saved report is entitled to be. Two different labels for the same case-insensitive key have no order-independent meaning and therefore fail. (Config-side `columnLabels` still fail fast on blank/case-colliding entries — config mistakes, not state.) |
 | Export consumes the posted document's completed active relation, inheritable metadata, and owner-local terminal response | neutral export headers; look up the user's saved report server-side | An export is the server rendering the user's screen, and the active document may never have been saved. A child receives only its parent's Export contract; the shared renderer applies the active table's own visibility and cell presentation without leaking those local choices across `from`. |
 | Schema endpoint synthesizes an empty `defaultState` | nullable `defaultState` | Every client would otherwise invent its own "no default configured" behavior. An empty state already *means* the right thing — all columns, database order — and it is also the delivery vehicle: the definition's mapping rides down as its `labels`. |
-| Feature control is a flat server suggestion plus client-authoritative overrides | APEX-style per-action objects; treat the server list as a client ceiling | One `features` array supplies useful default chrome while an embedding application can force packaged controls on or off without rewriting schema payloads. Absent = everything keeps existing configs working. The richer per-column attribute model (alignment, masks, LOVs, per-column permissions) layers on later without reshaping this. |
+| Feature control is a flat server suggestion plus client-authoritative overrides | APEX-style per-action objects; treat the server list as a client ceiling | One `features` array supplies useful default chrome while an embedding application can force packaged controls on or off without rewriting schema payloads. Absent means everything is suggested. Per-column definition overrides and current-relation LOVs layer beside this contract without reshaping it. |
 | The control suggestion is presentation-level except server policies for `download` and `savedReports` creation | validate all posted state docs against the suggested controls | Hiding or force-showing a dialog is not a data boundary: the query endpoint accepts any valid document, and context params (§12) are the security story. The two independently enforced policies are the operations that egress (unpaged export) or persist (saved-report rows); enforcing at creation only keeps existing saved reports manageable after a config change. |
 | Locked chips: state from a client-disabled or unsuggested feature displays read-only | hide the chips; let them stay editable | The chip strip is the doc made visible. Hiding active filters would misrepresent the data shown, and editing them would reopen controls the effective client policy removed. Leaving a locked view for the grid stays possible: it abandons the feature rather than using it. |
 | Column formatting is a `formats` composable; only scalar mask lineage crosses `from` | inherit every style and renderer; apply every mask/style server-side | The active owner keeps its full presentation contract, while a child inherits only safe masks. Link/image/action dependencies are schema-bound owner-local inputs. One text renderer owns scalar masks; link/image compose it, and synthetic metric metadata retains its format source. Every terminal-table CSV export intentionally serializes Display As modes as browser-like encoded HTML; hidden inputs never become columns. |

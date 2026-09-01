@@ -131,6 +131,54 @@ internal static class ComposableTerminalQueryComposer
     }
 
     /// <summary>
+    /// Composes a bounded distinct-value lookup over one column of the completed active relation.
+    /// </summary>
+    /// <param name="definition">Supplies the SQL dialect.</param>
+    /// <param name="relation">The completed active relation, including request search and document filters.</param>
+    /// <param name="column">The resolved logical column to project.</param>
+    /// <param name="search">Optional user text matched case-insensitively against the value's text form.</param>
+    /// <param name="maxItems">The public item cap; one extra sentinel is requested to detect truncation.</param>
+    /// <returns>An isolated, parameterized distinct-value query and its single public column name.</returns>
+    public static MappedQuery ComposeLov(
+        ReportDefinition definition,
+        ComposableSqlRelation relation,
+        ColumnModel column,
+        string? search,
+        int maxItems)
+    {
+        var dialect = definition.GetEffectiveDialect();
+        var lovRelation = Isolate(relation);
+        var physicalName = lovRelation.PhysicalColumns[column.Name];
+        var query = Addressable(lovRelation)
+            .Select(physicalName)
+            .Distinct();
+
+        if (!string.IsNullOrEmpty(search))
+        {
+            var identifier = SqlKataSyntax.Identifier(dialect, physicalName);
+            var searchable = dialect switch
+            {
+                ReportDialect.SqlServer => $"CONVERT(NVARCHAR(4000), {identifier})",
+                ReportDialect.Oracle => $"TO_CHAR({identifier})",
+                _ => $"CAST({identifier} AS TEXT)",
+            };
+            query.WhereRaw(
+                $"LOWER({searchable}) LIKE ? ESCAPE '\\'",
+                LovPattern(search));
+        }
+
+        query.OrderBy(physicalName).Limit(maxItems + 1);
+        return new MappedQuery(query, [column.Name]);
+    }
+
+    /// <summary>Escapes LIKE metacharacters and wraps one literal substring search in wildcards.</summary>
+    private static string LovPattern(string search)
+        => $"%{search.Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("%", "\\%", StringComparison.Ordinal)
+            .Replace("_", "\\_", StringComparison.Ordinal)
+            .ToLowerInvariant()}%";
+
+    /// <summary>
     /// Composes the request-local aggregate query for the terminal relation.
     /// </summary>
     /// <param name="relation">An isolated completed relation.</param>

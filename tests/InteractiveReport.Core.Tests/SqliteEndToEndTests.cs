@@ -441,6 +441,71 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     }
 
     [Fact]
+    public async Task Lov_authored_text_matches_exactly_or_by_asterisk_wildcard_without_case()
+    {
+        var exact = await _executor.Query(Definition, Doc(source: new StageLayer
+        {
+            Filters = [Filter("LOWER(CUSTOMER) = LOWER('ACME CORP')")],
+        }), NoParams);
+        var wildcard = await _executor.Query(Definition, Doc(source: new StageLayer
+        {
+            Filters = [Filter("WILDCARD_MATCH(CUSTOMER, 'a*corp')")],
+        }), NoParams);
+
+        Assert.Equal(2, exact.TotalRows);
+        Assert.Equal(2, wildcard.TotalRows);
+    }
+
+    [Fact]
+    public async Task Lov_uses_the_submitted_active_relation_and_searches_before_returning_values()
+    {
+        var document = Doc(source: new StageLayer
+        {
+            Filters = [Filter("STATUS = 'PENDING'")],
+        });
+
+        var result = await _executor.Lov(Definition, new ReportLovRequest
+        {
+            Document = document,
+            Table = "source",
+            Column = "CUSTOMER",
+            Search = "AC",
+        }, NoParams);
+
+        Assert.Equal("source", result.Table);
+        Assert.Equal("CUSTOMER", result.Column);
+        Assert.Equal("text", result.Type);
+        Assert.Equal(["acme llc"], result.Items);
+        Assert.False(result.Truncated);
+    }
+
+    [Fact]
+    public async Task Lov_returns_only_the_first_50_distinct_items()
+    {
+        var definition = new ReportDefinition
+        {
+            Name = "lov-limit",
+            Connection = "E2E",
+            Dialect = ReportDialect.Sqlite,
+            Sql = "WITH RECURSIVE values_source(value) AS "
+                + "(SELECT 1 UNION ALL SELECT value + 1 FROM values_source WHERE value < 60) "
+                + "SELECT value AS VALUE FROM values_source",
+        };
+
+        var result = await _executor.Lov(definition, new ReportLovRequest
+        {
+            Document = new ReportState(),
+            Table = "definition",
+            Column = "VALUE",
+        }, NoParams);
+
+        Assert.Equal(ReportExecutor.MaxLovItems, result.Items.Count);
+        Assert.Equal(1L, result.Items[0]);
+        Assert.Equal(50L, result.Items[^1]);
+        Assert.True(result.Truncated);
+    }
+
+    [Fact]
     public async Task Search_shapes_every_complete_set_but_export_ignores_request_paging()
     {
         var state = Doc(

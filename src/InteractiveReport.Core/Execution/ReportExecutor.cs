@@ -22,6 +22,9 @@ namespace InteractiveReport.Core.Execution;
 /// </summary>
 public sealed class ReportExecutor
 {
+    /// <summary>Caps every list-of-values response, independently of report row limits.</summary>
+    public const int MaxLovItems = 50;
+
     /// <summary>Caps pivot discovery groups independently of per-definition dynamic-column limits.</summary>
     public const int MaxPivotGroups = 10_000;
 
@@ -159,6 +162,116 @@ public sealed class ReportExecutor
             result.Rows.Count,
             result.TotalRows);
         return result;
+    }
+
+    /// <summary>
+    /// Returns a bounded distinct list for one column of the active table represented by a complete,
+    /// possibly unsaved report document.
+    /// </summary>
+    /// <param name="definition">The resolved definition used for schema, SQL, and execution policy.</param>
+    /// <param name="request">
+    /// The complete document, its active table, one column, and optional case-insensitive
+    /// substring search text.
+    /// </param>
+    /// <param name="contextParams">Request-scoped parameter values referenced by the report definition.</param>
+    /// <param name="ct">Cancels schema discovery, validation, compilation, and database execution.</param>
+    /// <returns>At most 50 distinct matching values from the completed active relation.</returns>
+    /// <remarks>
+    /// The request document is compiled in memory and need not have been persisted. This operation does
+    /// not apply a separate column authorization policy; callers use the same report-query authorization
+    /// boundary as the active table query. <see cref="ReportLovRequest.Search"/> narrows the
+    /// returned choices and is partial-match by default. It does not define the filter or
+    /// highlight condition ultimately authored by a client.
+    /// </remarks>
+    /// <example>
+    /// <code><![CDATA[
+    /// var values = await executor.Lov(definition, new ReportLovRequest
+    /// {
+    ///     Document = currentDocument,
+    ///     Table = currentDocument.ActiveTable,
+    ///     Column = "STATUS",
+    ///     Search = "op"
+    /// }, contextParameters, ct);
+    /// ]]></code>
+    /// </example>
+    public async Task<ReportLovResult> Lov(
+        ReportDefinition definition,
+        ReportLovRequest request,
+        IReadOnlyDictionary<string, object?> contextParams,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(contextParams);
+
+        if (request.Document is null)
+            throw new ReportValidationException(
+                [new ValidationError("document", "the current report document is required")]);
+
+        var structural = StateStructureValidator.Collect(request.Document);
+        if (structural.Count > 0) throw new ReportValidationException(structural);
+        if (definition.DefaultState is not null
+            && StateStructureValidator.Collect(definition.DefaultState) is { Count: > 0 } defaultErrors)
+            throw new InvalidOperationException(
+                $"Report '{definition.Name}': the default state document is structurally invalid — "
+                + $"{defaultErrors[0].Path}: {defaultErrors[0].Message}.");
+
+        var document = ReportStateResolver.Resolve(definition.DefaultState, request.Document);
+        ValidateSyntheticColumnIdentities(document);
+        var activeTable = document.Tables is { Count: > 0 }
+            ? ResolveActiveTable(document)
+            : "definition";
+        var requestedTable = request.Table?.Trim();
+        if (string.IsNullOrEmpty(requestedTable))
+            throw new ReportValidationException(
+                [new ValidationError("table", "the current active table is required")]);
+        if (!string.Equals(requestedTable, activeTable, StringComparison.OrdinalIgnoreCase))
+            throw new ReportValidationException(
+                [new ValidationError("table", "table must identify the submitted document's active table")]);
+
+        var requestedColumn = request.Column?.Trim();
+        if (string.IsNullOrEmpty(requestedColumn))
+            throw new ReportValidationException(
+                [new ValidationError("column", "one current-table column is required")]);
+        if (request.Search is { Length: > 200 })
+            throw new ReportValidationException(
+                [new ValidationError("search", "search cannot exceed 200 characters")]);
+
+        var schema = await GetSchema(definition, contextParams, ct);
+        var sqlCompiler = DialectSupport.GetCompiler(definition.GetEffectiveDialect());
+        await using var connection = await _connections.Open(definition, ct);
+        await using var scope = await _connections.BeginReadScope(connection, definition, ct);
+        var reader = CreateReader(connection, sqlCompiler, definition, contextParams, scope.Transaction);
+        var compiler = new ComposableTableCompiler(
+            definition,
+            document,
+            schema,
+            DateTime.UtcNow,
+            (query, rowDimensions, columnDimensions, values, token) =>
+                reader.ReadPivotGroups(query, rowDimensions, columnDimensions, values, token));
+        var plan = compiler.CompleteForTarget(await compiler.Compile(activeTable, ct));
+        if (!plan.Relation.Schema.TryGetValue(requestedColumn, out var column))
+            throw new ReportValidationException(
+                [new ValidationError("column", $"unknown active-table column '{requestedColumn}'")]);
+
+        var mapped = ComposableTerminalQueryComposer.ComposeLov(
+            definition,
+            plan.Relation,
+            column,
+            request.Search,
+            MaxLovItems);
+        var rows = await reader.ReadRows(
+            mapped.Query,
+            mapped.PublicNames,
+            MaxLovItems,
+            ct);
+        await scope.CompleteAsync(ct);
+        return new ReportLovResult(
+            activeTable,
+            column.Name,
+            column.KindName,
+            rows.Rows.Select(row => row[column.Name]).ToList(),
+            rows.Truncated);
     }
 
     /// <summary>

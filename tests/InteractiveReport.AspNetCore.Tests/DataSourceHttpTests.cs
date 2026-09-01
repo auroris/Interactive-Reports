@@ -170,6 +170,42 @@ public sealed class DataSourceHttpTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Lov_posts_the_complete_current_document_and_returns_one_bounded_column()
+    {
+        using var response = await _client.PostAsync(
+            "/api/reports/literal/lov",
+            JsonContent.Create(new
+            {
+                document = new { },
+                table = "definition",
+                column = "LABEL",
+                search = "fir",
+            }));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var result = await ReadJson(response);
+        Assert.Equal("definition", result.GetProperty("table").GetString());
+        Assert.Equal("LABEL", result.GetProperty("column").GetString());
+        Assert.Equal("text", result.GetProperty("type").GetString());
+        Assert.Equal(["first"], result.GetProperty("items").EnumerateArray()
+            .Select(item => item.GetString()!).ToArray());
+        Assert.False(result.GetProperty("truncated").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Lov_rejects_a_request_without_the_current_document()
+    {
+        using var response = await _client.PostAsync(
+            "/api/reports/literal/lov",
+            JsonContent.Create(new { table = "definition", column = "LABEL" }));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await ReadJson(response);
+        Assert.Equal("IR-1201", problem.GetProperty("code").GetString());
+        Assert.Contains("document", problem.GetProperty("details").GetString());
+    }
+
+    [Fact]
     public async Task The_saved_report_store_lands_in_its_data_source()
     {
         var body = new { title = "Kept", state = new { v = 3 } };

@@ -131,6 +131,55 @@ internal static class ExprFunctionEmitter
     }
 
     /// <summary>
+    /// Emits a case-insensitive match whose bound user pattern uses <c>*</c> as its only
+    /// wildcard and <c>\*</c> for a literal asterisk.
+    /// </summary>
+    /// <param name="context">The mutable SQL and binding accumulator.</param>
+    /// <param name="arguments">The candidate text and validated literal user pattern.</param>
+    public static void EmitWildcardMatch(EmitContext context, IReadOnlyList<ExprNode> arguments)
+    {
+        var pattern = (StringLit)arguments[1];
+        context.Append("(LOWER(");
+        context.Visit(arguments[0]);
+        context.Append(") LIKE LOWER(");
+        context.AppendBinding(ToSqlLikePattern(pattern.Value));
+        context.Append(") ESCAPE '\\')");
+    }
+
+    /// <summary>
+    /// Converts the public asterisk pattern to a SQL LIKE pattern while making SQL's
+    /// native wildcard and escape characters literal.
+    /// </summary>
+    private static string ToSqlLikePattern(string value)
+    {
+        var pattern = new System.Text.StringBuilder(value.Length);
+        for (var i = 0; i < value.Length; i++)
+        {
+            var c = value[i];
+            if (c == '\\' && i + 1 < value.Length && value[i + 1] is '*' or '\\')
+            {
+                AppendLikeLiteral(pattern, value[++i]);
+                continue;
+            }
+
+            if (c == '*')
+            {
+                pattern.Append('%');
+                continue;
+            }
+
+            AppendLikeLiteral(pattern, c);
+        }
+        return pattern.ToString();
+    }
+
+    private static void AppendLikeLiteral(System.Text.StringBuilder pattern, char value)
+    {
+        if (value is '%' or '_' or '\\') pattern.Append('\\');
+        pattern.Append(value);
+    }
+
+    /// <summary>
     /// Emits an IN-list predicate from one candidate followed by one or more values.
     /// </summary>
     /// <param name="context">The mutable SQL and binding accumulator.</param>

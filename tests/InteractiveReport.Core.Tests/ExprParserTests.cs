@@ -406,6 +406,7 @@ public class ExprParserTests
     [InlineData("CASE WHEN ORDER_DATE BETWEEN NOW() THEN 1 END", "expected AND")]
     [InlineData("NOTES || ORDER_DATE", "convert the date with TO_STRING")]
     [InlineData("CONCAT(NOTES, ORDER_DATE)", "dates go through TO_STRING")]
+    [InlineData("WILDCARD_MATCH(CUSTOMER, STATUS)", "argument 2 must be a text literal")]
     public void Date_and_between_errors_are_precise(string expr, string expectedFragment)
     {
         Assert.Contains(expectedFragment, Error(expr));

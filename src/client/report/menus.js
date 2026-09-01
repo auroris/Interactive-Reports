@@ -15,6 +15,7 @@ import { groupByDialog, pivotDialog, chartDialog } from "./dialogs/view.js";
 import { saveDialog } from "./dialogs/save.js";
 import { canManageCurrentSaved, deleteCurrentSaved, resetWorkingCopy } from "./saved.js";
 import { downloadExport } from "./export.js";
+import { filterByLovDialog } from "./lov.js";
 
 /**
  * Ordinary table features have the same header surface regardless of which shape composable precedes
@@ -168,7 +169,9 @@ export function openHeaderMenu(w, col, anchor) {
 
     const filterable = ctx.caps.filter && columnFilterable(w, col);
     const filterItems = filterable
-        ? feature("filter", { label: w.t("menu.filter"), onPick: () => filterDialog(w, { col }) })
+        ? feature("filter",
+            { label: w.t("menu.filterByValue"), onPick: () => filterByLovDialog(w, col) },
+            { label: w.t("menu.filter"), onPick: () => filterDialog(w, { col }) })
         : [];
 
     const items = joinSections([sortItems, presentation, filterItems]);
