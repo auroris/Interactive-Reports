@@ -169,7 +169,7 @@ public sealed class ReportDocumentSchemaCacheTests : IClassFixture<SqliteE2EFixt
         var callerComposables = callerTable.Composables;
 
         var result = await _executor.Query(Definition(), document, NoParams);
-        var export = await _executor.Export(Definition(), document, NoParams);
+        var export = await _executor.Download(Definition(), document, NoParams);
 
         Assert.Equal("  SoUrCe  ", document.ActiveTable);
         Assert.Same(callerTables, document.Tables);
@@ -197,7 +197,7 @@ public sealed class ReportDocumentSchemaCacheTests : IClassFixture<SqliteE2EFixt
         var document = Doc(source: new StageLayer { Columns = ["GHOST"] });
 
         var result = await _executor.Query(Definition(), document, NoParams);
-        var export = await _executor.Export(Definition(), document, NoParams);
+        var export = await _executor.Download(Definition(), document, NoParams);
 
         Assert.Equal(
             ["ORDER_ID", "CUSTOMER", "STATUS", "AMOUNT", "NOTES"],

@@ -550,9 +550,10 @@ provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
   metadata. Unknown dependencies become `ignored[]`. The browser client constructs DOM nodes
   directly and permits relative/HTTP(S) URLs, plus `mailto:`/`tel:` for links;
   active-content and embedded-content schemes fall back to text. The file client
-  serializes the query result's visible scalar values with effective label headers;
-  browser-only link, image, action, style, and mask presentation is not transported
-  into CSV. Hidden renderer sources never become exported columns. Highlight styles win over column styles where
+  applies effective label headers and scalar masks, writes link display text, writes
+  image URLs, and retains action labels. Browser HTML, CSS, alignment, and highlight
+  styling are not transported into CSV. Hidden renderer sources never become exported
+  columns. Highlight styles win over column styles where
   both apply. Text is the base renderer and owns masks; link text composes the base
   renderer, including the selected text source column's own mask. A format declaration
   binds against its table's completed public schema; its array position is not a schema
@@ -1717,8 +1718,8 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 - **M15 — Column renderers** ✅ *(2026-08-07)*: the grid owns a per-column renderer
   seam with text, link, and image implementations. Column Settings selects the display
   mode and its URL/text source columns. Hidden dependencies are schema-bound server-side
-  and projected only as renderer inputs. CSV downloads retain visible scalar values
-  while browser-only link/image presentation remains in the JavaScript client. DOM construction,
+  and projected only as renderer inputs. The file client converts those modes to CSV-safe
+  text and URLs while browser HTML remains in the JavaScript client. DOM construction,
   HTML encoding, and a URL protocol allowlist keep report data out of active-content surfaces.
 - **M16 — Actions pagination** ✅ *(2026-08-07)*: Actions → Pagination owns the
   report document's page limit with APEX choices 10, 50, 100, 500, 1000, and All.

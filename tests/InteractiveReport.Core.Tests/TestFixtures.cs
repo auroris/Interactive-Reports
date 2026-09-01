@@ -1,10 +1,41 @@
+using InteractiveReport.Client.FileDownload;
+using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Model;
 using InteractiveReport.Core.Planning;
+using InteractiveReport.Core.Validation;
 
 namespace InteractiveReport.Core.Tests;
 
 public static class TestFixtures
 {
+    public sealed record DownloadResult(
+        IReadOnlyList<ColumnInfo> Columns,
+        IReadOnlyList<IReadOnlyDictionary<string, object?>> Rows,
+        bool Truncated);
+
+    /// <summary>
+    /// Exercises the production download boundary in engine integration tests: clone the
+    /// document, request its complete bounded result, then let the file client shape CSV cells.
+    /// </summary>
+    public static async Task<DownloadResult> Download(
+        this ReportExecutor executor,
+        ReportDefinition definition,
+        ReportState state,
+        IReadOnlyDictionary<string, object?> contextParams,
+        CancellationToken ct = default)
+    {
+        var document = ReportStateResolver.Resolve(defaults: null, state);
+        document.Page ??= new PageRequest();
+        document.Page.Index = 1;
+        document.Page.Size = 0;
+        var result = await executor.Query(definition, document, contextParams, ct);
+        var table = CsvReportPresentation.Render(result);
+        return new DownloadResult(
+            table.Columns,
+            table.Rows,
+            result.TotalRows > result.Rows.Count);
+    }
+
     /// <summary>
     /// Test-only shorthand for emitting ordinary composables. It deliberately is not
     /// part of the production report-document model.

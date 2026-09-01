@@ -106,4 +106,95 @@ public class CsvWriterTests
         Assert.Contains("=SUM(A1),1", csv);
         Assert.DoesNotContain("'=SUM(A1)", csv);
     }
+
+    [Fact]
+    public void Report_presentation_emits_labels_masks_link_text_and_image_urls_without_browser_markup()
+    {
+        var available = new[]
+        {
+            new ColumnInfo("CUSTOMER", "Customer", "text", false),
+            new ColumnInfo("AMOUNT", "Amount", "number", false),
+            new ColumnInfo("PHOTO", "Photo", "text", false),
+            new ColumnInfo("LINK_TEXT", "Link Text", "text", false),
+            new ColumnInfo("LINK_URL", "Link Url", "text", false),
+            new ColumnInfo("IMAGE_URL", "Image Url", "text", false),
+        };
+        var result = new ReportResult
+        {
+            ConfiguredLabels = new Dictionary<string, string> { ["CUSTOMER"] = "Configured customer" },
+            AvailableColumns = available,
+            Columns = available.Take(3).ToArray(),
+            Rows =
+            [
+                new Dictionary<string, object?>
+                {
+                    ["CUSTOMER"] = "ignored customer value",
+                    ["AMOUNT"] = 1234.5m,
+                    ["PHOTO"] = "ignored photo value",
+                    ["LINK_TEXT"] = "Acme",
+                    ["LINK_URL"] = "/customers/acme",
+                    ["IMAGE_URL"] = "/images/acme.png",
+                },
+            ],
+            Page = new PageRequest { Index = 1, Size = 0 },
+            TotalRows = 1,
+            Ignored = [],
+            Document = new ReportState
+            {
+                ActiveTable = "source",
+                Tables = new Dictionary<string, ReportTable>
+                {
+                    ["source"] = new()
+                    {
+                        From = "definition",
+                        Schema = available.ToList(),
+                        Composables =
+                        [
+                            new TableComposable
+                            {
+                                Kind = "labels",
+                                Labels = new Dictionary<string, string>
+                                {
+                                    ["CUSTOMER"] = "Client",
+                                    ["AMOUNT"] = "Revenue",
+                                    ["PHOTO"] = "Portrait",
+                                },
+                            },
+                            new TableComposable
+                            {
+                                Kind = "formats",
+                                Formats = new Dictionary<string, ColumnFormat>
+                                {
+                                    ["CUSTOMER"] = new()
+                                    {
+                                        DisplayAs = "link",
+                                        TextColumn = "LINK_TEXT",
+                                        UrlColumn = "LINK_URL",
+                                    },
+                                    ["AMOUNT"] = new() { Mask = "currency:USD" },
+                                    ["PHOTO"] = new()
+                                    {
+                                        DisplayAs = "image",
+                                        UrlColumn = "IMAGE_URL",
+                                    },
+                                },
+                            },
+                        ],
+                    },
+                },
+            },
+        };
+
+        var table = CsvReportPresentation.Render(result);
+        var bytes = CsvWriter.Write(table.Columns, table.Rows);
+        var csv = Encoding.UTF8.GetString(bytes, 3, bytes.Length - 3);
+
+        Assert.Equal(
+            "Client,Revenue,Portrait\r\nAcme,\"$1,234.50\",/images/acme.png\r\n",
+            csv);
+        Assert.DoesNotContain("<a", csv, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("<img", csv, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("LINK_URL", csv, StringComparison.Ordinal);
+        Assert.DoesNotContain("IMAGE_URL", csv, StringComparison.Ordinal);
+    }
 }

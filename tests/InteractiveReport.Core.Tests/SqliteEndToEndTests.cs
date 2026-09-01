@@ -89,7 +89,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         Assert.Equal(["CUSTOMER"], result.Columns.Select(c => c.Name));
         Assert.All(result.Rows, row => Assert.Equal(["CUSTOMER", "NOTES"], row.Keys));
 
-        var export = await _executor.Export(Definition, state, NoParams);
+        var export = await _executor.Download(Definition, state, NoParams);
         Assert.Equal(["CUSTOMER"], export.Columns.Select(c => c.Name));
         Assert.All(export.Rows, row => Assert.Equal(["CUSTOMER"], row.Keys));
     }
@@ -132,9 +132,9 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         Assert.Equal("/orders/1", row["ir1"]);
         Assert.DoesNotContain("ORDER_ID", row.Keys);
 
-        var export = await _executor.Export(Definition, state, NoParams);
+        var export = await _executor.Download(Definition, state, NoParams);
         Assert.Equal(["CUSTOMER"], export.Columns.Select(c => c.Name));
-        Assert.Equal("<a class=\"ir-cell-link\" href=\"/orders/1\">Acme Corp</a>", export.Rows[0]["CUSTOMER"]);
+        Assert.Equal("Acme Corp", export.Rows[0]["CUSTOMER"]);
         Assert.All(export.Rows, exported => Assert.DoesNotContain("ir1", exported.Keys));
     }
 
@@ -172,7 +172,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         Assert.All(result.Rows, row => Assert.Equal(["CUSTOMER", "ACTION_APPROVE", "ORDER_ID"], row.Keys));
         Assert.Contains(result.Rows, row => Equals(row["ACTION_APPROVE"], "Approve"));
 
-        var export = await _executor.Export(ActionDefinition, state, NoParams);
+        var export = await _executor.Download(ActionDefinition, state, NoParams);
         Assert.Equal(["CUSTOMER", "ACTION_APPROVE"], export.Columns.Select(c => c.Name));
         Assert.All(export.Rows, row => Assert.DoesNotContain("ORDER_ID", row.Keys));
         // Labels export as their raw value — never an HTML fragment; NULL stays empty.
@@ -195,7 +195,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     }
 
     [Fact]
-    public async Task Grid_export_renderers_emit_browser_like_encoded_html()
+    public async Task Grid_download_renderers_emit_file_appropriate_text_and_urls()
     {
         var state = Doc(source: new StageLayer
         {
@@ -230,23 +230,19 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
             },
         });
 
-        var export = await _executor.Export(Definition, state, NoParams);
+        var export = await _executor.Download(Definition, state, NoParams);
         var row = Assert.Single(export.Rows);
 
-        Assert.Equal(
-            "<a class=\"ir-cell-link\" href=\"/orders/1?a=1&amp;b=2\">&lt;Order &amp; Customer&gt;</a>",
-            row["CUSTOMER"]);
-        Assert.Equal(
-            "<img class=\"ir-cell-image\" src=\"/images/1.png?a=1&amp;b=2\" alt=\"\" loading=\"lazy\" decoding=\"async\">",
-            row["NOTES"]);
-        Assert.Equal("&lt;Order &amp; Customer&gt;", row["STATUS"]);
+        Assert.Equal("<Order & Customer>", row["CUSTOMER"]);
+        Assert.Equal("/images/1.png?a=1&b=2", row["NOTES"]);
+        Assert.Equal("<Order & Customer>", row["STATUS"]);
         Assert.Equal(["CUSTOMER", "NOTES", "STATUS"], row.Keys);
     }
 
     [Fact]
     public async Task Grid_export_link_text_uses_the_source_columns_mask()
     {
-        var export = await _executor.Export(Definition, Doc(source: new StageLayer
+        var export = await _executor.Download(Definition, Doc(source: new StageLayer
         {
             Computed = [new ComputedColumn { Id = "ir1", Expr = "'/orders/' || ORDER_ID" }],
             Columns = ["CUSTOMER"],
@@ -263,9 +259,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
             },
         }), NoParams);
 
-        Assert.Equal(
-            "<a class=\"ir-cell-link\" href=\"/orders/1\">$9,000.00</a>",
-            Assert.Single(export.Rows)["CUSTOMER"]);
+        Assert.Equal("$9,000.00", Assert.Single(export.Rows)["CUSTOMER"]);
     }
 
     [Fact]
@@ -276,7 +270,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
 
         // Document metadata overlays the definition mapping. A mapping is cleared
         // only by an explicit empty labels composable.
-        var grid = await _executor.Export(def, Doc(source: new StageLayer
+        var grid = await _executor.Download(def, Doc(source: new StageLayer
         {
             Columns = ["ORDER_ID", "AMOUNT"],
             Labels = new() { ["AMOUNT"] = "Order Total" },
@@ -287,14 +281,14 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
 
         // A document with no labels of its own falls back to the configured mapping,
         // and synthetic aggregate columns rebuild their labels from the display name.
-        var grouped = await _executor.Export(def, Doc(tail:
+        var grouped = await _executor.Download(def, Doc(tail:
         [
             Group(by: ["STATUS"], values: [Metric("ir1", "ORDER_ID", AggregateFn.Max)]),
         ]), NoParams);
 
         Assert.Equal(["Status", "Count", "max(Order #)"], grouped.Columns.Select(c => c.Label));
 
-        var inherited = await _executor.Export(def, Doc(
+        var inherited = await _executor.Download(def, Doc(
             source: new StageLayer { Labels = new() { ["AMOUNT"] = "Revenue" } },
             tail:
             [
@@ -355,7 +349,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         Assert.All(query.Rows.Take(7), row => Assert.NotNull(row["NOTES"]));
         Assert.All(query.Rows.TakeLast(3), row => Assert.Null(row["NOTES"]));
 
-        var export = await _executor.Export(Definition, nullsLast, NoParams);
+        var export = await _executor.Download(Definition, nullsLast, NoParams);
         Assert.All(export.Rows.Take(7), row => Assert.NotNull(row["NOTES"]));
         Assert.All(export.Rows.TakeLast(3), row => Assert.Null(row["NOTES"]));
 
@@ -389,7 +383,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         Assert.Equal(1, query.Page.Index);
         Assert.Equal(0, query.Page.Size);
 
-        var export = await _executor.Export(def, state, NoParams);
+        var export = await _executor.Download(def, state, NoParams);
         Assert.True(export.Truncated);
         Assert.Equal(3, export.Rows.Count);
     }
@@ -424,7 +418,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
             page: new PageRequest { Index = 1, Size = 0 });
 
         var query = await _executor.Query(def, state, NoParams);
-        var export = await _executor.Export(def, state, NoParams);
+        var export = await _executor.Download(def, state, NoParams);
 
         Assert.Equal(10, query.Rows.Count);
         Assert.Equal(10, export.Rows.Count);
@@ -528,7 +522,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
             page: new PageRequest { Index = 2, Size = 1 });
 
         var result = await _executor.Query(Definition, state, NoParams);
-        var export = await _executor.Export(Definition, state, NoParams);
+        var export = await _executor.Download(Definition, state, NoParams);
 
         Assert.Equal(3, result.TotalRows);
         Assert.Single(result.Rows);
@@ -1396,12 +1390,12 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         Assert.Equal(14800m, Convert.ToDecimal(result.Aggregates[pendingCell]["sum"]));
         Assert.Equal(26000m, Convert.ToDecimal(result.Aggregates[shippedCell]["sum"]));
 
-        var export = await _executor.Export(Definition, state, NoParams);
+        var export = await _executor.Download(Definition, state, NoParams);
         var exportedTotal = export.Rows[^1];
         Assert.Equal("Sum:", exportedTotal["CUSTOMER"]);
         Assert.Equal(26000m, Convert.ToDecimal(exportedTotal[shippedCell]));
 
-        var hiddenDimensionExport = await _executor.Export(Definition, Doc(tail:
+        var hiddenDimensionExport = await _executor.Download(Definition, Doc(tail:
         [
             Pivot(
                 rows: ["CUSTOMER"],
@@ -1463,12 +1457,10 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
             query.Document!.Tables![state.ActiveTable!].Schema!
                 .Single(column => column.Name == shipped).Label);
 
-        var export = await _executor.Export(Definition, state, NoParams);
+        var export = await _executor.Download(Definition, state, NoParams);
         Assert.Equal(["Customer", "Shipped Revenue"], export.Columns.Select(column => column.Label));
         var acme = export.Rows.Single(row => Equals(row["CUSTOMER"], "Acme Corp"));
-        Assert.Equal(
-            "<a class=\"ir-cell-link\" href=\"/customer\">$12,000.00</a>",
-            acme[shipped]);
+        Assert.Equal("$12,000.00", acme[shipped]);
         Assert.Equal(["CUSTOMER", shipped], acme.Keys);
     }
 
@@ -1592,7 +1584,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
         var def = Definition;
         def.MaxRows = 3;
 
-        var export = await _executor.Export(def, Doc(source: new StageLayer
+        var export = await _executor.Download(def, Doc(source: new StageLayer
         {
             Sorts = [new SortRule { Col = "AMOUNT", Dir = SortDir.Desc }],
         }), NoParams);
@@ -1605,7 +1597,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     [Fact]
     public async Task Export_group_stage_exports_all_groups_untruncated()
     {
-        var export = await _executor.Export(Definition, Doc(tail:
+        var export = await _executor.Download(Definition, Doc(tail:
         [
             Group(by: ["STATUS"], values: [Metric("ir1", "AMOUNT", AggregateFn.Sum)]),
         ]), NoParams);
@@ -1654,13 +1646,11 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
             query.Document!.Tables![state.ActiveTable!].Schema!
                 .Single(column => column.Name == "ir1").Label);
 
-        var export = await _executor.Export(Definition, state, NoParams);
+        var export = await _executor.Download(Definition, state, NoParams);
         Assert.Equal("Revenue image", Assert.Single(export.Columns).Label);
         Assert.All(export.Rows, row =>
         {
-            Assert.Equal(
-                "<img class=\"ir-cell-image\" src=\"/status.png\" alt=\"\" loading=\"lazy\" decoding=\"async\">",
-                row["ir1"]);
+            Assert.Equal("/status.png", row["ir1"]);
             Assert.Equal(["ir1"], row.Keys);
         });
     }
@@ -1689,9 +1679,9 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                     layer: new StageLayer { Columns = ["ir1"] }),
             ]);
 
-        var export = await _executor.Export(Definition, state, NoParams);
+        var export = await _executor.Download(Definition, state, NoParams);
 
-        Assert.Equal(6000m, Convert.ToDecimal(export.Rows[0]["ir1"]));
+        Assert.Equal("$6,000.00", export.Rows[0]["ir1"]);
         Assert.DoesNotContain("<a", Convert.ToString(export.Rows[0]["ir1"]));
     }
 
@@ -1747,10 +1737,10 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
             query.Document!.Tables![inheritedState.ActiveTable!].Schema!
                 .Single(column => column.Name == "ir1").Label);
 
-        var inherited = await _executor.Export(Definition, inheritedState, NoParams);
+        var inherited = await _executor.Download(Definition, inheritedState, NoParams);
 
         Assert.Equal("Ancestor revenue", Assert.Single(inherited.Columns).Label);
-        Assert.Equal(6000m, Convert.ToDecimal(inherited.Rows[0]["ir1"]));
+        Assert.Equal("$6,000.00", inherited.Rows[0]["ir1"]);
         Assert.DoesNotContain("<a", Convert.ToString(inherited.Rows[0]["ir1"]));
 
         var clearedState = Doc(
@@ -1769,7 +1759,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                 },
             ]);
         var clearedQuery = await _executor.Query(Definition, clearedState, NoParams);
-        var cleared = await _executor.Export(Definition, clearedState, NoParams);
+        var cleared = await _executor.Download(Definition, clearedState, NoParams);
 
         Assert.Equal("sum(Amount)", Assert.Single(cleared.Columns).Label);
         Assert.Equal(6000m, Convert.ToDecimal(cleared.Rows[0]["ir1"]));
@@ -1990,7 +1980,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                 },
                 tail: [chart]);
         var result = await _executor.Query(Definition, state, NoParams);
-        var export = await _executor.Export(Definition, state, NoParams);
+        var export = await _executor.Download(Definition, state, NoParams);
 
         Assert.Equal(["STATUS"], result.Columns.Select(column => column.Name));
         Assert.All(result.Rows, row => Assert.Equal(["STATUS"], row.Keys));
@@ -2199,15 +2189,13 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
             query.Document!.Tables![state.ActiveTable!].Schema!
                 .Single(column => column.Name == "v0").Label);
 
-        var export = await _executor.Export(Definition, state, NoParams);
+        var export = await _executor.Download(Definition, state, NoParams);
 
         Assert.False(export.Truncated);
         Assert.Equal(["STATUS", "v0"], export.Columns.Select(c => c.Name));
         Assert.Equal(["Status", "Chart revenue"], export.Columns.Select(c => c.Label));
         Assert.Equal(4, export.Rows.Count);
-        Assert.Equal(
-            "<a class=\"ir-cell-link\" href=\"/chart\">$6,000.00</a>",
-            export.Rows[0]["v0"]);
+        Assert.Equal("$6,000.00", export.Rows[0]["v0"]);
         Assert.All(export.Rows, row => Assert.Equal(["STATUS", "v0"], row.Keys));
     }
 

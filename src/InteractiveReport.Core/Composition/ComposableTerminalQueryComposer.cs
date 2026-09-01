@@ -97,40 +97,6 @@ internal static class ComposableTerminalQueryComposer
     }
 
     /// <summary>
-    /// Composes one unpaged export query with terminal projection and effective ordering.
-    /// </summary>
-    /// <param name="definition">Supplies the dialect used for null-placement SQL.</param>
-    /// <param name="relation">The completed lowered relation to query without mutating.</param>
-    /// <param name="terminal">The bound owner-local export projection and sorts.</param>
-    /// <param name="terminalShape">The optional shape that supplies default ordering.</param>
-    /// <param name="maxRows">The public row cap; a positive cap fetches one extra sentinel when possible.</param>
-    /// <returns>An isolated SQLKata query and its public projection names.</returns>
-    public static MappedQuery ComposeExport(
-        ReportDefinition definition,
-        ComposableSqlRelation relation,
-        BoundLocalResult terminal,
-        CompiledShape? terminalShape,
-        int maxRows)
-    {
-        var exportRelation = Isolate(relation);
-        var query = Addressable(exportRelation).Select(
-            terminal.ProjectionColumns
-                .Select(column => exportRelation.PhysicalColumns[column.Name])
-                .ToArray());
-        foreach (var sort in EffectiveSorts(terminal, terminalShape, relation.Schema))
-            ApplySort(
-                query,
-                sort,
-                exportRelation.PhysicalColumns[sort.Column.Name],
-                definition.GetEffectiveDialect());
-        if (maxRows > 0)
-            query.Limit(maxRows == int.MaxValue ? int.MaxValue : maxRows + 1);
-        return new MappedQuery(
-            query,
-            terminal.ProjectionColumns.Select(column => column.Name).ToList());
-    }
-
-    /// <summary>
     /// Composes a bounded distinct-value lookup over one column of the completed active relation.
     /// </summary>
     /// <param name="definition">Supplies the SQL dialect.</param>

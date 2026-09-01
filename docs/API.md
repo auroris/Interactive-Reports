@@ -400,7 +400,10 @@ app.MapInteractiveReportFileDownload("/api/download");
 
 The file client accepts the JavaScript client's current document, turns paging off in a
 detached copy, runs central `Export` authorization and the `download` feature check, then
-submits the document as an ordinary query and renders the returned rows.
+submits the document as an ordinary query and renders the returned rows. CSV rendering
+applies effective labels and masks, emits link text and image URLs rather than browser
+HTML, retains action labels, appends requested pivot totals, and omits hidden renderer
+inputs from the file.
 
 ## Replace a definition or saved-report store
 
@@ -481,6 +484,10 @@ With the default prefix, the principal routes are:
 | `GET /api/reports/ui/{file}` | Packaged browser assets. |
 | `GET /api/reports/{name}/view` | Optional packaged viewer page. |
 | `GET /api/reports/admin` | Optional packaged administration page. |
+
+`ReportResult.configuredLabels` carries the definition-owned base label map separately
+from structural column metadata. Clients layer the returned document's label composables
+over that map when rendering their own representation.
 
 All persisted document IDs are database-generated integers. A missing document, a document
 addressed through the wrong configured family, and a document the caller may not read all

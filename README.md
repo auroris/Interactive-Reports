@@ -608,10 +608,10 @@ Column Settings also offers `Text (Default)`, `Link`, and `Image` display modes.
 A link selects a URL column and a text column; an image selects a URL column. Source
 columns do not have to be visible: the server schema-checks them and includes them only
 in row data required by the grid and CSV renderers. Hidden sources remain absent from
-displayed and exported column metadata. In CSV, a Display As cell contains the encoded
-HTML fragment shown in the browser: `<a class="ir-cell-link">` or
-`<img class="ir-cell-image">`; ordinary cells remain raw values. Relative and HTTP(S)
-URLs are accepted for both renderers;
+displayed and exported column metadata. CSV applies effective labels and scalar masks,
+uses a link's displayed text, uses an image's URL, and uses an action's raw label. It
+never embeds browser HTML, CSS, or highlight styling. Relative and HTTP(S) URLs are
+accepted for link and image sources;
 links additionally accept `mailto:` and `tel:`. Active or embedded-content schemes
 such as `javascript:` and `data:` render as ordinary text instead.
 

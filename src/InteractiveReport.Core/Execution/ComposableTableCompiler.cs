@@ -25,7 +25,7 @@ namespace InteractiveReport.Core.Execution;
 internal sealed class ComposableTableCompiler
 {
     internal const int MaxRelationStages = 256;
-    // Reserve terminal page/export and grouped aggregate wrappers below SQL Server's
+    // Reserve terminal delivery and grouped aggregate wrappers below SQL Server's
     // practical derived-table nesting ceiling.
     internal const int MaxSqlServerRelationStages = 22;
     // Below the narrowest supported provider limit (Oracle: 1000 selected columns),

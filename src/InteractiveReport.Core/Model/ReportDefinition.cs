@@ -74,10 +74,9 @@ public sealed class ReportDefinition
     /// <summary>
     /// Gets or sets base-column friendly labels for queries whose column names are
     /// not presentable. Never applied to the engine's schema or query results: it is
-    /// delivered to the client as the labels of the default report the schema endpoint
-    /// sends down (an effective Default state with its own labels wins), and it plays
-    /// the same default-report role as the bottom layer of document-label resolution
-    /// at ingestion, so an unlabeled export matches an untouched client. Column
+    /// delivered to clients through schema/default-document metadata and query-result
+    /// <see cref="ReportResult.ConfiguredLabels"/> (an effective Default state with its own
+    /// labels wins). It is the bottom layer of document-label resolution. Column
     /// references crossing the wire always use the real name.
     /// </summary>
     public Dictionary<string, string>? ColumnLabels { get; set; }
@@ -106,7 +105,7 @@ public sealed class ReportDefinition
     public List<string>? Features { get; set; }
 
     /// <summary>
-    /// Gets or sets the hard row cap for unpaged grid/group queries and exports, and an upper bound
+    /// Gets or sets the hard row cap for unpaged grid/group queries and file downloads, and an upper bound
     /// for numeric page-size configuration. Zero or a negative value means unlimited.
     /// </summary>
     public int MaxRows { get; set; } = 100_000;

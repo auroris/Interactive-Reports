@@ -5,7 +5,6 @@
 using System.Data.Common;
 using System.Diagnostics;
 using InteractiveReport.Core.Composition;
-using InteractiveReport.Core.Export;
 using InteractiveReport.Core.Model;
 using InteractiveReport.Core.Planning;
 using InteractiveReport.Core.Schema;
@@ -483,6 +482,8 @@ public sealed class ReportExecutor
         {
             AvailableColumns = available,
             Columns = visible,
+            ConfiguredLabels = definition.GetEffectiveColumnLabels()
+                ?? new Dictionary<string, string>(),
             Rows = rows,
             Page = chartTerminal
                 ? new PageRequest { Index = 1, Size = Math.Max(1, rows.Count) }
@@ -626,191 +627,6 @@ public sealed class ReportExecutor
     }
 
     /// <summary>
-    /// Exports the same validated active state without paging, capped when <c>MaxRows</c> is positive. An export is
-    /// the server rendering what the user sees, so the ingested document's display labels, output-label
-    /// overrides, and cell renderers apply here (headers, sum(…) labels, Pivot cells, link/image HTML) — the
-    /// posted document is the source of truth, since the client's state may never have been saved.
-    /// </summary>
-    /// <param name="definition">The resolved definition used for schema, SQL, and export limits.</param>
-    /// <param name="state">The submitted partial report-state document.</param>
-    /// <param name="contextParams">Request-scoped parameter values referenced by the report definition.</param>
-    /// <param name="ct">Cancels validation, database execution, reading, and rendering.</param>
-    /// <returns>Visible columns, rendered export rows, and non-chart truncation state.</returns>
-    /// <remarks>Opens one connection/read scope, may execute pivot discovery and totals, and emits a completion log.</remarks>
-    internal async Task<ExportResult> Export(
-        ReportDefinition definition,
-        ReportState state,
-        IReadOnlyDictionary<string, object?> contextParams,
-        CancellationToken ct = default)
-    {
-        var result = await ExportCore(
-            definition,
-            state,
-            contextParams,
-            DateTime.UtcNow,
-            ct);
-        _logger?.LogInformation(
-            "Report {Report} export completed with {RowCount} rows (truncated: {Truncated})",
-            definition.Name,
-            result.Rows.Count,
-            result.Truncated);
-        return result;
-    }
-
-    /// <summary>
-    /// Performs structural validation and default-state resolution before exporting the active table.
-    /// </summary>
-    /// <param name="definition">The resolved definition used by compilation.</param>
-    /// <param name="state">The submitted partial state.</param>
-    /// <param name="contextParams">Request-scoped parameter values referenced by the report definition.</param>
-    /// <param name="evaluationUtcNow">The fixed UTC timestamp used to evaluate time-sensitive expressions consistently throughout the request.</param>
-    /// <param name="ct">Cancels validation and export execution.</param>
-    /// <returns>The rendered active-table export.</returns>
-    /// <exception cref="ReportValidationException">Thrown when the report state violates the report contract.</exception>
-    /// <exception cref="InvalidOperationException">Thrown when the report definition contains a structurally invalid default-state document.</exception>
-    private async Task<ExportResult> ExportCore(
-        ReportDefinition definition,
-        ReportState state,
-        IReadOnlyDictionary<string, object?> contextParams,
-        DateTime evaluationUtcNow,
-        CancellationToken ct)
-    {
-        var structural = StateStructureValidator.Collect(state);
-        if (structural.Count > 0) throw new ReportValidationException(structural);
-        if (definition.DefaultState is not null
-            && StateStructureValidator.Collect(definition.DefaultState) is { Count: > 0 } defaultErrors)
-            throw new InvalidOperationException(
-                $"Report '{definition.Name}': the default state document is structurally invalid — "
-                + $"{defaultErrors[0].Path}: {defaultErrors[0].Message}.");
-        var document = ReportStateResolver.Resolve(definition.DefaultState, state);
-        ValidateSyntheticColumnIdentities(document);
-        if (document.Tables is { Count: > 0 })
-            ResolveActiveTable(document);
-        return await ExportComposableTable(
-            definition,
-            document,
-            contextParams,
-            evaluationUtcNow,
-            ct);
-    }
-
-    /// <summary>
-    /// Compiles, executes, and renders the active composable table for export.
-    /// </summary>
-    /// <param name="definition">The resolved definition used for schema, SQL, and limits.</param>
-    /// <param name="document">The complete effective document with canonical active table.</param>
-    /// <param name="contextParams">Request-scoped parameter values referenced by the report definition.</param>
-    /// <param name="evaluationUtcNow">The fixed UTC timestamp used to evaluate time-sensitive expressions consistently throughout the request.</param>
-    /// <param name="ct">Cancels schema discovery, compilation, database work, and reading.</param>
-    /// <returns>Rendered visible columns/rows and truncation state.</returns>
-    /// <remarks>Opens one connection/read scope and may execute pivot discovery, row, and totals queries.</remarks>
-    /// <exception cref="ReportValidationException">Thrown when the report state violates the report contract.</exception>
-    private async Task<ExportResult> ExportComposableTable(
-        ReportDefinition definition,
-        ReportState document,
-        IReadOnlyDictionary<string, object?> contextParams,
-        DateTime evaluationUtcNow,
-        CancellationToken ct)
-    {
-        var schema = await GetSchema(definition, contextParams, ct);
-        var sqlCompiler = DialectSupport.GetCompiler(definition.GetEffectiveDialect());
-        await using var connection = await _connections.Open(definition, ct);
-        await using var scope = await _connections.BeginReadScope(connection, definition, ct);
-        var reader = CreateReader(connection, sqlCompiler, definition, contextParams, scope.Transaction);
-        var compiler = new ComposableTableCompiler(
-            definition,
-            document,
-            schema,
-            evaluationUtcNow,
-            (query, rowDimensions, columnDimensions, values, token) =>
-                reader.ReadPivotGroups(query, rowDimensions, columnDimensions, values, token));
-        var tableId = document.Tables is { Count: > 0 }
-            ? document.ActiveTable!
-            : "definition";
-        var plan = compiler.CompleteForTarget(await compiler.Compile(tableId, ct));
-        var chartTerminal = IsChartTerminal(plan);
-        var limit = chartTerminal ? definition.MaxChartPoints : definition.MaxRows;
-        var mapped = plan.ExecutionBundle.Export;
-        var read = await reader.ReadRows(
-            mapped.Query,
-            mapped.PublicNames,
-            limit > 0 ? limit : null,
-            ct);
-
-        IReadOnlyDictionary<string, IReadOnlyDictionary<string, object?>> pivotTotals =
-            new Dictionary<string, IReadOnlyDictionary<string, object?>>();
-        if (plan.ExecutionBundle.PivotTotals is { } pivotTotalsQuery)
-        {
-            var groups = await reader.ReadPivotGroups(
-                pivotTotalsQuery.Query.Query,
-                pivotTotalsQuery.Query.RowDimensionCount,
-                pivotTotalsQuery.Query.ColumnDimensionCount,
-                pivotTotalsQuery.Query.ValueCount,
-                ct);
-            pivotTotals = BuildPivotTotals(
-                groups,
-                pivotTotalsQuery.Metrics,
-                pivotTotalsQuery.Keys);
-        }
-        await scope.CompleteAsync(ct);
-
-        if (chartTerminal && read.Truncated)
-            throw new ReportValidationException(
-                [new ValidationError(
-                    plan.LastShape!.Path,
-                    $"chart would draw more than {definition.MaxChartPoints} points — filter further or aggregate to fewer categories")]);
-        if (chartTerminal && plan.LastShape is { Kind: ShapeKind.Chart, Chart.Type: ChartType.Pie })
-        {
-            var metric = plan.Relation.Schema.Columns[1].Name;
-            if (read.Rows.Any(row => row.TryGetValue(metric, out var value) && IsNegative(value)))
-                throw new ReportValidationException(
-                    [new ValidationError($"{plan.LastShape.Path}.value", "pie charts require non-negative values")]);
-        }
-
-        var available = CompiledColumns(plan);
-        var visible = ReportResultColumns.Select(available, plan.Terminal.SelectColumns);
-        IReadOnlyList<IReadOnlyDictionary<string, object?>> exportRows = read.Rows;
-        if (pivotTotals.Count > 0 && plan.LastShape?.Dimensions is { } rowDimensions)
-            exportRows = PivotTableBuilder.RowsForExport(
-                visible,
-                exportRows,
-                pivotTotals,
-                rowDimensions);
-        var rendered = TableExportRenderer.Render(
-            available,
-            visible,
-            exportRows,
-            plan.Relation.Schema,
-            plan.Formats,
-            ExportLabels(plan));
-        return new ExportResult(rendered.Columns, rendered.Rows, !chartTerminal && read.Truncated);
-    }
-
-    /// <summary>
-    /// Propagates source labels into derived aggregate labels when no explicit output label exists.
-    /// </summary>
-    /// <param name="plan">The completed plan containing explicit labels and derived format-source lineage.</param>
-    /// <returns>A detached case-insensitive label map suitable for export rendering.</returns>
-    private static IReadOnlyDictionary<string, string> ExportLabels(CompiledComposableTable plan)
-    {
-        var labels = new Dictionary<string, string>(plan.Labels, StringComparer.OrdinalIgnoreCase);
-        foreach (var column in plan.Relation.Schema.Columns)
-        {
-            if (labels.ContainsKey(column.Name)
-                || !plan.FormatSources.TryGetValue(column.Name, out var source)
-                || source is null
-                || !labels.TryGetValue(source, out var sourceLabel))
-                continue;
-            var open = column.Label.LastIndexOf('(');
-            var close = open < 0 ? -1 : column.Label.IndexOf(')', open + 1);
-            labels[column.Name] = close > open
-                ? $"{column.Label[..(open + 1)]}{sourceLabel}{column.Label[close..]}"
-                : column.Label;
-        }
-        return labels;
-    }
-
-    /// <summary>
     /// Determines whether the terminal relation is a chart.
     /// </summary>
     /// <param name="plan">The completed plan and its terminal selection.</param>
@@ -862,12 +678,6 @@ public sealed class ReportExecutor
         => new(connection, compiler, contextParams, definition, _logger, transaction);
 
 }
-
-/// <summary>Contains an unpaged rendered export; <c>Truncated</c> means a positive <c>MaxRows</c> cap was exceeded.</summary>
-internal sealed record ExportResult(
-    IReadOnlyList<ColumnInfo> Columns,
-    IReadOnlyList<IReadOnlyDictionary<string, object?>> Rows,
-    bool Truncated);
 
 /// <summary>Contains a refreshed effective document and any active result produced in the same read scope.</summary>
 internal sealed record SchemaRefresh(

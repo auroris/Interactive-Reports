@@ -107,7 +107,7 @@ internal static class IdentifierTortureCorpus
             search: "ship");
 
         var query = await executor.Query(definition, source, NoParams);
-        var export = await executor.Export(definition, source, NoParams);
+        var export = await executor.Download(definition, source, NoParams);
         var projectedNames = expectedNames.Concat(["ir1"]).ToArray();
 
         Assert.Equal(projectedNames, query.Columns.Select(column => column.Name));
@@ -129,7 +129,7 @@ internal static class IdentifierTortureCorpus
                 values: [Metric("ir1", AmountName, AggregateFn.Sum)]),
         ]);
         var grouped = await executor.Query(definition, groupedState, NoParams);
-        var groupedExport = await executor.Export(definition, groupedState, NoParams);
+        var groupedExport = await executor.Download(definition, groupedState, NoParams);
         string[] groupedNames = [RawMarkerName, "__count", "ir1"];
 
         Assert.Equal(groupedNames, grouped.Columns.Select(column => column.Name));

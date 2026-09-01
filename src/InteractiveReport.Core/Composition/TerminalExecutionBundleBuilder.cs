@@ -25,7 +25,7 @@ internal static class TerminalExecutionBundleBuilder
     /// <param name="request">The request-scoped paging, sorting, and search settings.</param>
     /// <param name="terminalShape">The terminal shape, when the relation ends in Group, Pivot, or Chart.</param>
     /// <param name="chartTerminal">Indicates whether the terminal represents a chart; defaults to <c>false</c>.</param>
-    /// <returns>A self-describing bundle of main, count, footer, break, pivot-total, and export queries.</returns>
+    /// <returns>A self-describing bundle of main, count, footer, break, and pivot-total queries.</returns>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="definition"/>, <paramref name="relation"/>, <paramref name="terminal"/>, or <paramref name="request"/> is <see langword="null"/>.</exception>
     public static TerminalExecutionBundle Build(
         ReportDefinition definition,
@@ -51,13 +51,6 @@ internal static class TerminalExecutionBundleBuilder
             request.PageAll,
             terminalShape,
             chartTerminal);
-        var export = ComposableTerminalQueryComposer.ComposeExport(
-            definition,
-            relation,
-            terminal,
-            terminalShape,
-            chartTerminal ? definition.MaxChartPoints : definition.MaxRows);
-
         var footer = main.Queries.FooterAggregates is null
             ? null
             : new TerminalAggregateQuery(
@@ -77,10 +70,7 @@ internal static class TerminalExecutionBundleBuilder
             Count: main.Queries.Count,
             FooterAggregates: footer,
             BreakTotals: breakTotals,
-            PivotTotals: PivotTotals(terminalShape),
-            Export: new TerminalRowQuery(
-                export.Query,
-                export.PublicNames.ToArray()));
+            PivotTotals: PivotTotals(terminalShape));
     }
 
     /// <summary>
@@ -118,14 +108,12 @@ internal static class TerminalExecutionBundleBuilder
 /// <param name="FooterAggregates">The optional whole-filtered-set footer aggregate query.</param>
 /// <param name="BreakTotals">The optional control-break subtotal query.</param>
 /// <param name="PivotTotals">The optional pivot totals query.</param>
-/// <param name="Export">The unpaged, bounded export row query.</param>
 internal sealed record TerminalExecutionBundle(
     TerminalRowQuery MainRows,
     Query Count,
     TerminalAggregateQuery? FooterAggregates,
     TerminalBreakQuery? BreakTotals,
-    PivotTotalsQuery? PivotTotals,
-    TerminalRowQuery Export);
+    PivotTotalsQuery? PivotTotals);
 
 /// <summary>Pairs a row-producing query with its public ordinal names.</summary>
 /// <param name="Query">The executable SqlKata query.</param>

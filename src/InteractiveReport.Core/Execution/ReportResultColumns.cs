@@ -48,8 +48,8 @@ internal static class ReportResultColumns
     /// <summary>
     /// Builds complete metadata for a statically known bound relation. Shape columns retain
     /// format-source metadata and computed output columns come from the relation's schema contract.
-    /// Presentation labels are deliberately absent: query/cache metadata is structural, while export applies
-    /// labels in its shared renderer.
+    /// Presentation labels are deliberately absent: query/cache column metadata is structural,
+    /// while client adapters resolve <see cref="ReportResult.ConfiguredLabels"/> and document labels.
     /// </summary>
     /// <param name="schema">The final relation schema in public order.</param>
     /// <param name="shapeColumns">Columns produced by the terminal shape operation.</param>

@@ -396,7 +396,7 @@ public sealed class ComposablePipelineSafetyTests : IClassFixture<SqliteE2EFixtu
         state.ActiveTable = "  DeFiNiTiOn  ";
 
         var exception = await Assert.ThrowsAsync<ReportValidationException>(() =>
-            _executor.Export(definition, state, NoParams));
+            _executor.Download(definition, state, NoParams));
 
         Assert.Contains(exception.Errors, error =>
             error.Path == "activeTable"
@@ -421,7 +421,7 @@ public sealed class ComposablePipelineSafetyTests : IClassFixture<SqliteE2EFixtu
         ]);
 
         var query = await _executor.Query(definition, state, NoParams);
-        var export = await _executor.Export(definition, state, NoParams);
+        var export = await _executor.Download(definition, state, NoParams);
 
         Assert.Equal(["A]B", "__count", "ir1"], query.Columns.Select(column => column.Name));
         Assert.Equal(4, query.TotalRows);
@@ -448,7 +448,7 @@ public sealed class ComposablePipelineSafetyTests : IClassFixture<SqliteE2EFixtu
         ]);
 
         var query = await _executor.Query(definition, state, NoParams);
-        var export = await _executor.Export(definition, state, NoParams);
+        var export = await _executor.Download(definition, state, NoParams);
 
         Assert.Equal(["A?B", "__count", "ir1"], query.Columns.Select(column => column.Name));
         Assert.Equal(4, query.TotalRows);
@@ -499,7 +499,7 @@ public sealed class ComposablePipelineSafetyTests : IClassFixture<SqliteE2EFixtu
             ]);
 
         var query = await _executor.Query(definition, state, NoParams);
-        var export = await _executor.Export(definition, state, NoParams);
+        var export = await _executor.Download(definition, state, NoParams);
 
         Assert.Equal(
             "ir1",

@@ -45,70 +45,11 @@ internal sealed class CsvInteractiveReportDownloadWriter : IInteractiveReportDow
         if (!Formats.Contains(format, StringComparer.OrdinalIgnoreCase))
             throw new NotSupportedException($"Download format '{format}' is not supported.");
 
+        var table = CsvReportPresentation.Render(result);
         return new(
-            CsvWriter.Write(DownloadColumns(result), result.Rows),
+            CsvWriter.Write(table.Columns, table.Rows),
             $"{SafeName(reportName)}.csv",
             "text/csv; charset=utf-8");
-    }
-
-    private static IReadOnlyList<ColumnInfo> DownloadColumns(ReportResult result)
-    {
-        var labels = EffectiveLabels(result.Document);
-        return result.Columns.Select(column =>
-        {
-            if (labels.TryGetValue(column.Name, out var label))
-                return column with { Label = label };
-            if (column.FormatSource is null
-                || !labels.TryGetValue(column.FormatSource, out var sourceLabel))
-                return column;
-
-            var open = column.Label.LastIndexOf('(');
-            var close = open < 0 ? -1 : column.Label.IndexOf(')', open + 1);
-            return close > open
-                ? column with
-                {
-                    Label = $"{column.Label[..(open + 1)]}{sourceLabel}{column.Label[close..]}",
-                }
-                : column;
-        }).ToArray();
-    }
-
-    private static IReadOnlyDictionary<string, string> EffectiveLabels(ReportState? document)
-    {
-        var labels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        if (document?.Tables is not { Count: > 0 } tables
-            || string.IsNullOrWhiteSpace(document.ActiveTable))
-            return labels;
-
-        var lookup = tables.ToDictionary(
-            pair => pair.Key,
-            pair => pair.Value,
-            StringComparer.OrdinalIgnoreCase);
-        var chain = new List<ReportTable>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var current = document.ActiveTable;
-        while (!string.IsNullOrWhiteSpace(current)
-               && seen.Add(current)
-               && lookup.TryGetValue(current, out var table))
-        {
-            chain.Add(table);
-            if (string.Equals(table.From, "definition", StringComparison.OrdinalIgnoreCase))
-                break;
-            current = table.From;
-        }
-        chain.Reverse();
-
-        foreach (var table in chain)
-        foreach (var composable in table.Composables ?? [])
-        {
-            if (!string.Equals(composable.Kind.Trim(), "labels", StringComparison.OrdinalIgnoreCase)
-                || composable.Labels is null)
-                continue;
-            if (composable.Labels.Count == 0) labels.Clear();
-            foreach (var (name, label) in composable.Labels)
-                labels[name] = label;
-        }
-        return labels;
     }
 
     private static string SafeName(string reportName)

@@ -15,6 +15,14 @@ public sealed class ReportResult
     /// <summary>Gets the visible result columns in wire order.</summary>
     public required IReadOnlyList<ColumnInfo> Columns { get; init; }
 
+    /// <summary>
+    /// Gets definition-owned base labels before report-document label composables are
+    /// applied. Client adapters use this presentation input without asking the engine to
+    /// render a transport-specific representation.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> ConfiguredLabels { get; init; }
+        = new Dictionary<string, string>();
+
     /// <summary>Gets the current page as row objects keyed by column name.</summary>
     public required IReadOnlyList<IReadOnlyDictionary<string, object?>> Rows { get; init; }
 

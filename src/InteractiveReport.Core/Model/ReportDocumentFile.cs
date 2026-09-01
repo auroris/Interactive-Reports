@@ -2,7 +2,7 @@ namespace InteractiveReport.Core.Model;
 
 /// <summary>
 /// The source-controlled envelope stored in a report-document JSON file. The state
-/// remains the same versioned document used by query, export, and saved reports;
+/// remains the same versioned document used by query, file download, and saved reports;
 /// title and default flag describe how the host publishes it.
 /// </summary>
 public sealed class ReportDocumentFile

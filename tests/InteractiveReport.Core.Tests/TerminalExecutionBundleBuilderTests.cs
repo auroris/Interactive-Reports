@@ -68,25 +68,20 @@ public sealed class TerminalExecutionBundleBuilderTests
         Assert.NotNull(plainBundle.FooterAggregates);
         Assert.NotNull(plainBundle.BreakTotals);
         Assert.Equal(["CUSTOMER", "AMOUNT", "STATUS"], plainBundle.MainRows.PublicNames);
-        Assert.Equal(plainBundle.MainRows.PublicNames, plainBundle.Export.PublicNames);
         Assert.Equal(
             ["CUSTOMER", "AMOUNT", "STATUS", "__ir_highlight_0"],
             highlightedBundle.MainRows.PublicNames);
-        Assert.Equal(plainBundle.Export.PublicNames, highlightedBundle.Export.PublicNames);
 
         AssertQueryEqual(plainBundle.Count, highlightedBundle.Count);
         AssertQueryEqual(plainBundle.FooterAggregates!.Query, highlightedBundle.FooterAggregates!.Query);
         AssertQueryEqual(plainBundle.BreakTotals!.Query, highlightedBundle.BreakTotals!.Query);
-        AssertQueryEqual(plainBundle.Export.Query, highlightedBundle.Export.Query);
         AssertQueryNotEqual(plainBundle.MainRows.Query, highlightedBundle.MainRows.Query);
 
         Assert.Equal(["AMOUNT", "STATUS"], selectedBundle.MainRows.PublicNames);
-        Assert.Equal(["AMOUNT", "STATUS"], selectedBundle.Export.PublicNames);
         AssertQueryEqual(plainBundle.Count, selectedBundle.Count);
         AssertQueryEqual(plainBundle.FooterAggregates.Query, selectedBundle.FooterAggregates!.Query);
         AssertQueryEqual(plainBundle.BreakTotals.Query, selectedBundle.BreakTotals!.Query);
         AssertQueryNotEqual(plainBundle.MainRows.Query, selectedBundle.MainRows.Query);
-        AssertQueryNotEqual(plainBundle.Export.Query, selectedBundle.Export.Query);
     }
 
     [Theory]
@@ -120,7 +115,6 @@ public sealed class TerminalExecutionBundleBuilderTests
         var footer = Assert.IsType<TerminalAggregateQuery>(bundle.FooterAggregates);
         var breakTotals = Assert.IsType<TerminalBreakQuery>(bundle.BreakTotals);
         Assert.Equal(["AMOUNT", "STATUS", "__ir_highlight_0"], bundle.MainRows.PublicNames);
-        Assert.Equal(["AMOUNT", "STATUS"], bundle.Export.PublicNames);
 
         var expectedOrder = new[]
         {
@@ -128,7 +122,6 @@ public sealed class TerminalExecutionBundleBuilderTests
             (relation.PhysicalColumns[amount.Name], false),
         };
         Assert.Equal(expectedOrder, SimpleOrder(bundle.MainRows.Query));
-        Assert.Equal(expectedOrder, SimpleOrder(bundle.Export.Query));
 
         var expectedMainLimit = chartTerminal
             ? definition.MaxChartPoints + 1
@@ -142,16 +135,11 @@ public sealed class TerminalExecutionBundleBuilderTests
         AssertUnpaged(footer.Query);
         AssertUnpaged(breakTotals.Query);
 
-        var expectedExportLimit = chartTerminal
-            ? definition.MaxChartPoints + 1
-            : definition.MaxRows + 1;
-        AssertWindow(bundle.Export.Query, expectedExportLimit, expectedOffset: null);
-
         var compiled = BundleSnapshot(bundle, dialect);
-        Assert.Equal(5, compiled.Count);
+        Assert.Equal(4, compiled.Count);
         Assert.All(compiled.Values, statement => Assert.False(string.IsNullOrWhiteSpace(statement.Sql)));
         Assert.Contains("__ir_highlight_0", compiled["main"].Sql, StringComparison.Ordinal);
-        foreach (var role in new[] { "count", "footer", "break", "export" })
+        foreach (var role in new[] { "count", "footer", "break" })
             Assert.DoesNotContain(
                 "__ir_highlight_0",
                 compiled[role].Sql,
@@ -159,7 +147,7 @@ public sealed class TerminalExecutionBundleBuilderTests
     }
 
     [Fact]
-    public void Main_and_export_share_effective_shape_and_break_ordering()
+    public void Main_rows_apply_effective_shape_and_break_ordering()
     {
         var (definition, relation, schema) = Source();
         var customer = schema.Lookup["CUSTOMER"];
@@ -178,9 +166,7 @@ public sealed class TerminalExecutionBundleBuilderTests
 
         var bundle = Build(definition, relation, terminal, shape);
         var mainOrder = OrderClause(Compile(bundle.MainRows.Query).Sql);
-        var exportOrder = OrderClause(Compile(bundle.Export.Query).Sql);
 
-        Assert.Equal(mainOrder, exportOrder);
         Assert.Contains("__irc1", mainOrder, StringComparison.Ordinal);
         Assert.Contains("__irc2", mainOrder, StringComparison.Ordinal);
         Assert.Contains("__irc0", mainOrder, StringComparison.Ordinal);
@@ -239,11 +225,7 @@ public sealed class TerminalExecutionBundleBuilderTests
         AssertCompiledEqual(
             Compile(before.Count, dialect),
             Compile(after.Count, dialect));
-        AssertCompiledEqual(
-            Compile(before.Export.Query, dialect),
-            Compile(after.Export.Query, dialect));
         Assert.Equal(before.MainRows.PublicNames, after.MainRows.PublicNames);
-        Assert.Equal(before.Export.PublicNames, after.Export.PublicNames);
     }
 
     [Theory]
@@ -267,7 +249,6 @@ public sealed class TerminalExecutionBundleBuilderTests
             relation,
             baseline with { Sorts = [new ValidSort(amount, SortDir.Desc)] });
         AssertQueryNotEqualForDialect(plain.MainRows.Query, sorted.MainRows.Query, dialect);
-        AssertQueryNotEqualForDialect(plain.Export.Query, sorted.Export.Query, dialect);
         AssertCompiledEqual(Compile(plain.Count, dialect), Compile(sorted.Count, dialect));
         AssertCompiledEqual(
             Compile(plain.FooterAggregates!.Query, dialect),
@@ -279,7 +260,6 @@ public sealed class TerminalExecutionBundleBuilderTests
             baseline with { Breaks = [status] });
         Assert.NotNull(broken.BreakTotals);
         AssertQueryNotEqualForDialect(plain.MainRows.Query, broken.MainRows.Query, dialect);
-        AssertQueryNotEqualForDialect(plain.Export.Query, broken.Export.Query, dialect);
         AssertCompiledEqual(Compile(plain.Count, dialect), Compile(broken.Count, dialect));
         AssertCompiledEqual(
             Compile(plain.FooterAggregates.Query, dialect),
@@ -291,7 +271,6 @@ public sealed class TerminalExecutionBundleBuilderTests
         AssertCompiledEqual(
             Compile(plain.FooterAggregates.Query, dialect),
             Compile(allRows.FooterAggregates!.Query, dialect));
-        AssertCompiledEqual(Compile(plain.Export.Query, dialect), Compile(allRows.Export.Query, dialect));
     }
 
     [Theory]
@@ -349,7 +328,7 @@ public sealed class TerminalExecutionBundleBuilderTests
         Assert.Equal(key, Assert.Single(totals.Keys));
 
         var compiled = BundleSnapshot(bundle, dialect);
-        Assert.Equal(6, compiled.Count);
+        Assert.Equal(5, compiled.Count);
         Assert.All(compiled.Values, statement => Assert.False(string.IsNullOrWhiteSpace(statement.Sql)));
     }
 
@@ -477,7 +456,6 @@ public sealed class TerminalExecutionBundleBuilderTests
         {
             ["main"] = Compile(bundle.MainRows.Query, dialect),
             ["count"] = Compile(bundle.Count, dialect),
-            ["export"] = Compile(bundle.Export.Query, dialect),
         };
         if (bundle.FooterAggregates is not null)
             result["footer"] = Compile(bundle.FooterAggregates.Query, dialect);
@@ -498,7 +476,6 @@ public sealed class TerminalExecutionBundleBuilderTests
         foreach (var role in expectedQueries.Keys)
             AssertCompiledEqual(expectedQueries[role], actualQueries[role]);
         Assert.Equal(expected.MainRows.PublicNames, actual.MainRows.PublicNames);
-        Assert.Equal(expected.Export.PublicNames, actual.Export.PublicNames);
     }
 
     private static void AssertQueryEqual(Query expected, Query actual)

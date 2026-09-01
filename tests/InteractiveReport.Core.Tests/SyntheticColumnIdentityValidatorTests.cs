@@ -358,7 +358,7 @@ public sealed class SyntheticColumnIdentityValidatorTests : IClassFixture<Sqlite
         };
 
         var exception = await Assert.ThrowsAsync<ReportValidationException>(() =>
-            _executor.Export(Definition, document, NoParams));
+            _executor.Download(Definition, document, NoParams));
 
         var error = Assert.Single(exception.Errors);
         Assert.Equal("tables.dormant.composables[0].values[0].id", error.Path);

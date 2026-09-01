@@ -719,7 +719,7 @@ public class LiveDialectTests
         def.Name = $"live-export-{dialect}";
         def.MaxRows = 3;
 
-        var export = await live.Executor.Export(def, Doc(source: new StageLayer
+        var export = await live.Executor.Download(def, Doc(source: new StageLayer
         {
             Sorts = [new SortRule { Col = "AMOUNT", Dir = SortDir.Desc }],
         }), NoParams);

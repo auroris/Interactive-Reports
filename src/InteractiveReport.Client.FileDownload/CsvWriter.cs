@@ -23,7 +23,8 @@ public static class CsvWriter
             AppendRow(buffer, columns.Select(column =>
             {
                 row.TryGetValue(column.Name, out var value);
-                return Sanitize(Format(value), value is string or char, policy);
+                var (text, fromText) = Format(value);
+                return Sanitize(text, fromText, policy);
             }));
         }
 
@@ -57,13 +58,15 @@ public static class CsvWriter
         buffer.Append('"').Append(field.Replace("\"", "\"\"")).Append('"');
     }
 
-    private static string Format(object? value) => value switch
+    private static (string Text, bool FromText) Format(object? value) => value switch
     {
-        null => "",
-        DateTime date => date.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
-        bool boolean => boolean ? "true" : "false",
-        IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture) ?? "",
-        _ => value.ToString() ?? "",
+        null => ("", false),
+        string text => (text, true),
+        char character => (character.ToString(), true),
+        DateTime date => (date.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture), false),
+        bool boolean => (boolean ? "true" : "false", false),
+        IFormattable formattable => (formattable.ToString(null, CultureInfo.InvariantCulture) ?? "", false),
+        _ => (value.ToString() ?? "", true),
     };
 
     private static string Sanitize(string field, bool fromText, CsvCellPolicy policy)

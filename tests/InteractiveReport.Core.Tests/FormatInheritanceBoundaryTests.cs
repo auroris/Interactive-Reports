@@ -40,13 +40,16 @@ public sealed class FormatInheritanceBoundaryTests : IClassFixture<SqliteE2EFixt
             });
 
         var result = await _executor.Query(Definition, document, NoParams);
-        var export = await _executor.Export(Definition, document, NoParams);
+        var export = await _executor.Download(Definition, document, NoParams);
         var plan = await Compile(document);
 
         Assert.All(result.Rows, row => Assert.Equal(["AMOUNT"], row.Keys));
-        Assert.All(export.Rows, row => Assert.IsNotType<string>(row["AMOUNT"]));
-        Assert.DoesNotContain(export.Rows, row =>
-            Convert.ToString(row["AMOUNT"])!.Contains("<a", StringComparison.Ordinal));
+        Assert.All(export.Rows, row =>
+        {
+            var value = Assert.IsType<string>(row["AMOUNT"]);
+            Assert.StartsWith("$", value, StringComparison.Ordinal);
+            Assert.DoesNotContain("<a", value, StringComparison.Ordinal);
+        });
 
         var effective = Assert.Contains("AMOUNT", plan.Formats);
         Assert.Equal("currency:USD", effective.Mask);
@@ -194,18 +197,15 @@ public sealed class FormatInheritanceBoundaryTests : IClassFixture<SqliteE2EFixt
         var document = Document(activeTable: "parent");
 
         var result = await _executor.Query(Definition, document, NoParams);
-        var export = await _executor.Export(Definition, document, NoParams);
+        var export = await _executor.Download(Definition, document, NoParams);
         var plan = await Compile(document);
 
         Assert.All(result.Rows, row => Assert.Equal(["AMOUNT", "NOTES"], row.Keys));
-        Assert.Contains(export.Rows, row =>
-            Assert.IsType<string>(row["AMOUNT"]).Contains("<a class=", StringComparison.Ordinal));
         Assert.All(export.Rows, row =>
         {
             var text = Assert.IsType<string>(row["AMOUNT"]);
-            Assert.True(
-                text.StartsWith("<a", StringComparison.Ordinal)
-                || text.StartsWith("$", StringComparison.Ordinal));
+            Assert.StartsWith("$", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("<a", text, StringComparison.Ordinal);
         });
 
         var effective = plan.Formats["AMOUNT"];
@@ -323,11 +323,12 @@ public sealed class FormatInheritanceBoundaryTests : IClassFixture<SqliteE2EFixt
             },
         };
 
-        var export = await _executor.Export(Definition, document, NoParams);
+        var export = await _executor.Download(Definition, document, NoParams);
 
         Assert.All(export.Rows, row =>
         {
-            Assert.Contains("<a class=", Assert.IsType<string>(row["AMOUNT"]));
+            Assert.NotEmpty(Assert.IsType<string>(row["AMOUNT"]));
+            Assert.DoesNotContain("<a", Assert.IsType<string>(row["AMOUNT"]), StringComparison.Ordinal);
             Assert.IsNotType<string>(row["ir1"]);
         });
     }
