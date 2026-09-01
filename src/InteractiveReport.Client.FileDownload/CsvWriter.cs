@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Globalization;
 using System.Text;
 using InteractiveReport.Core.Model;
@@ -11,51 +12,143 @@ namespace InteractiveReport.Client.FileDownload;
 /// </summary>
 public static class CsvWriter
 {
+    private static readonly UTF8Encoding BodyEncoding = new(encoderShouldEmitUTF8Identifier: false);
+
+    // Rendered text reaches the stream in fixed chunks, sized to stay well under the large object
+    // heap threshold so an unpaged export never allocates a buffer proportional to the result.
+    private const int ChunkChars = 16 * 1024;
+
+    /// <summary>
+    /// Writes the report to a destination stream in bounded chunks.
+    /// </summary>
+    /// <param name="destination">The stream that receives the BOM and CSV body.</param>
+    /// <param name="columns">The visible columns in wire order; their labels become the header row.</param>
+    /// <param name="rows">The result rows, keyed by column name.</param>
+    /// <param name="policy">Whether formula-like text is neutralized.</param>
+    /// <param name="ct">Cancels writing between chunks.</param>
+    /// <remarks>
+    /// Asynchronous throughout: an ASP.NET Core response body rejects synchronous writes unless the
+    /// host opts back in, and an unpaged export is the last place worth doing that.
+    /// </remarks>
+    public static async Task WriteToAsync(
+        Stream destination,
+        IReadOnlyList<ColumnInfo> columns,
+        IReadOnlyList<IReadOnlyDictionary<string, object?>> rows,
+        CsvCellPolicy policy = CsvCellPolicy.SafeText,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+        ArgumentNullException.ThrowIfNull(columns);
+        ArgumentNullException.ThrowIfNull(rows);
+
+        await destination.WriteAsync(Encoding.UTF8.GetPreamble(), ct);
+
+        // One encoder spans every chunk, so a surrogate pair split across a boundary stays intact.
+        var encoder = BodyEncoding.GetEncoder();
+        var capacity = ChunkChars + 1024;
+        var text = new StringBuilder(capacity);
+        var chars = ArrayPool<char>.Shared.Rent(capacity);
+        var bytes = ArrayPool<byte>.Shared.Rent(BodyEncoding.GetMaxByteCount(capacity));
+        try
+        {
+            AppendRecord(text, columns, policy, row: null);
+            foreach (var row in rows)
+            {
+                AppendRecord(text, columns, policy, row);
+                if (text.Length >= ChunkChars)
+                    await FlushAsync(destination, encoder, text, chars, bytes, flush: false, ct);
+            }
+            await FlushAsync(destination, encoder, text, chars, bytes, flush: true, ct);
+        }
+        finally
+        {
+            ArrayPool<char>.Shared.Return(chars);
+            ArrayPool<byte>.Shared.Return(bytes);
+        }
+    }
+
+    /// <summary>
+    /// Renders the report to a complete byte array. Prefer <see cref="WriteToAsync"/> for exports
+    /// large enough that holding the whole payload matters.
+    /// </summary>
+    /// <param name="columns">The visible columns in wire order; their labels become the header row.</param>
+    /// <param name="rows">The result rows, keyed by column name.</param>
+    /// <param name="policy">Whether formula-like text is neutralized.</param>
+    /// <returns>The complete file, including the UTF-8 BOM.</returns>
     public static byte[] Write(
         IReadOnlyList<ColumnInfo> columns,
         IReadOnlyList<IReadOnlyDictionary<string, object?>> rows,
         CsvCellPolicy policy = CsvCellPolicy.SafeText)
     {
-        var buffer = new StringBuilder();
-        AppendRow(buffer, columns.Select(column => Sanitize(column.Label, true, policy)));
-        foreach (var row in rows)
-        {
-            AppendRow(buffer, columns.Select(column =>
-            {
-                row.TryGetValue(column.Name, out var value);
-                var (text, fromText) = Format(value);
-                return Sanitize(text, fromText, policy);
-            }));
-        }
-
-        var body = Encoding.UTF8.GetBytes(buffer.ToString());
-        var preamble = Encoding.UTF8.GetPreamble();
-        var result = new byte[preamble.Length + body.Length];
-        preamble.CopyTo(result, 0);
-        body.CopyTo(result, preamble.Length);
-        return result;
+        using var buffer = new MemoryStream();
+        // A MemoryStream completes every write synchronously, so this never blocks a thread.
+        WriteToAsync(buffer, columns, rows, policy).GetAwaiter().GetResult();
+        return buffer.ToArray();
     }
 
-    private static void AppendRow(StringBuilder buffer, IEnumerable<string> fields)
+    /// <summary>Appends the header record when the row is null, otherwise one data record.</summary>
+    private static void AppendRecord(
+        StringBuilder text,
+        IReadOnlyList<ColumnInfo> columns,
+        CsvCellPolicy policy,
+        IReadOnlyDictionary<string, object?>? row)
     {
-        var first = true;
-        foreach (var field in fields)
+        for (var i = 0; i < columns.Count; i++)
         {
-            if (!first) buffer.Append(',');
-            first = false;
-            AppendField(buffer, field);
+            if (i > 0) text.Append(',');
+            string field;
+            if (row is null)
+            {
+                field = Sanitize(columns[i].Label, true, policy);
+            }
+            else
+            {
+                row.TryGetValue(columns[i].Name, out var value);
+                var (formatted, fromText) = Format(value);
+                field = Sanitize(formatted, fromText, policy);
+            }
+            AppendField(text, field);
         }
-        buffer.Append("\r\n");
+        text.Append("\r\n");
     }
 
-    private static void AppendField(StringBuilder buffer, string field)
+    /// <summary>Encodes the pending text into the pooled buffer, writes it, and clears it.</summary>
+    private static async Task FlushAsync(
+        Stream destination,
+        Encoder encoder,
+        StringBuilder text,
+        char[] chars,
+        byte[] bytes,
+        bool flush,
+        CancellationToken ct)
+    {
+        if (text.Length > 0)
+        {
+            text.CopyTo(0, chars, text.Length);
+            var count = encoder.GetBytes(chars.AsSpan(0, text.Length), bytes.AsSpan(), flush);
+            text.Clear();
+            await destination.WriteAsync(bytes.AsMemory(0, count), ct);
+        }
+
+        if (flush) await destination.FlushAsync(ct);
+    }
+
+    /// <summary>Appends one field, quoting and doubling embedded quotes only when RFC 4180 requires it.</summary>
+    private static void AppendField(StringBuilder text, string field)
     {
         if (field.AsSpan().IndexOfAny(',', '"', '\r') < 0 && !field.Contains('\n'))
         {
-            buffer.Append(field);
+            text.Append(field);
             return;
         }
-        buffer.Append('"').Append(field.Replace("\"", "\"\"")).Append('"');
+
+        text.Append('"');
+        foreach (var character in field)
+        {
+            if (character == '"') text.Append('"');
+            text.Append(character);
+        }
+        text.Append('"');
     }
 
     private static (string Text, bool FromText) Format(object? value) => value switch

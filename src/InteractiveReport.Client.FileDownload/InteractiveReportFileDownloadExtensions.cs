@@ -11,9 +11,16 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace InteractiveReport.Client.FileDownload;
 
-/// <summary>A complete generated file returned by a download writer.</summary>
+/// <summary>
+/// A download the server is ready to produce. The content is a callback rather than a buffer: an
+/// export is unpaged, so materializing it would hold the whole rendered document in memory — and on
+/// the large object heap — before a single byte reached the client.
+/// </summary>
+/// <param name="WriteContent">Writes the complete file to the response body.</param>
+/// <param name="FileName">The name offered to the client.</param>
+/// <param name="ContentType">The content type, including charset where it applies.</param>
 public sealed record InteractiveReportDownloadFile(
-    byte[] Bytes,
+    Func<Stream, CancellationToken, Task> WriteContent,
     string FileName,
     string ContentType);
 
@@ -47,7 +54,8 @@ internal sealed class CsvInteractiveReportDownloadWriter : IInteractiveReportDow
 
         var table = CsvReportPresentation.Render(result);
         return new(
-            CsvWriter.Write(table.Columns, table.Rows),
+            (stream, token) => CsvWriter.WriteToAsync(
+                stream, table.Columns, table.Rows, CsvCellPolicy.SafeText, token),
             $"{SafeName(reportName)}.csv",
             "text/csv; charset=utf-8");
     }
@@ -151,7 +159,13 @@ public static class InteractiveReportFileDownloadExtensions
 
         var file = writer.Write(name, format, queried.Value!);
         http.Response.Headers["X-IR-Truncated"] = queried.Truncated ? "true" : "false";
-        return Results.File(file.Bytes, file.ContentType, file.FileName);
+        // Streamed rather than buffered, so the response carries no Content-Length: an unpaged
+        // export is exactly the case where holding the whole body to announce its size is the
+        // cost worth avoiding.
+        return Results.Stream(
+            stream => file.WriteContent(stream, ct),
+            file.ContentType,
+            file.FileName);
     }
 
     private static IResult Failure(InteractiveReportFailure failure, HttpContext http)
