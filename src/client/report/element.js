@@ -1,14 +1,15 @@
-// Protocol contract: the <interactive-report> element: the state-document lifecycle. The report
-// state doc is the single source of truth; the element builds it, POSTs it, and routes the
+// Protocol contract: the private report controller owns the state-document lifecycle. The report
+// state doc is the single source of truth; the controller builds it, POSTs it, and routes the
 // response to the renderers. The skeleton, menus, search, dialogs, and saved-report features
-// live in modules that operate on the element through this class's surface: doc,
+// live in modules that operate on the controller through this class's internal surface: doc,
 // els, apply/applyOrBanner, runQuery, state transitions, restoreLastGood, normalize/serialize,
 // reportUrl, and the notice slots.
 
-import { api, apiUrl, errorText } from "../core/api.js";
-import { banner } from "../core/dom.js";
+import { api, apiUrl, defaultApiBase, errorText } from "../core/api.js";
+import { banner, transientBanner } from "../core/dom.js";
 import { loadWhoami } from "../core/identity.js";
-import { disposeWidget, setCustomStyleSheet, WidgetElement } from "../core/widget.js";
+import { resolveLocale, translate } from "../core/localization.js";
+import { createWidgetRoot, disposeWidget, setHostStyleSheet } from "../core/widget.js";
 import { applyFeatureChrome, buildSkeleton } from "./skeleton.js";
 import { canonicalControlName, featureEnabled } from "./schema.js";
 import {
@@ -40,6 +41,8 @@ const loadChartModule = () =>
     chartModulePromise ??= import(new URL("./ir-chart.js", import.meta.url).href)
         .catch(err => { chartModulePromise = undefined; throw err; });
 
+const USER_QUERY_DEBOUNCE_MS = 200;
+
 const invalidState = message => {
     const error = new Error(message);
     error.name = "InvalidStateError";
@@ -67,14 +70,25 @@ function copyReportDocument(value) {
     }
 }
 
-export class InteractiveReportElement extends WidgetElement {
-    static observedAttributes = ["report", "saved-report", "api-base", "base", "lang", "disabled"];
+const defaultBase = defaultApiBase();
+const controllers = new WeakMap();
+
+const controllerFor = element => {
+    const controller = controllers.get(element);
+    if (!controller) throw invalidState("The report controller is unavailable.");
+    return controller;
+};
+
+class ReportController {
 
     /**
      * Initializes the component state required by the browser report controller.
      */
-    constructor() {
-        super();
+    constructor(host, root, mount) {
+        this.host = host;
+        this._root = root;
+        this._mount = mount;
+        this._seq = 0;
         this._busyTokens = new Set();
         this._initialized = false;
         this._stateRevision = 0;
@@ -82,6 +96,36 @@ export class InteractiveReportElement extends WidgetElement {
         this._controlOverrides = new Map();
         this._savedListLoaded = false;
         this._savedListPromise = null;
+        this._scheduledUserQuery = null;
+    }
+
+    get shadowRoot() { return this.host.shadowRoot; }
+    get nodeType() { return 1; }
+    get parentElement() { return this.host.parentElement; }
+    get ownerDocument() { return this.host.ownerDocument; }
+    get isConnected() { return this.host.isConnected; }
+    getRootNode(options) { return this.host.getRootNode(options); }
+    get apiBase() {
+        return this.host.getAttribute("api-base")
+            ?? this.host.getAttribute("base")
+            ?? defaultBase;
+    }
+    get base() { return this.apiBase.replace(/\/+$/, ""); }
+    get locale() { return resolveLocale(this.host); }
+    getAttribute(name) { return this.host.getAttribute(name); }
+    hasAttribute(name) { return this.host.hasAttribute(name); }
+    dispatchEvent(event) { return this.host.dispatchEvent(event); }
+    t(key, values = {}) { return translate(this.host, key, values); }
+
+    clearError() { this.els?.errorSlot?.replaceChildren(); }
+    notify(text, kind = "ok") {
+        if (this.els?.transientSlot)
+            transientBanner(this.els.transientSlot, kind, text, 4000, this.host);
+    }
+
+    disposeTransients() {
+        disposeWidget(this);
+        disposeWidget(this.host);
     }
     /**
      * Returns the report name requested by the host attribute.
@@ -107,13 +151,7 @@ export class InteractiveReportElement extends WidgetElement {
      *
      * @returns {boolean} Whether the host carries the standard boolean `disabled` attribute.
      */
-    get disabled() { return this.hasAttribute("disabled"); }
-    /**
-     * Enables or disables every package-owned interactive control without changing feature overrides.
-     *
-     * @param {unknown} value - A truthy value disables the report controls.
-     */
-    set disabled(value) { this.toggleAttribute("disabled", Boolean(value)); }
+    get disabled() { return this.host.hasAttribute("disabled"); }
 
     /**
      * Schedules initialization when the custom element is attached to a document.
@@ -134,7 +172,9 @@ export class InteractiveReportElement extends WidgetElement {
      * Side effects: advances the inherited lifecycle sequence, aborts the active request, and destroys the chart instance.
      */
     disconnectedCallback() {
-        super.disconnectedCallback();
+        ++this._seq;
+        this.disposeTransients();
+        this.cancelScheduledUserQuery();
         this._abort?.abort();
         this._abort = null;
         this.destroyChart();
@@ -151,6 +191,10 @@ export class InteractiveReportElement extends WidgetElement {
      */
     attributeChangedCallback(name, oldValue, newValue) {
         if (oldValue === newValue) return;
+        if (name === "stylesheet") {
+            this.refreshStyleSheet();
+            return;
+        }
         if (name === "disabled") {
             this.refreshDisabledState();
             return;
@@ -175,6 +219,35 @@ export class InteractiveReportElement extends WidgetElement {
     // generation. Busy tokens are independent so overlapping operations cannot clear aria-busy early.
 
     /**
+     * Replaces any pending user query with one trailing-edge timer.
+     *
+     * @returns {Promise<boolean>} True when this call owns the elapsed timer; false when superseded.
+     */
+    scheduleUserQuery() {
+        this.cancelScheduledUserQuery();
+        return new Promise(resolve => {
+            const scheduled = {
+                resolve,
+                timer: setTimeout(() => {
+                    if (this._scheduledUserQuery !== scheduled) return;
+                    this._scheduledUserQuery = null;
+                    resolve(true);
+                }, USER_QUERY_DEBOUNCE_MS),
+            };
+            this._scheduledUserQuery = scheduled;
+        });
+    }
+
+    /** Resolves and removes a superseded user query before it reaches the transport. */
+    cancelScheduledUserQuery() {
+        const scheduled = this._scheduledUserQuery;
+        if (!scheduled) return;
+        this._scheduledUserQuery = null;
+        clearTimeout(scheduled.timer);
+        scheduled.resolve(false);
+    }
+
+    /**
      * Marks the widget busy and returns a callback that releases the busy token.
      *
      * @returns {() => void} An idempotency-agnostic callback that releases this operation's token.
@@ -196,11 +269,11 @@ export class InteractiveReportElement extends WidgetElement {
      *
      * @returns {void} No value.
      *
-     * Side effects: invalidates state transitions, clears report data and saved/search selections, and removes the custom stylesheet.
+     * Side effects: invalidates state transitions and clears report data and saved/search selections.
      */
     resetReportContext() {
+        this.cancelScheduledUserQuery();
         this._stateRevision++;
-        setCustomStyleSheet(this, null);
         this.schema = null;
         this.doc = null;
         this.lastResult = null;
@@ -299,7 +372,6 @@ export class InteractiveReportElement extends WidgetElement {
             const schema = await api(apiUrl(this.base, name, "schema"));
             if (seq !== this._seq) return false;
             this.schema = schema;
-            setCustomStyleSheet(this, schema.styleSheet);
             applyFeatureChrome(this);
             // Invariant: a missing saved endpoint means the feature is off; any other failure
             // must not masquerade as "no saved reports exist".
@@ -519,6 +591,11 @@ export class InteractiveReportElement extends WidgetElement {
      */
     getControlOverrides() { return Object.fromEntries(this._controlOverrides); }
 
+    /** Synchronizes the application-owned stylesheet attribute into the shadow root. */
+    refreshStyleSheet() {
+        setHostStyleSheet(this.host, this.host.getAttribute("stylesheet"));
+    }
+
     /**
      * Builds a report-relative API URL for the active report.
      *
@@ -556,7 +633,7 @@ export class InteractiveReportElement extends WidgetElement {
         this._mount.inert = disabled;
         this._mount.toggleAttribute("inert", disabled);
         this._mount.setAttribute("aria-disabled", String(disabled));
-        if (disabled) disposeWidget(this);
+        if (disabled) this.disposeTransients();
     }
 
     /**
@@ -569,7 +646,7 @@ export class InteractiveReportElement extends WidgetElement {
      */
     refreshControlSurface() {
         if (!this.els) return;
-        disposeWidget(this);
+        this.disposeTransients();
         if (this.schema) applyFeatureChrome(this);
         if (this.doc) renderChips(this, this.els.chips);
         if (this.lastResult) {
@@ -612,8 +689,14 @@ export class InteractiveReportElement extends WidgetElement {
      */
     async runQuery(opts = {}) {
         this._abort?.abort();
-        const ctrl = this._abort = new AbortController();
+        this._abort = null;
         const source = opts.source ?? "refresh";
+        if (source === "user") {
+            if (!await this.scheduleUserQuery()) return;
+        } else {
+            this.cancelScheduledUserQuery();
+        }
+        const ctrl = this._abort = new AbortController();
         const requestId = ++this._requestId;
         const finishBusy = this.beginBusy();
         try {
@@ -795,6 +878,7 @@ export class InteractiveReportElement extends WidgetElement {
      */
     beginStateTransition() {
         const revision = ++this._stateRevision;
+        this.cancelScheduledUserQuery();
         this._abort?.abort();
         this._abort = null;
         return revision;
@@ -914,7 +998,10 @@ export class InteractiveReportElement extends WidgetElement {
             : err?.status === 404 && !hasServerText
                 ? this.t("report.notFound")
                 : null;
-        super.showError(err, friendly);
+        const slot = this.els?.errorSlot;
+        if (!slot) return;
+        slot.replaceChildren(
+            banner("error", errorText(err, friendly, this.host), () => this.clearError(), this.host));
     }
 
     /**
@@ -981,4 +1068,68 @@ export class InteractiveReportElement extends WidgetElement {
         }
         openViewDialog(this, mode);
     }
+}
+
+/**
+ * Public browser interface for one interactive report.
+ *
+ * All mutable report and rendering state is held by a closure-owned controller in `controllers`.
+ * The custom element deliberately exposes only host configuration and supported integration APIs.
+ */
+export class InteractiveReportElement extends HTMLElement {
+    static observedAttributes = [
+        "report", "saved-report", "api-base", "base", "lang", "disabled", "stylesheet",
+    ];
+
+    constructor() {
+        super();
+        const { root, mount } = createWidgetRoot(this);
+        const controller = new ReportController(this, root, mount);
+        controllers.set(this, controller);
+        controller.refreshStyleSheet();
+    }
+
+    connectedCallback() { controllerFor(this).connectedCallback(); }
+    disconnectedCallback() { controllerFor(this).disconnectedCallback(); }
+    attributeChangedCallback(name, oldValue, newValue) {
+        controllerFor(this).attributeChangedCallback(name, oldValue, newValue);
+    }
+
+    /** The canonical name of the active report. */
+    get reportName() { return controllerFor(this).reportName; }
+
+    /** The explicit API base, legacy base, or bundle-relative default. */
+    get apiBase() { return controllerFor(this).apiBase; }
+    set apiBase(value) {
+        if (value === null || value === undefined) this.removeAttribute("api-base");
+        else this.setAttribute("api-base", String(value));
+    }
+
+    /** The application-owned stylesheet URL injected into this report's shadow root. */
+    get styleSheet() { return this.getAttribute("stylesheet"); }
+    set styleSheet(value) {
+        if (value === null || value === undefined) this.removeAttribute("stylesheet");
+        else this.setAttribute("stylesheet", String(value));
+    }
+
+    /** Whether every package-owned interactive control is inert. */
+    get disabled() { return this.hasAttribute("disabled"); }
+    set disabled(value) { this.toggleAttribute("disabled", Boolean(value)); }
+
+    getReportDocument() { return controllerFor(this).getReportDocument(); }
+    submitReportDocument(document) {
+        return controllerFor(this).submitReportDocument(document);
+    }
+    getExport(format = "csv", options = {}) {
+        return controllerFor(this).getExport(format, options);
+    }
+    setControlEnabled(name, enabled) {
+        return controllerFor(this).setControlEnabled(name, enabled);
+    }
+    setControlOverrides(overrides) {
+        return controllerFor(this).setControlOverrides(overrides);
+    }
+    clearControlOverrides() { return controllerFor(this).clearControlOverrides(); }
+    isControlEnabled(name) { return controllerFor(this).isControlEnabled(name); }
+    getControlOverrides() { return controllerFor(this).getControlOverrides(); }
 }

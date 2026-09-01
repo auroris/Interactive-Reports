@@ -407,7 +407,7 @@ test("column settings reject component-reserved CSS classes without leaking stag
     assert.match(dialog.querySelector(".ir-dialog-error").textContent, /invalid or reserved/i);
     assert.equal(!!report.shadowRoot.querySelector(".ir-dialog"), true,
         "invalid class input keeps the dialog open");
-    assert.equal(inputNode(report.doc, "formats")?.formats?.ID, undefined,
+    assert.equal(inputNode(report.getReportDocument(), "formats")?.formats?.ID, undefined,
         "an earlier staged column's edit must not survive a later column's failure");
 
     report.remove();

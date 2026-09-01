@@ -86,11 +86,12 @@ function chipToggle(w, kind, index, on, location) {
  * @param {string} kind - The chip kind, which selects search, view, computed, or ordinary rule removal.
  * @param {number} index - The zero-based rule index within the owning collection.
  * @param {object} location - The rendered composable location used to recover current ownership.
+ * @param {string|undefined} itemKey - A stable filter expression used when prior removals shifted indices.
  * @returns {void} No value.
  *
  * Side effects: may switch views, mutate state, clear the search input, run the report, remove dependent configuration, and show warnings or errors.
  */
-function chipRemove(w, kind, index, location) {
+function chipRemove(w, kind, index, location, itemKey) {
     if (kind === "view") {
         w.switchView("grid");
         return;
@@ -120,8 +121,16 @@ function chipRemove(w, kind, index, location) {
             default: {
                 const found = mutableLocation(d, location);
                 const field = nodeFields[found?.composable?.kind];
-                if (field && Array.isArray(found.composable[field]))
-                    found.composable[field].splice(index, 1);
+                if (field && Array.isArray(found.composable[field])) {
+                    const list = found.composable[field];
+                    // A debounced burst mutates the working document before the old chip DOM is
+                    // rerendered. Filter expressions provide a stable address while earlier
+                    // deletions shift array positions.
+                    const currentIndex = kind === "filter" && itemKey !== undefined
+                        ? list.findIndex(item => item?.expr === itemKey)
+                        : index;
+                    if (currentIndex >= 0) list.splice(currentIndex, 1);
+                }
                 break;
             }
         }
@@ -160,7 +169,7 @@ function chipEdit(w, kind, index, location) {
  *
  * Side effects: creates detached DOM nodes and event handlers; it does not mount the chip.
  */
-function chip({ w, kind, index, text, colLabel, off, toggleable = true, removable = true, editable = true, swatch, location }) {
+function chip({ w, kind, index, itemKey, text, colLabel, off, toggleable = true, removable = true, editable = true, swatch, location }) {
     const node = el("span", {
         class: "ir-chip" + (off ? " ir-chip-off" : ""),
         dataset: {
@@ -192,7 +201,7 @@ function chip({ w, kind, index, text, colLabel, off, toggleable = true, removabl
     if (removable) {
         node.append(el("button", {
             type: "button", class: "ir-chip-x", "aria-label": w.t("chip.remove", { name }), title: w.t("common.remove"),
-            onclick: () => chipRemove(w, kind, index, location),
+            onclick: () => chipRemove(w, kind, index, location, itemKey),
         }, icon("close")));
     }
     return node;
@@ -291,7 +300,7 @@ export function renderChips(w, container) {
         switch (node.kind) {
             case "filter":
                 (node.filters ?? []).forEach((rule, index) => chips.push(chip({
-                    w, kind: "filter", index,
+                    w, kind: "filter", index, itemKey: rule.expr,
                     off: rule.enabled === false, colLabel: w.t("filter.label"), text: rule.expr,
                     location, ...controls(location, "filter"),
                 })));

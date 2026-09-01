@@ -6,7 +6,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
-import { editInputComposable } from "../../src/client/report/state.js";
 import { reportState } from "./report-state-fixture.js";
 
 const window = new Window({ url: "https://host.example/dashboard" });
@@ -139,8 +138,6 @@ globalThis.fetch = (url, options = {}) => {
 };
 
 await import("../../src/InteractiveReport.AspNetCore/Ui/dist/ir.js");
-const { deleteCurrentSaved, loadSavedById, saveReport } =
-    await import("../../src/client/report/saved.js");
 
 const settle = async condition => {
     for (let attempt = 0; attempt < 60 && !condition(); attempt++)
@@ -156,44 +153,64 @@ async function mount() {
     return report;
 }
 
+const savedSelect = report => report.shadowRoot.querySelector(".ir-saved-select");
+
+const selectSaved = (report, id) => {
+    const select = savedSelect(report);
+    select.value = id;
+    select.dispatchEvent(new window.Event("change", { bubbles: true }));
+};
+
+const clickAction = (report, label) => {
+    report.shadowRoot.querySelector(".ir-actionsbtn").click();
+    const item = [...report.shadowRoot.querySelectorAll(".ir-popup .ir-menu-item")]
+        .find(candidate => candidate.textContent.includes(label));
+    assert.ok(item, `Actions contains ${label}`);
+    item.click();
+};
+
+const beginSaveAs = (report, title) => {
+    clickAction(report, "Save As");
+    const dialog = report.shadowRoot.querySelector(".ir-dialog");
+    assert.ok(dialog, "Save As opens a dialog");
+    dialog.querySelector('input[type="text"]').value = title;
+    dialog.querySelector(".ir-btn-primary").click();
+};
+
 const errorText = report =>
     report.shadowRoot.querySelector(".ir-banner-error")?.textContent ?? "";
 const warnText = report =>
     report.shadowRoot.querySelector(".ir-banner-warn")?.textContent ?? "";
 
-test("a mutator that throws mid-way leaves the live document untouched", async () => {
+test("an invalid public replacement leaves the accepted document untouched", async () => {
     requests.length = 0;
     const report = await mount();
 
-    const docBefore = report.doc;
-    const serialized = JSON.stringify(report.doc);
+    const before = report.getReportDocument();
     await assert.rejects(
-        report.apply(d => {
-            d.search = "partial";
-            editInputComposable(d, "filter", node => {
-                (node.filters ??= []).push({ enabled: true, expr: "ID = 1" });
-            });
-            throw new Error("staged validation failed");
-        }),
-        /staged validation failed/);
+        report.submitReportDocument({ ...before, extension: 1n }),
+        /JSON-compatible object/);
 
-    assert.equal(report.doc === docBefore, true, "the live doc object must not be replaced");
-    assert.equal(JSON.stringify(report.doc), serialized, "no partial mutation may survive");
+    assert.deepEqual(report.getReportDocument(), before, "no partial replacement may survive");
     assert.equal(requests.filter(r => r.url.endsWith("/query")).length, 1,
-        "a failed mutator must not reach the server");
+        "an invalid replacement must not reach the server");
 
     report.remove();
 });
 
-test("overlapping applies roll back to the last validated state, not an aborted intermediate", async () => {
+test("overlapping submissions roll back to the last validated state, not an aborted intermediate", async () => {
     requests.length = 0;
     const report = await mount();
-    assert.equal(report.doc.search ?? "", "");
+    assert.equal(report.getReportDocument().search ?? "", "");
 
     holdQueries = true;
-    const applyA = report.apply(d => { d.search = "AAA"; });
+    const a = report.getReportDocument();
+    a.search = "AAA";
+    const applyA = report.submitReportDocument(a);
     await settle(() => heldQueries.length === 1);
-    const applyB = report.apply(d => { d.search = "BBB"; });
+    const b = report.getReportDocument();
+    b.search = "BBB";
+    const applyB = report.submitReportDocument(b);
     await settle(() => heldQueries.length === 2);
 
     const rejection = assert.rejects(applyB, /validation/i);
@@ -203,12 +220,56 @@ test("overlapping applies roll back to the last validated state, not an aborted 
     holdQueries = false;
     heldQueries.length = 0;
 
-    assert.equal(report.doc.search ?? "", "",
+    assert.equal(report.getReportDocument().search ?? "", "",
         "the rollback must land on validated ground, not on A's never-validated mutation");
 
-    // The widget stays operational: a fresh apply commits normally.
-    await report.apply(d => { d.search = "ok"; });
-    assert.equal(report.doc.search, "ok");
+    // The widget stays operational: a fresh submission commits normally.
+    const next = report.getReportDocument();
+    next.search = "ok";
+    await report.submitReportDocument(next);
+    assert.equal(report.getReportDocument().search, "ok");
+
+    report.remove();
+});
+
+test("rapid filter-chip removals coalesce into one query with the final document", async () => {
+    requests.length = 0;
+    const report = await mount();
+    const document = report.getReportDocument();
+    document.tables.base.composables.push({
+        kind: "filter",
+        filters: [
+            { expr: "ID > 1", enabled: true },
+            { expr: "ID > 2", enabled: true },
+            { expr: "ID > 3", enabled: true },
+        ],
+    });
+    await report.submitReportDocument(document);
+
+    const before = requests.filter(request => request.url.endsWith("/query")).length;
+    const removeButtons = [...report.shadowRoot.querySelectorAll(
+        '.ir-chip[data-kind="filter"] .ir-chip-x')];
+    assert.equal(removeButtons.length, 3);
+
+    removeButtons.forEach(button => button.click());
+    assert.equal(requests.filter(request => request.url.endsWith("/query")).length, before,
+        "the burst must remain client-side until the trailing edge");
+
+    await settle(() => report.shadowRoot.querySelectorAll('.ir-chip[data-kind="filter"]').length === 0);
+    const queries = requests.filter(request => request.url.endsWith("/query"));
+    assert.equal(queries.length, before + 1, "all removals produce one server query");
+    const submitted = JSON.parse(queries.at(-1).body);
+    assert.deepEqual(
+        submitted.tables.base.composables.find(composable => composable.kind === "filter").filters,
+        [],
+        "the single request carries every deletion");
+
+    const hostDocument = report.getReportDocument();
+    hostDocument.search = "host refresh";
+    const hostSubmission = report.submitReportDocument(hostDocument);
+    assert.equal(requests.filter(request => request.url.endsWith("/query")).length, before + 2,
+        "an explicit host submission bypasses the user debounce");
+    await hostSubmission;
 
     report.remove();
 });
@@ -222,8 +283,8 @@ test("saved-report loads are last-request-wins even when GET responses arrive ou
 
     holdSavedDocuments = true;
     heldSavedDocuments.length = 0;
-    const loadA = loadSavedById(report, savedA.id);
-    const loadB = loadSavedById(report, savedB.id);
+    selectSaved(report, savedA.id);
+    selectSaved(report, savedB.id);
     await settle(() => heldSavedDocuments.length === 2);
 
     const state = search => ({
@@ -233,14 +294,13 @@ test("saved-report loads are last-request-wins even when GET responses arrive ou
     });
     heldSavedDocuments.find(request => request.id === savedB.id)
         .succeed({ summary: savedB, state: state("B") });
-    await loadB;
+    await settle(() => report.getReportDocument().search === "B");
     heldSavedDocuments.find(request => request.id === savedA.id)
         .succeed({ summary: savedA, state: state("A") });
-    await loadA;
+    await new Promise(resolve => setTimeout(resolve, 10));
 
-    assert.equal(report.currentSaved?.id, savedB.id);
-    assert.equal(report.doc.search, "B");
-    assert.equal(report.els.savedSel.value, savedB.id);
+    assert.equal(report.getReportDocument().search, "B");
+    assert.equal(savedSelect(report).value, savedB.id);
 
     holdSavedDocuments = false;
     heldSavedDocuments.length = 0;
@@ -258,26 +318,24 @@ test("a concurrent save cannot promote an unvalidated live document to last-good
     heldSaves.length = 0;
     heldQueries.length = 0;
 
-    const save = saveReport(report, {
-        title: "Saved A", isGlobal: false, isPrimary: false, asNew: true,
-    });
+    beginSaveAs(report, "Saved A");
     await settle(() => heldSaves.length === 1);
-    const apply = report.apply(doc => { doc.search = "BAD"; });
+    const bad = report.getReportDocument();
+    bad.search = "BAD";
+    const apply = report.submitReportDocument(bad);
     await settle(() => heldQueries.length === 1);
 
     const summary = { id: "saved-a", title: "Saved A", mine: true };
     savedReports = [summary];
     heldSaves[0].succeed(summary);
-    await save;
+    await settle(() => savedSelect(report).value === summary.id);
 
     const rejection = assert.rejects(apply, /validation/i);
     heldQueries[0].fail({ title: "Report state failed validation" }, 400);
     await rejection;
 
-    assert.equal(report.doc.search ?? "", "",
+    assert.equal(report.getReportDocument().search ?? "", "",
         "the failed query restores the previously rendered document");
-    assert.equal(report._lastGood.doc.search ?? "", "",
-        "save completion never blesses the unrelated live mutation");
 
     holdSaves = false;
     holdQueries = false;
@@ -295,14 +353,12 @@ test("a successful save remains in the local list when its refresh fails", async
 
     savedMutationResult = { id: "saved-new", title: "New report", mine: true };
     savedListStatus = 500;
-    await saveReport(report, {
-        title: "New report", isGlobal: false, isPrimary: false, asNew: true,
-    });
+    beginSaveAs(report, "New report");
+    await settle(() => warnText(report).includes("could not be refreshed"));
 
-    assert.equal(report.savedList.some(saved => saved.id === "saved-new"), true);
-    assert.equal(report.currentSaved?.id, "saved-new");
-    assert.equal(report.els.savedSel.value, "saved-new");
-    assert.equal(report.els.savedWrap.hidden, false);
+    assert.equal(!!savedSelect(report).querySelector('option[value="saved-new"]'), true);
+    assert.equal(savedSelect(report).value, "saved-new");
+    assert.equal(report.shadowRoot.querySelector(".ir-saved").hidden, false);
     assert.match(warnText(report), /could not be refreshed/i);
 
     savedMutationResult = null;
@@ -319,9 +375,7 @@ test("a saved-list refresh cannot cross a report switch", async () => {
     savedMutationResult = { id: "saved-orders", title: "Orders copy", mine: true };
     holdSavedLists = true;
     heldSavedLists.length = 0;
-    const save = saveReport(report, {
-        title: "Orders copy", isGlobal: false, isPrimary: false, asNew: true,
-    });
+    beginSaveAs(report, "Orders copy");
     await settle(() => heldSavedLists.length === 1);
     assert.match(heldSavedLists[0].url, /\/orders\/saved$/);
 
@@ -330,16 +384,16 @@ test("a saved-list refresh cannot cross a report switch", async () => {
     savedReports = [invoiceSaved];
     report.setAttribute("report", "invoices");
     await settle(() => report.reportName === "invoices"
-        && report.savedList.some(saved => saved.id === invoiceSaved.id));
+        && savedSelect(report).querySelector(`option[value="${invoiceSaved.id}"]`));
 
     heldSavedLists[0].succeed([
         { id: "late-orders", title: "Late orders response", mine: true },
     ]);
-    await save;
+    await new Promise(resolve => setTimeout(resolve, 10));
 
-    assert.deepEqual(report.savedList, [invoiceSaved],
+    assert.equal(!!savedSelect(report).querySelector('option[value="late-orders"]'), false,
         "the completed Orders request must not replace the Invoices list");
-    assert.equal(report.els.savedSel.value, "",
+    assert.equal(savedSelect(report).value, "",
         "the current report's selector remains on its own default state");
 
     savedMutationResult = null;
@@ -362,17 +416,17 @@ test("a successful delete stays removed from the local list when its refresh fai
     }]]);
     savedListStatus = 200;
     const report = await mount();
-    await loadSavedById(report, summary.id);
+    selectSaved(report, summary.id);
+    await settle(() => report.getReportDocument().search === "delete");
 
     savedListStatus = 500;
-    const deletion = deleteCurrentSaved(report);
+    clickAction(report, "Delete");
     await settle(() => report.shadowRoot.querySelector("dialog.ir-dialog-modal"));
     report.shadowRoot.querySelector("dialog.ir-dialog-modal .ir-btn-primary").click();
-    await deletion;
+    await settle(() => warnText(report).includes("could not be refreshed"));
 
-    assert.equal(report.savedList.some(saved => saved.id === summary.id), false);
-    assert.equal(report.currentSaved, null);
-    assert.notEqual(report.els.savedSel.value, summary.id);
+    assert.equal(!!savedSelect(report).querySelector(`option[value="${summary.id}"]`), false);
+    assert.notEqual(savedSelect(report).value, summary.id);
     assert.match(warnText(report), /could not be refreshed/i);
 
     savedDocuments = new Map();
@@ -399,10 +453,10 @@ test("a saved-report load whose query fails restores doc, selection, and search 
     select.dispatchEvent(new window.Event("change", { bubbles: true }));
     await settle(() => errorText(report).includes("could not run"));
 
-    assert.equal(report.currentSaved, null,
-        "the failed load must not leave the new report selected over the old grid");
-    assert.equal(report.doc.search ?? "", "", "the working copy reverts to the validated state");
-    assert.equal(report.els.search.value, "", "the search box follows the reverted doc");
+    assert.equal(report.getReportDocument().search ?? "", "",
+        "the working copy reverts to the validated state");
+    assert.equal(report.shadowRoot.querySelector(".ir-search-input").value, "",
+        "the search box follows the reverted doc");
     assert.equal(select.value, "", "the select returns to the previous selection");
 
     report.remove();
@@ -426,8 +480,8 @@ test("a saved report deleted elsewhere reports precisely and refreshes the list"
 
     assert.match(errorText(report), /no longer available/i,
         "a missing saved report must not present as 'Report not found'");
-    assert.equal(report.currentSaved, null);
-    assert.equal(report.doc.search ?? "", "");
+    assert.equal(savedSelect(report).value, "");
+    assert.equal(report.getReportDocument().search ?? "", "");
 
     report.remove();
     savedReports = [];
@@ -457,9 +511,10 @@ test("a saved report with a stale recorded schema is adopted — the server is t
     await settle(() => report.shadowRoot.querySelector(".ir-chips")?.textContent.includes("Acme"));
 
     assert.equal(errorText(report), "", "no client-side drift gate — the document runs");
-    assert.equal(report.currentSaved?.id, "stale-1");
-    assert.equal(report.doc.search, "Acme");
-    assert.equal("schema" in report.doc, false, "the retired snapshot key is dropped on adoption");
+    assert.equal(savedSelect(report).value, "stale-1");
+    assert.equal(report.getReportDocument().search, "Acme");
+    assert.equal("schema" in report.getReportDocument(), false,
+        "the retired snapshot key is dropped on adoption");
     const posted = JSON.parse(requests.filter(r => r.url.endsWith("/query")).at(-1).body);
     assert.equal("schema" in posted, false, "and never travels back to the server");
 

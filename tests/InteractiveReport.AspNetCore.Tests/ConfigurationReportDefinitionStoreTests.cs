@@ -246,30 +246,6 @@ public sealed class ConfigurationReportDefinitionStoreTests
         Assert.Equal(ReportFeatures.All, ReportFeatures.Resolve(snapshot));
     }
 
-    [Theory]
-    [InlineData(" ", "must not be blank")]
-    [InlineData("javascript:alert(1)", "must use http or https")]
-    [InlineData("file:///tmp/report.css", "must use http or https")]
-    public async Task Invalid_stylesheet_urls_fail_fast(string styleSheet, string expected)
-    {
-        var options = new InteractiveReportOptions();
-        options.Reports["orders"] = new ReportDefinition
-        {
-            Connection = "db",
-            Dialect = ReportDialect.Sqlite,
-            Sql = "select 1 as ID",
-            StyleSheet = styleSheet,
-        };
-        using var store = new ConfigurationReportDefinitionStore(
-            new OptionsMonitorStub(options),
-            new SchemaCache(), TestRegistry());
-
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(
-            async () => await store.Find("orders"));
-
-        Assert.Contains(expected, error.Message);
-    }
-
     [Fact]
     public async Task Find_rejects_out_of_range_chart_point_limits()
     {

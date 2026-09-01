@@ -168,7 +168,7 @@ export const messages = {
     "columns.textColor": "Texte",
     "columns.cssClasses": "Classes CSS",
     "columns.cssPlaceholder": "p. ex. colonne-montant accentuée",
-    "columns.cssNote": "Classes séparées par des espaces provenant de la feuille de style configurée du rapport. Le préfixe ir- est réservé.",
+    "columns.cssNote": "Classes séparées par des espaces provenant de la feuille de style de l’élément hôte. Le préfixe ir- est réservé.",
     "columns.preview": "Aperçu",
     "columns.sampleText": "Exemple de texte",
     "columns.renameTitle": "Renommer la colonne",

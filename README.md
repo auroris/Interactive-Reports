@@ -137,7 +137,6 @@ the host's content root unless absolute:
 "orders": {
   "connection": "MainDb",
   "sql": "SELECT ORDER_ID, CUSTOMER, STATUS, CUSTOMER_URL, THUMBNAIL_URL, AMOUNT FROM ORDERS",
-  "styleSheet": "/css/orders-report.css",
   "documentFiles": [
     "ReportDocuments/orders.primary.json",
     "ReportDocuments/orders.finance.json"
@@ -554,9 +553,15 @@ Debug can be enabled with:
 }
 ```
 
-`styleSheet` is an application-controlled relative or HTTP(S) URL. The component
-places its `<link>` inside the report's shadow root after the packaged styles, so its
-rules can target report internals without leaking into the host page. For example:
+An application integrator can set the element's `stylesheet` attribute or reflected
+`styleSheet` property to a relative or absolute stylesheet URL. The component places
+one `<link>` inside the report's shadow root after the packaged styles, so its rules can
+target report internals without leaking into the host page. For example:
+
+```html
+<interactive-report report="orders" stylesheet="/css/orders-report.css">
+</interactive-report>
+```
 
 ```css
 .amount-column { font-variant-numeric: tabular-nums; }
@@ -567,7 +572,8 @@ Column Settings accepts space-separated class names and saves them in the column
 `formats.classes` list. Classes apply to the column header, data cells, and aggregate
 cells. Tokens begin with a letter or `_`, then use letters, digits, `_`, or `-`; the
 component's `ir-` prefix is reserved. Report documents can therefore select
-developer-defined rules but cannot supply CSS or choose a stylesheet URL. The host's
+integrator-defined rules but cannot supply CSS or choose a stylesheet URL. Report
+definitions do not carry stylesheet configuration. The host's
 Content Security Policy still governs stylesheet loading.
 
 Column Settings also offers `Text (Default)`, `Link`, and `Image` display modes.
@@ -696,7 +702,8 @@ not reach the host page.
 <interactive-report
   report="open-orders"
   saved-report="My Open Orders"
-  api-base="/api/reports">
+  api-base="/api/reports"
+  stylesheet="/assets/report-overrides.css">
 </interactive-report>
 ```
 
@@ -747,6 +754,12 @@ the request. Its `detail` is `{ document, source, requestId, signal }`. The deta
 and sent. Calling `preventDefault()` cancels that query. `source` is one of `initial`,
 `user`, `saved-report`, `host`, or `refresh`.
 
+Ordinary UI edits use a 200 ms trailing-edge debounce. Rapid chip removals, toggles,
+paging commands, or other packaged-control mutations accumulate in the working document
+and send only the final state. If a request is already in flight, the next edit aborts it
+immediately before starting the debounce window. Initial and saved-report loads, explicit
+`submitReportDocument()` calls, exports, and administration refreshes are not delayed.
+
 After a current successful query has been adopted and rendered, `ir-query-complete`
 dispatches with detached `{ document, result, submitted, source, requestId }` snapshots.
 It is observational: changing its detail cannot mutate the report. Submit a changed copy
@@ -793,6 +806,10 @@ report.disabled = true;
 await performHostOperation();
 report.disabled = false;
 ```
+
+`styleSheet` reflects the `stylesheet` attribute. Assigning another URL replaces the
+shadow-root link immediately; assigning `null` removes it. The stylesheet belongs to
+the host element and remains in place when `report` changes.
 
 Server-side integrations should use the registered `IReportFileExporter` directly,
 not make an HTTP request back into their own application:

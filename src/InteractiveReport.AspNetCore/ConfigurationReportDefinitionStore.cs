@@ -388,21 +388,6 @@ public sealed partial class ConfigurationReportDefinitionStore :
             }
         }
 
-        if (def.StyleSheet is not null)
-        {
-            if (string.IsNullOrWhiteSpace(def.StyleSheet))
-                throw new InvalidOperationException(
-                    $"Report '{def.Name}': styleSheet must not be blank.");
-            if (!Uri.TryCreate(def.StyleSheet.Trim(), UriKind.RelativeOrAbsolute, out var styleSheet))
-                throw new InvalidOperationException(
-                    $"Report '{def.Name}': styleSheet must be a valid relative or absolute URL.");
-            if (styleSheet.IsAbsoluteUri
-                && !string.Equals(styleSheet.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
-                && !string.Equals(styleSheet.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException(
-                    $"Report '{def.Name}': styleSheet absolute URLs must use http or https.");
-        }
-
         ValidateEditLink(def);
         ValidateColumnOverrides(def);
     }

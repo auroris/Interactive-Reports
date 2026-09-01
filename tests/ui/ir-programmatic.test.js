@@ -113,6 +113,9 @@ test("the public document API is detached, transactional, and emits query lifecy
         });
     });
 
+    for (const internal of ["doc", "schema", "els", "apply", "runQuery", "_lastGood"])
+        assert.equal(internal in report, false, `${internal} must remain behind the public facade`);
+
     assert.equal(before[0].source, "initial");
     assert.equal(complete[0].source, "initial");
     assert.equal(report.getReportDocument().search, "initial hook");

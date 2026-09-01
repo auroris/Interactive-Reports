@@ -110,7 +110,7 @@ test("loads the stored primary Default, queries data, paginates from Actions, an
         "Order #", "Customer Name", "Region", "Status", "Amount", "Ordered On▼", "Notes", "With Tax",
     ]);
     const report = page.locator("interactive-report");
-    await expect(report.locator('link[data-ir-custom-styles]')).toHaveAttribute("href", "/report-overrides.css");
+    await expect(report.locator('link[data-ir-host-stylesheet]')).toHaveAttribute("href", "/report-overrides.css");
     await expect(page.getByRole("columnheader", { name: "Amount", exact: true })).toHaveClass(/amount-column/);
     const firstHeaderButton = page.getByRole("columnheader", { name: "Order #", exact: true })
         .getByRole("button");

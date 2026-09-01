@@ -366,7 +366,6 @@ public static class EndpointExtensions
             return Results.Json(new InteractiveReportSchema(
                 Name: def.Name,
                 Title: def.Title ?? ColumnModel.Prettify(def.Name),
-                StyleSheet: def.StyleSheet?.Trim(),
                 Columns: columns.Select(c => new ColumnInfo(c.Name, c.Label, c.KindName, c.IsComputed)).ToArray(),
                 EditLink: ResolveEditLink(def, columns, ctx),
                 ColumnOverrides: ResolveColumnOverrides(def, columns),

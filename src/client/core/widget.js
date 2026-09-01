@@ -71,11 +71,11 @@ function appendStyleNode(root) {
     root.append(packagedStyleNode());
 }
 
-// Invariant: adopted sheets cascade after every DOM sheet, so a custom stylesheet <link> could
+// Invariant: adopted sheets cascade after every DOM sheet, so a host stylesheet <link> could
 // never out-tie an adopted packaged rule. A root that hosts a custom stylesheet therefore falls
 // back to the style-node path, restoring the documented order: packaged styles first, the
-// application's link after them. The demotion is one-way: a report switch that drops the
-// custom stylesheet keeps the style node rather than thrash between the two mechanisms.
+// application's link after them. The demotion is one-way: clearing the host stylesheet keeps
+// the style node rather than thrash between the two mechanisms.
 /**
  * Replaces the packaged adopted sheet with an equivalent style node so a later custom link can override it.
  *
@@ -89,14 +89,14 @@ function demotePackagedStyles(root) {
     root.adoptedStyleSheets = root.adoptedStyleSheets.filter(sheet => sheet !== packagedStyleSheet);
     root.insertBefore(
         packagedStyleNode(),
-        root.querySelector('link[data-ir-custom-styles], [part~="surface"]'));
+        root.querySelector('link[data-ir-host-stylesheet], [part~="surface"]'));
 }
 
-// Invariant: a report definition may name one application-owned stylesheet. It belongs inside
-// the shadow root so its rules share the component's styling boundary. Keeping the URL out of
-// report state means saved/global reports cannot choose a CSS source.
+// Invariant: the application integrator may name one stylesheet on the host element. It belongs
+// inside the shadow root so its rules share the component's styling boundary. Report definitions
+// and report documents never choose a CSS source.
 /**
- * Loads, replaces, or removes the custom stylesheet owned by a widget host.
+ * Loads, replaces, or removes the application stylesheet owned by a widget host.
  *
  * @param {HTMLElement} host - The widget host whose shadow root owns the custom link.
  * @param {string|null|undefined} href - The application-owned stylesheet URL, or a falsy value to remove it.
@@ -104,9 +104,9 @@ function demotePackagedStyles(root) {
  *
  * Side effects: may demote the adopted packaged sheet, then inserts, replaces, or removes the custom link.
  */
-export function setCustomStyleSheet(host, href) {
+export function setHostStyleSheet(host, href) {
     const root = host.shadowRoot;
-    const current = root?.querySelector("link[data-ir-custom-styles]");
+    const current = root?.querySelector("link[data-ir-host-stylesheet]");
     if (!href) { current?.remove(); return; }
     if (!root || current?.getAttribute("href") === href) return;
 
@@ -114,7 +114,7 @@ export function setCustomStyleSheet(host, href) {
     const link = el("link", {
         rel: "stylesheet",
         href,
-        "data-ir-custom-styles": "",
+        "data-ir-host-stylesheet": "",
     });
     if (current) current.replaceWith(link);
     else root.insertBefore(link, root.querySelector('[part~="surface"]'));

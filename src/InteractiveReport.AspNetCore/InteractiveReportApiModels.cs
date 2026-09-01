@@ -141,7 +141,6 @@ internal static class InteractiveReportErrorCatalog
 public sealed record InteractiveReportSchema(
     string Name,
     string Title,
-    string? StyleSheet,
     IReadOnlyList<ColumnInfo> Columns,
     InteractiveReportEditLink? EditLink,
     IReadOnlyDictionary<string, InteractiveReportColumnOptions>? ColumnOverrides,

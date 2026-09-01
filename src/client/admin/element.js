@@ -117,7 +117,12 @@ export class InteractiveReportAdminElement extends WidgetElement {
      * Side effects: starts a query on the embedded listing; its own renderer handles errors.
      */
     refresh() {
-        this.els.report.runQuery?.().catch(() => {});
+        try {
+            const document = this.els.report.getReportDocument();
+            this.els.report.submitReportDocument(document).catch(() => {});
+        } catch {
+            // The embedded report owns its initial load and presents any load failure itself.
+        }
     }
 
     /**

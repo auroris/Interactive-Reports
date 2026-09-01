@@ -48,7 +48,6 @@ globalThis.fetch = async (url, options = {}) => {
             limits: { defaultPageSize: 25, maxPageSize: 100 },
             columns: [{ name: "ID", label: "ID", type: "number" }],
             capabilities: { aggregateFunctions: {}, expressionFunctions: [] },
-            ...(reportName === "orders" ? { styleSheet: "/styles/orders-report.css?v=3" } : {}),
         });
     }
     if (String(url).endsWith("/whoami")) return json(whoami);
@@ -88,13 +87,14 @@ test("the report is style-isolated and uses its explicit API base", async () => 
     const report = document.createElement("interactive-report");
     report.setAttribute("report", "orders");
     report.setAttribute("api-base", "/custom-report-api/");
+    report.setAttribute("stylesheet", "/styles/orders-report.css?v=3");
     document.body.append(report);
 
     for (let attempt = 0; attempt < 20 && !requests.some(r => r.url.endsWith("/query")); attempt++)
         await new Promise(resolve => setTimeout(resolve, 1));
 
     assert.ok(report.shadowRoot, "the component should render behind a shadow root");
-    const customLink = report.shadowRoot.querySelector("link[data-ir-custom-styles]");
+    const customLink = report.shadowRoot.querySelector("link[data-ir-host-stylesheet]");
     assert.equal(
         customLink?.getAttribute("href"),
         "/styles/orders-report.css?v=3",
@@ -122,7 +122,7 @@ test("the report is style-isolated and uses its explicit API base", async () => 
     assert.equal(report.shadowRoot.querySelector(".ir-table").getAttribute("part"), "table");
     assert.equal(report.shadowRoot.querySelector(".ir-report-select"), null);
     assert.equal(document.querySelector("link[data-ir-css]"), null, "the bundle should not inject global CSS");
-    assert.equal(document.querySelector("link[data-ir-custom-styles]"), null,
+    assert.equal(document.querySelector("link[data-ir-host-stylesheet]"), null,
         "the report stylesheet must not leak into the page head");
     assert.equal(document.querySelector(".ir-toolbar"), null, "internal elements should not leak into the host DOM");
     assert.equal(report.apiBase, "/custom-report-api/");
@@ -190,6 +190,7 @@ test("the configured report is loaded directly and can be changed through its at
     const report = document.createElement("interactive-report");
     report.setAttribute("report", "orders");
     report.setAttribute("api-base", "/custom-report-api");
+    report.setAttribute("stylesheet", "/styles/orders-report.css?v=3");
     document.body.append(report);
 
     for (let attempt = 0; attempt < 20 && !requests.some(r => r.url.endsWith("/orders/query")); attempt++)
@@ -200,8 +201,16 @@ test("the configured report is loaded directly and can be changed through its at
         await new Promise(resolve => setTimeout(resolve, 1));
 
     assert.equal(report.reportName, "order-feed");
-    assert.equal(report.shadowRoot.querySelector("link[data-ir-custom-styles]"), null,
-        "changing to a report without a custom sheet removes the previous link");
+    assert.equal(report.shadowRoot.querySelector("link[data-ir-host-stylesheet]")?.getAttribute("href"),
+        "/styles/orders-report.css?v=3",
+        "the host-owned stylesheet survives report changes");
+    report.styleSheet = "/styles/replacement.css";
+    assert.equal(report.getAttribute("stylesheet"), "/styles/replacement.css");
+    assert.equal(report.shadowRoot.querySelector("link[data-ir-host-stylesheet]")?.getAttribute("href"),
+        "/styles/replacement.css", "the reflected property replaces the shadow-root link");
+    report.styleSheet = null;
+    assert.equal(report.shadowRoot.querySelector("link[data-ir-host-stylesheet]"), null,
+        "clearing the reflected property removes the link");
     assert.ok(requests.some(r => r.url === "/custom-report-api/order-feed/schema"));
     assert.ok(requests.some(r => r.url === "/custom-report-api/order-feed/query"));
     assert.ok(!requests.some(r => r.url === "/custom-report-api"));
@@ -354,7 +363,7 @@ test("a primary saved report named Default represents the schema Default", async
     assert.equal(select.options[0].text, "Default");
     assert.equal(select.options[0].value, "default-1");
     assert.equal(select.querySelector('optgroup[label="Primary"] option')?.text, "Executive");
-    assert.equal(report.currentSaved?.id, "default-1");
+    assert.equal(select.value, "default-1");
     assert.equal(requests.some(r => r.url.endsWith("/saved/default-1")), false,
         "the schema already carries the resolved Default state");
 

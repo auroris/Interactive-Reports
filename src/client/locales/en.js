@@ -168,7 +168,7 @@ export const messages = {
     "columns.textColor": "Text",
     "columns.cssClasses": "CSS Classes",
     "columns.cssPlaceholder": "e.g. amount-column emphasized",
-    "columns.cssNote": "Space-separated classes from the report's configured stylesheet. The ir- prefix is reserved.",
+    "columns.cssNote": "Space-separated classes from the host element's stylesheet. The ir- prefix is reserved.",
     "columns.preview": "Preview",
     "columns.sampleText": "Sample text",
     "columns.renameTitle": "Rename Column",

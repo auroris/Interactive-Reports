@@ -129,7 +129,6 @@ optional interface retain the original full-definition lookup path.
       "maxRows": 100000,
       "defaultPageSize": 50,
       "maxPageSize": 1000,
-      "styleSheet": "/css/open-orders.css",
       "documentFiles": [
         "ReportDocuments/open-orders.primary.json",
         "ReportDocuments/open-orders.finance.json"
@@ -229,16 +228,11 @@ Notes:
   they can be renamed or removed. PUT may change only the primary flag; other updates
   and DELETE return 403, while Save As remains available. Hosts must include the
   referenced files in their build/publish output.
-- `styleSheet` is a relative or HTTP(S) URL chosen by the report developer. The schema
-  delivers it to the component, which links it inside the shadow root after the
-  packaged styles. Relative URLs resolve against the host page; CSP `style-src` still
-  applies. The URL never enters report state, so saved/global reports cannot redirect
-  CSS loading.
 - `editLink` renders APEX's edit pencil: a leading synthetic grid column whose anchor
   navigates to `urlTemplate` with `{COLUMN}` placeholders substituted from the row
   (values URL-encoded; the result still passes the renderer protocol allowlist).
-  Definition chrome like `styleSheet` — not a feature token, never in report state,
-  and independent of the user's column selection: template columns are schema-bound
+  It is definition chrome, not a feature token, never in report state, and independent
+  of the user's column selection: template columns are schema-bound
   and projected as hidden row data exactly like renderer source columns, so hiding a
   referenced column never breaks the pencil. The header is visually empty with the
   label as its accessible name; a row whose placeholder value is NULL renders no
@@ -537,7 +531,7 @@ provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
   dates); unknown tokens and indigestible values fall
   through to default rendering — a mask is a lens, never a gate. Inline styling is the
   same constrained property set highlights use. `classes` selects rules from the
-  definition's trusted shadow-root `styleSheet`; the client accepts conservative CSS
+  application integrator's shadow-root stylesheet; the client accepts conservative CSS
   identifier tokens, drops malformed/reserved state, and refuses the component's
   `ir-` namespace in the dialog. A report document can select classes but cannot carry
   CSS or a URL. `displayAs` chooses ordinary text, link, image, or action rendering.
@@ -1396,7 +1390,8 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 
 ```html
 <script type="module" src="/api/reports/ui/ir.js"></script>
-<interactive-report report="open-orders" api-base="/api/reports"></interactive-report>
+<interactive-report report="open-orders" api-base="/api/reports"
+                    stylesheet="/css/report-overrides.css"></interactive-report>
 
 <script type="module" src="/api/reports/ui/ir-admin.js"></script>
 <interactive-report-admin api-base="/api/reports"></interactive-report-admin>
@@ -1418,9 +1413,10 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   inert; short destructive confirmations use native modal dialogs. The
   packaged stylesheet is compiled into the JavaScript bundle, so host resets and
   utility classes cannot enter the component and component styles cannot escape onto
-  the host page. A definition's optional `styleSheet` link is inserted inside that
-  root after the packaged styles. Hosts can also theme documented `--ir-*` custom
-  properties on the element.
+  the host page. The report host's optional `stylesheet` attribute inserts one link
+  inside that root after the packaged styles; its reflected `styleSheet` property can
+  replace or remove the link at runtime. Report definitions and documents cannot choose
+  a CSS source. Hosts can also theme documented `--ir-*` custom properties on the element.
 - Source modules live in `src/client`, organized by concern. The root holds only the
   three bundle entries (`ir.js`, `ir-admin.js`, `ir-chart.js` — thin registration/
   re-export files whose basenames fix the `Ui/dist` output names) and the shared
@@ -1431,9 +1427,10 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   builder, icons, banners, form helpers), `menu.js` (popup menus), `dialog.js`
   (modal dialogs), `widget.js` (shadow-root mount/teardown, shared notices,
   compiles in `ir.css`). `report/` is the report
-  widget: `element.js` (the custom element — state-document lifecycle: build,
-  POST, route the response; exposes `doc`/`els`/`apply`/`runQuery`/notices as the
-  surface its feature modules call), `state.js` (pure normalization,
+  widget: `element.js` (a small public custom-element facade over a closure-owned
+  controller; the controller builds the state document, POSTs it, routes responses,
+  and supplies `doc`/`els`/`apply`/`runQuery`/notices only to feature modules),
+  `state.js` (pure normalization,
   serialization, scoped-search expression construction), `schema.js` (column
   metadata + label resolution), `skeleton.js` (toolbar/frame), `search.js`,
   `menus.js` (Actions + header menus), `saved.js` (saved-report management),
@@ -1516,8 +1513,16 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   snapshots. Client control overrides are tri-state per canonical feature (`true`,
   `false`, or inherit): an explicit override wins over the server suggestion and is
   retained across report changes. Runtime `savedReports` enablement lazily loads the
-  selector data. The standard `disabled` property makes the complete shadow surface
-  inert and closes transient UI without changing overrides. None of these client choices
+  selector data. Packaged `user` mutations pass through a 200 ms trailing-edge debounce:
+  rapid chip removals and other UI edits accumulate in the working document and only its
+  final state is posted. A new edit aborts an in-flight query immediately; initial,
+  saved-report, host-document, export, and administration operations remain immediate.
+  The standard `disabled` property makes the complete shadow surface
+  inert and closes transient UI without changing overrides. `styleSheet` reflects the
+  `stylesheet` attribute and is the sole foreign-stylesheet entry point; it belongs to
+  the host across report changes. Mutable documents, schema data, request state, rollback
+  state, and renderer operations live on a closure-owned controller rather than the DOM
+  element. None of these client choices
   bypass endpoint authorization, context resolution, document validation, or the
   server-enforced download and saved-report policies.
 - **Host export API**: after the initial query, `interactive-report.getExport(format,
@@ -1656,11 +1661,12 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   Masks and styling remain client-only; definitions ship default formatting through the effective Default state,
   with no new config surface. Remaining per-column configuration candidates: LOVs,
   help text, per-column sort/filter permissions.
-- **M14 — Trusted custom CSS** ✅ *(2026-08-07)*: a definition-owned `styleSheet`
-  URL is delivered through schema and linked inside the report's shadow root. Column
-  Settings writes validated class tokens to `formats.classes`; the grid applies them
+- **M14 — Host-owned custom CSS** ✅ *(2026-08-07; revised 2026-08-31)*: the
+  application integrator's `stylesheet` attribute / `styleSheet` property links one URL
+  inside the report's shadow root; report definitions and documents have no CSS source.
+  Column Settings writes validated class tokens to `formats.classes`; the grid applies them
   to headers, cells, and aggregates while filtering malformed and reserved `ir-*`
-  state. Reports select application-authored rules but cannot inject CSS or URLs.
+  state. Documents select application-authored rules but cannot inject CSS or URLs.
 - **M15 — Column renderers** ✅ *(2026-08-07)*: the grid owns a per-column renderer
   seam with text, link, and image implementations. Column Settings selects the display
   mode and its URL/text source columns. Hidden dependencies are schema-bound server-side
@@ -1763,7 +1769,7 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 | UI assets embedded in the AspNetCore assembly, served under the mapped prefix | RCL static web assets | Zero host setup (`UseStaticFiles`/`_content` not required), one mapping call delivers API + UI, works identically in any host. |
 | UI asset endpoint `AllowAnonymous` | inherit group auth | Assets are public package code (readable on any feed); an auth-gated script tag turns "session expired" into a blank region that can't even say "sign in". Data endpoints keep the full gate. |
 | Asset ETags hash content | assembly version tag | Version-tagged ETags 304 stale content across rebuilds of the same version (bitten in dev; would bite ops on patch releases). |
-| Shadow DOM + theme properties + configured inner stylesheet | Light DOM + `.ir-*` prefix | Isolation keeps host resets out and report rules in. Theme tokens cover broad branding; a developer-owned stylesheet inside the root supports deliberate internal and per-column styling. |
+| Shadow DOM + theme properties + host-owned inner stylesheet | Light DOM + `.ir-*` prefix | Isolation keeps host resets out and report rules in. Theme tokens cover broad branding; an integrator-owned stylesheet inside the root supports deliberate internal and per-column styling without adding CSS configuration to report definitions. |
 | Expression-rule `enabled` is canonical protocol state | strip disabled instructions | A saved computed column, filter, or highlight is either on or off; disabling does not delete the author's expression, label, or color choice. |
 | Compiled rule + typed effect plan | separate computed/filter/highlight expression pipelines | Parsing, binding, result contracts, and enabled behavior are one pipeline; definition, row-inclusion, and decoration effects still make query placement explicit. |
 | Cell styles apply after row styles | depend on rule order | Cell highlighting has explicit priority over the background/foreground inherited from a row highlight. |
@@ -1795,7 +1801,7 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 | Column formatting is a `formats` composable; only scalar mask lineage crosses `from` | inherit every style and renderer; apply every mask/style server-side | The active owner keeps its full presentation contract, while a child inherits only safe masks. Link/image/action dependencies are schema-bound owner-local inputs. One text renderer owns scalar masks; link/image compose it, and synthetic metric metadata retains its format source. Every terminal-table CSV export intentionally serializes Display As modes as browser-like encoded HTML; hidden inputs never become columns. |
 | Masks are closed per-type tokens (Intl-backed) | freeform mask strings (APEX FML/999G999D99) | Same rule as TO_STRING: a portable vocabulary has stable meaning while `Intl` supplies the user's separators, symbols, and ordering; it cannot smuggle anything. Unknown tokens fall through to default rendering instead of erroring, because a display mask must never break a report. |
 | Int64/UInt64/Decimal travel as invariant JSON strings; all numeric columns use bundled `big.js` | send every numeric database value as a JSON number; maintain separate integer/decimal formatters | JavaScript parses JSON numbers as IEEE-754 doubles. Typed metadata retains numeric behavior, while one arbitrary-precision path handles parsing, comparison, scaling, and rounding without silent digit loss. |
-| Column classes select a definition-owned shadow-root stylesheet | freeform style/CSS in report state; page-level classes | The URL and CSS stay application-controlled; saved reports carry only conservative class tokens and cannot select reserved `ir-*` behavior. Page CSS cannot cross the shadow boundary, while freeform report CSS would be an injection surface. |
+| Column classes select a host-owned shadow-root stylesheet | freeform style/CSS in report state; definition-owned or page-level CSS | The integrator owns the URL and CSS; saved reports carry only conservative class tokens and cannot select reserved `ir-*` behavior. Report definitions cannot choose a CSS source, page CSS cannot cross the shadow boundary, and freeform report CSS would be an injection surface. |
 | The dialog's Visible checkbox writes the active table's terminal `select` composable | a relational projection; a per-column `visible` flag in formats | One source of truth: the shuttle, the header Hide, and the checkbox all edit the same list, so they can never disagree. Visibility does not remove columns from the relation inherited by a child; a future relational projection would be a separate operation. |
 | Link/image renderers use explicit source columns | arbitrary HTML or URL/text templates | Column names can be schema-bound and safely projected. Direct DOM construction preserves escaping, and a protocol allowlist blocks active-content URLs without inventing a template language. |
 | Document is an unordered map of named completed relations | mode-specific branch registry | `from` makes dependency explicit: each child wraps its parent's Export SQL, map order carries no meaning, and canonical composable semantics make behavior belong to operations rather than table subclasses. Inactive alternatives remain ordinary map entries. |

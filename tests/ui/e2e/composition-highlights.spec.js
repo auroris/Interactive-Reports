@@ -193,7 +193,7 @@ test("Pivot totals reject active search transactionally and search succeeds once
         await expect(page.locator("tr.ir-grand-total")).toHaveCount(1);
         await expect(viewChip).toContainText("totals");
 
-        const beforeDocument = await report.evaluate(element => element.serialize());
+        const beforeDocument = await report.evaluate(element => element.getReportDocument());
         const beforeHeaders = await page.getByRole("columnheader").allTextContents();
         const beforeBody = await table.locator("tbody").innerText();
 
@@ -218,7 +218,7 @@ test("Pivot totals reject active search transactionally and search succeeds once
         // A rejected edit restores all authored and rendered state, including the
         // search control. The valid Pivot matrix and its total row never flicker out.
         await expect(search).toHaveValue("");
-        expect(await report.evaluate(element => element.serialize())).toEqual(beforeDocument);
+        expect(await report.evaluate(element => element.getReportDocument())).toEqual(beforeDocument);
         expect(await page.getByRole("columnheader").allTextContents()).toEqual(beforeHeaders);
         expect(await table.locator("tbody").innerText()).toBe(beforeBody);
         await expect(page.locator("tr.ir-grand-total")).toHaveCount(1);

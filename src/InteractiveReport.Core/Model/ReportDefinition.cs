@@ -153,17 +153,9 @@ public sealed class ReportDefinition
     public List<string>? DocumentFiles { get; set; }
 
     /// <summary>
-    /// Gets or sets an optional application-controlled stylesheet URL. The report component places a
-    /// link to it inside its shadow root, after the packaged styles, so report-specific
-    /// rules can reach the component without accepting CSS from report documents.
-    /// Relative URLs resolve against the host page.
-    /// </summary>
-    public string? StyleSheet { get; set; }
-
-    /// <summary>
     /// Gets or sets an APEX-style per-row edit pencil, rendered by the client as a leading synthetic
-    /// grid column. Definition chrome like styleSheet — not report state and not a
-    /// feature token; configuring it is what enables it.
+    /// grid column. This is definition chrome, not report state and not a feature token;
+    /// configuring it is what enables it.
     /// </summary>
     public ReportEditLink? EditLink { get; set; }
 

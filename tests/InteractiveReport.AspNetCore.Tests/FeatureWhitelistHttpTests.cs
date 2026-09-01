@@ -63,7 +63,6 @@ public sealed class FeatureWhitelistHttpTests : IAsyncLifetime
             ["InteractiveReport:Reports:locked:Dialect"] = "Sqlite",
             ["InteractiveReport:Reports:locked:Sql"] = "SELECT * FROM IR_FEATURE_TEST",
             ["InteractiveReport:Reports:locked:Authorization:AllowAnonymous"] = "true",
-            ["InteractiveReport:Reports:locked:StyleSheet"] = "/styles/locked-report.css?v=2",
             // Mixed casing on purpose: tokens are case-insensitive in config.
             ["InteractiveReport:Reports:locked:Features:0"] = "SEARCH",
             ["InteractiveReport:Reports:locked:Features:1"] = "sort",
@@ -115,7 +114,7 @@ public sealed class FeatureWhitelistHttpTests : IAsyncLifetime
         Assert.Equal(
             ["search", "sort"],
             locked.GetProperty("features").EnumerateArray().Select(f => f.GetString()!).ToArray());
-        Assert.Equal("/styles/locked-report.css?v=2", locked.GetProperty("styleSheet").GetString());
+        Assert.False(locked.TryGetProperty("styleSheet", out _));
         Assert.False(open.TryGetProperty("styleSheet", out _));
     }
 
