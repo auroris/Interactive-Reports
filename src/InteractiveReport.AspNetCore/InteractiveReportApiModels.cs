@@ -55,6 +55,8 @@ public static class InteractiveReportErrorCodes
     public const string SavedReportTitleConflict = "IR-1309";
     public const string ConfiguredReportTitleConflict = "IR-1310";
     public const string ConfiguredReportReadOnly = "IR-1311";
+    public const string DefaultReportCannotBeUnset = "IR-1312";
+    public const string ConfiguredDefaultControlled = "IR-1313";
 
     public const string MalformedAuthorizationRequest = "IR-1400";
     public const string AuthorizationRestrictionRequired = "IR-1401";
@@ -121,6 +123,10 @@ internal static class InteractiveReportErrorCatalog
             ("Configured report title conflict", "A read-only configured report uses this title."),
         InteractiveReportErrorCodes.ConfiguredReportReadOnly =>
             ("Read-only report", "Configured report documents cannot be updated or deleted. Use Save As to create an editable copy."),
+        InteractiveReportErrorCodes.DefaultReportCannotBeUnset =>
+            ("Default report required", "Select another default report instead of unsetting the current default."),
+        InteractiveReportErrorCodes.ConfiguredDefaultControlled =>
+            ("Configured default report", "The default report is selected by application configuration and cannot be replaced through the API."),
         InteractiveReportErrorCodes.MalformedAuthorizationRequest =>
             ("Malformed authorization request", "The authorization request is not valid JSON."),
         InteractiveReportErrorCodes.AuthorizationRestrictionRequired =>
@@ -204,8 +210,6 @@ public sealed class SaveReportRequest
     public ReportState? State { get; set; }
     /// <summary>Gets or sets whether all authorized report users may load the saved report.</summary>
     public bool IsGlobal { get; set; }
-    /// <summary>Gets or sets whether this saved report should receive the administrator-controlled primary publication flag.</summary>
-    public bool IsPrimary { get; set; }
 }
 
 /// <summary>Supplies a partial update for an existing saved report; null properties remain unchanged.</summary>
@@ -217,8 +221,8 @@ public sealed class UpdateSavedReportRequest
     public ReportState? State { get; set; }
     /// <summary>Gets or sets a replacement global-sharing flag.</summary>
     public bool? IsGlobal { get; set; }
-    /// <summary>Gets or sets a replacement primary-report flag.</summary>
-    public bool? IsPrimary { get; set; }
+    /// <summary>Gets or sets whether this report should become the family's default. Only <see langword="true"/> is accepted.</summary>
+    public bool? IsDefault { get; set; }
     /// <summary>Gets or sets a replacement owner identity for an administrative reassignment.</summary>
     public string? Owner { get; set; }
 }
@@ -230,7 +234,6 @@ public sealed record SavedReportSummary(
     string Title,
     bool IsGlobal,
     bool IsDefault,
-    bool IsPrimary,
     bool Mine,
     bool IsReadOnly,
     DateTime ModifiedUtc);

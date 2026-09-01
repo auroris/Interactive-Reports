@@ -130,7 +130,7 @@ optional interface retain the original full-definition lookup path.
       "defaultPageSize": 50,
       "maxPageSize": 1000,
       "documentFiles": [
-        "ReportDocuments/open-orders.primary.json",
+        "ReportDocuments/open-orders.default.json",
         "ReportDocuments/open-orders.finance.json"
       ]
     }
@@ -139,7 +139,7 @@ optional interface retain the original full-definition lookup path.
 ```
 
 ```json
-// ReportDocuments/open-orders.primary.json
+// ReportDocuments/open-orders.default.json
 {
   "title": "Default",
   "default": true,
@@ -694,7 +694,7 @@ Mounted by the host: `app.MapInteractiveReports("/api/reports").RequireAuthoriza
 | `POST /api/reports/{name}/lov` | Required complete current client document + active table + one column + optional search → at most 50 distinct values. Uses the Query action and the submitted, possibly unsaved active relation without persistence access. |
 | `GET  /api/reports/whoami` | Bootstrap diagnostic for the caller's canonical identity value (only when `whoamiEnabled`); grants no authority. |
 | `GET  /api/reports/{id}/saved` | Public documents and the caller's private documents in the id's report family. |
-| `POST /api/reports/{id}/saved` | Refresh null table caches, then save the posted state in the anchor document's family (global/primary publication = admin). 403 when the configured `savedReports` policy is absent (§4), independently of client controls. |
+| `POST /api/reports/{id}/saved` | Refresh null table caches, then save the posted state in the anchor document's family (global publication = admin). 403 when the configured `savedReports` policy is absent (§4), independently of client controls. |
 | `GET/PUT/DELETE /api/reports/{id}` | Load / modify / delete one report document (matrix in §13; configured documents reject mutation). |
 | `GET/POST /api/reports/__saved-reports/{schema,query}` | Administrator listing through the ordinary definition pipeline; action cells carry numeric document ids. |
 | `GET  /api/reports/admin/saved/{id}/document` | Administrator: download a canonical `{ title, default, state }` source-file envelope. |
@@ -823,6 +823,8 @@ The current HTTP code catalog is:
 | `IR-1309` | A user-authored saved-report title conflicts. |
 | `IR-1310` | A title conflicts with a configured read-only report. |
 | `IR-1311` | A configured report cannot be mutated. |
+| `IR-1312` | The current default was explicitly unset instead of replaced. |
+| `IR-1313` | Application configuration owns default selection. |
 | `IR-1400` | An authorization-administration body is not valid JSON. |
 | `IR-1401` | The restriction value is missing. |
 | `IR-1402` | The authorization identity is invalid. |
@@ -1227,8 +1229,9 @@ authorization are configured; this is a UI hint, never an authorization decision
 
 **Storage.** `ISavedReportStore` / `SqlSavedReportStore`: table `IR_SAVED_REPORTS`
 (database-generated numeric ID · REPORT_NAME · SOURCE_FILE · TITLE · TITLE_KEY ·
-TITLE_SCOPE · OWNER · IS_GLOBAL/IS_DEFAULT/IS_PRIMARY · STATE_JSON · MODIFIED_UTC ·
-ORIGIN). Cross-dialect-uniform storage types on purpose; auto-created unless
+TITLE_SCOPE · OWNER · IS_GLOBAL/IS_DEFAULT · STATE_JSON · MODIFIED_UTC ·
+ORIGIN, whose values are `user`, `synthetic`, and `configured`). Cross-dialect-uniform
+storage types on purpose; auto-created unless
 `autoCreate` is disabled. Location via `savedReports.connection` (a named connection —
 point it at the data database to co-locate saved reports with report data) or
 `savedReports.dataSource` (a ConnectionStrings name or literal connection string).
@@ -1259,7 +1262,10 @@ authority for existence, title, and default selection; retrieval dereferences
 served under the same id without rewriting stored presentation metadata. Removing a
 configured path during reconciliation removes its identity. If a still-catalogued file
 is absent when loaded, that row is deleted, a synthetic default is inserted when needed,
-and the vanished id returns 404. The store is the single listing surface for end-user,
+and the vanished id returns 404. A present configured body that fails report-state
+processing is logged and its optimistic row is deleted; the request returns 404 without a
+synthetic fallback. Reconciliation is invalidated so the still-declared file receives a new
+identity and is retried on the next synchronization. The store is the single listing surface for end-user,
 administration, and GraphQL discovery, but not the content source. Configured content is
 globally readable within its authorized family, read-only, and grouped under Public.
 Configured titles are deployment declarations and may duplicate user or configured titles.
@@ -1286,28 +1292,31 @@ then updates or deletes only the matching `MODIFIED_UTC` revision; every replace
 advances that revision. This avoids collation drift
 and Oracle CLOB equality while preventing an authorization decision from reaching a newer row.
 
-**Primary and Default.** `IS_PRIMARY` remains independent of global/private scope and
-is administrator-controlled publication metadata. It makes a saved report public but
-does not select the default. `IS_DEFAULT` identifies exactly one durable default per
-family. A configured file with `default: true` owns that identity and takes precedence.
+**Default.** `IS_DEFAULT` identifies exactly one durable default per family and that
+document is public. Selecting an ordinary database report as default is an administrator
+operation that atomically promotes it to global/default and retains the previous default
+as an ordinary global report. A configured file with `default: true` owns that identity
+and cannot be replaced through the API; configuration takes precedence.
 Otherwise the server lazily inserts a synthetic default generated from current
-appsettings. If that stored synthetic JSON fails parsing or report-state processing, the
+appsettings. If any database-backed default fails parsing or report-state processing, the
 server regenerates it from current appsettings and updates the same row so its id remains
-stable. User-authored and file-backed documents are never auto-repaired.
+stable. Saving the synthetic row through the API converts its origin to `user` without
+changing its role or id. Configured file bodies are never auto-repaired or replaced by a
+synthetic default merely because their state is invalid.
 
 **Authorization matrix** (enforced at the endpoint layer; the store is dumb):
 
 | Actor | May |
 |---|---|
 | Owner | read, update title/state, delete, regardless of publication status |
-| Anyone with report access | read primary and global reports for that definition |
-| Administrator | everything: list all, flag/unflag primary, publish/unpublish global, reassign owner, update/delete any database row |
+| Anyone with report access | read the default and global reports for that definition |
+| Administrator | everything: list all, select the default, publish/unpublish global, reassign owner, update/delete any database row |
 | Anyone (configured file) | read and Save As; never update/delete the configured source |
-| Administrator (configured file) | additionally flag/unflag primary; never edit/delete file-backed content |
+| Administrator (configured file) | never edit/delete file-backed content or change its configuration-owned default selection |
 
 Denials hide existence (404) except where the caller provably knows the resource — an
-owner reaching for admin-only powers (primary, publish, reassign) gets an explicit 403.
-Primary/global publication and ownership changes are administrator-only. Publication
+owner reaching for admin-only powers (default selection, publish, reassign) gets an explicit 403.
+Default selection, global publication, and ownership changes are administrator-only. Publication
 does not remove the owner's ability to update the report's title/state or delete it.
 Saved-report loads still pass the underlying report definition's authorization gate.
 
@@ -1335,7 +1344,7 @@ then derives publication and owner actions from the effective definition. A call
 can therefore narrow a public proposal to a private save, while any privilege added by
 a later handler still emits its required administrator action. The action vocabulary is
 ViewReport, Query, Export, List/Read/Create/Update/DeleteSavedReport,
-PublishGlobalReport, PublishPrimaryReport, ChangeSavedReportOwner,
+PublishGlobalReport, SelectDefaultReport, ChangeSavedReportOwner,
 ListAllSavedReports, ListAuthorizationUsers, ManageAuthorization, DownloadReportDocument, and
 UploadReportDocument. `false` and the
 dedicated denial exception are ordinary denials. Unexpected exceptions are logged and
@@ -1789,8 +1798,8 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 | Identity and owner matching is ordinal and case-sensitive | case-fold identity values | Identity-provider subjects are opaque; folding can merge distinct principals. |
 | Report-document ids are database-generated numeric identities | client-generated text ids | Numeric ids give database and configured-file rows one stable endpoint identity. Client-created transient documents may omit an id because processing routes use the configured definition key and submitted document. |
 | Timestamps as ISO text, flags as 0/1 | native per-dialect types | Uniform semantics and sorting across dialects for an engine-internal table. |
-| Global/primary flags admin-only; content remains owner-managed | all published mutations admin-only | Publication is a curation act, while title/state and deletion remain owner actions. |
-| `IS_DEFAULT` is a dedicated one-per-family flag; `IS_PRIMARY` remains independent publication metadata | infer default from title or primary | A configured file default can replace the synthetic row, while an invalid synthetic default can be rebuilt under the same id without overloading title or publication. |
+| Global publication and default selection are admin-only; content remains owner-managed | all published mutations admin-only | Publication and default selection are curation acts, while title/state and deletion remain owner actions. |
+| `IS_DEFAULT` is the single one-per-family default/publication role | maintain a separate primary flag | Global already represents additional public reports. A configured file default can replace the synthetic row, while an invalid synthetic default can be rebuilt under the same id without another overlapping publication concept. |
 | Configured report files use the saved-report protocol with `isReadOnly` | separate configured-report API or expose file origin | One selector and load path keeps the document model coherent. Generic mutability is what clients need; the storage source remains a server concern. |
 | Microsoft.Data.Sqlite dependency in the AspNetCore package | host-supplied providers only | SQLite remains a supported out-of-box `dataSource`; persistence still requires an explicit target and never creates a database merely because the package was installed. |
 | Decimal parameters bind as double on SQLite | decimal-as-TEXT (provider default) | The provider's TEXT binding breaks comparisons against affinity-less expressions (computed columns) via SQLite's cross-type ordering; double is SQLite's native numeric storage, so the conversion is faithful to the engine. |

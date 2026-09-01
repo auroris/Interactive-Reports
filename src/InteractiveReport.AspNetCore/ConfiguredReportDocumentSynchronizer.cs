@@ -105,9 +105,9 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
                 }
             }
 
-            // A configured file explicitly marked as default supersedes the synthetic database
-            // default. Demote configured predecessors and remove the synthetic fallback before
-            // inserting the new public file identity, since their display titles may coincide.
+            // A configured file explicitly marked as default supersedes the database selection.
+            // User-authored predecessors remain global; configured predecessors are demoted; every
+            // synthetic fallback is removed before inserting the configured public identity.
             foreach (var configuredDefault in documents.Where(document => document.Default))
             {
                 while (await _store.FindDefault(configuredDefault.ReportName, ct) is { } currentDefault)
@@ -119,7 +119,7 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
                             StringComparison.Ordinal))
                         break;
 
-                    if (currentDefault.Origin != SavedReportOrigin.Configured)
+                    if (currentDefault.Origin == SavedReportOrigin.Synthetic)
                     {
                         if (await _store.Delete(currentDefault, ct))
                         {
@@ -129,12 +129,22 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
                         continue;
                     }
 
-                    var demoted = currentDefault with { IsDefault = false };
+                    var demoted = currentDefault with { IsDefault = false, IsGlobal = true };
                     if (!await _store.Update(demoted, currentDefault, ct)) continue;
                     if (demoted.SourceFile is not null)
                         bySourceFile[(demoted.ReportName, demoted.SourceFile)] = demoted;
                     upserted++;
                     break;
+                }
+
+                foreach (var synthetic in existing.Where(report =>
+                             report.Origin == SavedReportOrigin.Synthetic
+                             && string.Equals(
+                                 report.ReportName,
+                                 configuredDefault.ReportName,
+                                 StringComparison.OrdinalIgnoreCase)))
+                {
+                    if (await _store.Delete(synthetic.Id, ct)) deleted++;
                 }
             }
 
@@ -150,7 +160,6 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
                     Owner = null,
                     IsGlobal = true,
                     IsDefault = document.Default,
-                    IsPrimary = false,
                     StateJson = null,
                     ModifiedUtc = document.ModifiedUtc,
                     Origin = SavedReportOrigin.Configured,
@@ -214,6 +223,26 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
     /// </summary>
     internal async Task RemoveMissing(SavedReport report, CancellationToken ct)
     {
+        await _store.Delete(report, ct);
+        Volatile.Write(ref _applied, null);
+    }
+
+    /// <summary>
+    /// Logs and deletes a configured identity whose file body could not be loaded or processed.
+    /// The configured reference remains authoritative, so invalidating reconciliation causes the
+    /// next synchronization attempt to create a fresh optimistic identity for another load attempt.
+    /// </summary>
+    internal async Task RemoveInvalid(
+        SavedReport report,
+        Exception exception,
+        CancellationToken ct)
+    {
+        _logger?.LogWarning(
+            exception,
+            "Configured report document {ReportName}/{SourceFile} (id {SavedReportId}) threw while loading; deleting its optimistic database identity",
+            report.ReportName,
+            report.SourceFile,
+            report.Id);
         await _store.Delete(report, ct);
         Volatile.Write(ref _applied, null);
     }

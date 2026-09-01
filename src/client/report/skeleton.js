@@ -7,7 +7,7 @@ import { el, icon } from "../core/dom.js";
 import { featureEnabled } from "./schema.js";
 import { doSearch, openSearchScopeMenu } from "./search.js";
 import { actionsMenuItems, openActionsMenu } from "./menus.js";
-import { loadSavedById, refreshSavedSelect, resetToPrimary } from "./saved.js";
+import { loadSavedById, refreshSavedSelect, resetToDefault } from "./saved.js";
 
 /**
  * Creates the report widget's persistent toolbar, banner, content, and paging regions.
@@ -50,7 +50,7 @@ export function buildSkeleton(w) {
 
     const savedSel = el("select", {
         class: "ir-select ir-saved-select",
-        onchange: () => savedSel.value ? loadSavedById(w, savedSel.value) : resetToPrimary(w),
+        onchange: () => savedSel.value ? loadSavedById(w, savedSel.value) : resetToDefault(w),
     });
     const savedWrap = el("label", { class: "ir-saved", hidden: true },
         el("span", { class: "ir-saved-label" }, w.t("toolbar.savedReport")), savedSel);

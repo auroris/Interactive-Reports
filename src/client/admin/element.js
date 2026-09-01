@@ -153,7 +153,7 @@ export class InteractiveReportAdminElement extends WidgetElement {
         try {
             switch (command) {
                 case "toggleGlobal": await this.toggleGlobal(id, row); break;
-                case "togglePrimary": await this.togglePrimary(id, row); break;
+                case "makeDefault": await this.makeDefault(id, row); break;
                 case "reassign": await this.reassign(id, row); break;
                 case "openState": await this.viewState(id, row); break;
                 case "download": await this.downloadDocument(id, row); break;
@@ -184,18 +184,17 @@ export class InteractiveReportAdminElement extends WidgetElement {
     }
 
     /**
-     * Updates whether a saved report has the primary publication flag.
+     * Selects a saved report as its report family's default.
      *
      * @param {string} id - The saved-report identifier to update.
-     * @param {object} row - Listing row containing the current primary status and title.
-     * @returns {Promise<void>} Resolves after the primary-status update and listing refresh are started.
+     * @param {object} row - Listing row containing the report title.
+     * @returns {Promise<void>} Resolves after the default replacement and listing refresh are started.
      *
      * Side effects: sends a saved-report update, displays a confirmation notice, and refreshes the listing.
      */
-    async togglePrimary(id, row) {
-        const makePrimary = row.PRIMARY_STATUS !== "Yes";
-        await api(apiUrl(this.base, id), { method: "PUT", body: { isPrimary: makePrimary } });
-        this.notify(this.t(makePrimary ? "admin.nowPrimary" : "admin.noLongerPrimary", {
+    async makeDefault(id, row) {
+        await api(apiUrl(this.base, id), { method: "PUT", body: { isDefault: true } });
+        this.notify(this.t("admin.nowDefault", {
             title: row.TITLE,
         }));
         this.refresh();

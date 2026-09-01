@@ -185,7 +185,7 @@ public static class EndpointExtensions
                 WithStorageErrors(group.MapPost("/{id:long}/saved", SavedReportEndpoints.Save)),
                 SavedReportsTag,
                 "Create a saved report",
-                "Creates a private, global, or primary saved report after validating the submitted state.")
+                "Creates a private or global saved report after validating the submitted state.")
             .Accepts<SaveReportRequest>("application/json")
             .Produces<SavedReportSummary>(StatusCodes.Status201Created)
             .Produces<InteractiveReportError>(StatusCodes.Status400BadRequest)

@@ -51,9 +51,16 @@ public sealed class InteractiveReportAuthorizationHttpTests
             HttpMethod.Post,
             $"/api/reports/{host.OrdersId}/saved",
             "action-admin",
-            new { title = "Lifecycle", isGlobal = true, isPrimary = true, state }));
+            new { title = "Lifecycle", isGlobal = true, state }));
         Assert.Equal(HttpStatusCode.Created, save.StatusCode);
         var id = (await ReadJson(save)).GetProperty("id").GetInt64();
+
+        using var makeDefault = await host.Client.SendAsync(Request(
+            HttpMethod.Put,
+            $"/api/reports/{id}",
+            "action-admin",
+            new { isDefault = true }));
+        Assert.Equal(HttpStatusCode.OK, makeDefault.StatusCode);
 
         using var load = await host.Client.SendAsync(Request(
             HttpMethod.Get, $"/api/reports/{id}", "action-admin"));
@@ -65,8 +72,6 @@ public sealed class InteractiveReportAuthorizationHttpTests
             new
             {
                 title = "Lifecycle Updated",
-                isGlobal = false,
-                isPrimary = false,
                 owner = "next-owner",
                 state,
             }));
@@ -80,7 +85,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
             HttpMethod.Post,
             $"/api/reports/admin/{host.OrdersId}/documents",
             "action-admin",
-            new { title = "Uploaded", primary = false, state }));
+            new { title = "Uploaded", state }));
         Assert.Equal(HttpStatusCode.Created, upload.StatusCode);
         using var delete = await host.Client.SendAsync(Request(
             HttpMethod.Delete, $"/api/reports/{id}", "action-admin"));
@@ -148,7 +153,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
             HttpMethod.Post,
             $"/api/reports/{host.OrdersId}/saved",
             "callback-admin",
-            new { title = "Default", isPrimary = true, state = new { } }));
+            new { title = "Published", isGlobal = true, state = new { } }));
 
         Assert.Equal(HttpStatusCode.Created, save.StatusCode);
         var calls = seen.ToArray();
@@ -156,15 +161,15 @@ public sealed class InteractiveReportAuthorizationHttpTests
             [
                 InteractiveReportAction.ReadSavedReport,
                 InteractiveReportAction.CreateSavedReport,
-                InteractiveReportAction.PublishPrimaryReport,
+                InteractiveReportAction.PublishGlobalReport,
             ],
             calls.Select(call => call.Action).ToArray());
         Assert.All(calls, call =>
         {
             Assert.Equal("callback-admin", call.User.FindFirstValue(ClaimTypes.NameIdentifier));
             Assert.Equal("orders", call.Resource.ReportName);
-            Assert.Equal("Default", call.Resource.Definition!.Title);
-            Assert.True(call.Resource.Definition.Primary);
+            Assert.Equal("Published", call.Resource.Definition!.Title);
+            Assert.True(call.Resource.Definition.Public);
             Assert.True(call.Resource.Definition.StateChanged);
             Assert.NotNull(call.Resource.Definition.State);
         });
@@ -175,6 +180,46 @@ public sealed class InteractiveReportAuthorizationHttpTests
             "callback-admin"));
         Assert.Equal(HttpStatusCode.OK, listing.StatusCode);
         Assert.Contains(seen, call => call.Action == InteractiveReportAction.ListAllSavedReports);
+    }
+
+    [Fact]
+    public async Task Selecting_a_default_emits_update_global_and_default_actions()
+    {
+        var seen = new ConcurrentQueue<InteractiveReportAuthorizationRequest>();
+        await using var host = await Start((reports, _) =>
+            reports.UseAuthorization((request, _) =>
+            {
+                seen.Enqueue(request);
+                return ValueTask.FromResult(true);
+            }));
+        using var save = await host.Client.SendAsync(Request(
+            HttpMethod.Post,
+            $"/api/reports/{host.OrdersId}/saved",
+            "callback-admin",
+            new { title = "Candidate", state = new { v = 3 } }));
+        Assert.Equal(HttpStatusCode.Created, save.StatusCode);
+        var id = (await ReadJson(save)).GetProperty("id").GetInt64();
+        while (seen.TryDequeue(out _)) { }
+
+        using var select = await host.Client.SendAsync(Request(
+            HttpMethod.Put,
+            $"/api/reports/{id}",
+            "callback-admin",
+            new { isDefault = true }));
+
+        Assert.Equal(HttpStatusCode.OK, select.StatusCode);
+        Assert.Equal(
+            [
+                InteractiveReportAction.UpdateSavedReport,
+                InteractiveReportAction.PublishGlobalReport,
+                InteractiveReportAction.SelectDefaultReport,
+            ],
+            seen.Select(call => call.Action).ToArray());
+        Assert.All(seen, call =>
+        {
+            Assert.True(call.Resource.Definition!.Public);
+            Assert.True(call.Resource.Definition.Default);
+        });
     }
 
     [Fact]
@@ -312,7 +357,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
                     Assert.Equal(request.Resource.SavedReport!.Id, definition.Id);
                     Assert.Equal("Client update", definition.Title);
                     Assert.False(definition.Public);
-                    Assert.False(definition.Primary);
+                    Assert.False(definition.Default);
                     Assert.Equal("ordinary-user", definition.Owner);
                     Assert.False(definition.StateChanged);
                     Assert.Null(definition.State);
@@ -355,8 +400,6 @@ public sealed class InteractiveReportAuthorizationHttpTests
                 seen.Enqueue(request.Action);
                 if (request.Action == InteractiveReportAction.CreateSavedReport)
                     request.Resource.Definition!.Public = true;
-                if (request.Action == InteractiveReportAction.PublishGlobalReport)
-                    request.Resource.Definition!.Primary = true;
                 return ValueTask.FromResult(true);
             }));
 
@@ -372,12 +415,10 @@ public sealed class InteractiveReportAuthorizationHttpTests
                 InteractiveReportAction.ReadSavedReport,
                 InteractiveReportAction.CreateSavedReport,
                 InteractiveReportAction.PublishGlobalReport,
-                InteractiveReportAction.PublishPrimaryReport,
             ],
             seen.ToArray());
         var result = await ReadJson(save);
         Assert.True(result.GetProperty("isGlobal").GetBoolean());
-        Assert.True(result.GetProperty("isPrimary").GetBoolean());
     }
 
     [Fact]
@@ -417,12 +458,12 @@ public sealed class InteractiveReportAuthorizationHttpTests
             new { title = "Mine", state = new { v = 3 } }));
         Assert.Equal(HttpStatusCode.Created, privateSave.StatusCode);
 
-        using var primarySave = await host.Client.SendAsync(Request(
+        using var globalSave = await host.Client.SendAsync(Request(
             HttpMethod.Post,
             $"/api/reports/{host.OrdersId}/saved",
             "ordinary-user",
-            new { title = "Primary", isPrimary = true, state = new { v = 3 } }));
-        Assert.Equal(HttpStatusCode.Forbidden, primarySave.StatusCode);
+            new { title = "Global", isGlobal = true, state = new { v = 3 } }));
+        Assert.Equal(HttpStatusCode.Forbidden, globalSave.StatusCode);
 
         using var listing = await host.Client.SendAsync(Request(
             HttpMethod.Get,
@@ -443,7 +484,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
             HttpMethod.Post,
             $"/api/reports/{host.OrdersId}/saved",
             "not-listed",
-            new { title = "Rejected", isPrimary = true, state = new { v = 3 } },
+            new { title = "Rejected", isGlobal = true, state = new { v = 3 } },
             roles: ["release"]));
         Assert.Equal(HttpStatusCode.Forbidden, nonListed.StatusCode);
 
@@ -451,14 +492,14 @@ public sealed class InteractiveReportAuthorizationHttpTests
             HttpMethod.Post,
             $"/api/reports/{host.OrdersId}/saved",
             "configured-admin",
-            new { title = "Restricted", isPrimary = true, state = new { v = 3 } }));
+            new { title = "Restricted", isGlobal = true, state = new { v = 3 } }));
         Assert.Equal(HttpStatusCode.Forbidden, restrictedAdmin.StatusCode);
 
         using var allowedAdmin = await host.Client.SendAsync(Request(
             HttpMethod.Post,
             $"/api/reports/{host.OrdersId}/saved",
             "configured-admin",
-            new { title = "Allowed", isPrimary = true, state = new { v = 3 } },
+            new { title = "Allowed", isGlobal = true, state = new { v = 3 } },
             roles: ["release"]));
         Assert.Equal(HttpStatusCode.Created, allowedAdmin.StatusCode);
     }
@@ -469,7 +510,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
         var handler = new RecordingHandler(
             InteractiveReportAction.ReadSavedReport,
             InteractiveReportAction.CreateSavedReport,
-            InteractiveReportAction.PublishPrimaryReport);
+            InteractiveReportAction.PublishGlobalReport);
         await using var host = await Start((reports, services) =>
         {
             reports.UseAspNetCoreAuthorization();
@@ -480,14 +521,14 @@ public sealed class InteractiveReportAuthorizationHttpTests
             HttpMethod.Post,
             $"/api/reports/{host.OrdersId}/saved",
             "native-admin",
-            new { title = "Native", isPrimary = true, state = new { v = 3 } }));
+            new { title = "Native", isGlobal = true, state = new { v = 3 } }));
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         Assert.Equal(
             [
                 InteractiveReportAction.ReadSavedReport,
                 InteractiveReportAction.CreateSavedReport,
-                InteractiveReportAction.PublishPrimaryReport,
+                InteractiveReportAction.PublishGlobalReport,
             ],
             handler.Seen.Select(item => item.Action).ToArray());
         Assert.All(handler.Seen, item => Assert.Equal("orders", item.Resource.ReportName));

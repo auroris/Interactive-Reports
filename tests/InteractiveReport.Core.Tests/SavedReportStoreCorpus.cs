@@ -36,7 +36,7 @@ public abstract class SavedReportStoreCorpus
         Assert.Equal(report.Title, loaded.Title);
         Assert.Equal("alice", loaded.Owner);
         Assert.False(loaded.IsGlobal);
-        Assert.False(loaded.IsPrimary);
+        Assert.False(loaded.IsDefault);
         Assert.Equal(report.StateJson, loaded.StateJson);
         Assert.True(loaded.ModifiedUtc > DateTime.UtcNow.AddMinutes(-1));
         Assert.Equal(SavedReportOrigin.User, loaded.Origin);
@@ -135,18 +135,26 @@ public abstract class SavedReportStoreCorpus
     }
 
     [SkippableFact]
-    public async Task Primary_reports_are_visible_without_identity_and_roundtrip_the_flag()
+    public async Task ReplaceDefault_atomically_promotes_one_global_report_and_retains_the_previous_default()
     {
-        var primary = Make("Executive", "bob");
-        primary.IsPrimary = true;
-        await Store.Create(primary);
+        var original = Make("Original", "admin");
+        original.IsGlobal = true;
+        original.IsDefault = true;
+        await Store.Create(original);
+        var candidate = Make("Executive", "bob");
+        await Store.Create(candidate);
+        var replacement = candidate with { IsGlobal = true, IsDefault = true };
 
-        var anonymous = await Store.ListVisible("orders", null);
+        Assert.True(await Store.ReplaceDefault(replacement, candidate, original));
 
-        var loaded = Assert.Single(anonymous);
-        Assert.Equal(primary.Id, loaded.Id);
-        Assert.True(loaded.IsPrimary);
-        Assert.False(loaded.IsGlobal);
+        var selected = await Store.FindDefault("orders");
+        Assert.Equal(candidate.Id, selected?.Id);
+        Assert.True(selected?.IsGlobal);
+        var prior = await Store.Get(original.Id);
+        Assert.NotNull(prior);
+        Assert.False(prior.IsDefault);
+        Assert.True(prior.IsGlobal);
+        Assert.Equal(2, (await Store.ListVisible("orders", null)).Count);
     }
 
     [SkippableFact]

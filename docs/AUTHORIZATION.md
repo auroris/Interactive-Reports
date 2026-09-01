@@ -96,22 +96,22 @@ the same resource separately.
 | `User` | The current ASP.NET Core `ClaimsPrincipal`. Use its claims, roles, authentication type, or name as the host normally would. |
 | `Action` | One `InteractiveReportAction` describing the operation currently being evaluated. |
 | `Resource.ReportName` | The exact report-definition name. Authorization is therefore scoped to the dataset/report definition, not merely to a database connection. |
-| `Resource.SavedReport` | Current immutable saved-report metadata, when an existing row is involved. It contains id, title, owner, global/primary flags, and origin. |
+| `Resource.SavedReport` | Current immutable saved-report metadata, when an existing row is involved. It contains id, title, owner, global/default flags, and origin. |
 | `Resource.Definition` | The mutable, typed saved-report definition for create, update, and document upload operations. Its metadata is effective rather than a sparse patch. |
 | `RequestServices` | The current request service provider. Use it to resolve scoped ACL services or `IAuthorizationService`. It is available on the callback request, not on the native requirement. |
 
 `Resource.Definition` is an
 `InteractiveReport.AspNetCore.Definitions.InteractiveReportDefinition`. It exposes
-`Id`, `ReportName`, `Title`, `Public`, `Primary`, `Owner`, `State`, and
-`StateChanged`. `Public` corresponds to the HTTP field `isGlobal`; `Primary`
-corresponds to `isPrimary`. `State` is the typed `ReportState` object graph, including
+`Id`, `ReportName`, `Title`, `Public`, `Default`, `Owner`, `State`, and
+`StateChanged`. `Public` corresponds to the HTTP field `isGlobal`; `Default`
+corresponds to `isDefault` on updates. `State` is the typed `ReportState` object graph, including
 the unordered table map, explicit recursive `from` dependencies, nullable per-table
 schema caches, direct composables, filters, computed columns, formats, and other nested
 structures. Each child consumes its completed parent's relation; cached schemas remain
 advisory response data, so authorization code must not treat them as proof of either
 the configured SQL or a composed relation's shape.
 
-For updates, title, publication flags, and owner are the effective values after the
+For updates, title, global/default status, and owner are the effective values after the
 client patch has been applied to current metadata. `StateChanged` distinguishes a
 submitted replacement from an update that retains the existing state. When it is
 false, `State` is null. The server deliberately does not deserialize current stored
@@ -172,7 +172,7 @@ Mutation follows these rules:
 - Publication and owner actions are derived from the effective definition after the
   base action passes. Setting `Public = false` during create therefore removes an
   unwanted publication request before the administrator boundary is evaluated.
-- If an authorizer later adds a public, primary, or owner change, the server detects it
+- If an authorizer later adds a public, default-selection, or owner change, the server detects it
   and evaluates the corresponding administrator action before persistence.
 - A denial at any point discards all mutations because nothing has yet been stored.
 - After authorization, title/owner invariants and the submitted state's executable
@@ -189,14 +189,18 @@ This mutation surface is available through all three authorization integrations.
 direct callback is usually the clearest place for request normalization. Native
 resource handlers and resource-aware named policies receive the same mutable resource.
 
-Ordinary user-document reads parse stored JSON only for response framing and send it to
-the client without hydrating `InteractiveReportDefinition` or `ReportState`. Historical
+Non-default user-document reads parse stored JSON only for response framing and send it
+to the client without hydrating `InteractiveReportDefinition` or `ReportState`. Historical
 user documents are therefore not rewritten or rejected merely because they are read.
 Configured documents read their state from the configured file. If that file is missing,
 the stale database identity is deleted and the original request returns 404. When the
 missing document was the default, the server also creates a new synthetic default for
-subsequent requests. Synthetic defaults are the sole repairable origin: invalid stored
-state is regenerated from current appsettings without changing the database id.
+subsequent requests. Any database-backed default is repairable: invalid stored state is
+regenerated from current appsettings without changing the database id. Configured file
+bodies are never rewritten this way. If a present configured body fails processing, its
+exception and identity are logged, its optimistic row is deleted, and the request returns
+404. Its configuration remains authoritative, so the next synchronization recreates an
+identity and retries it rather than substituting a synthetic default.
 
 Query, LOV, and export are addressed by configured definition key. They authorize that
 definition and execute the client-submitted document without reading the saved-report
@@ -207,12 +211,12 @@ changes, provided the caller still has access to the configured definition.
 Authorization is expressed in facts rather than in how the caller reached an
 endpoint. For saved reports, the relevant facts are available on the resource:
 
-- `ReadSavedReport` is normally allowed when the report is global/primary, the caller
+- `ReadSavedReport` is normally allowed when the report is default/global, the caller
   owns it, or the caller is an application administrator.
 - `UpdateSavedReport` and `DeleteSavedReport` are normally allowed when the caller owns
   the report or is an application administrator. Publication does not remove owner
   rights over title/state or deletion.
-- Changing global/primary publication or ownership emits a separate action, so those
+- Changing global publication, default selection, or ownership emits a separate action, so those
   decisions do not have to be inferred from `UpdateSavedReport`.
 
 The engine applies the same built-in facts, including configured/database report-user
@@ -234,13 +238,13 @@ use the same service before invoking their authorization store or user provider.
 | `ViewReport` | Schema for an ordinary report | Report-definition authentication and policy run first. |
 | `Query` | Process a client document through HTTP, or execute a stored document through GraphQL | HTTP processing authorizes only the resolved report definition and never supplies original document metadata. GraphQL loads a stored document and supplies `SavedReport` metadata. |
 | `Export` | CSV export | The report's `download` feature must also be enabled. Admin-list export emits `ListAllSavedReports` as well. |
-| `ListSavedReports` | List visible saved reports for one report definition | Storage still filters to primary, global, and caller-owned rows. |
+| `ListSavedReports` | List visible saved reports for one report definition | Storage filters to the default, global, and caller-owned rows. |
 | `ReadSavedReport` | Load one saved report, or execute it through GraphQL | Public, owner, and administrator access are distinguished from `SavedReport` metadata and the principal. |
 | `CreateSavedReport` | Create a saved report | Requires an authenticated canonical owner and the `savedReports` feature. Receives the typed definition before publication actions are derived. |
-| `UpdateSavedReport` | Update a saved report | Owner or administrator. Receives effective metadata and only client-authored replacement state. Global/primary publication remains unchanged unless its separate action also passes. Configured content remains read-only. |
+| `UpdateSavedReport` | Update a saved report | Owner or administrator. Receives effective metadata and only client-authored replacement state. Global publication and default selection remain unchanged unless their separate actions also pass. Configured content remains read-only. |
 | `DeleteSavedReport` | Delete a saved report | Owner or administrator. Configured rows remain undeletable even when authorized. |
 | `PublishGlobalReport` | Effective definition changes public status | Emitted for both publishing and unpublishing after base-action mutation. Administrator action. |
-| `PublishPrimaryReport` | Effective definition changes primary status | Emitted for both flagging and unflagging after base-action mutation. Administrator action. |
+| `SelectDefaultReport` | Effective definition selects a new family default | Administrator action. The new default becomes global and the previous default remains global. A configured default cannot be replaced through the API. |
 | `ChangeSavedReportOwner` | Effective definition changes owner | Administrator action. |
 | `ListAllSavedReports` | Schema/query/export of the built-in `__saved-reports` definition | Administrator action. Its export also emits `Export`. |
 | `ListAuthorizationUsers` | Resolve the protected administration user directory | Administrator action. Directory entries are choices, not grants. |
@@ -252,10 +256,9 @@ One HTTP request can emit several actions. These examples assume authorization d
 not first narrow the typed definition:
 
 - Creating a private report emits `CreateSavedReport`.
-- Creating a primary report emits `CreateSavedReport` and
-  `PublishPrimaryReport`; both must pass.
-- Updating title, state, global status, primary status, and owner emits
-  `UpdateSavedReport`, `PublishGlobalReport`, `PublishPrimaryReport`, and
+- Creating a global report emits `CreateSavedReport` and `PublishGlobalReport`; both must pass.
+- Updating title, state, global status, default selection, and owner emits
+  `UpdateSavedReport`, `PublishGlobalReport`, `SelectDefaultReport`, and
   `ChangeSavedReportOwner`.
 - Exporting the administrator listing emits `ListAllSavedReports` and `Export`.
 - Executing a saved report through GraphQL emits `ReadSavedReport` and `Query`.
@@ -288,7 +291,7 @@ reports.UseAuthorization((request, cancellationToken) =>
     var isOwner = saved is not null
         && caller is not null
         && string.Equals(saved.Owner, caller, StringComparison.Ordinal);
-    var isPublic = saved is { IsGlobal: true } or { IsPrimary: true };
+    var isPublic = saved is { IsGlobal: true } or { IsDefault: true };
     var isAdministrator = request.User.IsInRole("ReportAdministrators");
 
     var allowed = request.Action switch
@@ -301,7 +304,7 @@ reports.UseAuthorization((request, cancellationToken) =>
             isOwner || isAdministrator,
 
         InteractiveReportAction.PublishGlobalReport
-            or InteractiveReportAction.PublishPrimaryReport
+            or InteractiveReportAction.SelectDefaultReport
             or InteractiveReportAction.ChangeSavedReportOwner
             or InteractiveReportAction.ListAllSavedReports
             or InteractiveReportAction.ListAuthorizationUsers
@@ -465,7 +468,7 @@ reports.UseAuthorization(async (request, cancellationToken) =>
     var isOwner = saved is not null
         && caller is not null
         && string.Equals(saved.Owner, caller, StringComparison.Ordinal);
-    var isPublic = saved is { IsGlobal: true } or { IsPrimary: true };
+    var isPublic = saved is { IsGlobal: true } or { IsDefault: true };
 
     var policyName = request.Action switch
     {
@@ -482,7 +485,7 @@ reports.UseAuthorization(async (request, cancellationToken) =>
             "Reports.Administer",
 
         InteractiveReportAction.PublishGlobalReport
-            or InteractiveReportAction.PublishPrimaryReport
+            or InteractiveReportAction.SelectDefaultReport
             or InteractiveReportAction.ChangeSavedReportOwner
             or InteractiveReportAction.ListAllSavedReports
             or InteractiveReportAction.ListAuthorizationUsers
@@ -542,7 +545,7 @@ Operations that require administrator authority use this decision table:
 | Any | Unauthenticated | Any | `401 Unauthorized`. |
 
 This fallback is action-specific. An application can grant
-`PublishPrimaryReport` while denying `DeleteSavedReport`; it does not have to promote
+`SelectDefaultReport` while denying `DeleteSavedReport`; it does not have to promote
 the principal to a permanent administrator identity.
 
 A definition with `authorization.administratorsOnly: true` uses the same model. With
@@ -698,7 +701,7 @@ At minimum, cover:
 - An ordinary allowed and denied query.
 - A private saved-report owner update.
 - A non-owner read/update/delete attempt.
-- Primary and global publication.
+- Default selection and global publication.
 - Empty administrator list with an affirmative decision.
 - Empty administrator list with no authorizer.
 - Nonempty administrator list with an unlisted caller.

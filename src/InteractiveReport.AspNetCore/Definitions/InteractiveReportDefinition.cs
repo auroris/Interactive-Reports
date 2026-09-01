@@ -29,19 +29,18 @@ public sealed class InteractiveReportDefinition
     public required string Title { get; set; }
 
     /// <summary>
-    /// Gets or sets whether the report has ordinary public/global publication. A primary report is
-    /// also broadly visible through its separate flag. This property is named
-    /// <c>isGlobal</c> in the HTTP JSON contract.
+    /// Gets or sets whether the report has ordinary public/global publication. This property is
+    /// named <c>isGlobal</c> in the HTTP JSON contract.
     /// </summary>
     [JsonPropertyName("isGlobal")]
     public bool Public { get; set; }
 
     /// <summary>
-    /// Gets or sets whether the saved report is a primary report. This is named <c>isPrimary</c> in
-    /// the HTTP JSON contract.
+    /// Gets or sets whether the saved report is the report family's default. This is named
+    /// <c>isDefault</c> in the HTTP JSON contract.
     /// </summary>
-    [JsonPropertyName("isPrimary")]
-    public bool Primary { get; set; }
+    [JsonPropertyName("isDefault")]
+    public bool Default { get; set; }
 
     /// <summary>Gets or sets the canonical owner identity to persist.</summary>
     public string? Owner { get; set; }

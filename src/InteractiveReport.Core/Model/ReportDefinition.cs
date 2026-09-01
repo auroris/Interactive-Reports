@@ -139,7 +139,7 @@ public sealed class ReportDefinition
     public ReportConsistency Consistency { get; set; } = ReportConsistency.None;
 
     /// <summary>
-    /// Gets or sets the developer-owned state used to create or repair the persisted synthetic default.
+    /// Gets or sets the developer-owned state used to create the synthetic default or repair a database-backed default.
     /// </summary>
     public ReportState? DefaultState { get; set; }
 

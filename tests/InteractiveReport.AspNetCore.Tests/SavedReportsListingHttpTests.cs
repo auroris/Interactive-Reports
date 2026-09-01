@@ -186,7 +186,7 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
         Assert.Equal("Regional View", configured.GetProperty("TITLE").GetString());
         Assert.Equal("Read only", configured.GetProperty("SCOPE").GetString());
         Assert.Equal(JsonValueKind.Null, configured.GetProperty("ACTION_PUBLISH").ValueKind);
-        Assert.Equal("Make primary", configured.GetProperty("ACTION_PRIMARY").GetString());
+        Assert.Equal(JsonValueKind.Null, configured.GetProperty("ACTION_DEFAULT").ValueKind);
         Assert.Equal(JsonValueKind.Null, configured.GetProperty("ACTION_REASSIGN").ValueKind);
         Assert.Equal(JsonValueKind.Null, configured.GetProperty("ACTION_DELETE").ValueKind);
         Assert.Equal("State", configured.GetProperty("ACTION_STATE").GetString());
@@ -210,8 +210,9 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
         var user = second.GetProperty("rows").EnumerateArray()
             .Single(row => row.GetProperty("TITLE").GetString() == "Mine");
         Assert.Equal("Global", user.GetProperty("SCOPE").GetString());
-        Assert.Equal("No", user.GetProperty("PRIMARY_STATUS").GetString());
+        Assert.Equal("No", user.GetProperty("DEFAULT_STATUS").GetString());
         Assert.Equal("Unpublish", user.GetProperty("ACTION_PUBLISH").GetString());
+        Assert.Equal("Make default", user.GetProperty("ACTION_DEFAULT").GetString());
         Assert.Equal("Reassign", user.GetProperty("ACTION_REASSIGN").GetString());
         Assert.Equal("Delete", user.GetProperty("ACTION_DELETE").GetString());
         Assert.Equal(savedId.ToString(System.Globalization.CultureInfo.InvariantCulture),
@@ -228,32 +229,37 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
         Assert.Equal("Private", republished.GetProperty("SCOPE").GetString());
         Assert.Equal("Publish", republished.GetProperty("ACTION_PUBLISH").GetString());
 
-        using var makePrimary = await _client.SendAsync(Request(
-            HttpMethod.Put, $"/api/reports/{savedId}", Admin, new { isPrimary = true }));
-        Assert.Equal(HttpStatusCode.OK, makePrimary.StatusCode);
+        using var makeDefault = await _client.SendAsync(Request(
+            HttpMethod.Put, $"/api/reports/{savedId}", Admin, new { isDefault = true }));
+        Assert.Equal(HttpStatusCode.OK, makeDefault.StatusCode);
         var fourth = await Query(state);
-        var primary = fourth.GetProperty("rows").EnumerateArray()
+        var selectedDefault = fourth.GetProperty("rows").EnumerateArray()
             .Single(row => row.GetProperty("TITLE").GetString() == "Mine");
-        Assert.Equal("Yes", primary.GetProperty("PRIMARY_STATUS").GetString());
-        Assert.Equal("Unflag", primary.GetProperty("ACTION_PRIMARY").GetString());
+        Assert.Equal("Global", selectedDefault.GetProperty("SCOPE").GetString());
+        Assert.Equal("Yes", selectedDefault.GetProperty("DEFAULT_STATUS").GetString());
+        Assert.Equal(JsonValueKind.Null, selectedDefault.GetProperty("ACTION_DEFAULT").ValueKind);
 
         using var mutateConfigured = await _client.SendAsync(Request(
             HttpMethod.Put, $"/api/reports/{configuredId}", Admin, new { title = "Takeover" }));
         Assert.Equal(HttpStatusCode.Forbidden, mutateConfigured.StatusCode);
 
-        using var flagConfigured = await _client.SendAsync(Request(
-            HttpMethod.Put, $"/api/reports/{configuredId}", Admin, new { isPrimary = true }));
-        Assert.Equal(HttpStatusCode.OK, flagConfigured.StatusCode);
+        using var selectConfigured = await _client.SendAsync(Request(
+            HttpMethod.Put, $"/api/reports/{configuredId}", Admin, new { isDefault = true }));
+        Assert.Equal(HttpStatusCode.Forbidden, selectConfigured.StatusCode);
     }
 
     [Fact]
-    public async Task Primary_reports_are_visible_to_dataset_users_and_only_admins_can_unflag_them()
+    public async Task Only_an_administrator_can_replace_the_default_and_the_previous_default_remains_global()
     {
         using var save = await _client.SendAsync(Request(
             HttpMethod.Post, $"/api/reports/{_ordersId}/saved", Admin,
-            new { title = "Executive", isPrimary = true, state = new { v = 3 } }));
+            new { title = "Executive", state = new { v = 3 } }));
         Assert.Equal(HttpStatusCode.Created, save.StatusCode);
         var id = (await ReadJson(save)).GetProperty("id").GetInt64();
+
+        using var makeDefault = await _client.SendAsync(Request(
+            HttpMethod.Put, $"/api/reports/{id}", Admin, new { isDefault = true }));
+        Assert.Equal(HttpStatusCode.OK, makeDefault.StatusCode);
 
         using var visibleResponse = await _client.SendAsync(Request(
             HttpMethod.Get, $"/api/reports/{_ordersId}/saved", User));
@@ -261,20 +267,27 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
         var visible = await ReadJson(visibleResponse);
         Assert.Contains(visible.EnumerateArray(), report =>
             report.GetProperty("id").GetInt64() == id
-            && report.GetProperty("isPrimary").GetBoolean());
+            && report.GetProperty("isDefault").GetBoolean()
+            && report.GetProperty("isGlobal").GetBoolean());
 
         using var denied = await _client.SendAsync(Request(
-            HttpMethod.Put, $"/api/reports/{id}", User, new { isPrimary = false }));
+            HttpMethod.Put, $"/api/reports/{id}", User, new { isDefault = false }));
         Assert.Equal(HttpStatusCode.NotFound, denied.StatusCode);
 
-        using var unflag = await _client.SendAsync(Request(
-            HttpMethod.Put, $"/api/reports/{id}", Admin, new { isPrimary = false }));
-        Assert.Equal(HttpStatusCode.OK, unflag.StatusCode);
+        using var unset = await _client.SendAsync(Request(
+            HttpMethod.Put, $"/api/reports/{id}", Admin, new { isDefault = false }));
+        Assert.Equal(HttpStatusCode.BadRequest, unset.StatusCode);
 
-        using var hiddenResponse = await _client.SendAsync(Request(
+        using var restoreOriginal = await _client.SendAsync(Request(
+            HttpMethod.Put, $"/api/reports/{_ordersId}", Admin, new { isDefault = true }));
+        Assert.Equal(HttpStatusCode.OK, restoreOriginal.StatusCode);
+        using var afterResponse = await _client.SendAsync(Request(
             HttpMethod.Get, $"/api/reports/{_ordersId}/saved", User));
-        var hidden = await ReadJson(hiddenResponse);
-        Assert.DoesNotContain(hidden.EnumerateArray(), report => report.GetProperty("id").GetInt64() == id);
+        var after = await ReadJson(afterResponse);
+        Assert.Contains(after.EnumerateArray(), report =>
+            report.GetProperty("id").GetInt64() == id
+            && !report.GetProperty("isDefault").GetBoolean()
+            && report.GetProperty("isGlobal").GetBoolean());
     }
 
     [Fact]
@@ -288,7 +301,7 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
 
         using var publish = await _client.SendAsync(Request(
             HttpMethod.Put, $"/api/reports/{id}", Admin,
-            new { isGlobal = true, isPrimary = true }));
+            new { isDefault = true }));
         Assert.Equal(HttpStatusCode.OK, publish.StatusCode);
 
         using var update = await _client.SendAsync(Request(
@@ -297,7 +310,7 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, update.StatusCode);
         var updated = await ReadJson(update);
         Assert.True(updated.GetProperty("isGlobal").GetBoolean());
-        Assert.True(updated.GetProperty("isPrimary").GetBoolean());
+        Assert.True(updated.GetProperty("isDefault").GetBoolean());
 
         using var delete = await _client.SendAsync(Request(
             HttpMethod.Delete, $"/api/reports/{id}", User));
@@ -312,6 +325,9 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
         Assert.NotNull(current);
         Assert.True(current.IsDefault);
         Assert.Null(current.SourceFile);
+        Assert.Equal(
+            InteractiveReport.Core.SavedReports.SavedReportOrigin.Synthetic,
+            current.Origin);
 
         var invalid = current with
         {

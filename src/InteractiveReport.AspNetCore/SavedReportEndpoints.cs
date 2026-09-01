@@ -16,7 +16,7 @@ namespace InteractiveReport.AspNetCore;
 ///
 /// Authorization matrix:
 ///   owner                    → read, update title/state, delete
-///   anyone (global/primary) → read
+///   anyone (default/global) → read
 ///   administrator           → everything: list all, publish/unpublish global,
 ///                             reassign owner, update or delete any report
 /// Denials hide existence (404) except where the caller already provably knows the
@@ -230,7 +230,7 @@ internal static class SavedReportEndpoints
     }
 
     /// <summary>
-    /// Validates and creates a private, global, or primary saved report owned by the current caller.
+    /// Validates and creates a private or global saved report owned by the current caller.
     /// </summary>
     /// <param name="id">The numeric document id used to select its report family.</param>
     /// <param name="ctx">The current HTTP request and response context.</param>
@@ -252,7 +252,7 @@ internal static class SavedReportEndpoints
             Actions = [InteractiveReportAction.ReadSavedReport, InteractiveReportAction.CreateSavedReport],
             AdministratorRequired = builtIn != SavedReportAccess.Allowed,
             HideDenied = builtIn != SavedReportAccess.Allowed,
-            DenialDetail = "Publishing a global or primary report requires authorization.",
+            DenialDetail = "Publishing a global report requires authorization.",
             PrepareResource = async (definition, token) =>
             {
                 // Enforce the feature at creation only. Existing saved reports stay governed by
@@ -288,7 +288,7 @@ internal static class SavedReportEndpoints
                     ReportName = definition.Name,
                     Title = request.Title!.Trim(),
                     Public = request.IsGlobal,
-                    Primary = request.IsPrimary,
+                    Default = false,
                     Owner = identity,
                     State = request.State,
                 };
@@ -309,7 +309,7 @@ internal static class SavedReportEndpoints
         if (await ValidateSubmittedState(def, candidate, ctx, "saved report creation", ct) is { } stateError)
             return stateError;
 
-        var candidateIsPublic = candidate.Public || candidate.Primary;
+        var candidateIsPublic = candidate.Public;
         if (await FindTitleCollision(
                 ctx, def.Name, candidate.Title, identity, candidateIsPublic, exceptId: null, ct) is { } collision)
             return TitleConflict(collision, candidate.Title);
@@ -321,7 +321,6 @@ internal static class SavedReportEndpoints
             Title = candidate.Title.Trim(),
             Owner = candidate.Owner,
             IsGlobal = candidate.Public,
-            IsPrimary = candidate.Primary,
             StateJson = JsonSerializer.Serialize(candidate.State, IrJson.Options),
         };
         try
@@ -344,7 +343,7 @@ internal static class SavedReportEndpoints
     /// <param name="ctx">The current HTTP request and response context.</param>
     /// <param name="ct">Cancels persistence reads, authorization, and missing-file cleanup.</param>
     /// <returns>The saved-report document JSON, or a hidden not-found/access result.</returns>
-    /// <remarks>Trusts database identity metadata. A missing configured file deletes its stale row, restores a synthetic default when needed, and returns 404.</remarks>
+    /// <remarks>Trusts database identity metadata. A missing configured file deletes its stale row and restores a synthetic default when needed. A configured state that fails processing is logged and deleted without fallback. Both cases return 404.</remarks>
     internal static async Task<IResult> Load(long id, HttpContext ctx, CancellationToken ct)
     {
         var report = await SavedStore(ctx).Get(id, ct);
@@ -369,13 +368,42 @@ internal static class SavedReportEndpoints
             JsonElement state;
             if (report.Origin == SavedReportOrigin.Configured)
             {
-                if (report.SourceFile is null
-                    || ConfiguredDocuments(ctx).Find(report.ReportName, report.SourceFile) is not { } file)
+                ConfiguredReportDocument? file;
+                try
+                {
+                    file = report.SourceFile is null
+                        ? null
+                        : ConfiguredDocuments(ctx).Find(report.ReportName, report.SourceFile);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    await RemoveInvalidConfiguredDocument(report, ctx, ex, ct);
+                    return EndpointExtensions.SavedReportNotFound();
+                }
+
+                if (file is null)
                 {
                     await RemoveMissingConfiguredDocument(report, access.Definition!, ctx, ct);
                     return EndpointExtensions.SavedReportNotFound();
                 }
-                state = JsonSerializer.SerializeToElement(file.State, IrJson.Options);
+
+                var contextParameters = await Access(ctx).ResolveContextParameters(
+                    access.Definition!, ctx, ct);
+                try
+                {
+                    var refreshed = await ctx.RequestServices.GetRequiredService<ReportExecutor>()
+                        .RefreshSchemaCaches(access.Definition!, file.State, contextParameters, ct);
+                    state = JsonSerializer.SerializeToElement(refreshed, IrJson.Options);
+                }
+                catch (ReportValidationException ex)
+                {
+                    await RemoveInvalidConfiguredDocument(report, ctx, ex, ct);
+                    return EndpointExtensions.SavedReportNotFound();
+                }
             }
             else if (report.IsDefault)
             {
@@ -414,7 +442,7 @@ internal static class SavedReportEndpoints
     }
 
     /// <summary>
-    /// Applies a partial update to a user report, or an explicit primary-flag update to a configured document.
+    /// Applies a partial update to a user report, including selection as the report family's default.
     /// </summary>
     /// <param name="id">The numeric report-document identifier from the route.</param>
     /// <param name="ctx">The current HTTP request and response context.</param>
@@ -459,16 +487,17 @@ internal static class SavedReportEndpoints
                             InteractiveReportErrorCodes.MalformedUpdateRequest,
                             ex.Message));
                 }
-
                 candidate = new InteractiveReportDefinition
                 {
                     Id = metadata.Id,
                     ReportName = definition.Name,
                     Title = request.Title ?? metadata.Title,
                     Public = request.IsGlobal ?? metadata.IsGlobal,
-                    Primary = request.IsPrimary ?? metadata.IsPrimary,
+                    Default = request.IsDefault ?? metadata.IsDefault,
                     Owner = request.Owner ?? metadata.Owner,
                 };
+                if (candidate.Default && !metadata.IsDefault)
+                    candidate.Public = true;
                 if (request.State is not null)
                     candidate.State = request.State;
                 return new ReportAccessResourcePreparation(
@@ -483,19 +512,12 @@ internal static class SavedReportEndpoints
         var report = current with { };
 
         if (metadata.Origin == SavedReportOrigin.Configured)
-        {
-            if (candidate.StateChanged
-                || (!request.IsPrimary.HasValue && candidate.Primary == report.IsPrimary)
-                || !string.Equals(candidate.Title, report.Title, StringComparison.Ordinal)
-                || candidate.Public != report.IsGlobal
-                || !string.Equals(candidate.Owner, report.Owner, StringComparison.Ordinal))
-                return ReadOnlyConfiguredResult();
+            return ReadOnlyConfiguredResult();
 
-            report.IsPrimary = candidate.Primary;
-            return await savedStore.Update(report, current, ct)
-                ? Results.Json(Summary(report, identity), IrJson.Options)
-                : EndpointExtensions.SavedReportNotFound();
-        }
+        if (metadata.IsDefault && !candidate.Default)
+            return BadRequest(InteractiveReportErrorCodes.DefaultReportCannotBeUnset);
+        if (candidate.Default && !candidate.Public)
+            return BadRequest(InteractiveReportErrorCodes.DefaultReportCannotBeUnset);
 
         if (DefinitionError(
                 candidate,
@@ -508,8 +530,8 @@ internal static class SavedReportEndpoints
             NormalizeTitle(candidate.Title),
             NormalizeTitle(report.Title),
             StringComparison.Ordinal);
-        var scopeChanged = candidate.Public != report.IsGlobal || candidate.Primary != report.IsPrimary;
-        var candidateIsPublic = candidate.Public || candidate.Primary;
+        var scopeChanged = candidate.Public != report.IsGlobal || candidate.Default != report.IsDefault;
+        var candidateIsPublic = candidate.Public || candidate.Default;
         if ((titleChanged || scopeChanged)
             && await FindTitleCollision(
                 ctx,
@@ -525,12 +547,30 @@ internal static class SavedReportEndpoints
         if (candidate.StateChanged)
             report.StateJson = JsonSerializer.Serialize(candidate.State, IrJson.Options);
         report.IsGlobal = candidate.Public;
-        report.IsPrimary = candidate.Primary;
+        report.IsDefault = candidate.Default;
         report.Owner = candidate.Owner?.Trim();
+        if (current.Origin == SavedReportOrigin.Synthetic)
+            report.Origin = SavedReportOrigin.User;
 
         try
         {
-            return await savedStore.Update(report, current, ct)
+            var updated = true;
+            if (report.IsDefault && !current.IsDefault)
+            {
+                var currentDefault = await savedStore.FindDefault(report.ReportName, ct)
+                    ?? await DefaultDocuments(ctx).CreateMissing(definition, ct);
+                if (currentDefault.Origin == SavedReportOrigin.Configured)
+                    return EndpointExtensions.Error(
+                        InteractiveReportErrorCodes.ConfiguredDefaultControlled,
+                        StatusCodes.Status409Conflict);
+                updated = await savedStore.ReplaceDefault(report, current, currentDefault, ct);
+            }
+            else
+            {
+                updated = await savedStore.Update(report, current, ct);
+            }
+
+            return updated
                 ? Results.Json(Summary(report, identity), IrJson.Options)
                 : EndpointExtensions.SavedReportNotFound();
         }
@@ -583,7 +623,7 @@ internal static class SavedReportEndpoints
     /// <summary>
     /// Downloads the canonical source-controlled envelope, not the endpoint's
     /// summary/state response wrapper. The resulting file can be placed directly in a report definition's
-    /// documentFiles collection after the operator chooses whether it should be primary.
+    /// documentFiles collection after the operator chooses whether it should be the configured default.
     /// </summary>
     /// <param name="id">The numeric report-document identifier from the route.</param>
     /// <param name="ctx">The current HTTP request and response context.</param>
@@ -729,7 +769,7 @@ internal static class SavedReportEndpoints
                     ReportName = definition.Name,
                     Title = document.Title!.Trim(),
                     Public = false,
-                    Primary = false,
+                    Default = false,
                     Owner = identity,
                     State = document.State,
                 };
@@ -750,7 +790,7 @@ internal static class SavedReportEndpoints
         if (await ValidateSubmittedState(definition, candidate, ctx, "report document upload", ct) is { } stateError)
             return stateError;
 
-        var candidateIsPublic = candidate.Public || candidate.Primary;
+        var candidateIsPublic = candidate.Public;
         if (await FindTitleCollision(
                 ctx,
                 definition.Name,
@@ -768,7 +808,6 @@ internal static class SavedReportEndpoints
             Title = candidate.Title.Trim(),
             Owner = candidate.Owner,
             IsGlobal = candidate.Public,
-            IsPrimary = candidate.Primary,
             StateJson = JsonSerializer.Serialize(candidate.State, IrJson.Options),
         };
         try
@@ -847,6 +886,17 @@ internal static class SavedReportEndpoints
     }
 
     /// <summary>
+    /// Deletes an invalid configured identity without creating a synthetic fallback. The still-declared
+    /// configured source remains the default authority and will be retried by the next synchronization.
+    /// </summary>
+    private static Task RemoveInvalidConfiguredDocument(
+        SavedReport report,
+        HttpContext ctx,
+        Exception exception,
+        CancellationToken ct)
+        => Synchronizer(ctx).RemoveInvalid(report, exception, ct);
+
+    /// <summary>
     /// Resolves the caller identity used for saved-report ownership checks.
     /// </summary>
     /// <param name="ctx">The current HTTP request and response context.</param>
@@ -869,7 +919,6 @@ internal static class SavedReportEndpoints
         report.Title,
         report.IsGlobal,
         report.IsDefault,
-        report.IsPrimary,
         SavedReportAccessPolicy.IsOwner(report, caller),
         report.Origin == SavedReportOrigin.Configured,
         report.ModifiedUtc);
@@ -884,12 +933,12 @@ internal static class SavedReportEndpoints
         => Summary(report.Metadata(), caller);
 
     /// <summary>
-    /// Yields the administrator-only actions implied by changes to publication or ownership.
+    /// Yields the administrator-only actions implied by changes to publication, default selection, or ownership.
     /// </summary>
     /// <param name="candidate">The proposed saved-report definition.</param>
     /// <param name="current">The persisted metadata being updated, or <see langword="null"/> during creation.</param>
     /// <param name="originalOwner">The caller who will own a newly created report.</param>
-    /// <returns>Zero or more publish-global, publish-primary, and change-owner actions in that order.</returns>
+    /// <returns>Zero or more publish-global, select-default, and change-owner actions in that order.</returns>
     private static IEnumerable<InteractiveReportAction> RequiredAdministratorActions(
         InteractiveReportDefinition candidate,
         SavedReportMetadata? current,
@@ -897,8 +946,8 @@ internal static class SavedReportEndpoints
     {
         if (candidate.Public != (current?.IsGlobal ?? false))
             yield return InteractiveReportAction.PublishGlobalReport;
-        if (candidate.Primary != (current?.IsPrimary ?? false))
-            yield return InteractiveReportAction.PublishPrimaryReport;
+        if (candidate.Default != (current?.IsDefault ?? false))
+            yield return InteractiveReportAction.SelectDefaultReport;
         var existingOwner = current is null ? originalOwner : current.Owner;
         if (!string.Equals(candidate.Owner, existingOwner, StringComparison.Ordinal))
             yield return InteractiveReportAction.ChangeSavedReportOwner;
@@ -971,7 +1020,7 @@ internal static class SavedReportEndpoints
                     report.Title,
                     report.Owner,
                     report.IsGlobal,
-                    report.IsPrimary,
+                    report.IsDefault,
                     report.Origin),
             Definition = definition,
         };

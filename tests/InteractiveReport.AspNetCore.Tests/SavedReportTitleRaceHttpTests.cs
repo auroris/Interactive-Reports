@@ -163,6 +163,13 @@ public sealed class SavedReportTitleRaceHttpTests : IAsyncLifetime
             SavedReport expected,
             CancellationToken ct = default) => inner.Update(report, expected, ct);
 
+        public Task<bool> ReplaceDefault(
+            SavedReport report,
+            SavedReport expected,
+            SavedReport currentDefault,
+            CancellationToken ct = default)
+            => inner.ReplaceDefault(report, expected, currentDefault, ct);
+
         public Task Put(SavedReport report, CancellationToken ct = default) => inner.Put(report, ct);
 
         public Task<bool> Put(

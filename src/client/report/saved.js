@@ -70,7 +70,7 @@ export function refreshSavedSelect(w) {
         for (const s of items) g.append(new Option(s.title, s.id));
         savedSel.append(g);
     };
-    const isPublic = saved => saved.isDefault || saved.isGlobal || saved.isPrimary;
+    const isPublic = saved => saved.isDefault || saved.isGlobal;
     group(w.t("saved.public"), w.savedList.filter(isPublic));
     group(w.t("saved.private"), w.savedList.filter(saved => !isPublic(saved)));
     savedSel.value = w.currentSaved?.id ?? "";
@@ -181,7 +181,7 @@ export async function loadSavedById(w, id) {
  *
  * Side effects: changes saved selection and working state, refreshes the selector, runs a query, and may roll back.
  */
-export async function resetToPrimary(w) {
+export async function resetToDefault(w) {
     const defaultReport = (w.savedList ?? []).find(report => report.isDefault);
     if (defaultReport) await loadSavedById(w, defaultReport.id);
 }
@@ -189,7 +189,7 @@ export async function resetToPrimary(w) {
 /**
  * Restores the last validated saved or default document as the working copy.
  *
- * @param {object} w - The report controller whose current saved or primary state will be restored.
+ * @param {object} w - The report controller whose current saved or default state will be restored.
  * @returns {Promise<void>} Resolves after cancellation or after the chosen state has been loaded and queried.
  *
  * Side effects: opens a confirmation dialog and may perform the load/reset state transition.
@@ -202,26 +202,26 @@ export async function resetWorkingCopy(w) {
         w.t("saved.resetConfirm", { target }),
         w.t("menu.reset"))) return;
     if (w.currentSaved) await loadSavedById(w, w.currentSaved.id);
-    else await resetToPrimary(w);
+    else await resetToDefault(w);
 }
 
 /**
  * Creates or updates a saved report and adopts the server-returned summary.
  *
  * @param {object} w - The report controller providing serialized state, identity hints, caches, and notifications.
- * @param {{title: string, isGlobal: boolean, isPrimary: boolean, asNew: boolean, target?: object|null}} options - Publication fields, create/update mode, and optional replacement summary.
+ * @param {{title: string, isGlobal: boolean, asNew: boolean, target?: object|null}} options - Publication fields, create/update mode, and optional replacement summary.
  * @returns {Promise<void>} Resolves after the write, best-effort list refresh, selector rebuild, and success notification.
  *
  * Side effects: performs network requests, updates saved-report caches and association state, rebuilds the selector, and notifies the user.
  * @throws {Error} When update mode has no replacement target or a network request fails.
  */
-export async function saveReport(w, { title, isGlobal, isPrimary, asNew, target = null }) {
+export async function saveReport(w, { title, isGlobal, asNew, target = null }) {
     const state = w.serialize();
     const revision = w.stateRevision;
     let savedSummary;
     if (asNew) {
         savedSummary = await api(w.documentFamilyUrl("saved"), {
-            method: "POST", body: { title, state, isGlobal, isPrimary },
+            method: "POST", body: { title, state, isGlobal },
         });
     } else {
         const saved = target ?? w.currentSaved;
@@ -229,7 +229,6 @@ export async function saveReport(w, { title, isGlobal, isPrimary, asNew, target 
         const body = { title, state };
         if (canRequestAdministration(w)) {
             body.isGlobal = isGlobal;
-            body.isPrimary = isPrimary;
         }
         savedSummary = await api(apiUrl(w.base, saved.id), {
             method: "PUT", body,
@@ -251,7 +250,7 @@ export async function saveReport(w, { title, isGlobal, isPrimary, asNew, target 
  * @param {object} w - The report controller containing the current summary, state revision, caches, and UI services.
  * @returns {Promise<void>} Resolves after no-op, cancellation, successful reconciliation, or displayed failure.
  *
- * Side effects: opens a confirmation dialog, performs delete/list requests, updates caches and selection, may reset to primary state, and shows a notification or error.
+ * Side effects: opens a confirmation dialog, performs delete/list requests, updates caches and selection, may reset to the default state, and shows a notification or error.
  */
 export async function deleteCurrentSaved(w) {
     const s = w.currentSaved;
@@ -268,7 +267,7 @@ export async function deleteCurrentSaved(w) {
         // Invariant: do not replace a document changed after the delete began. The deleted
         // association is cleared either way; only a still-current deletion resets the working
         // document to Default.
-        if (deletedCurrent && w.isCurrentStateTransition(revision)) await resetToPrimary(w);
+        if (deletedCurrent && w.isCurrentStateTransition(revision)) await resetToDefault(w);
         else refreshSavedSelect(w);
         w.notify(w.t("saved.deleted"));
     } catch (err) {

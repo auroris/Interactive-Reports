@@ -216,6 +216,42 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Invalid_configured_report_is_deleted_and_hidden_as_not_found()
+    {
+        var reportId = await DefaultId();
+        using var list = await Send(HttpMethod.Get, $"/api/reports/{reportId}/saved", identity: null);
+        var reports = await ReadJson(list);
+        var id = reports.EnumerateArray().Single(item =>
+            item.GetProperty("title").GetString() == "File View")
+            .GetProperty("id").GetInt64();
+
+        var path = Path.Combine(_tempRoot, "ReportDocuments", "orders.file.json");
+        await File.WriteAllTextAsync(path, """
+            {
+              "title": "File View",
+              "state": {
+                "activeTable": "file",
+                "tables": {
+                  "file": {
+                    "from": "definition",
+                    "composables": [
+                      { "kind": "filter", "filters": [ { "expr": "ID +" } ] }
+                    ]
+                  }
+                }
+              }
+            }
+            """);
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddMinutes(2));
+
+        using var response = await GraphQL(id, identity: null);
+        var body = await ReadJson(response);
+        Assert.Equal("NOT_FOUND", body.GetProperty("errors")[0]
+            .GetProperty("extensions").GetProperty("code").GetString());
+        Assert.Null(await _app!.Services.GetRequiredService<ISavedReportStore>().Get(id));
+    }
+
+    [Fact]
     public async Task Unknown_report_and_invalid_pagination_return_stable_GraphQL_error_codes()
     {
         using var missing = await GraphQL(long.MaxValue, "alice");

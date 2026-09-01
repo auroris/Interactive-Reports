@@ -40,7 +40,7 @@ public interface ISavedReportStore
             && string.Equals(report.SourceFile, sourceFile, StringComparison.Ordinal));
 
     /// <summary>
-    /// Lists saved reports for one report definition visible to an identity: primary and global rows
+    /// Lists saved reports for one report definition visible to an identity: default and global rows
     /// plus their own.
     /// </summary>
     /// <param name="reportName">The canonical report name that scopes the rows.</param>
@@ -131,6 +131,17 @@ public interface ISavedReportStore
         CancellationToken ct = default);
 
     /// <summary>
+    /// Atomically replaces one report family's current default with an existing user-authored report.
+    /// Both supplied snapshots must still be current. The replacement must be global and flagged as
+    /// default; the prior default is retained as an ordinary global report.
+    /// </summary>
+    Task<bool> ReplaceDefault(
+        SavedReport report,
+        SavedReport expected,
+        SavedReport currentDefault,
+        CancellationToken ct = default);
+
+    /// <summary>
     /// Inserts or replaces a row with internal compare-and-swap retries. Inserts preserve the supplied <c>ModifiedUtc</c>. Every
     /// replacement advances ModifiedUtc beyond the stored version, even when the supplied value is unchanged
     /// or older, so it remains a valid CAS revision. Implementations must retry conditional conflicts
@@ -183,6 +194,9 @@ public enum SavedReportOrigin
     /// <summary>Created through saved-report or report-document endpoints by a user or administrator.</summary>
     User,
 
+    /// <summary>Generated from the configured definition as the durable fallback default.</summary>
+    Synthetic,
+
     /// <summary>Mirrored from a definition's configured document files.</summary>
     Configured,
 }
@@ -211,11 +225,6 @@ public sealed record SavedReport
     public bool IsGlobal { get; set; }
     /// <summary>Gets or sets whether this is the durable default document for its report family.</summary>
     public bool IsDefault { get; set; }
-    /// <summary>
-    /// Gets or sets the administrator-controlled publication flag. Primary reports are visible to
-    /// everyone who can access their underlying report definition.
-    /// </summary>
-    public bool IsPrimary { get; set; }
     /// <summary>Gets or sets the state document stored as JSON text.</summary>
     public string? StateJson { get; set; }
     /// <summary>
@@ -224,11 +233,11 @@ public sealed record SavedReport
     /// replacement must advance it even when that source timestamp is unchanged.
     /// </summary>
     public DateTime ModifiedUtc { get; set; }
-    /// <summary>Gets or sets whether the row was authored by a user or identifies a configured file.</summary>
+    /// <summary>Gets or sets whether the row is user-authored, synthetic, or identifies a configured file.</summary>
     public SavedReportOrigin Origin { get; set; } = SavedReportOrigin.User;
 
     /// <summary>Gets whether the document belongs to the public name and visibility scope.</summary>
-    public bool IsPublic => IsDefault || IsGlobal || IsPrimary || Origin == SavedReportOrigin.Configured;
+    public bool IsPublic => IsDefault || IsGlobal || Origin == SavedReportOrigin.Configured;
 
     /// <summary>
     /// Projects a complete saved report into its metadata-only representation.
@@ -242,7 +251,6 @@ public sealed record SavedReport
         Owner,
         IsGlobal,
         IsDefault,
-        IsPrimary,
         ModifiedUtc,
         Origin);
 }
@@ -256,12 +264,11 @@ public sealed record SavedReportMetadata(
     string? Owner,
     bool IsGlobal,
     bool IsDefault,
-    bool IsPrimary,
     DateTime ModifiedUtc,
     SavedReportOrigin Origin)
 {
     /// <summary>Gets whether the document belongs to the public name and visibility scope.</summary>
-    public bool IsPublic => IsDefault || IsGlobal || IsPrimary || Origin == SavedReportOrigin.Configured;
+    public bool IsPublic => IsDefault || IsGlobal || Origin == SavedReportOrigin.Configured;
 }
 
 /// <summary>Defines saved-report storage; the connection name resolves through <c>IReportConnectionFactory</c>.</summary>

@@ -125,12 +125,12 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     }
 
     /// <summary>
-    /// Lists primary, global, and caller-owned reports for one report definition.
+    /// Lists default, global, and caller-owned reports for one report definition.
     /// </summary>
     /// <param name="reportName">The configured report name whose definition or saved reports are being addressed.</param>
     /// <param name="identity">The exact owner identity to include; <see langword="null"/> includes no private reports.</param>
     /// <param name="ct">Signals that the operation should be canceled; defaults to <c>default</c>.</param>
-    /// <returns>Visible reports ordered with primary and global entries first, then by title.</returns>
+    /// <returns>Visible reports ordered with the default and global entries first, then by title.</returns>
     /// <remarks>Ownership is filtered in memory with ordinal equality so database collations cannot change authorization behavior.</remarks>
     public async Task<IReadOnlyList<SavedReport>> ListVisible(string reportName, string? identity, CancellationToken ct = default)
     {
@@ -141,7 +141,7 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         // pushing the OR into the WHERE clause.
         var rows = await Select(
             q => q.Where("REPORT_NAME", reportName)
-                .OrderByDesc("IS_DEFAULT").OrderByDesc("IS_PRIMARY").OrderByDesc("IS_GLOBAL").OrderBy("TITLE"),
+                .OrderByDesc("IS_DEFAULT").OrderByDesc("IS_GLOBAL").OrderBy("TITLE"),
             ct);
         return rows
             .Where(r => r.IsPublic
@@ -150,12 +150,12 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     }
 
     /// <summary>
-    /// Lists metadata for primary, global, and caller-owned reports without loading state JSON.
+    /// Lists metadata for default, global, and caller-owned reports without loading state JSON.
     /// </summary>
     /// <param name="reportName">The configured report name whose definition or saved reports are being addressed.</param>
     /// <param name="identity">The exact owner identity to include; <see langword="null"/> includes no private reports.</param>
     /// <param name="ct">Signals that the operation should be canceled; defaults to <c>default</c>.</param>
-    /// <returns>Visible metadata ordered with primary and global entries first, then by title.</returns>
+    /// <returns>Visible metadata ordered with the default and global entries first, then by title.</returns>
     public async Task<IReadOnlyList<SavedReportMetadata>> ListVisibleMetadata(
         string reportName,
         string? identity,
@@ -163,7 +163,7 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     {
         var rows = await SelectMetadata(
             q => q.Where("REPORT_NAME", reportName)
-                .OrderByDesc("IS_DEFAULT").OrderByDesc("IS_PRIMARY").OrderByDesc("IS_GLOBAL").OrderBy("TITLE"),
+                .OrderByDesc("IS_DEFAULT").OrderByDesc("IS_GLOBAL").OrderBy("TITLE"),
             ct);
         return rows
             .Where(r => r.IsPublic
@@ -425,7 +425,12 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     /// <param name="origin">The origin to encode.</param>
     /// <returns>The persisted saved-report origin token.</returns>
     private static string OriginText(SavedReportOrigin origin)
-        => origin == SavedReportOrigin.Configured ? "configured" : "user";
+        => origin switch
+        {
+            SavedReportOrigin.Configured => "configured",
+            SavedReportOrigin.Synthetic => "synthetic",
+            _ => "user",
+        };
 
     /// <summary>
     /// Chooses a modification timestamp strictly newer than the stored revision.
@@ -463,11 +468,14 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     /// Parses the persisted origin token into the protocol enum.
     /// </summary>
     /// <param name="text">The persisted origin token.</param>
-    /// <returns><see cref="SavedReportOrigin.Configured"/> for <c>configured</c>, ignoring case; otherwise, <see cref="SavedReportOrigin.User"/>.</returns>
+    /// <returns>The matching stable origin token, or <see cref="SavedReportOrigin.User"/> for an unknown value.</returns>
     private static SavedReportOrigin OriginFrom(string text)
-        => string.Equals(text, "configured", StringComparison.OrdinalIgnoreCase)
-            ? SavedReportOrigin.Configured
-            : SavedReportOrigin.User;
+        => text.ToLowerInvariant() switch
+        {
+            "configured" => SavedReportOrigin.Configured,
+            "synthetic" => SavedReportOrigin.Synthetic,
+            _ => SavedReportOrigin.User,
+        };
 
     /// <summary>
     /// Maps a saved report to the provider-neutral column/value dictionary used by insert and update commands.
@@ -484,7 +492,6 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         ["OWNER"] = r.Owner,
         ["IS_GLOBAL"] = r.IsGlobal ? 1 : 0,
         ["IS_DEFAULT"] = r.IsDefault ? 1 : 0,
-        ["IS_PRIMARY"] = r.IsPrimary ? 1 : 0,
         ["TITLE_SCOPE"] = TitleScope(r),
         ["STATE_JSON"] = r.StateJson,
         ["MODIFIED_UTC"] = r.ModifiedUtc.ToString("o", CultureInfo.InvariantCulture),
@@ -521,7 +528,6 @@ public sealed class SqlSavedReportStore : ISavedReportStore
             && string.Equals(current.Owner, expected.Owner, StringComparison.Ordinal)
             && current.IsGlobal == expected.IsGlobal
             && current.IsDefault == expected.IsDefault
-            && current.IsPrimary == expected.IsPrimary
             && string.Equals(current.StateJson, expected.StateJson, StringComparison.Ordinal)
             && current.ModifiedUtc == expected.ModifiedUtc
             && current.Origin == expected.Origin;
@@ -623,7 +629,7 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         CancellationToken ct)
     {
         var query = shape(new Query(config.TableName)
-            .Select("ID", "REPORT_NAME", "SOURCE_FILE", "TITLE", "OWNER", "IS_GLOBAL", "IS_DEFAULT", "IS_PRIMARY", "STATE_JSON", "MODIFIED_UTC", "ORIGIN"));
+            .Select("ID", "REPORT_NAME", "SOURCE_FILE", "TITLE", "OWNER", "IS_GLOBAL", "IS_DEFAULT", "STATE_JSON", "MODIFIED_UTC", "ORIGIN"));
 
         await using var conn = await OpenConnection(config, ct);
         var compiled = DialectSupport.GetCompiler(config.Dialect).Compile(query);
@@ -643,10 +649,9 @@ public sealed class SqlSavedReportStore : ISavedReportStore
                 Owner = reader.IsDBNull(4) ? null : reader.GetString(4),
                 IsGlobal = Convert.ToBoolean(reader.GetValue(5), CultureInfo.InvariantCulture),
                 IsDefault = Convert.ToBoolean(reader.GetValue(6), CultureInfo.InvariantCulture),
-                IsPrimary = Convert.ToBoolean(reader.GetValue(7), CultureInfo.InvariantCulture),
-                StateJson = reader.IsDBNull(8) ? null : reader.GetString(8),
-                ModifiedUtc = DateTime.Parse(reader.GetString(9), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-                Origin = OriginFrom(reader.GetString(10)),
+                StateJson = reader.IsDBNull(7) ? null : reader.GetString(7),
+                ModifiedUtc = DateTime.Parse(reader.GetString(8), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                Origin = OriginFrom(reader.GetString(9)),
             });
         }
         return result;
@@ -665,7 +670,7 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     {
         var cfg = Validated(_config());
         var query = shape(new Query(cfg.TableName)
-            .Select("ID", "REPORT_NAME", "SOURCE_FILE", "TITLE", "OWNER", "IS_GLOBAL", "IS_DEFAULT", "IS_PRIMARY", "MODIFIED_UTC", "ORIGIN"));
+            .Select("ID", "REPORT_NAME", "SOURCE_FILE", "TITLE", "OWNER", "IS_GLOBAL", "IS_DEFAULT", "MODIFIED_UTC", "ORIGIN"));
 
         await using var conn = await OpenConnection(cfg, ct);
         var compiled = DialectSupport.GetCompiler(cfg.Dialect).Compile(query);
@@ -684,9 +689,8 @@ public sealed class SqlSavedReportStore : ISavedReportStore
                 reader.IsDBNull(4) ? null : reader.GetString(4),
                 Convert.ToBoolean(reader.GetValue(5), CultureInfo.InvariantCulture),
                 Convert.ToBoolean(reader.GetValue(6), CultureInfo.InvariantCulture),
-                Convert.ToBoolean(reader.GetValue(7), CultureInfo.InvariantCulture),
-                DateTime.Parse(reader.GetString(8), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-                OriginFrom(reader.GetString(9))));
+                DateTime.Parse(reader.GetString(7), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                OriginFrom(reader.GetString(8))));
         }
         return result;
     }
@@ -724,6 +728,21 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         await using var cmd = CommandBuilder.Build(
             conn, compiled, NoParams, TimeoutSeconds, config.Dialect, _logger);
         return await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>Executes a compiled non-query on an existing transaction.</summary>
+    private async Task<int> Execute(
+        DbConnection connection,
+        DbTransaction transaction,
+        SavedReportStoreConfig config,
+        Query query,
+        CancellationToken ct)
+    {
+        var compiled = DialectSupport.GetCompiler(config.Dialect).Compile(query);
+        await using var command = CommandBuilder.Build(
+            connection, compiled, NoParams, TimeoutSeconds, config.Dialect, _logger);
+        command.Transaction = transaction;
+        return await command.ExecuteNonQueryAsync(ct);
     }
 
     /// <summary>Inserts a new row and returns the database-generated numeric identity.</summary>
@@ -855,7 +874,6 @@ public sealed class SqlSavedReportStore : ISavedReportStore
                 OWNER        TEXT NULL,
                 IS_GLOBAL    INTEGER NOT NULL,
                 IS_DEFAULT   INTEGER NOT NULL,
-                IS_PRIMARY   INTEGER NOT NULL DEFAULT 0,
                 STATE_JSON   TEXT NULL,
                 MODIFIED_UTC TEXT NOT NULL,
                 ORIGIN       TEXT NOT NULL DEFAULT 'user'
@@ -873,7 +891,6 @@ public sealed class SqlSavedReportStore : ISavedReportStore
                 OWNER        NVARCHAR(400) NULL,
                 IS_GLOBAL    INT NOT NULL,
                 IS_DEFAULT   INT NOT NULL,
-                IS_PRIMARY   INT NOT NULL DEFAULT 0,
                 STATE_JSON   NVARCHAR(MAX) NULL,
                 MODIFIED_UTC NVARCHAR(40) NOT NULL,
                 ORIGIN       NVARCHAR(20) NOT NULL DEFAULT 'user'
@@ -891,7 +908,6 @@ public sealed class SqlSavedReportStore : ISavedReportStore
                     OWNER        VARCHAR2(400) NULL,
                     IS_GLOBAL    NUMBER(1) NOT NULL,
                     IS_DEFAULT   NUMBER(1) NOT NULL,
-                    IS_PRIMARY   NUMBER(1) DEFAULT 0 NOT NULL,
                     STATE_JSON   CLOB NULL,
                     MODIFIED_UTC VARCHAR2(40) NOT NULL,
                     ORIGIN       VARCHAR2(20) DEFAULT ''user'' NOT NULL
@@ -913,7 +929,6 @@ public sealed class SqlSavedReportStore : ISavedReportStore
                 "OWNER"        VARCHAR(400) NULL,
                 "IS_GLOBAL"    INT NOT NULL,
                 "IS_DEFAULT"   INT NOT NULL,
-                "IS_PRIMARY"   INT NOT NULL DEFAULT 0,
                 "STATE_JSON"   TEXT NULL,
                 "MODIFIED_UTC" VARCHAR(40) NOT NULL,
                 "ORIGIN"       VARCHAR(20) NOT NULL DEFAULT 'user'
@@ -952,6 +967,90 @@ public sealed class SqlSavedReportStore : ISavedReportStore
                     $"Could not create a saved-report uniqueness index on '{cfg.TableName}'.",
                     ex);
             }
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> ReplaceDefault(
+        SavedReport report,
+        SavedReport expected,
+        SavedReport currentDefault,
+        CancellationToken ct = default)
+    {
+        ValidateReport(report);
+        var config = Validated(_config());
+        if (report.Id != expected.Id)
+            throw new ArgumentException(
+                "The replacement and expected saved-report snapshots must have the same id.",
+                nameof(expected));
+        if (currentDefault.Id == expected.Id)
+            return await Update(report, expected, ct);
+        if (!report.IsDefault || !report.IsGlobal)
+            throw new ArgumentException("A replacement default must also be globally published.", nameof(report));
+        if (!currentDefault.IsDefault
+            || !string.Equals(currentDefault.ReportName, report.ReportName, StringComparison.Ordinal))
+            throw new ArgumentException(
+                "The current default must belong to the replacement report's family.",
+                nameof(currentDefault));
+        if (!await IsCurrentSnapshot(config, expected, ct)
+            || !await IsCurrentSnapshot(config, currentDefault, ct))
+            return false;
+
+        var promotedModifiedUtc = NextModifiedUtc(expected.ModifiedUtc);
+        var demotedModifiedUtc = NextModifiedUtc(currentDefault.ModifiedUtc);
+        var promotedRow = ToRow(report with { ModifiedUtc = promotedModifiedUtc });
+        promotedRow.Remove("ID");
+        var demotedRow = ToRow(currentDefault with
+        {
+            IsDefault = false,
+            IsGlobal = true,
+            ModifiedUtc = demotedModifiedUtc,
+        });
+        demotedRow.Remove("ID");
+
+        try
+        {
+            await using var connection = await OpenConnection(config, ct);
+            await using var transaction = await connection.BeginTransactionAsync(ct);
+            try
+            {
+                var demoted = await Execute(
+                    connection,
+                    transaction,
+                    config,
+                    MatchRevision(new Query(config.TableName), currentDefault).AsUpdate(demotedRow),
+                    ct);
+                if (demoted != 1)
+                {
+                    await transaction.RollbackAsync(ct);
+                    return false;
+                }
+
+                var promoted = await Execute(
+                    connection,
+                    transaction,
+                    config,
+                    MatchRevision(new Query(config.TableName), expected).AsUpdate(promotedRow),
+                    ct);
+                if (promoted != 1)
+                {
+                    await transaction.RollbackAsync(ct);
+                    return false;
+                }
+
+                await transaction.CommitAsync(ct);
+                report.ModifiedUtc = promotedModifiedUtc;
+                return true;
+            }
+            catch
+            {
+                await transaction.RollbackAsync(CancellationToken.None);
+                throw;
+            }
+        }
+        catch (DbException ex) when (IsTitleUniqueViolation(config, ex))
+        {
+            throw new SavedReportTitleConflictException(report.ReportName, report.Title, ex);
         }
     }
 

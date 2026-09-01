@@ -27,8 +27,8 @@ public enum InteractiveReportAction
     DeleteSavedReport,
     /// <summary>Publish or unpublish a global report.</summary>
     PublishGlobalReport,
-    /// <summary>Publish or unpublish a primary report.</summary>
-    PublishPrimaryReport,
+    /// <summary>Select a different default report document.</summary>
+    SelectDefaultReport,
     /// <summary>Reassign saved-report ownership.</summary>
     ChangeSavedReportOwner,
     /// <summary>List every saved report for administration.</summary>
@@ -51,14 +51,14 @@ public enum InteractiveReportAction
 /// <param name="Title">The current display title.</param>
 /// <param name="Owner">The canonical owner identity.</param>
 /// <param name="IsGlobal">Whether the report is globally published.</param>
-/// <param name="IsPrimary">Whether the report is published as a primary report.</param>
+/// <param name="IsDefault">Whether the report is the report family's default document.</param>
 /// <param name="Origin">Whether the row originated from a user or configured document.</param>
 public sealed record SavedReportAuthorizationResource(
     long Id,
     string Title,
     string? Owner,
     bool IsGlobal,
-    bool IsPrimary,
+    bool IsDefault,
     SavedReportOrigin Origin);
 
 /// <summary>

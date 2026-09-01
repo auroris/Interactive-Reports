@@ -28,8 +28,8 @@ internal sealed class DefaultReportDocumentService(ISavedReportStore store)
         IReadOnlyDictionary<string, object?> contextParameters,
         CancellationToken ct)
     {
-        if (!report.IsDefault)
-            throw new InvalidOperationException("Only a flagged default report document can be auto-repaired.");
+        if (!report.IsDefault || report.Origin == SavedReportOrigin.Configured)
+            throw new InvalidOperationException("Only a database-backed default report document can be auto-repaired.");
 
         try
         {
@@ -60,6 +60,17 @@ internal sealed class DefaultReportDocumentService(ISavedReportStore store)
     {
         if (await store.FindDefault(definition.Name, ct) is { } existing) return existing;
 
+        var dormant = (await store.ListAll(ct)).SingleOrDefault(report =>
+            report.Origin == SavedReportOrigin.Synthetic
+            && string.Equals(report.ReportName, definition.Name, StringComparison.OrdinalIgnoreCase));
+        if (dormant is not null)
+        {
+            var restored = dormant with { IsDefault = true, IsGlobal = true };
+            if (await store.Update(restored, dormant, ct)) return restored;
+            if (await store.FindDefault(definition.Name, ct) is { } winner) return winner;
+            return await CreateMissing(definition, ct);
+        }
+
         var report = Synthetic(definition);
         try
         {
@@ -83,13 +94,12 @@ internal sealed class DefaultReportDocumentService(ISavedReportStore store)
         ReportState state,
         CancellationToken ct)
     {
-        if (!expected.IsDefault)
-            throw new InvalidOperationException("Only a flagged default report document can be repaired.");
+        if (!expected.IsDefault || expected.Origin == SavedReportOrigin.Configured)
+            throw new InvalidOperationException("Only a database-backed default report document can be repaired.");
 
         var replacement = expected with
         {
             ReportName = definition.Name,
-            Owner = null,
             IsGlobal = true,
             IsDefault = true,
             StateJson = JsonSerializer.Serialize(state, IrJson.Options),
@@ -123,11 +133,10 @@ internal sealed class DefaultReportDocumentService(ISavedReportStore store)
         Owner = null,
         IsGlobal = true,
         IsDefault = true,
-        IsPrimary = false,
         StateJson = JsonSerializer.Serialize(
             EndpointExtensions.SchemaDefaultState(definition),
             IrJson.Options),
         ModifiedUtc = DateTime.UtcNow,
-        Origin = SavedReportOrigin.User,
+        Origin = SavedReportOrigin.Synthetic,
     };
 }

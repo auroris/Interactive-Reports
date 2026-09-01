@@ -358,8 +358,8 @@ test("the flagged default report represents the schema Default", async () => {
         id: "default-1", reportName: "orders", title: "Default",
         isGlobal: true, isDefault: true, owner: null, mine: false,
     }, {
-        id: "primary-2", reportName: "orders", title: "Executive",
-        isGlobal: false, isPrimary: true, owner: "admin", mine: false,
+        id: "global-2", reportName: "orders", title: "Executive",
+        isGlobal: true, isDefault: false, owner: "admin", mine: false,
     }];
 
     const report = document.createElement("interactive-report");

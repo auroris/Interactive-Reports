@@ -86,6 +86,9 @@ and source filename; execution reads their current state from disk rather than f
 mirrored database body. The row remains the optimistic authority for catalogue metadata.
 If its source file is absent when GraphQL dereferences it, the adapter deletes the stale
 row, restores a synthetic default when necessary, and returns `NOT_FOUND` for the old id.
+If the file is present but its state fails processing, the adapter logs the exception,
+deletes the optimistic row, and returns `NOT_FOUND` without creating a synthetic fallback.
+The next synchronization creates a new identity and retries the configured source.
 
 `page` and `pageSize` optionally replace only the saved state's paging request:
 
@@ -144,7 +147,7 @@ and stay numbers.
 Every saved report in `ISavedReportStore` is eligible:
 
 - private database reports;
-- global or primary database reports;
+- default or global database reports;
 - configured file-backed reports synchronized into the store.
 
 The adapter does not read configured files as a separate catalogue. It addresses the

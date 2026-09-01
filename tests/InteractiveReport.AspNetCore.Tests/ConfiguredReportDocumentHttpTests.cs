@@ -1,7 +1,9 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text.Json;
+using InteractiveReport.Core.Definitions;
 using InteractiveReport.Core.Model;
 using InteractiveReport.Core.SavedReports;
 using Microsoft.AspNetCore.Builder;
@@ -21,7 +23,8 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
     private const string ReportName = "orders";
     private const string Identity = "file-doc-admin";
     private string _tempRoot = "";
-    private string _primaryPath = "";
+    private string _defaultPath = "";
+    private readonly CapturingLogger _logger = new();
     private WebApplication? _app;
     private HttpClient _client = null!;
     private long _reportId;
@@ -31,8 +34,8 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
         _tempRoot = Directory.CreateTempSubdirectory("interactive-report-documents-").FullName;
         var documentDirectory = Path.Combine(_tempRoot, "ReportDocuments");
         Directory.CreateDirectory(documentDirectory);
-        _primaryPath = Path.Combine(documentDirectory, "orders.primary.json");
-        await File.WriteAllTextAsync(_primaryPath, """
+        _defaultPath = Path.Combine(documentDirectory, "orders.default.json");
+        await File.WriteAllTextAsync(_defaultPath, """
             {
               "title": "Committed Default",
               "default": true,
@@ -98,12 +101,13 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
             [$"InteractiveReport:Reports:{ReportName}:Authorization:AllowAnonymous"] = "true",
             // This is the synthetic default when no configured file is flagged as default.
             [$"InteractiveReport:Reports:{ReportName}:DefaultState:Search"] = "inline default",
-            [$"InteractiveReport:Reports:{ReportName}:DocumentFiles:0"] = "ReportDocuments/orders.primary.json",
+            [$"InteractiveReport:Reports:{ReportName}:DocumentFiles:0"] = "ReportDocuments/orders.default.json",
             [$"InteractiveReport:Reports:{ReportName}:DocumentFiles:1"] = "ReportDocuments/orders.regional.json",
             ["InteractiveReport:SavedReports:Connection"] = "Data",
         });
         builder.Services
             .AddInteractiveReports(builder.Configuration)
+            .UseLogger(_logger)
             .AddConnection("Data", _ => new SqliteConnection(connectionString));
 
         _app = builder.Build();
@@ -144,8 +148,28 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
         Assert.Equal(_reportId, persisted.Id);
         Assert.Equal("Committed Default", persisted.Title);
         Assert.Equal(SavedReportOrigin.Configured, persisted.Origin);
-        Assert.Equal("ReportDocuments/orders.primary.json", persisted.SourceFile);
+        Assert.Equal("ReportDocuments/orders.default.json", persisted.SourceFile);
         Assert.Null(persisted.StateJson);
+    }
+
+    [Fact]
+    public async Task A_configured_default_cannot_be_replaced_through_the_api()
+    {
+        using var saveResponse = await _client.PostAsync(
+            $"/api/reports/{_reportId}/saved",
+            JsonContent.Create(new { title = "Candidate", state = new { v = 3 } }));
+        Assert.Equal(HttpStatusCode.Created, saveResponse.StatusCode);
+        var id = (await ReadJson(saveResponse)).GetProperty("id").GetInt64();
+
+        using var replace = await _client.PutAsJsonAsync(
+            $"/api/reports/{id}", new { isDefault = true });
+
+        Assert.Equal(HttpStatusCode.Conflict, replace.StatusCode);
+        Assert.Equal(
+            InteractiveReportErrorCodes.ConfiguredDefaultControlled,
+            (await ReadJson(replace)).GetProperty("code").GetString());
+        Assert.Equal(_reportId, (await _app!.Services.GetRequiredService<ISavedReportStore>()
+            .FindDefault(ReportName))?.Id);
     }
 
     [Fact]
@@ -166,9 +190,9 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
         Assert.True(configured.GetProperty("isGlobal").GetBoolean());
         Assert.True(configured.GetProperty("isReadOnly").GetBoolean());
         Assert.False(configured.GetProperty("mine").GetBoolean());
-        var configuredPrimary = visible.EnumerateArray()
+        var configuredDefault = visible.EnumerateArray()
             .Single(summary => summary.GetProperty("title").GetString() == "Committed Default");
-        Assert.True(configuredPrimary.GetProperty("isDefault").GetBoolean());
+        Assert.True(configuredDefault.GetProperty("isDefault").GetBoolean());
         Assert.Equal(3, visible.GetArrayLength());
 
         var id = configured.GetProperty("id").GetInt64();
@@ -183,7 +207,7 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.Forbidden, update.StatusCode);
         using var delete = await _client.DeleteAsync($"/api/reports/{id}");
         Assert.Equal(HttpStatusCode.Forbidden, delete.StatusCode);
-        Assert.True(File.Exists(_primaryPath));
+        Assert.True(File.Exists(_defaultPath));
     }
 
     [Fact]
@@ -216,6 +240,10 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
         var admin = await GetAdminRows();
         Assert.Equal(2, admin.Count(row => string.Equals(
             row.GetProperty("TITLE").GetString(), "Regional View", StringComparison.OrdinalIgnoreCase)));
+        var privateRow = admin.Single(row =>
+            row.GetProperty("TITLE").GetString() == "regional view");
+        Assert.Equal("Private", privateRow.GetProperty("SCOPE").GetString());
+        Assert.Equal(JsonValueKind.Null, privateRow.GetProperty("ACTION_DEFAULT").ValueKind);
     }
 
     [Fact]
@@ -373,7 +401,7 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
         Assert.Equal(title, imported.GetProperty("title").GetString());
         Assert.False(imported.TryGetProperty("owner", out _));
         Assert.False(imported.GetProperty("isGlobal").GetBoolean());
-        Assert.False(imported.GetProperty("isPrimary").GetBoolean());
+        Assert.False(imported.GetProperty("isDefault").GetBoolean());
 
         var id = imported.GetProperty("id").GetInt64();
         var stored = await _app!.Services.GetRequiredService<ISavedReportStore>().Get(id);
@@ -406,14 +434,14 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
             .GetProperty("base").GetProperty("composables")[0]
             .GetProperty("columns")[0].GetString());
 
-        await File.WriteAllTextAsync(_primaryPath, """
+        await File.WriteAllTextAsync(_defaultPath, """
             {
               "title": "Committed Default",
               "default": true,
               "state": { "v": 3, "search": "changed on disk" }
             }
             """);
-        File.SetLastWriteTimeUtc(_primaryPath, DateTime.UtcNow.AddMinutes(2));
+        File.SetLastWriteTimeUtc(_defaultPath, DateTime.UtcNow.AddMinutes(2));
 
         var after = await GetJson($"/api/reports/{_reportId}");
         Assert.Equal("changed on disk", after.GetProperty("state").GetProperty("search").GetString());
@@ -425,7 +453,7 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
     [Fact]
     public async Task Missing_file_identity_is_deleted_returns_404_and_restores_a_synthetic_default()
     {
-        File.Delete(_primaryPath);
+        File.Delete(_defaultPath);
 
         // Catalogue discovery trusts the database identity and does not probe the body.
         var catalogue = await GetJson("/api/reports");
@@ -440,7 +468,7 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
         var replacement = await store.FindDefault(ReportName);
         Assert.NotNull(replacement);
         Assert.NotEqual(_reportId, replacement.Id);
-        Assert.Equal(SavedReportOrigin.User, replacement.Origin);
+        Assert.Equal(SavedReportOrigin.Synthetic, replacement.Origin);
         Assert.True(replacement.IsDefault);
 
         var loaded = await GetJson($"/api/reports/{replacement.Id}");
@@ -460,12 +488,87 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
         var updated = await ReadJson(update);
         Assert.Equal(replacement.Id, updated.GetProperty("id").GetInt64());
         Assert.True(updated.GetProperty("isDefault").GetBoolean());
+        Assert.Equal(
+            SavedReportOrigin.User,
+            (await store.Get(replacement.Id))!.Origin);
 
         var edited = await GetJson($"/api/reports/{replacement.Id}");
         Assert.Equal("Edited Default", edited.GetProperty("summary").GetProperty("title").GetString());
         Assert.Equal(
             "edited in the UI",
             edited.GetProperty("state").GetProperty("search").GetString());
+    }
+
+    [Fact]
+    public async Task Invalid_configured_default_replaces_synthetic_then_is_logged_deleted_and_retried()
+    {
+        var services = _app!.Services;
+        var store = services.GetRequiredService<ISavedReportStore>();
+        var synchronizer = services.GetRequiredService<ConfiguredReportDocumentSynchronizer>();
+        var configured = await store.Get(_reportId);
+        Assert.NotNull(configured);
+
+        // Model the definition changing after the synthetic default had already been created.
+        await synchronizer.RemoveMissing(configured, CancellationToken.None);
+        var definition = await services.GetRequiredService<IReportDefinitionStore>()
+            .Find(ReportName);
+        Assert.NotNull(definition);
+        var synthetic = await services.GetRequiredService<DefaultReportDocumentService>()
+            .CreateMissing(definition, CancellationToken.None);
+        Assert.Equal(SavedReportOrigin.Synthetic, synthetic.Origin);
+
+        await File.WriteAllTextAsync(_defaultPath, """
+            {
+              "title": "Invalid Committed Default",
+              "default": true,
+              "state": {
+                "activeTable": "broken",
+                "tables": {
+                  "broken": {
+                    "from": "definition",
+                    "composables": [
+                      { "kind": "filter", "filters": [ { "expr": "ID +" } ] }
+                    ]
+                  }
+                }
+              }
+            }
+            """);
+        File.SetLastWriteTimeUtc(_defaultPath, DateTime.UtcNow.AddMinutes(3));
+
+        var firstCatalogue = await GetJson("/api/reports");
+        var firstIdentity = firstCatalogue.EnumerateArray().Single(report =>
+            report.GetProperty("reportName").GetString() == ReportName
+            && report.GetProperty("isDefault").GetBoolean());
+        var firstId = firstIdentity.GetProperty("id").GetInt64();
+        Assert.NotEqual(synthetic.Id, firstId);
+        Assert.Null(await store.Get(synthetic.Id));
+        Assert.Equal(SavedReportOrigin.Configured, (await store.Get(firstId))!.Origin);
+
+        using var firstLoad = await _client.GetAsync($"/api/reports/{firstId}");
+        Assert.Equal(HttpStatusCode.NotFound, firstLoad.StatusCode);
+        Assert.Null(await store.Get(firstId));
+        Assert.Null(await store.FindDefault(ReportName));
+
+        var secondCatalogue = await GetJson("/api/reports");
+        var secondId = secondCatalogue.EnumerateArray().Single(report =>
+            report.GetProperty("reportName").GetString() == ReportName
+            && report.GetProperty("isDefault").GetBoolean())
+            .GetProperty("id").GetInt64();
+        Assert.NotEqual(firstId, secondId);
+
+        using var secondLoad = await _client.GetAsync($"/api/reports/{secondId}");
+        Assert.Equal(HttpStatusCode.NotFound, secondLoad.StatusCode);
+        Assert.Null(await store.Get(secondId));
+        Assert.Null(await store.FindDefault(ReportName));
+
+        var failures = _logger.Events.Where(item =>
+            item.Level == LogLevel.Warning
+            && item.Message.Contains("threw while loading", StringComparison.Ordinal)
+            && item.Message.Contains("orders.default.json", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Equal(2, failures.Length);
+        Assert.All(failures, failure => Assert.IsType<ReportValidationException>(failure.Exception));
     }
 
     private async Task<JsonElement[]> GetAdminRows()
@@ -490,5 +593,22 @@ public sealed class ConfiguredReportDocumentHttpTests : IAsyncLifetime
         await using var stream = await response.Content.ReadAsStreamAsync();
         using var document = await JsonDocument.ParseAsync(stream);
         return document.RootElement.Clone();
+    }
+
+    private sealed class CapturingLogger : ILogger
+    {
+        public ConcurrentQueue<(LogLevel Level, string Message, Exception? Exception)> Events { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            => Events.Enqueue((logLevel, formatter(state, exception), exception));
     }
 }

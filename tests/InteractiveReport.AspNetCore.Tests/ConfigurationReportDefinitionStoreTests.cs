@@ -416,8 +416,8 @@ public sealed class ConfigurationReportDefinitionStoreTests
         var formats = table.Composables!.Single(c => c.Kind == "formats").Formats!;
         Assert.DoesNotContain("ID", columns);
         Assert.Equal(
-            ["toggleGlobal", "togglePrimary", "reassign", "openState", "download", "delete"],
-            new[] { "ACTION_PUBLISH", "ACTION_PRIMARY", "ACTION_REASSIGN", "ACTION_STATE", "ACTION_DOWNLOAD", "ACTION_DELETE" }
+            ["toggleGlobal", "makeDefault", "reassign", "openState", "download", "delete"],
+            new[] { "ACTION_PUBLISH", "ACTION_DEFAULT", "ACTION_REASSIGN", "ACTION_STATE", "ACTION_DOWNLOAD", "ACTION_DELETE" }
                 .Select(column => formats[column].Command));
         Assert.All(formats.Values, format =>
         {
@@ -456,7 +456,7 @@ public sealed class ConfigurationReportDefinitionStoreTests
         Assert.Contains("IR_SAVED_REPORTS", sql);
         foreach (var column in new[]
         {
-            "SCOPE", "PRIMARY_STATUS", "MODIFIED", "ACTION_PUBLISH", "ACTION_PRIMARY", "ACTION_REASSIGN",
+            "SCOPE", "DEFAULT_STATUS", "MODIFIED", "ACTION_PUBLISH", "ACTION_DEFAULT", "ACTION_REASSIGN",
             "ACTION_STATE", "ACTION_DOWNLOAD", "ACTION_DELETE",
         })
             Assert.Contains(column, sql);

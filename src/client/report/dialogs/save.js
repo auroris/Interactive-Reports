@@ -1,4 +1,4 @@
-// Saved-report authoring dialog: handles Save, Save As, collision replacement, and administrative publication fields.
+// Saved-report authoring dialog: handles Save, Save As, collision replacement, and global publication.
 
 import { el, labeled } from "../../core/dom.js";
 import { confirmDialog, openDialog } from "../../core/dialog.js";
@@ -29,10 +29,7 @@ export function saveDialog(w, { asNew }) {
     const globalChk = el("input", {
         type: "checkbox",
         checked: updating ? !!w.currentSaved.isGlobal : false,
-    });
-    const primaryChk = el("input", {
-        type: "checkbox",
-        checked: updating ? !!w.currentSaved.isPrimary : false,
+        disabled: updating && !!w.currentSaved.isDefault,
     });
 
     openDialog({
@@ -44,8 +41,6 @@ export function saveDialog(w, { asNew }) {
             body.append(labeled(w.t("common.name"), titleInp));
             if (canRequestAdministration(w)) {
                 body.append(
-                    el("label", { class: "ir-checkline" }, primaryChk,
-                        w.t("saved.primaryHelp")),
                     el("label", { class: "ir-checkline" }, globalChk,
                         w.t("saved.globalHelp")));
             }
@@ -55,8 +50,8 @@ export function saveDialog(w, { asNew }) {
             if (!title) throw new Error(w.t("saved.enterName"));
             if (!updating) {
                 const requestedPublic = canRequestAdministration(w)
-                    && (globalChk.checked || primaryChk.checked);
-                const isPublic = saved => saved.isDefault || saved.isGlobal || saved.isPrimary;
+                    && globalChk.checked;
+                const isPublic = saved => saved.isDefault || saved.isGlobal;
                 const matches = (w.savedList ?? [])
                     .filter(saved => sameTitle(saved.title, title))
                     .filter(saved => requestedPublic ? isPublic(saved) : isPublic(saved) || saved.mine);
@@ -75,7 +70,6 @@ export function saveDialog(w, { asNew }) {
                     await saveReport(w, {
                         title: target.title,
                         isGlobal: target.isGlobal,
-                        isPrimary: target.isPrimary,
                         asNew: false,
                         target,
                     });
@@ -85,7 +79,6 @@ export function saveDialog(w, { asNew }) {
             return saveReport(w, {
                 title,
                 isGlobal: canRequestAdministration(w) ? globalChk.checked : false,
-                isPrimary: canRequestAdministration(w) ? primaryChk.checked : false,
                 asNew: !updating,
             });
         },

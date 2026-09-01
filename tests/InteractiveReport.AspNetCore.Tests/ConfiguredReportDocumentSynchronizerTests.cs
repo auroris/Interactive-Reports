@@ -9,15 +9,15 @@ namespace InteractiveReport.AspNetCore.Tests;
 public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
 {
     private readonly string _root;
-    private readonly string _primaryPath;
+    private readonly string _defaultPath;
     private readonly string _regionalPath;
 
     public ConfiguredReportDocumentSynchronizerTests()
     {
         _root = Directory.CreateTempSubdirectory("ir-sync-tests-").FullName;
-        _primaryPath = Path.Combine(_root, "orders.primary.json");
+        _defaultPath = Path.Combine(_root, "orders.default.json");
         _regionalPath = Path.Combine(_root, "orders.regional.json");
-        File.WriteAllText(_primaryPath, """
+        File.WriteAllText(_defaultPath, """
             { "title": "Committed Default", "default": true,
               "state": { "activeTable": "base", "tables": { "base": { "from": "definition", "composables": [] } } } }
             """);
@@ -68,7 +68,7 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
     [Fact]
     public async Task Sync_creates_numeric_file_identities_and_marks_the_configured_default()
     {
-        var (synchronizer, store, _) = Build(_primaryPath, _regionalPath);
+        var (synchronizer, store, _) = Build(_defaultPath, _regionalPath);
 
         await synchronizer.EnsureSynced();
 
@@ -79,7 +79,6 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
         Assert.Equal("Regional View", row.Title);
         Assert.Null(row.Owner);
         Assert.True(row.IsGlobal);
-        Assert.False(row.IsPrimary);
         Assert.Equal(SavedReportOrigin.Configured, row.Origin);
         Assert.Equal(_regionalPath, row.SourceFile);
         Assert.Null(row.StateJson);
@@ -96,7 +95,7 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
             { "title": "Committed Default",
               "state": { "activeTable": "regional", "tables": { "regional": { "from": "definition", "composables": [] } } } }
             """);
-        var (synchronizer, store, _) = Build(_primaryPath, _regionalPath);
+        var (synchronizer, store, _) = Build(_defaultPath, _regionalPath);
 
         await synchronizer.EnsureSynced();
 
@@ -110,7 +109,7 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
     [Fact]
     public async Task Existing_database_identities_are_not_reprobed_when_a_file_changes()
     {
-        var (synchronizer, store, _) = Build(_primaryPath, _regionalPath);
+        var (synchronizer, store, _) = Build(_defaultPath, _regionalPath);
         await synchronizer.EnsureSynced();
         store.Calls.Clear();
 
@@ -133,7 +132,7 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
     public async Task Existing_database_metadata_remains_authoritative_when_file_length_changes()
     {
         var originalTimestamp = File.GetLastWriteTimeUtc(_regionalPath);
-        var (synchronizer, store, _) = Build(_primaryPath, _regionalPath);
+        var (synchronizer, store, _) = Build(_defaultPath, _regionalPath);
         await synchronizer.EnsureSynced();
         store.Calls.Clear();
 
@@ -152,7 +151,7 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
     [Fact]
     public async Task Sync_removes_configured_orphans_but_never_user_rows()
     {
-        var (synchronizer, store, monitor) = Build(_primaryPath, _regionalPath);
+        var (synchronizer, store, monitor) = Build(_defaultPath, _regionalPath);
         var userRow = new SavedReport
         {
             Id = 0,
@@ -179,7 +178,7 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
     [Fact]
     public async Task Configured_default_supersedes_the_synthetic_database_default()
     {
-        var (synchronizer, store, _) = Build(_primaryPath);
+        var (synchronizer, store, _) = Build(_defaultPath);
         var synthetic = new SavedReport
         {
             Id = 0,
@@ -190,6 +189,7 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
             IsDefault = true,
             StateJson = "{\"v\":3}",
             ModifiedUtc = DateTime.UtcNow,
+            Origin = SavedReportOrigin.Synthetic,
         };
         await store.Create(synthetic);
 
@@ -202,13 +202,43 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
     }
 
     [Fact]
+    public async Task Configured_default_demotes_but_preserves_a_user_selected_default()
+    {
+        var (synchronizer, store, _) = Build(_defaultPath);
+        var selected = new SavedReport
+        {
+            Id = 0,
+            ReportName = "orders",
+            Title = "Selected by administrator",
+            Owner = "alice",
+            IsGlobal = true,
+            IsDefault = true,
+            StateJson = "{\"v\":3}",
+            ModifiedUtc = DateTime.UtcNow,
+            Origin = SavedReportOrigin.User,
+        };
+        await store.Create(selected);
+
+        await synchronizer.EnsureSynced();
+
+        Assert.Equal(2, store.Rows.Count);
+        var configured = Assert.Single(store.Rows.Values, row => row.IsDefault);
+        Assert.Equal(SavedReportOrigin.Configured, configured.Origin);
+        var preserved = store.Rows[selected.Id];
+        Assert.Equal(SavedReportOrigin.User, preserved.Origin);
+        Assert.True(preserved.IsGlobal);
+        Assert.False(preserved.IsDefault);
+        Assert.Equal("alice", preserved.Owner);
+    }
+
+    [Fact]
     public async Task Existing_database_default_selection_is_not_rewritten_from_file_edits()
     {
-        var (synchronizer, store, monitor) = Build(_primaryPath, _regionalPath);
+        var (synchronizer, store, monitor) = Build(_defaultPath, _regionalPath);
         await synchronizer.EnsureSynced();
         var originalIds = store.Rows.Values.ToDictionary(row => row.SourceFile!, row => row.Id);
 
-        File.WriteAllText(_primaryPath, """
+        File.WriteAllText(_defaultPath, """
             { "title": "Committed Default",
               "state": { "activeTable": "base", "tables": { "base": { "from": "definition", "composables": [] } } } }
             """);
@@ -216,15 +246,15 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
             { "title": "Regional View", "default": true,
               "state": { "activeTable": "base", "tables": { "base": { "from": "definition", "composables": [] } } } }
             """);
-        File.SetLastWriteTimeUtc(_primaryPath, DateTime.UtcNow.AddMinutes(1));
+        File.SetLastWriteTimeUtc(_defaultPath, DateTime.UtcNow.AddMinutes(1));
         File.SetLastWriteTimeUtc(_regionalPath, DateTime.UtcNow.AddMinutes(1));
-        monitor.Swap(OptionsWith(_primaryPath, _regionalPath));
+        monitor.Swap(OptionsWith(_defaultPath, _regionalPath));
 
         await synchronizer.EnsureSynced();
 
         Assert.Equal(2, store.Rows.Count);
         Assert.All(store.Rows.Values, row => Assert.Equal(originalIds[row.SourceFile!], row.Id));
-        Assert.Equal(_primaryPath, Assert.Single(store.Rows.Values, row => row.IsDefault).SourceFile);
+        Assert.Equal(_defaultPath, Assert.Single(store.Rows.Values, row => row.IsDefault).SourceFile);
     }
 
     private sealed class RecordingStore : ISavedReportStore
@@ -273,6 +303,28 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
             Calls.Add($"update:{report.Id}");
             if (!Rows.TryGetValue(report.Id, out var current) || !SameSnapshot(current, expected))
                 return Task.FromResult(false);
+            report.ModifiedUtc = current.ModifiedUtc.AddTicks(1);
+            Rows[report.Id] = report with { };
+            return Task.FromResult(true);
+        }
+
+        public Task<bool> ReplaceDefault(
+            SavedReport report,
+            SavedReport expected,
+            SavedReport currentDefault,
+            CancellationToken ct = default)
+        {
+            if (!Rows.TryGetValue(report.Id, out var current)
+                || !SameSnapshot(current, expected)
+                || !Rows.TryGetValue(currentDefault.Id, out var selected)
+                || !SameSnapshot(selected, currentDefault))
+                return Task.FromResult(false);
+            Rows[currentDefault.Id] = currentDefault with
+            {
+                IsDefault = false,
+                IsGlobal = true,
+                ModifiedUtc = currentDefault.ModifiedUtc.AddTicks(1),
+            };
             report.ModifiedUtc = current.ModifiedUtc.AddTicks(1);
             Rows[report.Id] = report with { };
             return Task.FromResult(true);

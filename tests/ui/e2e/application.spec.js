@@ -634,28 +634,9 @@ test("saves and reloads a report, then administers its complete lifecycle", asyn
         await expect(stateDialog.locator("pre")).toContainText('"search": "Acme Corp"');
         await stateDialog.getByText("Close", { exact: true }).click();
 
-        const flagResponse = page.waitForResponse(response =>
-            response.request().method() === "PUT"
-            && new URL(response.url()).pathname === `/api/reports/${savedId}`
-            && response.request().postDataJSON().isPrimary === true);
-        await row.getByRole("button", { name: "Make primary", exact: true }).click();
-        expect((await flagResponse).ok()).toBe(true);
-        await expect(row).toContainText("Yes");
-
-        const unflagResponse = page.waitForResponse(response =>
-            response.request().method() === "PUT"
-            && new URL(response.url()).pathname === `/api/reports/${savedId}`
-            && response.request().postDataJSON().isPrimary === false);
-        await row.getByRole("button", { name: "Unflag", exact: true }).click();
-        expect((await unflagResponse).ok()).toBe(true);
-        await expect(row).toContainText("No");
-
-        const publishResponse = page.waitForResponse(response =>
-            response.request().method() === "PUT"
-            && new URL(response.url()).pathname === `/api/reports/${savedId}`);
-        await row.getByRole("button", { name: "Publish", exact: true }).click();
-        expect((await publishResponse).ok()).toBe(true);
-        await expect(row).toContainText("Global");
+        // The orders family has a configured file default. Configuration owns that
+        // selection, so the administration grid must not offer an action the API rejects.
+        await expect(row.getByRole("button", { name: "Make default", exact: true })).toHaveCount(0);
 
         await row.getByRole("button", { name: "Reassign", exact: true }).click();
         const reassignDialog = page.getByRole("dialog");

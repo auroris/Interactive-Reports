@@ -32,10 +32,10 @@ public sealed class SavedReportAccessPolicyTests
         => Assert.Equal((SavedReportAccess)expected, SavedReportAccessPolicy.Modify(Report(global), identity, administrator));
 
     [Fact]
-    public void Primary_is_public_and_remains_owner_managed()
+    public void Default_is_public_and_remains_owner_managed()
     {
         var report = Report(global: false);
-        report.IsPrimary = true;
+        report.IsDefault = true;
 
         Assert.Equal(SavedReportAccess.Allowed, SavedReportAccessPolicy.Read(report, identity: null, administrator: false));
         Assert.Equal(SavedReportAccess.Allowed,

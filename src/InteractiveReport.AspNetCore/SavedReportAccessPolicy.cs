@@ -20,7 +20,7 @@ internal static class SavedReportAccessPolicy
     /// <param name="report">The complete saved report being requested.</param>
     /// <param name="identity">The caller's canonical identity, or <see langword="null"/> when unavailable.</param>
     /// <param name="administrator">Whether the caller has administrative authority.</param>
-    /// <returns><see cref="SavedReportAccess.Allowed"/> for an administrator, owner, primary report, or global report; otherwise, <see cref="SavedReportAccess.Hidden"/>.</returns>
+    /// <returns><see cref="SavedReportAccess.Allowed"/> for an administrator, owner, default report, or global report; otherwise, <see cref="SavedReportAccess.Hidden"/>.</returns>
     public static SavedReportAccess Read(SavedReport report, string? identity, bool administrator)
         => administrator || report.IsPublic || IsOwner(report, identity)
             ? SavedReportAccess.Allowed
@@ -44,7 +44,7 @@ internal static class SavedReportAccessPolicy
     /// <param name="report">The saved-report metadata being requested.</param>
     /// <param name="identity">The caller's canonical identity, or <see langword="null"/> when unavailable.</param>
     /// <param name="administrator">Whether the caller has administrative authority.</param>
-    /// <returns><see cref="SavedReportAccess.Allowed"/> for an administrator, owner, primary report, or global report; otherwise, <see cref="SavedReportAccess.Hidden"/>.</returns>
+    /// <returns><see cref="SavedReportAccess.Allowed"/> for an administrator, owner, default report, or global report; otherwise, <see cref="SavedReportAccess.Hidden"/>.</returns>
     public static SavedReportAccess Read(SavedReportMetadata report, string? identity, bool administrator)
         => administrator || report.IsPublic || IsOwner(report, identity)
             ? SavedReportAccess.Allowed

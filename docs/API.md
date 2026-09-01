@@ -145,10 +145,13 @@ while the state remains on disk and can be deployed or versioned in Git. The row
 optimistic catalogue authority for title and default metadata. Configured titles may
 collide with any database or configured title. At most one file per family may set
 `default: true`; it supersedes the synthetic appsettings default. When no file default
-exists, the synthetic document is created lazily and repaired in place from current
-configuration if its stored state can no longer be processed. A missing file is detected
-when its numeric id is loaded; the server deletes the stale row, restores a synthetic
-default when necessary, and returns 404 for that id.
+exists, the synthetic document is created lazily. Any database-backed default is repaired
+in place from current configuration if its stored state can no longer be processed. A
+missing file is detected when its numeric id is loaded; the server deletes the stale row,
+restores a synthetic default when necessary, and returns 404 for that id. If a present
+configured file throws while its state is processed, the server logs the exception, deletes
+the optimistic identity, and returns 404 without creating a synthetic fallback. The next
+synchronization recreates the configured identity and retries the file.
 
 ## Server API index
 
@@ -461,9 +464,9 @@ With the default prefix, the principal routes are:
 | `POST /api/reports/{name}/lov` | Accepts a required current `document`, its active `table`, one `column`, and optional `search`; returns at most 50 distinct values. |
 | `POST /api/reports/{name}/export` | Accepts the client's `ReportState`; returns the requested file format. CSV is currently supported. |
 | `GET /api/reports/{id}/saved` | Lists public documents and the caller's private documents in the same report family. |
-| `POST /api/reports/{id}/saved` | Creates a saved report from `SaveReportRequest` in that family. |
+| `POST /api/reports/{id}/saved` | Creates a private or global saved report from `SaveReportRequest` in that family. |
 | `GET /api/reports/{id}` | Returns `SavedReportDocument`. |
-| `PUT /api/reports/{id}` | Applies `UpdateSavedReportRequest`. |
+| `PUT /api/reports/{id}` | Applies `UpdateSavedReportRequest`; `isDefault: true` atomically selects a new default. |
 | `DELETE /api/reports/{id}` | Deletes an editable saved report. |
 | `GET /api/reports/whoami` | Optional identity diagnostic; disabled unless `WhoamiEnabled` is true. |
 | `/api/reports/admin/*` | Administrator user, authorization, and report-document operations. |
@@ -478,6 +481,11 @@ configured definition key. These processing endpoints authorize that definition 
 not read the saved-report store. A submitted `ReportState` has no required ID or stored
 provenance; it may be a mutated default, another retrieved document, or a document made
 entirely by the client.
+
+Each report family has exactly one public default. Selecting an ordinary database report
+as default also publishes it globally and retains the previous default as a global report.
+The default cannot be unset directly. When a configured file declares `default: true`,
+configuration owns the selection and API attempts to replace it return 409.
 
 All data and management routes enter `IReportAccessService`. Packaged assets and page
 shells are intentionally anonymous; the page's API calls are still authorized.

@@ -39,7 +39,7 @@ internal sealed class InteractiveReportGraphQLExecutor(
     /// <param name="pageSize">The requested page size; <see langword="null"/> preserves the saved value.</param>
     /// <param name="ct">Signals that the operation should be canceled.</param>
     /// <returns>A task containing the executed report result.</returns>
-    /// <remarks>Trusts persisted document identities, reads a configured file body only after authorization, may query the report database, and logs unexpected failures. Transport failures are returned as sanitized <see cref="ExecutionError"/> instances.</remarks>
+    /// <remarks>Trusts persisted document identities, reads a configured file body only after authorization, deletes and logs configured identities whose state fails processing, may query the report database, and logs unexpected failures. Transport failures are returned as sanitized <see cref="ExecutionError"/> instances.</remarks>
     /// <exception cref="ExecutionError">Thrown for invalid arguments, missing or denied reports, invalid saved state, and sanitized execution failures.</exception>
     /// <exception cref="InvalidOperationException">Thrown when no active HTTP request is available.</exception>
     public async Task<ReportResult?> Query(
@@ -70,7 +70,7 @@ internal sealed class InteractiveReportGraphQLExecutor(
                 metadata.Title,
                 metadata.Owner,
                 metadata.IsGlobal,
-                metadata.IsPrimary,
+                metadata.IsDefault,
                 metadata.Origin),
         };
         var authorization = await reportAccess.Authorize(
@@ -94,8 +94,24 @@ internal sealed class InteractiveReportGraphQLExecutor(
             ReportState state;
             if (saved.Origin == SavedReportOrigin.Configured)
             {
-                if (saved.SourceFile is null
-                    || configuredDocuments.Find(saved.ReportName, saved.SourceFile) is not { } file)
+                ConfiguredReportDocument? file;
+                try
+                {
+                    file = saved.SourceFile is null
+                        ? null
+                        : configuredDocuments.Find(saved.ReportName, saved.SourceFile);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    await synchronizer.RemoveInvalid(saved, ex, ct);
+                    throw NotFound();
+                }
+
+                if (file is null)
                 {
                     await synchronizer.RemoveMissing(saved, ct);
                     await defaultDocuments.CreateMissing(definition, ct);
@@ -126,6 +142,11 @@ internal sealed class InteractiveReportGraphQLExecutor(
         }
         catch (ReportValidationException ex)
         {
+            if (saved.Origin == SavedReportOrigin.Configured)
+            {
+                await synchronizer.RemoveInvalid(saved, ex, ct);
+                throw NotFound();
+            }
             var error = Error("The saved report state failed validation.", "REPORT_VALIDATION_FAILED");
             error.AddExtension(
                 "validation",

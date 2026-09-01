@@ -51,10 +51,10 @@ internal static class SavedReportsListingDefinition
                 ["TITLE"] = "Title",
                 ["OWNER"] = "Owner",
                 ["SCOPE"] = "Scope",
-                ["PRIMARY_STATUS"] = "Primary",
+                ["DEFAULT_STATUS"] = "Default",
                 ["MODIFIED"] = "Modified (UTC)",
                 ["ACTION_PUBLISH"] = "Publish",
-                ["ACTION_PRIMARY"] = "Primary",
+                ["ACTION_DEFAULT"] = "Default",
                 ["ACTION_REASSIGN"] = "Reassign",
                 ["ACTION_STATE"] = "State",
                 ["ACTION_DOWNLOAD"] = "Download",
@@ -94,8 +94,8 @@ internal static class SavedReportsListingDefinition
                             // ID stays hidden; the action keyColumn carries it in row data.
                             Columns =
                             [
-                                "REPORT_NAME", "TITLE", "OWNER", "SCOPE", "PRIMARY_STATUS", "MODIFIED",
-                                "ACTION_PUBLISH", "ACTION_PRIMARY", "ACTION_REASSIGN", "ACTION_STATE",
+                                "REPORT_NAME", "TITLE", "OWNER", "SCOPE", "DEFAULT_STATUS", "MODIFIED",
+                                "ACTION_PUBLISH", "ACTION_DEFAULT", "ACTION_REASSIGN", "ACTION_STATE",
                                 "ACTION_DOWNLOAD", "ACTION_DELETE",
                             ],
                         },
@@ -110,7 +110,7 @@ internal static class SavedReportsListingDefinition
                             Formats = new()
                             {
                                 ["ACTION_PUBLISH"] = Action("toggleGlobal"),
-                                ["ACTION_PRIMARY"] = Action("togglePrimary"),
+                                ["ACTION_DEFAULT"] = Action("makeDefault"),
                                 ["ACTION_REASSIGN"] = Action("reassign"),
                                 ["ACTION_STATE"] = Action("openState"),
                                 ["ACTION_DOWNLOAD"] = Action("download"),
@@ -125,7 +125,7 @@ internal static class SavedReportsListingDefinition
 
     /// <summary>
     /// Returns one plain SELECT per dialect. Values are pre-rendered text: SCOPE and the action labels are CASE
-    /// expressions over ORIGIN/IS_GLOBAL/IS_PRIMARY, and MODIFIED trims the ISO-8601 "o" text to sortable
+    /// expressions over ORIGIN/IS_GLOBAL/IS_DEFAULT, and MODIFIED trims the ISO-8601 "o" text to sortable
     /// "yyyy-MM-dd HH:mm". No ORDER BY (sorting belongs to report state); no bracket/brace characters
     /// (SqlKata rewrites them even inside raw SQL). PostgreSQL quotes every identifier because the store's DDL
     /// created quoted-uppercase names.
@@ -137,49 +137,64 @@ internal static class SavedReportsListingDefinition
     private static string Sql(ReportDialect dialect, string table) => dialect switch
     {
         ReportDialect.Sqlite or ReportDialect.Oracle => $"""
-            SELECT ID, REPORT_NAME, TITLE, OWNER, IS_GLOBAL, IS_PRIMARY,
+            SELECT ID, REPORT_NAME, TITLE, OWNER, IS_GLOBAL, IS_DEFAULT,
                 CASE WHEN ORIGIN = 'configured' THEN 'Read only'
                      WHEN IS_GLOBAL = 1 THEN 'Global' ELSE 'Private' END AS "SCOPE",
-                CASE WHEN IS_PRIMARY = 1 THEN 'Yes' ELSE 'No' END AS PRIMARY_STATUS,
+                CASE WHEN IS_DEFAULT = 1 THEN 'Yes' ELSE 'No' END AS DEFAULT_STATUS,
                 REPLACE(SUBSTR(MODIFIED_UTC, 1, 16), 'T', ' ') AS MODIFIED,
-                CASE WHEN ORIGIN = 'configured' THEN NULL
+                CASE WHEN ORIGIN = 'configured' OR IS_DEFAULT = 1 THEN NULL
                      WHEN IS_GLOBAL = 1 THEN 'Unpublish' ELSE 'Publish' END AS ACTION_PUBLISH,
-                CASE WHEN IS_PRIMARY = 1 THEN 'Unflag' ELSE 'Make primary' END AS ACTION_PRIMARY,
+                CASE WHEN ORIGIN = 'configured' OR IS_DEFAULT = 1
+                          OR EXISTS (SELECT 1 FROM {table} D
+                              WHERE D.REPORT_NAME = R.REPORT_NAME
+                                AND D.IS_DEFAULT = 1
+                                AND D.ORIGIN = 'configured')
+                     THEN NULL ELSE 'Make default' END AS ACTION_DEFAULT,
                 CASE WHEN ORIGIN = 'configured' THEN NULL ELSE 'Reassign' END AS ACTION_REASSIGN,
                 'State' AS ACTION_STATE,
                 'Download' AS ACTION_DOWNLOAD,
                 CASE WHEN ORIGIN = 'configured' THEN NULL ELSE 'Delete' END AS ACTION_DELETE
-            FROM {table}
+            FROM {table} R
             """,
         ReportDialect.SqlServer => $"""
-            SELECT ID, REPORT_NAME, TITLE, OWNER, IS_GLOBAL, IS_PRIMARY,
+            SELECT ID, REPORT_NAME, TITLE, OWNER, IS_GLOBAL, IS_DEFAULT,
                 CASE WHEN ORIGIN = N'configured' THEN N'Read only'
                      WHEN IS_GLOBAL = 1 THEN N'Global' ELSE N'Private' END AS SCOPE,
-                CASE WHEN IS_PRIMARY = 1 THEN N'Yes' ELSE N'No' END AS PRIMARY_STATUS,
+                CASE WHEN IS_DEFAULT = 1 THEN N'Yes' ELSE N'No' END AS DEFAULT_STATUS,
                 REPLACE(SUBSTRING(MODIFIED_UTC, 1, 16), N'T', N' ') AS MODIFIED,
-                CASE WHEN ORIGIN = N'configured' THEN NULL
+                CASE WHEN ORIGIN = N'configured' OR IS_DEFAULT = 1 THEN NULL
                      WHEN IS_GLOBAL = 1 THEN N'Unpublish' ELSE N'Publish' END AS ACTION_PUBLISH,
-                CASE WHEN IS_PRIMARY = 1 THEN N'Unflag' ELSE N'Make primary' END AS ACTION_PRIMARY,
+                CASE WHEN ORIGIN = N'configured' OR IS_DEFAULT = 1
+                          OR EXISTS (SELECT 1 FROM {table} D
+                              WHERE D.REPORT_NAME = R.REPORT_NAME
+                                AND D.IS_DEFAULT = 1
+                                AND D.ORIGIN = N'configured')
+                     THEN NULL ELSE N'Make default' END AS ACTION_DEFAULT,
                 CASE WHEN ORIGIN = N'configured' THEN NULL ELSE N'Reassign' END AS ACTION_REASSIGN,
                 N'State' AS ACTION_STATE,
                 N'Download' AS ACTION_DOWNLOAD,
                 CASE WHEN ORIGIN = N'configured' THEN NULL ELSE N'Delete' END AS ACTION_DELETE
-            FROM {table}
+            FROM {table} R
             """,
         ReportDialect.Postgres => $"""
-            SELECT "ID", "REPORT_NAME", "TITLE", "OWNER", "IS_GLOBAL", "IS_PRIMARY",
+            SELECT "ID", "REPORT_NAME", "TITLE", "OWNER", "IS_GLOBAL", "IS_DEFAULT",
                 CASE WHEN "ORIGIN" = 'configured' THEN 'Read only'
                      WHEN "IS_GLOBAL" = 1 THEN 'Global' ELSE 'Private' END AS "SCOPE",
-                CASE WHEN "IS_PRIMARY" = 1 THEN 'Yes' ELSE 'No' END AS "PRIMARY_STATUS",
+                CASE WHEN "IS_DEFAULT" = 1 THEN 'Yes' ELSE 'No' END AS "DEFAULT_STATUS",
                 REPLACE(SUBSTR("MODIFIED_UTC", 1, 16), 'T', ' ') AS "MODIFIED",
-                CASE WHEN "ORIGIN" = 'configured' THEN NULL
+                CASE WHEN "ORIGIN" = 'configured' OR "IS_DEFAULT" = 1 THEN NULL
                      WHEN "IS_GLOBAL" = 1 THEN 'Unpublish' ELSE 'Publish' END AS "ACTION_PUBLISH",
-                CASE WHEN "IS_PRIMARY" = 1 THEN 'Unflag' ELSE 'Make primary' END AS "ACTION_PRIMARY",
+                CASE WHEN "ORIGIN" = 'configured' OR "IS_DEFAULT" = 1
+                          OR EXISTS (SELECT 1 FROM "{table}" D
+                              WHERE D."REPORT_NAME" = R."REPORT_NAME"
+                                AND D."IS_DEFAULT" = 1
+                                AND D."ORIGIN" = 'configured')
+                     THEN NULL ELSE 'Make default' END AS "ACTION_DEFAULT",
                 CASE WHEN "ORIGIN" = 'configured' THEN NULL ELSE 'Reassign' END AS "ACTION_REASSIGN",
                 'State' AS "ACTION_STATE",
                 'Download' AS "ACTION_DOWNLOAD",
                 CASE WHEN "ORIGIN" = 'configured' THEN NULL ELSE 'Delete' END AS "ACTION_DELETE"
-            FROM "{table}"
+            FROM "{table}" R
             """,
         _ => throw new ArgumentOutOfRangeException(nameof(dialect), dialect, null),
     };

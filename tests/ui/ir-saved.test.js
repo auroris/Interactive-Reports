@@ -41,7 +41,7 @@ test("administration controls are only hints for eligible authorization modes", 
 });
 
 test("owners can manage their published report without controlling publication flags", () => {
-    const owner = { mine: true, isGlobal: true, isPrimary: true, isReadOnly: false };
+    const owner = { mine: true, isGlobal: true, isDefault: true, isReadOnly: false };
     assert.equal(canManageSaved({ whoami: null }, owner), true);
     assert.equal(canManageSaved({ whoami: null }, { ...owner, mine: false }), false);
     assert.equal(canManageSaved({ whoami: null }, { ...owner, isReadOnly: true }), false);

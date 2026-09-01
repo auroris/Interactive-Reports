@@ -143,7 +143,7 @@ the host's content root unless absolute:
   "connection": "MainDb",
   "sql": "SELECT ORDER_ID, CUSTOMER, STATUS, CUSTOMER_URL, THUMBNAIL_URL, AMOUNT FROM ORDERS",
   "documentFiles": [
-    "ReportDocuments/orders.primary.json",
+    "ReportDocuments/orders.default.json",
     "ReportDocuments/orders.finance.json"
   ]
 }
@@ -259,29 +259,34 @@ duplicate any public, private, or other configured title. File content remains r
 although Save As can create an editable database copy. At most one file per report may
 set `default: true`; synchronizing that file removes the synthetic default and gives the
 file-backed row the default role. Without a configured file default, the server lazily
-creates a synthetic default row. Invalid stored synthetic state is rebuilt in place from
-current configuration, retaining the same id. If a referenced file is missing during
+creates a synthetic default row. Invalid database-backed default state is rebuilt in place
+from current configuration, retaining the same id. If a referenced file is missing during
 retrieval, its stale database row is deleted, a synthetic default is inserted when the
 missing row was the default, and the vanished numeric id returns 404. Ensure the host
 project copies the referenced files to its build and publish output; the Workbench project
-shows one way to do that.
+shows one way to do that. A present configured document whose state fails processing is
+different: its identity is deleted and retrieval returns 404, but its declaration remains
+authoritative, so no synthetic fallback is created. The next synchronization inserts a new
+identity and retries it. Each failed attempt is logged with its family, id, source file, and
+exception.
 
 Auto-created stores create the report-document and adjacent `IR_REPORT_AUTHORIZATION`
 tables. This release uses the replacement schema and does not upgrade an older table in
 place. `savedReports.tablePrefix` is prepended to both physical storage table names.
 Hosts with `savedReports.autoCreate: false` must provision both current schemas.
 
-Primary remains an administrator-controlled publication flag. Every primary report is
-visible to anyone who can access the underlying dataset, but it does not choose the
-family default. The dedicated `isDefault` row does that.
+Every report family has exactly one default document, and that document is public.
+Administrators can select an ordinary database report as the new default; the operation
+publishes it globally and retains the previous default as an ordinary global report.
+A configured file marked `default: true` owns default selection until configuration changes.
 
 The packaged administration panel lists every saved report through an embedded
 `<interactive-report>` bound to the built-in, administrator-only `__saved-reports`
 definition — the listing is a report like any other, so searching, sorting, column
 tools, pagination, and CSV export all apply to it. Per-row actions (Publish/Unpublish,
-Make primary/Unflag, Reassign, State, Download, Delete) are action-renderer cells;
-configured rows permit the primary action while their file-backed content remains
-read-only. Report names beginning with `__` are reserved. A definition
+Make default, Reassign, State, Download, Delete) are action-renderer cells. Configured
+rows remain read-only, including their configuration-owned default selection. Report
+names beginning with `__` are reserved. A definition
 may also declare `"authorization": { "administratorsOnly": true }` to restrict any
 report to configured or database administrators the same way. Because the admin element
 nests the report inside its own shadow root, theme tokens set on
@@ -433,7 +438,7 @@ which exact identity value belongs in configuration, and it grants no authority.
 
 Saved-report decisions are resource-based: public, owner, or administrator may read;
 owner or administrator may update title/state or delete; and the explicit global,
-primary, ownership, list-all, authorization-management, upload, and download actions
+default-selection, ownership, list-all, authorization-management, upload, and download actions
 require administrator authority. The API applies these rules regardless of which
 client issued the request. Ordinary saved-report summaries expose only the derived
 `mine` flag, not the canonical owner identity; ownership remains a database column and
@@ -698,6 +703,10 @@ public/private duplicate unambiguous, and an existing private document remains e
 Configured file synchronization bypasses these save-time title rules, leaving deployment
 collisions for the programmer to resolve; numeric ids and selector groups keep them
 addressable.
+
+Administrators may select an ordinary saved report as the new default. That replacement
+is atomic, makes the selected report global, and leaves the former default global. A
+configured file marked `default: true` can be changed only through application configuration.
 
 Highlights have a report-facing name and a positive sequence. Matching rules are
 applied from lower to higher sequence, so the highest sequence wins when rules set the
