@@ -15,7 +15,7 @@ namespace InteractiveReport.AspNetCore.Definitions;
 /// when the client submitted replacement state, so the server never has to deserialize
 /// an existing stored state document merely to authorize an update.
 /// </remarks>
-public sealed class InteractiveReportDefinition
+public sealed class SavedReportCandidate
 {
     private ReportState? _state;
 

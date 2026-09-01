@@ -168,10 +168,10 @@ public sealed class InteractiveReportAuthorizationHttpTests
         {
             Assert.Equal("callback-admin", call.User.FindFirstValue(ClaimTypes.NameIdentifier));
             Assert.Equal("orders", call.Resource.ReportName);
-            Assert.Equal("Published", call.Resource.Definition!.Title);
-            Assert.True(call.Resource.Definition.Public);
-            Assert.True(call.Resource.Definition.StateChanged);
-            Assert.NotNull(call.Resource.Definition.State);
+            Assert.Equal("Published", call.Resource.Candidate!.Title);
+            Assert.True(call.Resource.Candidate.Public);
+            Assert.True(call.Resource.Candidate.StateChanged);
+            Assert.NotNull(call.Resource.Candidate.State);
         });
 
         using var listing = await host.Client.SendAsync(Request(
@@ -217,8 +217,8 @@ public sealed class InteractiveReportAuthorizationHttpTests
             seen.Select(call => call.Action).ToArray());
         Assert.All(seen, call =>
         {
-            Assert.True(call.Resource.Definition!.Public);
-            Assert.True(call.Resource.Definition.Default);
+            Assert.True(call.Resource.Candidate!.Public);
+            Assert.True(call.Resource.Candidate.Default);
         });
     }
 
@@ -232,8 +232,8 @@ public sealed class InteractiveReportAuthorizationHttpTests
                 seen.Enqueue(request.Action);
                 if (request.Action == InteractiveReportAction.CreateSavedReport)
                 {
-                    var definition = Assert.IsType<InteractiveReportDefinition>(
-                        request.Resource.Definition);
+                    var definition = Assert.IsType<SavedReportCandidate>(
+                        request.Resource.Candidate);
                     Assert.Equal("orders", definition.ReportName);
                     Assert.True(definition.Public);
                     Assert.True(definition.StateChanged);
@@ -310,8 +310,8 @@ public sealed class InteractiveReportAuthorizationHttpTests
             {
                 if (request.Action == InteractiveReportAction.CreateSavedReport)
                 {
-                    proposedId = request.Resource.Definition!.Id;
-                    request.Resource.Definition.State = new ReportState
+                    proposedId = request.Resource.Candidate!.Id;
+                    request.Resource.Candidate.State = new ReportState
                     {
                         ActiveTable = "broken",
                         Tables = new()
@@ -353,7 +353,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
             {
                 if (request.Action == InteractiveReportAction.UpdateSavedReport)
                 {
-                    var definition = request.Resource.Definition!;
+                    var definition = request.Resource.Candidate!;
                     Assert.Equal(request.Resource.SavedReport!.Id, definition.Id);
                     Assert.Equal("Client update", definition.Title);
                     Assert.False(definition.Public);
@@ -399,7 +399,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
             {
                 seen.Enqueue(request.Action);
                 if (request.Action == InteractiveReportAction.CreateSavedReport)
-                    request.Resource.Definition!.Public = true;
+                    request.Resource.Candidate!.Public = true;
                 return ValueTask.FromResult(true);
             }));
 

@@ -1211,7 +1211,7 @@ Layered, default-deny:
 3. **Application operation authorization** — optional callbacks and/or native ASP.NET
    resource handlers receive an `InteractiveReportAction`, the `ClaimsPrincipal`, and
    current resource metadata. Saved-report mutations also carry a mutable, typed
-   `InteractiveReportDefinition` containing effective metadata and any client-authored
+   `SavedReportCandidate` containing effective metadata and any client-authored
    `ReportState`. Every registered authorizer must grant every applicable action. This
    is an additional restriction over the built-in rules and the fallback administrator
    authority when the legacy list is empty. See [Authorization](AUTHORIZATION.md).

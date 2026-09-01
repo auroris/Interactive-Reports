@@ -44,26 +44,8 @@ public enum InteractiveReportAction
 }
 
 /// <summary>
-/// Immutable current saved-report metadata exposed to authorization code. The stored
-/// state document is deliberately excluded.
-/// </summary>
-/// <param name="Id">The saved-report identifier.</param>
-/// <param name="Title">The current display title.</param>
-/// <param name="Owner">The canonical owner identity.</param>
-/// <param name="IsGlobal">Whether the report is globally published.</param>
-/// <param name="IsDefault">Whether the report is the report family's default document.</param>
-/// <param name="Origin">Whether the row originated from a user or configured document.</param>
-public sealed record SavedReportAuthorizationResource(
-    long Id,
-    string Title,
-    string? Owner,
-    bool IsGlobal,
-    bool IsDefault,
-    SavedReportOrigin Origin);
-
-/// <summary>
 /// The resource passed to callback and ASP.NET Core resource-based authorization.
-/// SavedReport is immutable current metadata. Definition is the mutable, typed result
+/// SavedReport is immutable current metadata. Candidate is the mutable, typed result
 /// of applying the client request and is the object validated and persisted after
 /// authorization.
 /// </summary>
@@ -72,9 +54,9 @@ public sealed record InteractiveReportAuthorizationResource
     /// <summary>Gets the configured report name.</summary>
     public required string ReportName { get; init; }
     /// <summary>Gets immutable current saved-report metadata when the operation targets an existing row.</summary>
-    public SavedReportAuthorizationResource? SavedReport { get; init; }
-    /// <summary>Gets the mutable proposed saved-report definition when the operation creates or updates a row.</summary>
-    public InteractiveReportDefinition? Definition { get; init; }
+    public SavedReportMetadata? SavedReport { get; init; }
+    /// <summary>Gets the mutable proposed saved report when the operation creates or updates a row.</summary>
+    public SavedReportCandidate? Candidate { get; init; }
 }
 
 /// <summary>Contains one application authorization decision requested by Interactive Reports.</summary>

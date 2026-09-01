@@ -158,8 +158,14 @@ public sealed class SavedReportConcurrencyHttpTests
     private static string State(string search)
         => JsonSerializer.Serialize(new { search });
 
-    private static string? Search(string stateJson)
+    /// <summary>
+    /// Reads the search text out of a stored state document. The store types StateJson as nullable,
+    /// so a missing document is asserted here rather than surfacing as a null-reference throw from
+    /// the parser: every caller is checking what a committed write left behind.
+    /// </summary>
+    private static string? Search(string? stateJson)
     {
+        Assert.NotNull(stateJson);
         using var state = JsonDocument.Parse(stateJson);
         return state.RootElement.GetProperty("search").GetString();
     }

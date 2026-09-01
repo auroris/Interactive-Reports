@@ -65,17 +65,7 @@ public sealed record InteractiveReportDocumentExport(string ReportName, ReportDo
 public sealed record InteractiveReportLoadedDocument(
     string ReportName,
     SavedReportMetadata Metadata,
-    ReportState State)
-{
-    /// <summary>Projects the document's metadata into the resource authorization compares against.</summary>
-    internal SavedReportAuthorizationResource Resource() => new(
-        Metadata.Id,
-        Metadata.Title,
-        Metadata.Owner,
-        Metadata.IsGlobal,
-        Metadata.IsDefault,
-        Metadata.Origin);
-}
+    ReportState State);
 
 /// <summary>
 /// Application boundary used by JSON, GraphQL, and file clients. It resolves definitions,
@@ -437,13 +427,7 @@ internal sealed class InteractiveReportServer(
             new InteractiveReportAuthorizationResource
             {
                 ReportName = definition.Name,
-                SavedReport = new SavedReportAuthorizationResource(
-                    metadata.Id,
-                    metadata.Title,
-                    metadata.Owner,
-                    metadata.IsGlobal,
-                    metadata.IsDefault,
-                    metadata.Origin),
+                SavedReport = metadata,
             },
             administratorRequired: builtIn != SavedReportAccess.Allowed,
             hideDenied: true,
@@ -565,7 +549,7 @@ internal sealed class InteractiveReportServer(
         return Query(
             document.ReportName,
             state,
-            document.Resource(),
+            document.Metadata,
             InteractiveReportAction.Query,
             requireDownload: false,
             context,
@@ -766,13 +750,7 @@ internal sealed class InteractiveReportServer(
             new InteractiveReportAuthorizationResource
             {
                 ReportName = resolved.Definition.Name,
-                SavedReport = new SavedReportAuthorizationResource(
-                    metadata.Id,
-                    metadata.Title,
-                    metadata.Owner,
-                    metadata.IsGlobal,
-                    metadata.IsDefault,
-                    metadata.Origin),
+                SavedReport = metadata,
             },
             administratorRequired: report.Origin != SavedReportOrigin.Configured
                 && builtIn != SavedReportAccess.Allowed,
@@ -849,13 +827,7 @@ internal sealed class InteractiveReportServer(
             new InteractiveReportAuthorizationResource
             {
                 ReportName = definition.Name,
-                SavedReport = new SavedReportAuthorizationResource(
-                    metadata.Id,
-                    metadata.Title,
-                    metadata.Owner,
-                    metadata.IsGlobal,
-                    metadata.IsDefault,
-                    metadata.Origin),
+                SavedReport = metadata,
             },
             administratorRequired: true,
             hideDenied: true,
@@ -1064,7 +1036,7 @@ internal sealed class InteractiveReportServer(
         if (request.State is null)
             return InteractiveReportServerResult<SavedReportSummary>.Failed(Invalid(shape.StateCode));
 
-        var candidate = new InteractiveReportDefinition
+        var candidate = new SavedReportCandidate
         {
             Id = 0,
             ReportName = definition.Name,
@@ -1082,7 +1054,7 @@ internal sealed class InteractiveReportServer(
             new InteractiveReportAuthorizationResource
             {
                 ReportName = definition.Name,
-                Definition = candidate,
+                Candidate = candidate,
             },
             administratorRequired: shape.AlwaysAdministrator || builtIn != SavedReportAccess.Allowed,
             hideDenied: shape.AlwaysAdministrator || builtIn != SavedReportAccess.Allowed,
@@ -1180,7 +1152,7 @@ internal sealed class InteractiveReportServer(
                 Invalid(InteractiveReportErrorCodes.MalformedUpdateRequest, ex.Message));
         }
 
-        var candidate = new InteractiveReportDefinition
+        var candidate = new SavedReportCandidate
         {
             Id = metadata.Id,
             ReportName = definition.Name,
@@ -1199,14 +1171,8 @@ internal sealed class InteractiveReportServer(
             new InteractiveReportAuthorizationResource
             {
                 ReportName = definition.Name,
-                SavedReport = new SavedReportAuthorizationResource(
-                    metadata.Id,
-                    metadata.Title,
-                    metadata.Owner,
-                    metadata.IsGlobal,
-                    metadata.IsDefault,
-                    metadata.Origin),
-                Definition = candidate,
+                SavedReport = metadata,
+                Candidate = candidate,
             },
             administratorRequired: metadata.Origin == SavedReportOrigin.Configured
                 || builtIn != SavedReportAccess.Allowed,
@@ -1362,7 +1328,7 @@ internal sealed class InteractiveReportServer(
 
     /// <summary>Yields the administrator-only actions implied by publication, default, or ownership changes.</summary>
     private static IEnumerable<InteractiveReportAction> RequiredAdministratorActions(
-        InteractiveReportDefinition candidate,
+        SavedReportCandidate candidate,
         SavedReportMetadata? current,
         string? originalOwner)
     {
@@ -1378,7 +1344,7 @@ internal sealed class InteractiveReportServer(
     /// <summary>Rebinds a changed state against the live report and replaces it with refreshed schema caches.</summary>
     private async Task<InteractiveReportFailure?> ValidateSubmittedState(
         ReportDefinition definition,
-        InteractiveReportDefinition candidate,
+        SavedReportCandidate candidate,
         string operation,
         InteractiveReportRequestContext context,
         CancellationToken ct)
@@ -1414,7 +1380,7 @@ internal sealed class InteractiveReportServer(
 
     /// <summary>Validates a client-authored candidate independently of live schema binding.</summary>
     private static InteractiveReportFailure? DefinitionFailure(
-        InteractiveReportDefinition candidate,
+        SavedReportCandidate candidate,
         string titleCode,
         string stateCode)
     {
@@ -1460,7 +1426,7 @@ internal sealed class InteractiveReportServer(
     private async Task<InteractiveReportServerResult<ReportResult>> Query(
         string reportName,
         ReportState state,
-        SavedReportAuthorizationResource? savedReport,
+        SavedReportMetadata? savedReport,
         InteractiveReportAction action,
         bool requireDownload,
         InteractiveReportRequestContext context,
@@ -1508,7 +1474,7 @@ internal sealed class InteractiveReportServer(
     private async Task<(ReportDefinition? Definition, InteractiveReportFailure? Failure)> AuthorizeQuery(
         string reportName,
         InteractiveReportAction action,
-        SavedReportAuthorizationResource? savedReport,
+        SavedReportMetadata? savedReport,
         InteractiveReportRequestContext context,
         CancellationToken ct)
     {

@@ -99,11 +99,11 @@ the same resource separately.
 | `Action` | One `InteractiveReportAction` describing the operation currently being evaluated. |
 | `Resource.ReportName` | The exact report-definition name. Authorization is therefore scoped to the dataset/report definition, not merely to a database connection. |
 | `Resource.SavedReport` | Current immutable saved-report metadata, when an existing row is involved. It contains id, title, owner, global/default flags, and origin. |
-| `Resource.Definition` | The mutable, typed saved-report definition for create, update, and document upload operations. Its metadata is effective rather than a sparse patch. |
+| `Resource.Candidate` | The mutable, typed saved report proposed by a create, update, or document-upload operation. Its metadata is effective rather than a sparse patch. |
 | `RequestServices` | The current request service provider. Use it to resolve scoped ACL services or `IAuthorizationService`. It is available on the callback request, not on the native requirement. |
 
-`Resource.Definition` is an
-`InteractiveReport.AspNetCore.Definitions.InteractiveReportDefinition`. It exposes
+`Resource.Candidate` is a
+`InteractiveReport.AspNetCore.Definitions.SavedReportCandidate`. It exposes
 `Id`, `ReportName`, `Title`, `Public`, `Default`, `Owner`, `State`, and
 `StateChanged`. `Public` corresponds to the HTTP field `isGlobal`; `Default`
 corresponds to `isDefault` on updates. `State` is the typed `ReportState` object graph, including
@@ -138,11 +138,11 @@ reports.UseAuthorization((request, cancellationToken) =>
     cancellationToken.ThrowIfCancellationRequested();
 
     if (request.Action == InteractiveReportAction.CreateSavedReport
-        && request.Resource.Definition is { } definition)
+        && request.Resource.Candidate is { } candidate)
     {
         // This host never permits end users to publish directly. The private save may
         // still proceed if the rest of the rule grants CreateSavedReport.
-        definition.Public = false;
+        candidate.Public = false;
 
         // The state is typed. No JsonElement traversal or second deserialization is
         // required.
@@ -181,20 +181,20 @@ Mutation follows these rules:
   view are validated against the current dataset schema. The typed state is then
   serialized canonically. Unknown client JSON members are not copied into storage.
 
-Assigning `Definition.State` marks `StateChanged` true. Mutating a nested state object
+Assigning `Candidate.State` marks `StateChanged` true. Mutating a nested state object
 on create or on an update that already supplied state preserves its existing true
 value. On an update with `StateChanged == false`, the stored JSON remains byte-for-byte
 untouched. To replace it from authorization code, assign a new `ReportState` to
-`Definition.State`.
+`Candidate.State`.
 
 This mutation surface is available through all three authorization integrations. A
 direct callback is usually the clearest place for request normalization. Native
 resource handlers and resource-aware named policies receive the same mutable resource.
 
-Non-default user-document reads parse stored JSON only for response framing and send it
-to the client without hydrating `InteractiveReportDefinition` or `ReportState`. Historical
-user documents are therefore not rewritten or rejected merely because they are read.
-Configured documents read their state from the configured file. If that file is missing,
+Non-default user-document reads bind stored JSON to the current `ReportState` model and
+re-serialize it, so a document is served as this version of the engine understands it;
+members outside that model are not echoed back. Configured documents read their state
+from the configured file. If that file is missing,
 the stale database identity is deleted and the original request returns 404. When the
 missing document was the default, the server also creates a new synthetic default for
 subsequent requests. Any database-backed default is repairable: invalid stored state is
