@@ -46,7 +46,7 @@ public sealed class InteractiveReportQueryGraphType : ObjectGraphType
             {
                 var executor = context.RequestServices!.GetRequiredService<InteractiveReportGraphQLExecutor>();
                 return await executor.Query(
-                    context.GetArgument<string>("id"),
+                    context.GetArgument<long>("id"),
                     context.GetArgument<int?>("page"),
                     context.GetArgument<int?>("pageSize"),
                     context.CancellationToken);

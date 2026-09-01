@@ -92,7 +92,7 @@ if (app.Environment.IsDevelopment())
 {
     await app.Services.GetRequiredService<ConfiguredReportDocumentSynchronizer>().EnsureSynced();
     var defaultReport = await app.Services.GetRequiredService<ISavedReportStore>()
-        .FindByTitle("orders", "Default")
+        .FindDefault("orders")
         ?? throw new InvalidOperationException(
             "The Workbench GraphiQL example requires the configured 'orders / Default' report.");
     const string defaultQuery = """

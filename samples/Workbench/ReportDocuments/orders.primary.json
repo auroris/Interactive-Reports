@@ -1,6 +1,6 @@
 {
   "title": "Default",
-  "primary": true,
+  "default": true,
   "state": {
     "activeTable": "orders",
     "tables": {
@@ -14,6 +14,11 @@
           { "kind": "sort", "sorts": [
             { "col": "ORDER_DATE", "dir": "desc" }
           ] },
+          { "kind": "labels", "labels": {
+            "ORDER_ID": "Order #",
+            "CUSTOMER": "Customer Name",
+            "ORDER_DATE": "Ordered On"
+          } },
           { "kind": "select", "columns": [
             "ORDER_ID", "CUSTOMER", "REGION", "STATUS", "AMOUNT", "ORDER_DATE", "NOTES", "ir1"
           ] },

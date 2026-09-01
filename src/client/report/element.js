@@ -20,7 +20,7 @@ import {
     selectView,
     serializeReportState,
 } from "./state.js";
-import { loadSavedList, refreshSavedSelect, sameTitle } from "./saved.js";
+import { loadSavedList, refreshSavedSelect } from "./saved.js";
 import { renderChips } from "./render/chips.js";
 import { renderGrid } from "./render/grid.js";
 import { canRenderChart, renderChartView } from "./render/chart-view.js";
@@ -128,23 +128,25 @@ class ReportController {
         disposeWidget(this.host);
     }
     /**
-     * Returns the report name requested by the host attribute.
+     * Returns the report-document id requested by the host attribute.
      *
-     * @returns {string|null} The requested report name.
+     * @returns {string|null} The requested report-document id.
      */
-    get requestedReportName() { return this.getAttribute("report"); }
+    get requestedReportId() { return this.getAttribute("report"); }
     /**
-     * Returns the saved-report title requested by the host attribute.
+     * Returns the saved report-document id requested by the host attribute.
      *
-     * @returns {string|null} The requested saved report name.
+     * @returns {string|null} The requested saved report-document id.
      */
-    get requestedSavedReportName() { return this.getAttribute("saved-report"); }
+    get requestedSavedReportId() { return this.getAttribute("saved-report"); }
     /**
-     * Returns the canonical name of the active report.
+     * Returns the numeric id of the active report-family anchor document.
      *
-     * @returns {string|null} The report name.
+     * @returns {string|null} The report-document id.
      */
-    get reportName() { return this._activeReportName ?? this.requestedReportName; }
+    get reportId() { return this._activeReportId ?? this.requestedReportId; }
+    /** Returns the configured definition key learned from the active anchor document. */
+    get definitionName() { return this._activeDefinitionName ?? null; }
 
     /**
      * Returns whether every package-owned control is temporarily inert.
@@ -279,6 +281,7 @@ class ReportController {
         this.lastResult = null;
         this.savedList = [];
         this.currentSaved = null;
+        this._activeDefinitionName = null;
         this.searchScopeCol = null;
         this._lastGood = null;
         this._savedListLoaded = false;
@@ -320,11 +323,11 @@ class ReportController {
         this.destroyChart();
 
         this.resetReportContext();
-        this._activeReportName = null;
+        this._activeReportId = null;
         this.whoami = null;
         buildSkeleton(this);
 
-        const requested = this.requestedReportName?.trim();
+        const requested = this.requestedReportId?.trim();
         if (!requested) {
             this.showError(new Error(this.t("report.attributeRequired")));
             return;
@@ -347,67 +350,67 @@ class ReportController {
     /**
      * Loads a report's schema, saved state, and initial query result as one sequenced activation.
      *
-     * @param {string} name - The report definition name to activate.
+     * @param {string} id - The report-family anchor document id to activate.
      * @param {number} [seq=++this._seq] - The lifecycle sequence used to reject stale asynchronous work.
      * @param {{quiet?: boolean}} [options={}] - Set `quiet` to suppress query errors during activation.
      * @returns {Promise<boolean|undefined>} True after a current successful query, false for failure or stale work detected at most checkpoints, and undefined at the saved-list checkpoint.
      *
      * Side effects: aborts prior work, fetches schema and saved reports, adopts initial state, runs a query, and updates styles, controls, notices, and saved selection.
      */
-    async activateReport(name, seq = ++this._seq, { quiet = false } = {}) {
-        name = name?.trim();
-        if (!name || seq !== this._seq) return false;
+    async activateReport(id, seq = ++this._seq, { quiet = false } = {}) {
+        id = id?.trim();
+        if (!id || seq !== this._seq) return false;
 
         this._abort?.abort();
         this._abort = null;
         this.resetReportContext();
-        this._activeReportName = name;
+        this._activeReportId = id;
         this.clearReportView();
         refreshSavedSelect(this);
         const finishBusy = this.beginBusy();
 
         try {
-            // Schema is the loadability gate. Do not issue saved-state or query requests for
-            // this report until its definition is accessible and valid.
-            const schema = await api(apiUrl(this.base, name, "schema"));
+            const requestedSaved = this.requestedSavedReportId?.trim();
+            const anchorResponse = await api(apiUrl(this.base, id));
             if (seq !== this._seq) return false;
-            this.schema = schema;
-            applyFeatureChrome(this);
+            const definitionName = anchorResponse.summary?.reportName?.trim();
+            if (!definitionName)
+                throw new Error("The report document did not identify its configured definition.");
+            this._activeDefinitionName = definitionName;
+
+            let docResponse = anchorResponse;
+            if (requestedSaved && requestedSaved !== id) {
+                docResponse = await api(apiUrl(this.base, requestedSaved));
+                if (seq !== this._seq) return false;
+                if (docResponse.summary?.reportName !== definitionName)
+                    throw new Error("The selected report document belongs to a different report definition.");
+            }
+
+            // Schema and processing are definition operations. Only document discovery and
+            // persistence use numeric document ids.
             // Invariant: a missing saved endpoint means the feature is off; any other failure
             // must not masquerade as "no saved reports exist".
             let savedError = null;
-            const saved = featureEnabled(this, "savedReports")
-                ? await api(apiUrl(this.base, name, "saved")).catch(err => {
+            const [schema, saved] = await Promise.all([
+                api(apiUrl(this.base, definitionName, "schema")),
+                api(apiUrl(this.base, id, "saved")).catch(err => {
                     if (err.status !== 404) savedError = err;
                     return [];
-                })
-                : [];
+                }),
+            ]);
             if (seq !== this._seq) return;
-            this._savedListLoaded = featureEnabled(this, "savedReports");
+            this.schema = schema;
+            applyFeatureChrome(this);
+            this._savedListLoaded = true;
             this.savedList = saved;
 
-            const requestedSaved = this.requestedSavedReportName?.trim();
-            const savedMatches = requestedSaved
-                ? saved.filter(candidate => sameTitle(candidate.title, requestedSaved))
-                : [];
             let savedWarning = savedError
                 ? this.t("saved.loadFailed", { message: savedError.message })
                 : undefined;
-            if (savedMatches.length === 1) {
-                const docResponse = await api(apiUrl(this.base, "saved", savedMatches[0].id));
-                if (seq !== this._seq) return false;
-                this.currentSaved = docResponse.summary;
-                this.adoptState(docResponse.state);
-            } else {
-                this.adoptState(schema.defaultState);
-                this.currentSaved = saved.find(candidate =>
-                    candidate.isPrimary && sameTitle(candidate.title, "Default")) ?? null;
-                if (requestedSaved && !savedError) {
-                    savedWarning = savedMatches.length === 0
-                        ? this.t("saved.requestedUnavailable", { title: requestedSaved })
-                        : this.t("saved.requestedAmbiguous", { title: requestedSaved });
-                }
-            }
+            this.currentSaved = docResponse.summary;
+            if (!saved.some(candidate => String(candidate.id) === String(docResponse.summary.id)))
+                this.savedList = [...saved, docResponse.summary];
+            this.adoptState(docResponse.state);
             refreshSavedSelect(this);
             await this.runQuery({ quiet, source: "initial" });
             if (savedWarning) this.notify(savedWarning, "warn");
@@ -474,7 +477,7 @@ class ReportController {
      * @throws {Error} When the initial report query has not completed successfully.
      */
     getReportDocument() {
-        if (!this.reportName || !this.schema || !this.doc || !this.lastResult)
+        if (!this.reportId || !this.definitionName || !this.schema || !this.doc || !this.lastResult)
             throw invalidState("The report must finish loading before its document can be read.");
         return this.serialize();
     }
@@ -489,7 +492,7 @@ class ReportController {
      * Side effects: posts the complete document to the report's query-authorized LOV endpoint.
      */
     async getListOfValues(options = {}) {
-        if (!this.reportName || !this.schema || !this.doc || !this.lastResult)
+        if (!this.reportId || !this.schema || !this.doc || !this.lastResult)
             throw invalidState("The report must finish loading before values can be requested.");
         const {
             document = this.serialize(),
@@ -502,7 +505,7 @@ class ReportController {
         if (typeof column !== "string" || !column.trim()) throw new TypeError("A current-table column is required.");
         if (typeof search !== "string") throw new TypeError("LOV search text must be a string.");
 
-        const result = await api(this.reportUrl("lov"), {
+        const result = await api(this.definitionUrl("lov"), {
             method: "POST",
             body: {
                 document: copyReportDocument(document),
@@ -528,7 +531,7 @@ class ReportController {
      * rerenders on success, and restores the last validated document on current failure or cancellation.
      */
     async submitReportDocument(document) {
-        if (!this.reportName || !this.schema || !this.doc || !this.lastResult)
+        if (!this.reportId || !this.definitionName || !this.schema || !this.doc || !this.lastResult)
             throw invalidState("The report must finish loading before a document can be submitted.");
 
         const prev = this.doc;
@@ -633,13 +636,18 @@ class ReportController {
     }
 
     /**
-     * Builds a report-relative API URL for the active report.
+     * Builds a processing URL for the active configured report definition.
      *
      * @param {string} resource - The report-relative API resource path.
-     * @returns {string} The API URL for the resource under the active report.
+     * @returns {string} The definition-scoped API URL.
      */
-    reportUrl(resource) {
-        return apiUrl(this.base, this.reportName, resource);
+    definitionUrl(resource) {
+        return apiUrl(this.base, this.definitionName, resource);
+    }
+
+    /** Builds a document-family persistence URL using the numeric anchor id. */
+    documentFamilyUrl(resource) {
+        return apiUrl(this.base, this.reportId, resource);
     }
 
     /**
@@ -703,9 +711,9 @@ class ReportController {
         if (this._savedListLoaded) return Promise.resolve();
         if (this._savedListPromise) return this._savedListPromise;
         const sequence = this._seq;
-        const reportName = this.reportName;
+        const reportId = this.reportId;
         const promise = this._savedListPromise = loadSavedList(this).then(() => {
-            if (sequence !== this._seq || reportName !== this.reportName) return;
+            if (sequence !== this._seq || reportId !== this.reportId) return;
             this._savedListLoaded = true;
             refreshSavedSelect(this);
             applyFeatureChrome(this);
@@ -758,7 +766,7 @@ class ReportController {
             const outgoing = copyReportDocument(detail.document);
             invalidateChangedSchemas(beforeHook, outgoing);
             const submitted = serializeReportState(outgoing);
-            const result = await api(this.reportUrl("query"), {
+            const result = await api(this.definitionUrl("query"), {
                 method: "POST", body: submitted, signal: ctrl.signal,
             });
             if (ctrl !== this._abort) return;
@@ -1136,12 +1144,15 @@ export class InteractiveReportElement extends HTMLElement {
     }
 
     /**
-     * The active canonical report name, or the requested `report` attribute before activation.
-     * This property is read-only; set the attribute to activate another report.
+     * The active report-family anchor id, or the requested `report` attribute before activation.
+     * This property is read-only; set the attribute to activate another report document.
      *
-     * @returns {string|null} The active or requested report name.
+     * @returns {string|null} The active or requested report-document id.
      */
-    get reportName() { return controllerFor(this).reportName; }
+    get reportId() { return controllerFor(this).reportId; }
+
+    /** The configured definition key learned after the anchor document is retrieved. */
+    get definitionName() { return controllerFor(this).definitionName; }
 
     /**
      * The explicit `api-base`, legacy `base`, or bundle-relative default.

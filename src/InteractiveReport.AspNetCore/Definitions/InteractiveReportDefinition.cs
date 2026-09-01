@@ -20,7 +20,7 @@ public sealed class InteractiveReportDefinition
     private ReportState? _state;
 
     /// <summary>Gets the saved-report identifier to create or update.</summary>
-    public required string Id { get; init; }
+    public required long Id { get; init; }
 
     /// <summary>Gets the configured report definition this saved report belongs to.</summary>
     public required string ReportName { get; init; }

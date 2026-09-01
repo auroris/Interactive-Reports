@@ -1,8 +1,9 @@
 // SQL saved-report persistence entrypoint: maps the store contract to provider-neutral SqlKata
 // statements, then compiles them for the configured database dialect. Full detached snapshots
 // provide optimistic-concurrency checks, while a revision predicate makes writes atomic. Optional
-// schema creation and legacy-column upgrades are serialized per store target within this process.
+// schema creation is serialized per store target within this process.
 
+using System.Data;
 using System.Data.Common;
 using System.Globalization;
 using InteractiveReport.Core.Composition;
@@ -76,7 +77,7 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     /// <param name="ct">Signals that the operation should be canceled; defaults to <c>default</c>.</param>
     /// <returns>The matching report, or <see langword="null"/> when no row exists.</returns>
     /// <remarks>Opens and disposes a database connection and executes one query.</remarks>
-    public async Task<SavedReport?> Get(string id, CancellationToken ct = default)
+    public async Task<SavedReport?> Get(long id, CancellationToken ct = default)
     {
         var rows = await Select(Validated(_config()), q => q.Where("ID", id), ct);
         return rows.SingleOrDefault();
@@ -91,7 +92,7 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     /// <returns>The matching report, or <see langword="null"/> when no row exists.</returns>
     private async Task<SavedReport?> Get(
         SavedReportStoreConfig config,
-        string id,
+        long id,
         CancellationToken ct)
     {
         var rows = await Select(config, q => q.Where("ID", id), ct);
@@ -105,9 +106,21 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     /// <param name="ct">Signals that the operation should be canceled; defaults to <c>default</c>.</param>
     /// <returns>The matching metadata, or <see langword="null"/> when no row exists.</returns>
     /// <remarks>Does not select or materialize the report's state JSON.</remarks>
-    public async Task<SavedReportMetadata?> GetMetadata(string id, CancellationToken ct = default)
+    public async Task<SavedReportMetadata?> GetMetadata(long id, CancellationToken ct = default)
     {
         var rows = await SelectMetadata(q => q.Where("ID", id), ct);
+        return rows.SingleOrDefault();
+    }
+
+    /// <summary>Finds the database identity assigned to one configured report-document file.</summary>
+    public async Task<SavedReport?> FindConfiguredFile(
+        string reportName,
+        string sourceFile,
+        CancellationToken ct = default)
+    {
+        var rows = await Select(q => q
+            .Where("REPORT_NAME", reportName)
+            .Where("SOURCE_FILE", sourceFile), ct);
         return rows.SingleOrDefault();
     }
 
@@ -128,11 +141,10 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         // pushing the OR into the WHERE clause.
         var rows = await Select(
             q => q.Where("REPORT_NAME", reportName)
-                .OrderByDesc("IS_PRIMARY").OrderByDesc("IS_GLOBAL").OrderBy("TITLE"),
+                .OrderByDesc("IS_DEFAULT").OrderByDesc("IS_PRIMARY").OrderByDesc("IS_GLOBAL").OrderBy("TITLE"),
             ct);
         return rows
-            .Where(r => r.IsPrimary
-                || r.IsGlobal
+            .Where(r => r.IsPublic
                 || (identity is not null && string.Equals(r.Owner, identity, StringComparison.Ordinal)))
             .ToList();
     }
@@ -151,34 +163,29 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     {
         var rows = await SelectMetadata(
             q => q.Where("REPORT_NAME", reportName)
-                .OrderByDesc("IS_PRIMARY").OrderByDesc("IS_GLOBAL").OrderBy("TITLE"),
+                .OrderByDesc("IS_DEFAULT").OrderByDesc("IS_PRIMARY").OrderByDesc("IS_GLOBAL").OrderBy("TITLE"),
             ct);
         return rows
-            .Where(r => r.IsPrimary
-                || r.IsGlobal
+            .Where(r => r.IsPublic
                 || (identity is not null && string.Equals(r.Owner, identity, StringComparison.Ordinal)))
             .ToList();
     }
 
     /// <summary>
-    /// Finds the effective primary report named <c>Default</c> for one report definition.
+    /// Finds the single row explicitly flagged as the default for one report definition.
     /// </summary>
     /// <param name="reportName">The configured report name whose definition or saved reports are being addressed.</param>
     /// <param name="ct">Signals that the operation should be canceled; defaults to <c>default</c>.</param>
-    /// <returns>The newest matching user report when present, otherwise the newest configured report, or <see langword="null"/>.</returns>
-    public async Task<SavedReport?> FindPrimaryDefault(
+    /// <returns>The flagged default row, or <see langword="null"/>.</returns>
+    public async Task<SavedReport?> FindDefault(
         string reportName,
         CancellationToken ct = default)
     {
         var rows = await Select(
             q => q.Where("REPORT_NAME", reportName)
-                .Where("TITLE_KEY", TitleKey("Default"))
-                .Where("IS_PRIMARY", 1),
+                .Where("IS_DEFAULT", 1),
             ct);
-        return rows
-            .OrderBy(report => report.Origin == SavedReportOrigin.User ? 0 : 1)
-            .ThenByDescending(report => report.ModifiedUtc)
-            .FirstOrDefault();
+        return rows.SingleOrDefault();
     }
 
     /// <summary>
@@ -189,18 +196,23 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     /// <param name="exceptId">An identifier to omit, typically the row being renamed; defaults to <see langword="null"/>.</param>
     /// <param name="ct">Signals that the operation should be canceled; defaults to <c>default</c>.</param>
     /// <returns>The configured match in preference to a user match, or <see langword="null"/> when none exists.</returns>
-    public async Task<SavedReport?> FindByTitle(
+    public async Task<SavedReport?> FindTitleCollision(
         string reportName,
         string title,
-        string? exceptId = null,
+        string? owner,
+        bool isPublic,
+        long? exceptId = null,
         CancellationToken ct = default)
     {
         var rows = await Select(
             q => q.Where("REPORT_NAME", reportName).Where("TITLE_KEY", TitleKey(title)),
             ct);
         return rows
-            .Where(report => !string.Equals(report.Id, exceptId, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(report => report.Origin == SavedReportOrigin.Configured ? 0 : 1)
+            .Where(report => report.Id != exceptId)
+            .Where(report => isPublic
+                ? report.IsPublic
+                : report.IsPublic || string.Equals(report.Owner, owner, StringComparison.Ordinal))
+            .OrderByDescending(report => report.IsPublic)
             .FirstOrDefault();
     }
 
@@ -223,11 +235,12 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     /// <exception cref="SavedReportTitleConflictException">Thrown when another saved report already uses the title in the same visibility scope.</exception>
     public async Task Create(SavedReport report, CancellationToken ct = default)
     {
+        ValidateReport(report);
         var config = Validated(_config());
         report.ModifiedUtc = DateTime.UtcNow;
         try
         {
-            await Execute(config, cfg => new Query(cfg.TableName).AsInsert(ToRow(report)), ct);
+            report.Id = await Insert(config, report, ct);
         }
         catch (DbException ex) when (IsTitleUniqueViolation(config, ex))
         {
@@ -250,8 +263,9 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         SavedReport expected,
         CancellationToken ct = default)
     {
+        ValidateReport(report);
         var config = Validated(_config());
-        if (!string.Equals(report.Id, expected.Id, StringComparison.Ordinal))
+        if (report.Id != expected.Id)
             throw new ArgumentException(
                 "The replacement and expected saved-report snapshots must have the same id.",
                 nameof(expected));
@@ -285,6 +299,13 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     /// <remarks>May retry database reads and writes. On replacement, advances <paramref name="report"/>'s <c>ModifiedUtc</c>.</remarks>
     public async Task Put(SavedReport report, CancellationToken ct = default)
     {
+        if (report.Id == 0)
+        {
+            var insertConfig = Validated(_config());
+            if (!await Put(insertConfig, report, expected: null, ct))
+                throw new InvalidOperationException("A generated saved-report insert did not commit.");
+            return;
+        }
         var config = Validated(_config());
         while (true)
         {
@@ -323,8 +344,8 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         SavedReport? expected,
         CancellationToken ct)
     {
-        if (expected is not null
-            && !string.Equals(report.Id, expected.Id, StringComparison.Ordinal))
+        ValidateReport(report);
+        if (expected is not null && report.Id != expected.Id)
             throw new ArgumentException(
                 "The replacement and expected saved-report snapshots must have the same id.",
                 nameof(expected));
@@ -340,7 +361,11 @@ public sealed class SqlSavedReportStore : ISavedReportStore
             bool applied;
             if (expected is null)
             {
-                await Execute(config, cfg => new Query(cfg.TableName).AsInsert(row), ct);
+                if (report.Id != 0)
+                    throw new ArgumentException(
+                        "A new report document must leave its database-generated id unset.",
+                        nameof(report));
+                report.Id = await Insert(config, report with { ModifiedUtc = modifiedUtc }, ct);
                 applied = true;
             }
             else
@@ -361,7 +386,6 @@ public sealed class SqlSavedReportStore : ISavedReportStore
             // portable way to distinguish it even if the provider reports another unique index
             // first. The caller must reconsider the replacement from that new snapshot. Other
             // title conflicts keep their stable exception.
-            if (expected is null && await Get(config, report.Id, ct) is not null) return false;
             if (IsTitleUniqueViolation(config, ex))
                 throw new SavedReportTitleConflictException(report.ReportName, report.Title, ex);
             throw;
@@ -390,7 +414,7 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     /// <param name="id">The saved-report identifier to delete.</param>
     /// <param name="ct">Signals that the operation should be canceled; defaults to <c>default</c>.</param>
     /// <returns>A task whose result is <see langword="true"/> when the requested row was deleted; otherwise, <see langword="false"/>.</returns>
-    public async Task<bool> Delete(string id, CancellationToken ct = default)
+    public async Task<bool> Delete(long id, CancellationToken ct = default)
         => await Execute(
             config => new Query(config.TableName).Where("ID", id).AsDelete(),
             ct) == 1;
@@ -454,11 +478,14 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     {
         ["ID"] = r.Id,
         ["REPORT_NAME"] = r.ReportName,
+        ["SOURCE_FILE"] = r.SourceFile,
         ["TITLE"] = r.Title,
         ["TITLE_KEY"] = TitleKey(r.Title),
         ["OWNER"] = r.Owner,
         ["IS_GLOBAL"] = r.IsGlobal ? 1 : 0,
+        ["IS_DEFAULT"] = r.IsDefault ? 1 : 0,
         ["IS_PRIMARY"] = r.IsPrimary ? 1 : 0,
+        ["TITLE_SCOPE"] = TitleScope(r),
         ["STATE_JSON"] = r.StateJson,
         ["MODIFIED_UTC"] = r.ModifiedUtc.ToString("o", CultureInfo.InvariantCulture),
         ["ORIGIN"] = OriginText(r.Origin),
@@ -487,11 +514,13 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     /// <param name="expected">The caller's detached snapshot.</param>
     /// <returns><see langword="true"/> when all fields match with ordinal string equality; otherwise, <see langword="false"/>.</returns>
     private static bool SameSnapshot(SavedReport current, SavedReport expected)
-        => string.Equals(current.Id, expected.Id, StringComparison.Ordinal)
+        => current.Id == expected.Id
             && string.Equals(current.ReportName, expected.ReportName, StringComparison.Ordinal)
+            && string.Equals(current.SourceFile, expected.SourceFile, StringComparison.Ordinal)
             && string.Equals(current.Title, expected.Title, StringComparison.Ordinal)
             && string.Equals(current.Owner, expected.Owner, StringComparison.Ordinal)
             && current.IsGlobal == expected.IsGlobal
+            && current.IsDefault == expected.IsDefault
             && current.IsPrimary == expected.IsPrimary
             && string.Equals(current.StateJson, expected.StateJson, StringComparison.Ordinal)
             && current.ModifiedUtc == expected.ModifiedUtc
@@ -517,6 +546,37 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     internal static string TitleKey(string title) => title.Trim().ToUpperInvariant();
 
     /// <summary>
+    /// Builds the atomic title scope used by the replacement persistence contract. Configured
+    /// files have an independent scope per source identity: deployment declarations may shadow
+    /// any user or configured title, while API-authored reports retain public/private uniqueness.
+    /// </summary>
+    internal static string TitleScope(SavedReport report)
+        => report.Origin == SavedReportOrigin.Configured
+            ? $"configured:{report.SourceFile}"
+            : report.IsPublic ? "public" : $"private:{report.Owner}";
+
+    private static void ValidateReport(SavedReport report)
+    {
+        if (report.Origin == SavedReportOrigin.Configured)
+        {
+            if (string.IsNullOrWhiteSpace(report.SourceFile))
+                throw new ArgumentException(
+                    "A configured report document requires its configured source file.",
+                    nameof(report));
+            return;
+        }
+
+        if (report.StateJson is null)
+            throw new ArgumentException(
+                "A database-backed report document requires persisted state JSON.",
+                nameof(report));
+        if (report.SourceFile is not null)
+            throw new ArgumentException(
+                "Only configured report documents may reference a source file.",
+                nameof(report));
+    }
+
+    /// <summary>
     /// Builds the dialect-safe name of the title-uniqueness index.
     /// </summary>
     /// <param name="tableName">The validated physical table name used for saved-report persistence.</param>
@@ -534,7 +594,7 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         return DbErrorClassifier.IsUniqueViolation(config.Dialect, ex)
             && (ex.Message.Contains(TitleIndexName(config.TableName), StringComparison.OrdinalIgnoreCase)
                 // Provider constraint: SQLite reports the violated COLUMNS, not the index name.
-                || ex.Message.Contains("TITLE_KEY", StringComparison.OrdinalIgnoreCase));
+                || ex.Message.Contains("TITLE_SCOPE", StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>
@@ -563,7 +623,7 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         CancellationToken ct)
     {
         var query = shape(new Query(config.TableName)
-            .Select("ID", "REPORT_NAME", "TITLE", "OWNER", "IS_GLOBAL", "IS_PRIMARY", "STATE_JSON", "MODIFIED_UTC", "ORIGIN"));
+            .Select("ID", "REPORT_NAME", "SOURCE_FILE", "TITLE", "OWNER", "IS_GLOBAL", "IS_DEFAULT", "IS_PRIMARY", "STATE_JSON", "MODIFIED_UTC", "ORIGIN"));
 
         await using var conn = await OpenConnection(config, ct);
         var compiled = DialectSupport.GetCompiler(config.Dialect).Compile(query);
@@ -576,15 +636,17 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         {
             result.Add(new SavedReport
             {
-                Id = reader.GetString(0),
+                Id = Convert.ToInt64(reader.GetValue(0), CultureInfo.InvariantCulture),
                 ReportName = reader.GetString(1),
-                Title = reader.GetString(2),
-                Owner = reader.IsDBNull(3) ? null : reader.GetString(3),
-                IsGlobal = Convert.ToBoolean(reader.GetValue(4), CultureInfo.InvariantCulture),
-                IsPrimary = Convert.ToBoolean(reader.GetValue(5), CultureInfo.InvariantCulture),
-                StateJson = reader.GetString(6),
-                ModifiedUtc = DateTime.Parse(reader.GetString(7), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-                Origin = OriginFrom(reader.GetString(8)),
+                SourceFile = reader.IsDBNull(2) ? null : reader.GetString(2),
+                Title = reader.GetString(3),
+                Owner = reader.IsDBNull(4) ? null : reader.GetString(4),
+                IsGlobal = Convert.ToBoolean(reader.GetValue(5), CultureInfo.InvariantCulture),
+                IsDefault = Convert.ToBoolean(reader.GetValue(6), CultureInfo.InvariantCulture),
+                IsPrimary = Convert.ToBoolean(reader.GetValue(7), CultureInfo.InvariantCulture),
+                StateJson = reader.IsDBNull(8) ? null : reader.GetString(8),
+                ModifiedUtc = DateTime.Parse(reader.GetString(9), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                Origin = OriginFrom(reader.GetString(10)),
             });
         }
         return result;
@@ -603,7 +665,7 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     {
         var cfg = Validated(_config());
         var query = shape(new Query(cfg.TableName)
-            .Select("ID", "REPORT_NAME", "TITLE", "OWNER", "IS_GLOBAL", "IS_PRIMARY", "MODIFIED_UTC", "ORIGIN"));
+            .Select("ID", "REPORT_NAME", "SOURCE_FILE", "TITLE", "OWNER", "IS_GLOBAL", "IS_DEFAULT", "IS_PRIMARY", "MODIFIED_UTC", "ORIGIN"));
 
         await using var conn = await OpenConnection(cfg, ct);
         var compiled = DialectSupport.GetCompiler(cfg.Dialect).Compile(query);
@@ -615,14 +677,16 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         while (await reader.ReadAsync(ct))
         {
             result.Add(new SavedReportMetadata(
-                reader.GetString(0),
+                Convert.ToInt64(reader.GetValue(0), CultureInfo.InvariantCulture),
                 reader.GetString(1),
-                reader.GetString(2),
-                reader.IsDBNull(3) ? null : reader.GetString(3),
-                Convert.ToBoolean(reader.GetValue(4), CultureInfo.InvariantCulture),
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4),
                 Convert.ToBoolean(reader.GetValue(5), CultureInfo.InvariantCulture),
-                DateTime.Parse(reader.GetString(6), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-                OriginFrom(reader.GetString(7))));
+                Convert.ToBoolean(reader.GetValue(6), CultureInfo.InvariantCulture),
+                Convert.ToBoolean(reader.GetValue(7), CultureInfo.InvariantCulture),
+                DateTime.Parse(reader.GetString(8), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                OriginFrom(reader.GetString(9))));
         }
         return result;
     }
@@ -662,6 +726,64 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         return await cmd.ExecuteNonQueryAsync(ct);
     }
 
+    /// <summary>Inserts a new row and returns the database-generated numeric identity.</summary>
+    private async Task<long> Insert(
+        SavedReportStoreConfig config,
+        SavedReport report,
+        CancellationToken ct)
+    {
+        if (report.Id != 0)
+            throw new ArgumentException("New report documents must not supply an id.", nameof(report));
+
+        var row = ToRow(report);
+        row.Remove("ID");
+        var compiled = DialectSupport.GetCompiler(config.Dialect).Compile(
+            new Query(config.TableName).AsInsert(row));
+        await using var connection = await OpenConnection(config, ct);
+        await using var command = CommandBuilder.Build(
+            connection, compiled, NoParams, TimeoutSeconds, config.Dialect, _logger);
+
+        if (config.Dialect == ReportDialect.Oracle)
+        {
+            command.CommandText += " RETURNING ID INTO :ir_generated_id";
+            var output = command.CreateParameter();
+            output.ParameterName = "ir_generated_id";
+            output.DbType = DbType.Int64;
+            output.Direction = ParameterDirection.Output;
+            command.Parameters.Add(output);
+            CommandBuilder.Log(command, _logger);
+            await command.ExecuteNonQueryAsync(ct);
+            return Convert.ToInt64(output.Value, CultureInfo.InvariantCulture);
+        }
+
+        // Provider constraint: SQLite's INSERT ... RETURNING reader can throw SQLITE_BUSY
+        // while it is being disposed under concurrent writers, after the row has already been
+        // produced. Complete the insert first, then read the connection-local identity instead.
+        if (config.Dialect == ReportDialect.Sqlite)
+        {
+            CommandBuilder.Log(command, _logger);
+            await command.ExecuteNonQueryAsync(ct);
+            command.CommandText = "SELECT last_insert_rowid()";
+            command.Parameters.Clear();
+            CommandBuilder.Log(command, _logger);
+            var sqliteId = await command.ExecuteScalarAsync(ct)
+                ?? throw new InvalidOperationException(
+                    "SQLite did not return a generated report-document id.");
+            return Convert.ToInt64(sqliteId, CultureInfo.InvariantCulture);
+        }
+
+        command.CommandText += config.Dialect switch
+        {
+            ReportDialect.Postgres => " RETURNING \"ID\"",
+            ReportDialect.SqlServer => "; SELECT CAST(SCOPE_IDENTITY() AS BIGINT)",
+            _ => throw new ArgumentOutOfRangeException(nameof(config), config.Dialect, null),
+        };
+        CommandBuilder.Log(command, _logger);
+        var generated = await command.ExecuteScalarAsync(ct)
+            ?? throw new InvalidOperationException("The database did not return a generated report-document id.");
+        return Convert.ToInt64(generated, CultureInfo.InvariantCulture);
+    }
+
     /// <summary>
     /// Creates and opens a configured connection, optionally ensuring the saved-report schema exists.
     /// </summary>
@@ -687,12 +809,12 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     }
 
     /// <summary>
-    /// Creates or upgrades an auto-managed saved-report table once per process and store target.
+    /// Creates an auto-managed saved-report table once per process and store target.
     /// </summary>
-    /// <param name="conn">The open connection on which to run DDL and legacy-row backfills.</param>
+    /// <param name="conn">The open connection on which to run DDL.</param>
     /// <param name="cfg">The validated dialect and physical table settings.</param>
     /// <param name="ct">Signals that the operation should be canceled.</param>
-    /// <returns>A task that completes after the table, columns, backfill, and unique index are ready.</returns>
+    /// <returns>A task that completes after the table and unique indexes are ready.</returns>
     /// <remarks>Serializes initialization through <c>_createLock</c>, executes database writes, and caches successful targets in <c>_createdTargets</c>.</remarks>
     private async Task EnsureCreated(DbConnection conn, SavedReportStoreConfig cfg, CancellationToken ct)
     {
@@ -705,22 +827,7 @@ public sealed class SqlSavedReportStore : ISavedReportStore
             cmd.CommandText = CreateTableSql(cfg);
             CommandBuilder.Log(cmd, _logger);
             await cmd.ExecuteNonQueryAsync(ct);
-            if (cfg.Dialect == ReportDialect.Sqlite)
-            {
-                await AddSqliteColumnIfMissing(cmd, cfg, "IS_PRIMARY", "INTEGER NOT NULL DEFAULT 0", ct);
-                await AddSqliteColumnIfMissing(cmd, cfg, "TITLE_KEY", "TEXT NULL", ct);
-            }
-            else
-            {
-                cmd.CommandText = AddPrimaryColumnSql(cfg);
-                CommandBuilder.Log(cmd, _logger);
-                await cmd.ExecuteNonQueryAsync(ct);
-                cmd.CommandText = AddTitleKeyColumnSql(cfg);
-                CommandBuilder.Log(cmd, _logger);
-                await cmd.ExecuteNonQueryAsync(ct);
-            }
-            await BackfillTitleKeys(conn, cfg, ct);
-            await CreateTitleIndex(cmd, cfg, ct);
+            await CreateIndexes(cmd, cfg, ct);
             _createdTargets.Add(target);
         }
         finally
@@ -737,18 +844,19 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="cfg"/> contains an unsupported dialect.</exception>
     private static string CreateTableSql(SavedReportStoreConfig cfg) => cfg.Dialect switch
     {
-        // ID is 80 wide: configured-document ids are 68 chars ("cfg_" + SHA-256 hex). OWNER is
-        // nullable: configured rows have no owner.
         ReportDialect.Sqlite => $"""
             CREATE TABLE IF NOT EXISTS {cfg.TableName} (
-                ID           TEXT PRIMARY KEY,
+                ID           INTEGER PRIMARY KEY AUTOINCREMENT,
                 REPORT_NAME  TEXT NOT NULL,
+                SOURCE_FILE  TEXT NULL,
                 TITLE        TEXT NOT NULL,
-                TITLE_KEY    TEXT NULL,
+                TITLE_KEY    TEXT NOT NULL,
+                TITLE_SCOPE  TEXT NOT NULL,
                 OWNER        TEXT NULL,
                 IS_GLOBAL    INTEGER NOT NULL,
+                IS_DEFAULT   INTEGER NOT NULL,
                 IS_PRIMARY   INTEGER NOT NULL DEFAULT 0,
-                STATE_JSON   TEXT NOT NULL,
+                STATE_JSON   TEXT NULL,
                 MODIFIED_UTC TEXT NOT NULL,
                 ORIGIN       TEXT NOT NULL DEFAULT 'user'
             )
@@ -756,14 +864,17 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         ReportDialect.SqlServer => $"""
             IF OBJECT_ID(N'{cfg.TableName}', N'U') IS NULL
             CREATE TABLE {cfg.TableName} (
-                ID           NVARCHAR(80) PRIMARY KEY,
+                ID           BIGINT IDENTITY(1,1) PRIMARY KEY,
                 REPORT_NAME  NVARCHAR(200) NOT NULL,
+                SOURCE_FILE  NVARCHAR(400) NULL,
                 TITLE        NVARCHAR(200) NOT NULL,
-                TITLE_KEY    NVARCHAR(400) NULL,
+                TITLE_KEY    NVARCHAR(400) NOT NULL,
+                TITLE_SCOPE  NVARCHAR(420) NOT NULL,
                 OWNER        NVARCHAR(400) NULL,
                 IS_GLOBAL    INT NOT NULL,
+                IS_DEFAULT   INT NOT NULL,
                 IS_PRIMARY   INT NOT NULL DEFAULT 0,
-                STATE_JSON   NVARCHAR(MAX) NOT NULL,
+                STATE_JSON   NVARCHAR(MAX) NULL,
                 MODIFIED_UTC NVARCHAR(40) NOT NULL,
                 ORIGIN       NVARCHAR(20) NOT NULL DEFAULT 'user'
             )
@@ -771,14 +882,17 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         ReportDialect.Oracle => $"""
             BEGIN
                 EXECUTE IMMEDIATE 'CREATE TABLE {cfg.TableName} (
-                    ID           VARCHAR2(80) PRIMARY KEY,
+                    ID           NUMBER(19) GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
                     REPORT_NAME  VARCHAR2(200) NOT NULL,
+                    SOURCE_FILE  VARCHAR2(400) NULL,
                     TITLE        VARCHAR2(200) NOT NULL,
-                    TITLE_KEY    VARCHAR2(400 CHAR) NULL,
+                    TITLE_KEY    VARCHAR2(400 CHAR) NOT NULL,
+                    TITLE_SCOPE  VARCHAR2(420 CHAR) NOT NULL,
                     OWNER        VARCHAR2(400) NULL,
                     IS_GLOBAL    NUMBER(1) NOT NULL,
+                    IS_DEFAULT   NUMBER(1) NOT NULL,
                     IS_PRIMARY   NUMBER(1) DEFAULT 0 NOT NULL,
-                    STATE_JSON   CLOB NOT NULL,
+                    STATE_JSON   CLOB NULL,
                     MODIFIED_UTC VARCHAR2(40) NOT NULL,
                     ORIGIN       VARCHAR2(20) DEFAULT ''user'' NOT NULL
                 )';
@@ -790,14 +904,17 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         // match the quoted uppercase identifiers SqlKata emits in queries.
         ReportDialect.Postgres => $"""
             CREATE TABLE IF NOT EXISTS "{cfg.TableName}" (
-                "ID"           VARCHAR(80) PRIMARY KEY,
+                "ID"           BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
                 "REPORT_NAME"  VARCHAR(200) NOT NULL,
+                "SOURCE_FILE"  VARCHAR(400) NULL,
                 "TITLE"        VARCHAR(200) NOT NULL,
-                "TITLE_KEY"    VARCHAR(400) NULL,
+                "TITLE_KEY"    VARCHAR(400) NOT NULL,
+                "TITLE_SCOPE"  VARCHAR(420) NOT NULL,
                 "OWNER"        VARCHAR(400) NULL,
                 "IS_GLOBAL"    INT NOT NULL,
+                "IS_DEFAULT"   INT NOT NULL,
                 "IS_PRIMARY"   INT NOT NULL DEFAULT 0,
-                "STATE_JSON"   TEXT NOT NULL,
+                "STATE_JSON"   TEXT NULL,
                 "MODIFIED_UTC" VARCHAR(40) NOT NULL,
                 "ORIGIN"       VARCHAR(20) NOT NULL DEFAULT 'user'
             )
@@ -806,145 +923,35 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     };
 
     /// <summary>
-    /// Inspects a SQLite table and adds one legacy-upgrade column when it is absent.
-    /// </summary>
-    /// <param name="cmd">A reusable command associated with the open SQLite connection.</param>
-    /// <param name="cfg">The validated SQLite table settings.</param>
-    /// <param name="column">The trusted column name to inspect and add.</param>
-    /// <param name="definitionSql">The trusted SQLite type, nullability, and default fragment for the new column.</param>
-    /// <param name="ct">Signals that the operation should be canceled.</param>
-    /// <returns>A task that completes after the inspection and any required <c>ALTER TABLE</c>.</returns>
-    /// <remarks>Replaces <paramref name="cmd"/>'s command text and executes one or two database commands.</remarks>
-    private async Task AddSqliteColumnIfMissing(
-        DbCommand cmd,
-        SavedReportStoreConfig cfg,
-        string column,
-        string definitionSql,
-        CancellationToken ct)
-    {
-        cmd.CommandText = $"SELECT COUNT(*) FROM pragma_table_info('{cfg.TableName}') WHERE name = '{column}'";
-        CommandBuilder.Log(cmd, _logger);
-        if (Convert.ToInt32(await cmd.ExecuteScalarAsync(ct), CultureInfo.InvariantCulture) == 0)
-        {
-            cmd.CommandText = $"ALTER TABLE {cfg.TableName} ADD COLUMN {column} {definitionSql}";
-            CommandBuilder.Log(cmd, _logger);
-            await cmd.ExecuteNonQueryAsync(ct);
-        }
-    }
-
-    /// <summary>
-    /// Builds an idempotent in-place upgrade for the primary-report flag. Auto-created stores from older
-    /// versions may already have the table, while externally managed stores remain the host's responsibility.
-    /// </summary>
-    /// <param name="cfg">The validated dialect and physical table settings.</param>
-    /// <returns>The SQL statement that adds the primary-report column.</returns>
-    /// <exception cref="InvalidOperationException">Thrown for SQLite, whose columns must first be inspected through <see cref="AddSqliteColumnIfMissing"/>.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="cfg"/> contains an unsupported dialect.</exception>
-    private static string AddPrimaryColumnSql(SavedReportStoreConfig cfg) => cfg.Dialect switch
-    {
-        ReportDialect.Sqlite => throw new InvalidOperationException("SQLite primary-column upgrades are inspected before ALTER TABLE."),
-        ReportDialect.SqlServer => $"""
-            IF COL_LENGTH(N'{cfg.TableName}', N'IS_PRIMARY') IS NULL
-                ALTER TABLE {cfg.TableName} ADD IS_PRIMARY INT NOT NULL DEFAULT 0
-            """,
-        ReportDialect.Oracle => $"""
-            BEGIN
-                EXECUTE IMMEDIATE 'ALTER TABLE {cfg.TableName} ADD (IS_PRIMARY NUMBER(1) DEFAULT 0 NOT NULL)';
-            EXCEPTION WHEN OTHERS THEN
-                IF SQLCODE != -1430 THEN RAISE; END IF;
-            END;
-            """,
-        ReportDialect.Postgres => $"""
-            ALTER TABLE "{cfg.TableName}" ADD COLUMN IF NOT EXISTS "IS_PRIMARY" INT NOT NULL DEFAULT 0
-            """,
-        _ => throw new ArgumentOutOfRangeException(nameof(cfg), cfg.Dialect, null),
-    };
-
-    /// <summary>
-    /// Builds an idempotent upgrade for the normalized title-key column. The column remains nullable until
-    /// legacy rows are backfilled in application code, preserving the exact <see cref="TitleKey"/> rule across dialects.
-    /// </summary>
-    /// <param name="cfg">The validated dialect and physical table settings.</param>
-    /// <returns>The SQL statement that adds the normalized title-key column.</returns>
-    /// <exception cref="InvalidOperationException">Thrown for SQLite, whose columns must first be inspected through <see cref="AddSqliteColumnIfMissing"/>.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="cfg"/> contains an unsupported dialect.</exception>
-    private static string AddTitleKeyColumnSql(SavedReportStoreConfig cfg) => cfg.Dialect switch
-    {
-        ReportDialect.Sqlite => throw new InvalidOperationException("SQLite column upgrades are inspected before ALTER TABLE."),
-        ReportDialect.SqlServer => $"""
-            IF COL_LENGTH(N'{cfg.TableName}', N'TITLE_KEY') IS NULL
-                ALTER TABLE {cfg.TableName} ADD TITLE_KEY NVARCHAR(400) NULL
-            """,
-        ReportDialect.Oracle => $"""
-            BEGIN
-                EXECUTE IMMEDIATE 'ALTER TABLE {cfg.TableName} ADD (TITLE_KEY VARCHAR2(400 CHAR) NULL)';
-            EXCEPTION WHEN OTHERS THEN
-                IF SQLCODE != -1430 THEN RAISE; END IF;
-            END;
-            """,
-        ReportDialect.Postgres => $"""
-            ALTER TABLE "{cfg.TableName}" ADD COLUMN IF NOT EXISTS "TITLE_KEY" VARCHAR(400) NULL
-            """,
-        _ => throw new ArgumentOutOfRangeException(nameof(cfg), cfg.Dialect, null),
-    };
-
-    /// <summary>
-    /// Computes and persists title keys for rows written before the normalized key column existed.
-    /// </summary>
-    /// <param name="conn">The open connection used for the read and subsequent updates.</param>
-    /// <param name="cfg">The validated dialect and physical table settings.</param>
-    /// <param name="ct">Signals that the operation should be canceled.</param>
-    /// <returns>A task that completes after every row with a null key has been updated.</returns>
-    /// <remarks>Buffers identifiers and titles before issuing updates so providers need not support concurrent readers and commands on one connection.</remarks>
-    private async Task BackfillTitleKeys(DbConnection conn, SavedReportStoreConfig cfg, CancellationToken ct)
-    {
-        var compiler = DialectSupport.GetCompiler(cfg.Dialect);
-        var pending = new List<(string Id, string Title)>();
-        var select = compiler.Compile(new Query(cfg.TableName).Select("ID", "TITLE").WhereNull("TITLE_KEY"));
-        await using (var cmd = CommandBuilder.Build(
-                         conn, select, NoParams, TimeoutSeconds, cfg.Dialect, _logger))
-        await using (var reader = await cmd.ExecuteReaderAsync(ct))
-        {
-            while (await reader.ReadAsync(ct))
-                pending.Add((reader.GetString(0), reader.GetString(1)));
-        }
-
-        foreach (var (id, title) in pending)
-        {
-            var update = compiler.Compile(new Query(cfg.TableName)
-                .Where("ID", id)
-                .AsUpdate(new Dictionary<string, object?> { ["TITLE_KEY"] = TitleKey(title) }));
-            await using var cmd = CommandBuilder.Build(
-                conn, update, NoParams, TimeoutSeconds, cfg.Dialect, _logger);
-            await cmd.ExecuteNonQueryAsync(ct);
-        }
-    }
-
-    /// <summary>
-    /// Creates the unique index that makes user-title uniqueness atomic. Configured rows are deliberately
-    /// excluded so a checked-in document can shadow a user title without breaking synchronization.
+    /// Creates the indexes that make title scopes, configured-file identities, and defaults unique.
     /// </summary>
     /// <param name="cmd">A reusable command associated with the open store connection.</param>
     /// <param name="cfg">The validated dialect and physical table settings.</param>
     /// <param name="ct">Signals that the operation should be canceled.</param>
     /// <returns>A task that completes after the database accepts the idempotent index DDL.</returns>
     /// <remarks>Replaces <paramref name="cmd"/>'s command text, logs it when enabled, and executes database DDL.</remarks>
-    /// <exception cref="InvalidOperationException">Thrown when the index cannot be created, commonly because legacy user rows contain duplicate titles.</exception>
-    private async Task CreateTitleIndex(DbCommand cmd, SavedReportStoreConfig cfg, CancellationToken ct)
+    /// <exception cref="InvalidOperationException">Thrown when an index cannot be created.</exception>
+    private async Task CreateIndexes(DbCommand cmd, SavedReportStoreConfig cfg, CancellationToken ct)
     {
-        cmd.CommandText = CreateTitleIndexSql(cfg);
-        try
+        foreach (var sql in new[]
+                 {
+                     CreateTitleIndexSql(cfg),
+                     CreateSourceKeyIndexSql(cfg),
+                     CreateDefaultIndexSql(cfg),
+                 })
         {
-            CommandBuilder.Log(cmd, _logger);
-            await cmd.ExecuteNonQueryAsync(ct);
-        }
-        catch (DbException ex)
-        {
-            throw new InvalidOperationException(
-                $"Could not create the saved-report title uniqueness index on '{cfg.TableName}'. "
-                + "If the table predates this version, duplicate user-saved titles within one report "
-                + "must be renamed or removed first.",
-                ex);
+            cmd.CommandText = sql;
+            try
+            {
+                CommandBuilder.Log(cmd, _logger);
+                await cmd.ExecuteNonQueryAsync(ct);
+            }
+            catch (DbException ex)
+            {
+                throw new InvalidOperationException(
+                    $"Could not create a saved-report uniqueness index on '{cfg.TableName}'.",
+                    ex);
+            }
         }
     }
 
@@ -961,14 +968,13 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         {
             ReportDialect.Sqlite => $"""
                 CREATE UNIQUE INDEX IF NOT EXISTS {index}
-                ON {cfg.TableName} (REPORT_NAME, TITLE_KEY) WHERE ORIGIN = 'user'
+                ON {cfg.TableName} (REPORT_NAME, TITLE_KEY, TITLE_SCOPE)
                 """,
-            // Filtered-index DML needs the standard ANSI SET options; SqlClient's defaults
-            // satisfy them (legacy tooling writing this table may not).
+            // Filtered-index DML needs the standard ANSI SET options; SqlClient's defaults satisfy them.
             ReportDialect.SqlServer => $"""
                 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'{index}' AND object_id = OBJECT_ID(N'{cfg.TableName}'))
                     CREATE UNIQUE INDEX {index}
-                    ON {cfg.TableName} (REPORT_NAME, TITLE_KEY) WHERE ORIGIN = 'user'
+                    ON {cfg.TableName} (REPORT_NAME, TITLE_KEY, TITLE_SCOPE)
                 """,
             // Provider constraint: oracle has no partial indexes; the CASE projections index
             // user rows only (rows where every keyed expression is NULL are not indexed). -955:
@@ -976,16 +982,54 @@ public sealed class SqlSavedReportStore : ISavedReportStore
             ReportDialect.Oracle => $"""
                 BEGIN
                     EXECUTE IMMEDIATE 'CREATE UNIQUE INDEX {index} ON {cfg.TableName}
-                        (CASE WHEN ORIGIN = ''user'' THEN REPORT_NAME END,
-                         CASE WHEN ORIGIN = ''user'' THEN TITLE_KEY END)';
+                        (REPORT_NAME, TITLE_KEY, TITLE_SCOPE)';
                 EXCEPTION WHEN OTHERS THEN
                     IF SQLCODE NOT IN (-955, -1408) THEN RAISE; END IF;
                 END;
                 """,
             ReportDialect.Postgres => $"""
                 CREATE UNIQUE INDEX IF NOT EXISTS "{index}"
-                ON "{cfg.TableName}" ("REPORT_NAME", "TITLE_KEY") WHERE "ORIGIN" = 'user'
+                ON "{cfg.TableName}" ("REPORT_NAME", "TITLE_KEY", "TITLE_SCOPE")
                 """,
+            _ => throw new ArgumentOutOfRangeException(nameof(cfg), cfg.Dialect, null),
+        };
+    }
+
+    private static string CreateSourceKeyIndexSql(SavedReportStoreConfig cfg)
+    {
+        var index = cfg.TableName + "_SOURCE_UX";
+        return cfg.Dialect switch
+        {
+            ReportDialect.Sqlite => $"CREATE UNIQUE INDEX IF NOT EXISTS {index} ON {cfg.TableName} (REPORT_NAME, SOURCE_FILE) WHERE SOURCE_FILE IS NOT NULL",
+            ReportDialect.SqlServer => $"IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'{index}' AND object_id = OBJECT_ID(N'{cfg.TableName}')) CREATE UNIQUE INDEX {index} ON {cfg.TableName} (REPORT_NAME, SOURCE_FILE) WHERE SOURCE_FILE IS NOT NULL",
+            ReportDialect.Oracle => $"""
+                BEGIN
+                    EXECUTE IMMEDIATE 'CREATE UNIQUE INDEX {index} ON {cfg.TableName} (REPORT_NAME, SOURCE_FILE)';
+                EXCEPTION WHEN OTHERS THEN
+                    IF SQLCODE NOT IN (-955, -1408) THEN RAISE; END IF;
+                END;
+                """,
+            ReportDialect.Postgres => $"CREATE UNIQUE INDEX IF NOT EXISTS \"{index}\" ON \"{cfg.TableName}\" (\"REPORT_NAME\", \"SOURCE_FILE\") WHERE \"SOURCE_FILE\" IS NOT NULL",
+            _ => throw new ArgumentOutOfRangeException(nameof(cfg), cfg.Dialect, null),
+        };
+    }
+
+    private static string CreateDefaultIndexSql(SavedReportStoreConfig cfg)
+    {
+        var index = cfg.TableName + "_DEFAULT_UX";
+        return cfg.Dialect switch
+        {
+            ReportDialect.Sqlite => $"CREATE UNIQUE INDEX IF NOT EXISTS {index} ON {cfg.TableName} (REPORT_NAME) WHERE IS_DEFAULT = 1",
+            ReportDialect.SqlServer => $"IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'{index}' AND object_id = OBJECT_ID(N'{cfg.TableName}')) CREATE UNIQUE INDEX {index} ON {cfg.TableName} (REPORT_NAME) WHERE IS_DEFAULT = 1",
+            ReportDialect.Oracle => $"""
+                BEGIN
+                    EXECUTE IMMEDIATE 'CREATE UNIQUE INDEX {index} ON {cfg.TableName}
+                        (CASE WHEN IS_DEFAULT = 1 THEN REPORT_NAME ELSE NULL END)';
+                EXCEPTION WHEN OTHERS THEN
+                    IF SQLCODE NOT IN (-955, -1408) THEN RAISE; END IF;
+                END;
+                """,
+            ReportDialect.Postgres => $"CREATE UNIQUE INDEX IF NOT EXISTS \"{index}\" ON \"{cfg.TableName}\" (\"REPORT_NAME\") WHERE \"IS_DEFAULT\" = 1",
             _ => throw new ArgumentOutOfRangeException(nameof(cfg), cfg.Dialect, null),
         };
     }

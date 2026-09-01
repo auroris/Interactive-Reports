@@ -54,12 +54,17 @@ export function saveDialog(w, { asNew }) {
             const title = titleInp.value.trim();
             if (!title) throw new Error(w.t("saved.enterName"));
             if (!updating) {
-                const matches = (w.savedList ?? []).filter(saved => sameTitle(saved.title, title));
+                const requestedPublic = canRequestAdministration(w)
+                    && (globalChk.checked || primaryChk.checked);
+                const isPublic = saved => saved.isDefault || saved.isGlobal || saved.isPrimary;
+                const matches = (w.savedList ?? [])
+                    .filter(saved => sameTitle(saved.title, title))
+                    .filter(saved => requestedPublic ? isPublic(saved) : isPublic(saved) || saved.mine);
                 if (matches.length > 1)
                     throw new Error(w.t("saved.duplicateNames", { title }));
                 if (matches.length === 1) {
                     const target = matches[0];
-                    if (!canManageSaved(w, target))
+                    if (isPublic(target) !== requestedPublic || !canManageSaved(w, target))
                         throw new Error(w.t("saved.cannotReplace", { title }));
                     const replace = await confirmDialog(
                         w,

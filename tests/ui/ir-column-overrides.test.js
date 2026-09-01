@@ -53,6 +53,13 @@ globalThis.fetch = async url => {
     }
     if (String(url).endsWith("/whoami")) return json({ identity: "test-user" });
     if (String(url).endsWith("/saved")) return json([]);
+    if (!String(url).endsWith("/query") && /\/[^/?]+$/.test(String(url))) {
+        const id = String(url).split("/").at(-1);
+        return json({
+            summary: { id, reportName: id, title: "Default", isDefault: true, isGlobal: true },
+            state: {},
+        });
+    }
     if (String(url).endsWith("/query")) {
         return json({
             columns: [

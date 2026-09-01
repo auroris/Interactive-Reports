@@ -1,20 +1,16 @@
 using InteractiveReport.Core.SavedReports;
+using System.Data.Common;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace InteractiveReport.AspNetCore;
 
 /// <summary>
-/// Mirrors configured report documents into the saved-report store as
-/// read-only rows (Origin = Configured), so the store is the single listing surface
-/// and the built-in saved-reports report can query everything with plain SQL. The
-/// files remain the source of truth: rows are upserted under their stable cfg_ ids
-/// whenever a file signature changes, and configured rows whose file is gone are
-/// removed (which also self-handles moved or renamed files — their id changes).
-/// A new row starts at the file mtime; subsequent content replacements advance that
-/// value as an optimistic-concurrency revision, including when an mtime is preserved.
-/// A file's primary value seeds a new row. After that the database flag is preserved,
-/// making the administrator's flag/unflag action authoritative over file metadata.
+/// Creates database identities for configured report-document files so persistence is the
+/// single listing surface and every endpoint can use a numeric document id. The database row
+/// is the optimistic authority for existence, title, and default selection; the JSON file is
+/// dereferenced only for its state body. Removing or renaming a configured source removes its
+/// old identity. A configured default supersedes the synthetic default for its report family.
 /// </summary>
 public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
 {
@@ -53,10 +49,9 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
     }
 
     /// <summary>
-    /// Brings the store's configured rows up to date with the document files. It is cheap when
-    /// nothing changed: one file stat per document plus an in-memory signature compare. The first pass per
-    /// process also triggers the store's lazy table creation, so callers (including built-in definition
-    /// resolution) need no separate readiness step. Failures propagate and retry on the next request.
+    /// Brings configured source references and database identities into agreement. Existing
+    /// identities are trusted without probing their files. Only a configured source lacking an
+    /// identity is opened so its initial database metadata can be recorded.
     /// </summary>
     /// <param name="ct">Cancels lock acquisition and database operations.</param>
     /// <returns>A task that completes after all configured rows and orphans have been reconciled.</returns>
@@ -77,59 +72,119 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
             var signature = Signature();
             if (signature == _applied) return;
 
-            var documents = _documents.ListAll().ToArray();
-            var desired = documents.Select(document => document.Id).ToHashSet(StringComparer.Ordinal);
+            var references = _documents.ListReferences().ToArray();
+            var desired = references
+                .Select(reference => (reference.ReportName, reference.SourceFile))
+                .ToHashSet();
             var existing = await _store.ListAll(ct);
-            var byId = existing.ToDictionary(row => row.Id, StringComparer.Ordinal);
+            var bySourceFile = existing
+                .Where(row => row.SourceFile is not null)
+                .ToDictionary(row => (row.ReportName, row.SourceFile!));
             var upserted = 0;
             var deleted = 0;
+            var unresolved = false;
+
+            // The database is the optimistic catalogue. Do not touch files for identities
+            // that already exist. A new configured reference must be read once to seed its
+            // title and default bit; an absent new file remains absent from the database and
+            // is retried on a later synchronization.
+            var documents = new List<ConfiguredReportDocument>();
+            foreach (var reference in references)
+            {
+                if (bySourceFile.ContainsKey((reference.ReportName, reference.SourceFile)))
+                    continue;
+                if (_documents.Find(reference.ReportName, reference.SourceFile) is { } document)
+                    documents.Add(document);
+                else
+                {
+                    unresolved = true;
+                    _logger?.LogWarning(
+                        "Configured report document {ReportName}/{SourceFile} has no database identity because its file is absent",
+                        reference.ReportName,
+                        reference.SourceFile);
+                }
+            }
+
+            // A configured file explicitly marked as default supersedes the synthetic database
+            // default. Demote configured predecessors and remove the synthetic fallback before
+            // inserting the new public file identity, since their display titles may coincide.
+            foreach (var configuredDefault in documents.Where(document => document.Default))
+            {
+                while (await _store.FindDefault(configuredDefault.ReportName, ct) is { } currentDefault)
+                {
+                    if (currentDefault.Origin == SavedReportOrigin.Configured
+                        && string.Equals(
+                            currentDefault.SourceFile,
+                            configuredDefault.SourceFile,
+                            StringComparison.Ordinal))
+                        break;
+
+                    if (currentDefault.Origin != SavedReportOrigin.Configured)
+                    {
+                        if (await _store.Delete(currentDefault, ct))
+                        {
+                            deleted++;
+                            break;
+                        }
+                        continue;
+                    }
+
+                    var demoted = currentDefault with { IsDefault = false };
+                    if (!await _store.Update(demoted, currentDefault, ct)) continue;
+                    if (demoted.SourceFile is not null)
+                        bySourceFile[(demoted.ReportName, demoted.SourceFile)] = demoted;
+                    upserted++;
+                    break;
+                }
+            }
 
             foreach (var document in documents)
             {
-                byId.TryGetValue(document.Id, out var current);
-                while (true)
+                var sourceIdentity = (document.ReportName, document.SourceFile);
+                var row = new SavedReport
                 {
-                    var row = new SavedReport
-                    {
-                        Id = document.Id,
-                        ReportName = document.ReportName,
-                        Title = document.Title,
-                        Owner = null,
-                        IsGlobal = true,
-                        IsPrimary = current?.IsPrimary ?? document.Primary,
-                        StateJson = document.StateJson,
-                        ModifiedUtc = document.ModifiedUtc,
-                        Origin = SavedReportOrigin.Configured,
-                    };
-                    if (current is not null && !Differs(current, row)) break;
-
-                    if (await _store.Put(row, current, ct))
-                    {
-                        byId[document.Id] = row;
-                        upserted++;
-                        break;
-                    }
-
-                    // Re-evaluate the administrator-owned primary bit after a concurrent
-                    // mutation instead of applying the stale value that ListAll observed at the
-                    // start of synchronization.
-                    current = await _store.Get(document.Id, ct);
+                    Id = 0,
+                    ReportName = document.ReportName,
+                    SourceFile = document.SourceFile,
+                    Title = document.Title,
+                    Owner = null,
+                    IsGlobal = true,
+                    IsDefault = document.Default,
+                    IsPrimary = false,
+                    StateJson = null,
+                    ModifiedUtc = document.ModifiedUtc,
+                    Origin = SavedReportOrigin.Configured,
+                };
+                try
+                {
+                    await _store.Create(row, ct);
+                    bySourceFile[sourceIdentity] = row;
+                    upserted++;
+                }
+                catch (DbException)
+                {
+                    var winner = await _store.FindConfiguredFile(
+                        document.ReportName, document.SourceFile, ct);
+                    if (winner is null) throw;
+                    bySourceFile[sourceIdentity] = winner;
                 }
             }
 
             foreach (var orphan in existing)
             {
-                if (orphan.Origin == SavedReportOrigin.Configured && !desired.Contains(orphan.Id))
+                if (orphan.Origin == SavedReportOrigin.Configured
+                    && (orphan.SourceFile is null
+                        || !desired.Contains((orphan.ReportName, orphan.SourceFile))))
                 {
                     await _store.Delete(orphan.Id, ct);
                     deleted++;
                 }
             }
 
-            _applied = signature;
+            _applied = unresolved ? null : signature;
             _logger?.LogInformation(
                 "Synchronized {DocumentCount} configured report documents: {UpsertedCount} upserted, {DeletedCount} deleted",
-                documents.Length,
+                references.Length,
                 upserted,
                 deleted);
         }
@@ -140,35 +195,28 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
     }
 
     /// <summary>
-    /// Builds a signature from the store target and every document's identity, length, and modification time.
-    /// The document store caches parses
-    /// by length + mtime, so computing this costs one FileInfo stat per document and uses the same
-    /// invalidation boundary.
+    /// Builds a signature from the store target and configured source references without
+    /// probing any file body.
     /// </summary>
     /// <returns>A deterministic string that changes when the target store or a configured file changes.</returns>
     private string Signature()
     {
         var cfg = _registry.ResolveStoreConfig(_options.CurrentValue.SavedReports);
-        var parts = _documents.ListAll()
-            .Select(document => $"{document.Id}:{document.Length}:{document.ModifiedUtc.Ticks}")
+        var parts = _documents.ListReferences()
+            .Select(document => $"{document.ReportName}:{document.SourceFile}")
             .OrderBy(part => part, StringComparer.Ordinal);
         return $"{cfg.ConnectionName}|{cfg.Dialect}|{cfg.TableName}|{string.Join(";", parts)}";
     }
 
     /// <summary>
-    /// Determines whether synchronization must replace an existing configured row.
+    /// Deletes a configured identity whose referenced body was absent and invalidates the
+    /// reconciliation cache so a later deployment of that file can create a new identity.
     /// </summary>
-    /// <param name="current">The row currently stored in the database.</param>
-    /// <param name="desired">The row derived from the current configured document.</param>
-    /// <returns><see langword="true"/> when persisted fields differ from the configured document; otherwise, <see langword="false"/>.</returns>
-    private static bool Differs(SavedReport current, SavedReport desired)
-        => current.Origin != desired.Origin
-            || !current.IsGlobal
-            || current.IsPrimary != desired.IsPrimary
-            || current.Owner is not null
-            || !string.Equals(current.ReportName, desired.ReportName, StringComparison.Ordinal)
-            || !string.Equals(current.Title, desired.Title, StringComparison.Ordinal)
-            || !string.Equals(current.StateJson, desired.StateJson, StringComparison.Ordinal);
+    internal async Task RemoveMissing(SavedReport report, CancellationToken ct)
+    {
+        await _store.Delete(report, ct);
+        Volatile.Write(ref _applied, null);
+    }
 
     /// <summary>
     /// Releases the options-reload subscription and synchronization lock.

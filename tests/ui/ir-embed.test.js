@@ -52,8 +52,20 @@ globalThis.fetch = async (url, options = {}) => {
     }
     if (String(url).endsWith("/whoami")) return json(whoami);
     if (String(url).endsWith("/saved")) return json(savedReports);
-    const savedId = /\/saved\/([^/]+)$/.exec(String(url))?.[1];
+    const savedId = /\/([^/]+)$/.exec(String(url))?.[1];
     if (savedId && savedDocuments.has(savedId)) return json(savedDocuments.get(savedId));
+    if ((options.method ?? "GET") === "GET" && savedId) {
+        return json({
+            summary: {
+                id: savedId,
+                reportName: savedId,
+                title: "Default",
+                isDefault: true,
+                isGlobal: true,
+            },
+            state: {},
+        });
+    }
     if (String(url).endsWith("/query")) {
         return json({
             columns: [{ name: "ID", label: "ID", type: "number" }],
@@ -200,7 +212,7 @@ test("the configured report is loaded directly and can be changed through its at
     for (let attempt = 0; attempt < 20 && !requests.some(r => r.url.endsWith("/order-feed/query")); attempt++)
         await new Promise(resolve => setTimeout(resolve, 1));
 
-    assert.equal(report.reportName, "order-feed");
+    assert.equal(report.reportId, "order-feed");
     assert.equal(report.shadowRoot.querySelector("link[data-ir-host-stylesheet]")?.getAttribute("href"),
         "/styles/orders-report.css?v=3",
         "the host-owned stylesheet survives report changes");
@@ -322,7 +334,7 @@ test("saved-report loads a uniquely named saved report before the initial query"
 
     const report = document.createElement("interactive-report");
     report.setAttribute("report", "orders");
-    report.setAttribute("saved-report", "my default");
+    report.setAttribute("saved-report", "saved-1");
     report.setAttribute("api-base", "/custom-report-api");
     document.body.append(report);
 
@@ -330,7 +342,7 @@ test("saved-report loads a uniquely named saved report before the initial query"
         await new Promise(resolve => setTimeout(resolve, 1));
 
     assert.equal(report.shadowRoot.querySelector(".ir-saved-select").value, "saved-1");
-    assert.ok(requests.some(r => r.url === "/custom-report-api/saved/saved-1"));
+    assert.ok(requests.some(r => r.url === "/custom-report-api/saved-1"));
     const queries = requests.filter(r => r.url === "/custom-report-api/orders/query");
     assert.equal(queries.length, 1, "Default should not be queried before the requested saved report");
     assert.equal(JSON.parse(queries[0].body).search, "Acme");
@@ -340,18 +352,18 @@ test("saved-report loads a uniquely named saved report before the initial query"
     savedDocuments = new Map();
 });
 
-test("a primary saved report named Default represents the schema Default", async () => {
+test("the flagged default report represents the schema Default", async () => {
     requests.length = 0;
     savedReports = [{
         id: "default-1", reportName: "orders", title: "Default",
-        isGlobal: false, isPrimary: true, owner: "admin", mine: false,
+        isGlobal: true, isDefault: true, owner: null, mine: false,
     }, {
         id: "primary-2", reportName: "orders", title: "Executive",
         isGlobal: false, isPrimary: true, owner: "admin", mine: false,
     }];
 
     const report = document.createElement("interactive-report");
-    report.setAttribute("report", "orders");
+    report.setAttribute("report", "default-1");
     report.setAttribute("api-base", "/custom-report-api");
     document.body.append(report);
 
@@ -362,10 +374,10 @@ test("a primary saved report named Default represents the schema Default", async
     assert.equal(select.value, "default-1");
     assert.equal(select.options[0].text, "Default");
     assert.equal(select.options[0].value, "default-1");
-    assert.equal(select.querySelector('optgroup[label="Primary"] option')?.text, "Executive");
+    assert.equal(select.querySelector('optgroup[label="Public"] option')?.text, "Default");
     assert.equal(select.value, "default-1");
-    assert.equal(requests.some(r => r.url.endsWith("/saved/default-1")), false,
-        "the schema already carries the resolved Default state");
+    assert.equal(requests.some(r => r.url.endsWith("/default-1")), true,
+        "the default document is retrieved independently of the schema");
 
     report.remove();
     savedReports = [];
@@ -385,7 +397,7 @@ test("a read-only saved report never offers Save or Delete, even to an administr
 
     const report = document.createElement("interactive-report");
     report.setAttribute("report", "orders");
-    report.setAttribute("saved-report", "Configured View");
+    report.setAttribute("saved-report", "configured-1");
     report.setAttribute("api-base", "/custom-report-api");
     document.body.append(report);
 

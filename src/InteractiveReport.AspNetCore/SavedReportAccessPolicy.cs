@@ -22,7 +22,7 @@ internal static class SavedReportAccessPolicy
     /// <param name="administrator">Whether the caller has administrative authority.</param>
     /// <returns><see cref="SavedReportAccess.Allowed"/> for an administrator, owner, primary report, or global report; otherwise, <see cref="SavedReportAccess.Hidden"/>.</returns>
     public static SavedReportAccess Read(SavedReport report, string? identity, bool administrator)
-        => administrator || report.IsPrimary || report.IsGlobal || IsOwner(report, identity)
+        => administrator || report.IsPublic || IsOwner(report, identity)
             ? SavedReportAccess.Allowed
             : SavedReportAccess.Hidden;
 
@@ -46,7 +46,7 @@ internal static class SavedReportAccessPolicy
     /// <param name="administrator">Whether the caller has administrative authority.</param>
     /// <returns><see cref="SavedReportAccess.Allowed"/> for an administrator, owner, primary report, or global report; otherwise, <see cref="SavedReportAccess.Hidden"/>.</returns>
     public static SavedReportAccess Read(SavedReportMetadata report, string? identity, bool administrator)
-        => administrator || report.IsPrimary || report.IsGlobal || IsOwner(report, identity)
+        => administrator || report.IsPublic || IsOwner(report, identity)
             ? SavedReportAccess.Allowed
             : SavedReportAccess.Hidden;
 

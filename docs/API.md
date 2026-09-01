@@ -113,7 +113,9 @@ sets either `connection` or `dataSource`, never both.
 
 ## Report-definition configuration
 
-Definitions are keyed by their route name under `InteractiveReport:Reports`.
+Definitions are keyed by an internal family name under `InteractiveReport:Reports`.
+Processing endpoints use that key because the client submits its own document; catalogue,
+load, save, and viewer endpoints use database-generated numeric document ids.
 
 | Property | Purpose |
 |---|---|
@@ -135,6 +137,18 @@ authorization block explicitly sets `allowAnonymous`. `features` is a client hin
 not an authorization boundary: embedding JavaScript may override client controls.
 The server still independently enforces authorization, report-state validation,
 trusted context, and the `download` and saved-report-creation feature checks.
+
+Each `documentFiles` entry is a `{ "title", "default", "state" }` JSON envelope;
+`title` is the file-backed report's required configured name.
+The server creates a database identity row containing its family key and source filename,
+while the state remains on disk and can be deployed or versioned in Git. The row is the
+optimistic catalogue authority for title and default metadata. Configured titles may
+collide with any database or configured title. At most one file per family may set
+`default: true`; it supersedes the synthetic appsettings default. When no file default
+exists, the synthetic document is created lazily and repaired in place from current
+configuration if its stored state can no longer be processed. A missing file is detected
+when its numeric id is loaded; the server deletes the stale row, restores a synthetic
+default when necessary, and returns 404 for that id.
 
 ## Server API index
 
@@ -441,20 +455,29 @@ With the default prefix, the principal routes are:
 
 | Method and route | Contract |
 |---|---|
-| `GET /api/reports/{name}/schema` | Definition schema, default state, presentation hints, limits, features, and client capabilities. |
-| `POST /api/reports/{name}/query` | Accepts `ReportState`; returns `ReportResult` with rows and the accepted server-enriched `document`. |
+| `GET /api/reports` | Lists every report document visible through an authorized report definition. IDs are JSON numbers. |
+| `GET /api/reports/{name}/schema` | Definition schema, presentation hints, limits, features, and client capabilities for a configured definition key. |
+| `POST /api/reports/{name}/query` | Accepts the client's `ReportState`; returns `ReportResult` with rows and the accepted server-enriched `document`. |
 | `POST /api/reports/{name}/lov` | Accepts a required current `document`, its active `table`, one `column`, and optional `search`; returns at most 50 distinct values. |
-| `POST /api/reports/{name}/export` | Accepts `ReportState`; returns the requested file format. CSV is currently supported. |
-| `GET /api/reports/{name}/saved` | Lists saved reports visible to the caller. |
-| `POST /api/reports/{name}/saved` | Creates a saved report from `SaveReportRequest`. |
-| `GET /api/reports/saved/{id}` | Returns `SavedReportDocument`. |
-| `PUT /api/reports/saved/{id}` | Applies `UpdateSavedReportRequest`. |
-| `DELETE /api/reports/saved/{id}` | Deletes an editable saved report. |
+| `POST /api/reports/{name}/export` | Accepts the client's `ReportState`; returns the requested file format. CSV is currently supported. |
+| `GET /api/reports/{id}/saved` | Lists public documents and the caller's private documents in the same report family. |
+| `POST /api/reports/{id}/saved` | Creates a saved report from `SaveReportRequest` in that family. |
+| `GET /api/reports/{id}` | Returns `SavedReportDocument`. |
+| `PUT /api/reports/{id}` | Applies `UpdateSavedReportRequest`. |
+| `DELETE /api/reports/{id}` | Deletes an editable saved report. |
 | `GET /api/reports/whoami` | Optional identity diagnostic; disabled unless `WhoamiEnabled` is true. |
 | `/api/reports/admin/*` | Administrator user, authorization, and report-document operations. |
 | `GET /api/reports/ui/{file}` | Packaged browser assets. |
-| `GET /api/reports/{name}/view` | Optional packaged viewer page. |
+| `GET /api/reports/{id}/view` | Optional packaged viewer page. |
 | `GET /api/reports/admin` | Optional packaged administration page. |
+
+All document IDs are database-generated integers. A missing document and a document the
+caller may not read both return 404. Document catalogue, retrieval, reset, save, update,
+and delete operations use those IDs. Schema, query, LOV, and export instead use the
+configured definition key. These processing endpoints authorize that definition and do
+not read the saved-report store. A submitted `ReportState` has no required ID or stored
+provenance; it may be a mutated default, another retrieved document, or a document made
+entirely by the client.
 
 All data and management routes enter `IReportAccessService`. Packaged assets and page
 shells are intentionally anonymous; the page's API calls are still authorized.
@@ -564,8 +587,8 @@ only the supported element interface; mutable controller state remains private.
 
 <interactive-report
   id="orders-report"
-  report="orders"
-  saved-report="My Open Orders"
+  report="42"
+  saved-report="87"
   api-base="/api/reports"
   stylesheet="/css/orders-report.css">
 </interactive-report>
@@ -575,8 +598,9 @@ only the supported element interface; mutable controller state remains private.
 
 | Attribute | Property | Meaning |
 |---|---|---|
-| `report` | `reportName` (read-only) | Required report-definition name. Changing the attribute loads that report. |
-| `saved-report` | none | Optional visible saved-report title to select on activation. |
+| `report` | `reportId` (read-only) | Required numeric anchor document id. Changing the attribute loads that report family. |
+| none | `definitionName` (read-only) | Configured definition key learned from the retrieved anchor document; available after activation. |
+| `saved-report` | none | Optional numeric document id to load on activation. |
 | `api-base` | `apiBase` | API prefix. It is inferred from the module URL when omitted. |
 | `base` | `apiBase` | Older alias for `api-base`. |
 | `lang` | none | Client locale. |

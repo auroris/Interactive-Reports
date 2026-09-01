@@ -61,6 +61,13 @@ globalThis.fetch = async (url, options = {}) => {
     }
     if (request.url.endsWith("/whoami")) return json({ identity: "test-user" });
     if (request.url.endsWith("/saved")) return json([]);
+    if (request.method === "GET" && /\/[^/?]+$/.test(request.url)) {
+        const id = request.url.split("/").at(-1);
+        return json({
+            summary: { id, reportName: id, title: "Default", isDefault: true, isGlobal: true },
+            state: {},
+        });
+    }
     if (request.url.endsWith("/query")) {
         const state = JSON.parse(request.body);
         if (chartStageOf(state)) {

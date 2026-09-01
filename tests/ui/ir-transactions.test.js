@@ -100,7 +100,9 @@ globalThis.fetch = (url, options = {}) => {
         }
         return Promise.resolve(json(savedMutationResult, 201));
     }
-    const savedId = /\/saved\/([^/]+)$/.exec(path)?.[1];
+    const savedId = !path.endsWith("/query") && !path.endsWith("/lov") && !path.endsWith("/export")
+        ? /\/([^/?]+)$/.exec(path)?.[1]
+        : null;
     if (savedId && method === "GET") {
         if (holdSavedDocuments) {
             return new Promise(resolve => heldSavedDocuments.push({
@@ -108,9 +110,21 @@ globalThis.fetch = (url, options = {}) => {
                 succeed: document => resolve(json(document)),
             }));
         }
+        const fallback = savedId === "orders" || savedId === "invoices"
+            ? {
+                summary: {
+                    id: savedId,
+                    reportName: savedId,
+                    title: "Default",
+                    isDefault: true,
+                    isGlobal: true,
+                },
+                state: {},
+            }
+            : null;
         return Promise.resolve(savedDocuments.has(savedId)
             ? json(savedDocuments.get(savedId))
-            : new Response(null, { status: 404 }));
+            : fallback ? json(fallback) : new Response(null, { status: 404 }));
     }
     if (savedId && method === "DELETE")
         return Promise.resolve(new Response(null, { status: 204 }));
@@ -276,8 +290,8 @@ test("rapid filter-chip removals coalesce into one query with the final document
 
 test("saved-report loads are last-request-wins even when GET responses arrive out of order", async () => {
     requests.length = 0;
-    const savedA = { id: "saved-a", title: "A", mine: true };
-    const savedB = { id: "saved-b", title: "B", mine: true };
+    const savedA = { id: "saved-a", reportName: "orders", title: "A", mine: true };
+    const savedB = { id: "saved-b", reportName: "orders", title: "B", mine: true };
     savedReports = [savedA, savedB];
     const report = await mount();
 
@@ -383,7 +397,7 @@ test("a saved-list refresh cannot cross a report switch", async () => {
     const invoiceSaved = { id: "saved-invoices", title: "Invoices copy", mine: true };
     savedReports = [invoiceSaved];
     report.setAttribute("report", "invoices");
-    await settle(() => report.reportName === "invoices"
+    await settle(() => report.reportId === "invoices"
         && savedSelect(report).querySelector(`option[value="${invoiceSaved.id}"]`));
 
     heldSavedLists[0].succeed([
@@ -393,8 +407,8 @@ test("a saved-list refresh cannot cross a report switch", async () => {
 
     assert.equal(!!savedSelect(report).querySelector('option[value="late-orders"]'), false,
         "the completed Orders request must not replace the Invoices list");
-    assert.equal(savedSelect(report).value, "",
-        "the current report's selector remains on its own default state");
+    assert.equal(savedSelect(report).value, "invoices",
+        "the current report's selector remains on its own default document");
 
     savedMutationResult = null;
     savedReports = [];
@@ -404,7 +418,12 @@ test("a saved-list refresh cannot cross a report switch", async () => {
 
 test("a successful delete stays removed from the local list when its refresh fails", async () => {
     requests.length = 0;
-    const summary = { id: "saved-delete", title: "Delete me", mine: true };
+    const summary = {
+        id: "saved-delete",
+        reportName: "orders",
+        title: "Delete me",
+        mine: true,
+    };
     savedReports = [summary];
     savedDocuments = new Map([[summary.id, {
         summary,
@@ -457,7 +476,7 @@ test("a saved-report load whose query fails restores doc, selection, and search 
         "the working copy reverts to the validated state");
     assert.equal(report.shadowRoot.querySelector(".ir-search-input").value, "",
         "the search box follows the reverted doc");
-    assert.equal(select.value, "", "the select returns to the previous selection");
+    assert.equal(select.value, "orders", "the select returns to the previous default document");
 
     report.remove();
     savedReports = [];

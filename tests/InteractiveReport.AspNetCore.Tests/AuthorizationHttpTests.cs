@@ -140,22 +140,23 @@ public sealed class AuthorizationHttpTests : IAsyncLifetime
     [Fact]
     public async Task Saved_report_queries_and_title_checks_require_report_access()
     {
+        var reportId = await ReportDocumentTestIds.Default(_app!.Services, "configured");
         using var created = await Send(
             HttpMethod.Post,
-            "/api/reports/configured/saved",
+            $"/api/reports/{reportId}/saved",
             "configured-user",
             new { title = "Private title", state = new { v = 3 } });
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
 
         using var list = await Send(
             HttpMethod.Get,
-            "/api/reports/configured/saved",
+            $"/api/reports/{reportId}/saved",
             "ordinary-user");
         Assert.Equal(HttpStatusCode.NotFound, list.StatusCode);
 
         using var collisionProbe = await Send(
             HttpMethod.Post,
-            "/api/reports/configured/saved",
+            $"/api/reports/{reportId}/saved",
             "ordinary-user",
             new { title = "PRIVATE TITLE", state = new { v = 3 } });
         Assert.Equal(HttpStatusCode.NotFound, collisionProbe.StatusCode);
@@ -334,8 +335,8 @@ public sealed class AuthorizationHttpTests : IAsyncLifetime
             (await ReadJson(invalidIdentity)).GetProperty("code").GetString());
     }
 
-    private Task<HttpResponseMessage> GetSchema(string report, string? identity)
-        => Send(HttpMethod.Get, $"/api/reports/{report}/schema", identity);
+    private async Task<HttpResponseMessage> GetSchema(string report, string? identity)
+        => await Send(HttpMethod.Get, $"/api/reports/{report}/schema", identity);
 
     private async Task<HttpResponseMessage> Send(
         HttpMethod method,

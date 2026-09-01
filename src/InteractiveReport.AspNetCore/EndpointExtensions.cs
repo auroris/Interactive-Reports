@@ -153,7 +153,7 @@ public static class EndpointExtensions
         // InteractiveReport:ViewerPagesEnabled. Literal-first routing means the existing /ui
         // and /saved segments shadow reports with those names at /view, as they already do on
         // the data routes.
-        group.MapGet("/{name}/view", ViewerPageEndpoints.Report)
+        group.MapGet("/{id:long}/view", ViewerPageEndpoints.Report)
             .AllowAnonymous()
             .ExcludeFromDescription();
         group.MapGet("/admin", ViewerPageEndpoints.Admin)
@@ -170,13 +170,19 @@ public static class EndpointExtensions
             .Produces<InteractiveReportError>(StatusCodes.Status404NotFound)
             .Produces<InteractiveReportError>(StatusCodes.Status500InternalServerError);
         ProtectedApi(
-                WithStorageErrors(group.MapGet("/{name}/saved", SavedReportEndpoints.ListForReport)),
+                WithStorageErrors(group.MapGet("", SavedReportEndpoints.ListAvailable)),
+                SavedReportsTag,
+                "List available report documents",
+                "Lists public and caller-owned documents across authorized report definitions.")
+            .Produces<SavedReportSummary[]>();
+        ProtectedApi(
+                WithStorageErrors(group.MapGet("/{id:long}/saved", SavedReportEndpoints.ListForReport)),
                 SavedReportsTag,
                 "List saved reports",
                 "Lists saved reports visible to the current caller for one report definition.")
             .Produces<SavedReportSummary[]>();
         ProtectedApi(
-                WithStorageErrors(group.MapPost("/{name}/saved", SavedReportEndpoints.Save)),
+                WithStorageErrors(group.MapPost("/{id:long}/saved", SavedReportEndpoints.Save)),
                 SavedReportsTag,
                 "Create a saved report",
                 "Creates a private, global, or primary saved report after validating the submitted state.")
@@ -185,13 +191,13 @@ public static class EndpointExtensions
             .Produces<InteractiveReportError>(StatusCodes.Status400BadRequest)
             .Produces<InteractiveReportError>(StatusCodes.Status409Conflict);
         ProtectedApi(
-                WithStorageErrors(group.MapGet("/saved/{id}", SavedReportEndpoints.Load)),
+                WithStorageErrors(group.MapGet("/{id:long}", SavedReportEndpoints.Load)),
                 SavedReportsTag,
                 "Load a saved report",
                 "Returns visible saved-report metadata and its versioned report-state document.")
             .Produces<SavedReportDocument>();
         ProtectedApi(
-                WithStorageErrors(group.MapPut("/saved/{id}", SavedReportEndpoints.Update)),
+                WithStorageErrors(group.MapPut("/{id:long}", SavedReportEndpoints.Update)),
                 SavedReportsTag,
                 "Update a saved report",
                 "Changes selected saved-report properties. Publication and ownership changes require administrator authority.")
@@ -200,7 +206,7 @@ public static class EndpointExtensions
             .Produces<InteractiveReportError>(StatusCodes.Status400BadRequest)
             .Produces<InteractiveReportError>(StatusCodes.Status409Conflict);
         ProtectedApi(
-                WithStorageErrors(group.MapDelete("/saved/{id}", SavedReportEndpoints.Delete)),
+                WithStorageErrors(group.MapDelete("/{id:long}", SavedReportEndpoints.Delete)),
                 SavedReportsTag,
                 "Delete a saved report",
                 "Deletes a user-authored saved report visible to the current caller.")
@@ -259,14 +265,14 @@ public static class EndpointExtensions
             .Produces<InteractiveReportError>(StatusCodes.Status400BadRequest);
         ProtectedApi(
                 WithStorageErrors(group.MapGet(
-                    "/admin/saved/{id}/document", SavedReportEndpoints.AdminDownloadDocument)),
+                    "/admin/saved/{id:long}/document", SavedReportEndpoints.AdminDownloadDocument)),
                 AdministrationTag,
                 "Download a report document",
                 "Downloads a saved report as a source-controllable report-document envelope.")
             .Produces<ReportDocumentFile>(contentType: "application/json");
         ProtectedApi(
                 WithStorageErrors(group.MapPost(
-                    "/admin/{name}/documents", SavedReportEndpoints.AdminUploadDocument)),
+                    "/admin/{id:long}/documents", SavedReportEndpoints.AdminUploadDocument)),
                 AdministrationTag,
                 "Upload a report document",
                 "Validates and imports a report-document envelope as a saved report.")
@@ -301,7 +307,7 @@ public static class EndpointExtensions
             }
             catch (Exception ex)
             {
-                var reportName = invocation.HttpContext.Request.RouteValues["name"]?.ToString()
+                var reportName = invocation.HttpContext.Request.RouteValues["id"]?.ToString()
                     ?? SavedReportsListingDefinition.Name;
                 return ServerError(
                     invocation.HttpContext,
@@ -355,7 +361,7 @@ public static class EndpointExtensions
     /// <summary>
     /// Discovers and returns the authorized schema for a report definition.
     /// </summary>
-    /// <param name="name">The report name to resolve.</param>
+    /// <param name="name">The configured or built-in report-definition key from the route.</param>
     /// <param name="ctx">The current HTTP request and response context.</param>
     /// <param name="ct">Cancels authorization, context resolution, or schema discovery.</param>
     /// <returns>The schema JSON, an access result, or a sanitized server-error result.</returns>
@@ -457,9 +463,9 @@ public static class EndpointExtensions
 
     /// <summary>
     /// Resolves per-column behavior flags for the client, filtered to live schema columns
-    /// and keyed by canonical name. Labels are deliberately absent — they ride the default report's labels
-    /// channel like columnLabels always has — so this map only exists when a column carries behavior the
-    /// client must gate on.
+    /// and keyed by canonical name. Labels are deliberately absent because they ride the synthetic
+    /// fallback/document-label channel used by columnLabels, so this map only exists when a column
+    /// carries behavior the client must gate on.
     /// </summary>
     /// <param name="def">The definition containing optional column overrides.</param>
     /// <param name="schema">The live schema used to canonicalize and filter column names.</param>
@@ -487,14 +493,14 @@ public static class EndpointExtensions
     }
 
     /// <summary>
-    /// Builds the complete default report state sent by the schema endpoint. The result is never
-    /// null. An unconfigured effective Default synthesizes to an empty state (every schema column in
-    /// database order), and the definition's labels (columnLabels overlaid with columns[*].label) become the
-    /// default report's labels unless the effective state carries its own. Query responses never apply
-    /// labels; the document ingestion pipeline mirrors this same layering so exports render what an
-    /// equivalent client displays.
+    /// Builds the complete synthetic fallback state sent by the schema endpoint. The result is never
+    /// null. An unconfigured fallback synthesizes to an empty state (every schema column in database
+    /// order), and the definition's labels (columnLabels overlaid with columns[*].label) become the
+    /// fallback document's labels unless the configured state carries its own. Query responses never
+    /// apply labels; the document ingestion pipeline mirrors this same layering so exports render what
+    /// an equivalent client displays.
     /// </summary>
-    /// <param name="def">The definition supplying the effective default state and definition-level labels.</param>
+    /// <param name="def">The definition supplying the synthetic fallback state and definition-level labels.</param>
     /// <returns>A detached, complete state with a definition-input table and layered default labels.</returns>
     internal static ReportState SchemaDefaultState(ReportDefinition def)
     {
@@ -579,7 +585,7 @@ public static class EndpointExtensions
     /// <summary>
     /// Executes a posted report query through the shared request pipeline.
     /// </summary>
-    /// <param name="name">The configured or built-in report name from the route.</param>
+    /// <param name="name">The configured or built-in report-definition key from the route.</param>
     /// <param name="ctx">The current HTTP request and response context.</param>
     /// <param name="ct">Cancels authorization, body reading, context resolution, and query execution.</param>
     /// <returns>The report-result JSON or a standardized access, validation, or server-error result.</returns>
@@ -602,7 +608,7 @@ public static class EndpointExtensions
     /// Executes a list-of-values request through the same definition and query authorization path as
     /// the current report table.
     /// </summary>
-    /// <param name="name">The configured or built-in report name from the route.</param>
+    /// <param name="name">The configured or built-in report-definition key from the route.</param>
     /// <param name="ctx">The current HTTP request and response context.</param>
     /// <param name="ct">Cancels authorization, body reading, context resolution, and lookup execution.</param>
     /// <returns>The bounded LOV JSON or a standardized access, validation, or server-error result.</returns>
@@ -660,7 +666,7 @@ public static class EndpointExtensions
     /// is positive, with truncation signaled via X-IR-Truncated. Download is one of the two server-enforced
     /// features because it creates an external artifact; hiding the menu client-side is not enough.
     /// </summary>
-    /// <param name="name">The configured or built-in report name from the route.</param>
+    /// <param name="name">The configured or built-in report-definition key from the route.</param>
     /// <param name="ctx">The current HTTP request and response context.</param>
     /// <param name="ct">Cancels authorization, body reading, context resolution, query execution, and rendering.</param>
     /// <returns>The requested file result or a standardized feature, format, access, validation, or server-error result.</returns>
@@ -701,7 +707,7 @@ public static class EndpointExtensions
     /// happen before body parsing, then both query and export receive identical context resolution,
     /// validation error shaping, cancellation, and sanitization behavior.
     /// </summary>
-    /// <param name="name">The configured or built-in report name from the route.</param>
+    /// <param name="name">The configured or built-in report-definition key from the route.</param>
     /// <param name="ctx">The current HTTP request and response context.</param>
     /// <param name="operationName">A diagnostic operation name used when logging unexpected failures.</param>
     /// <param name="action">The report action required from the caller.</param>
@@ -764,7 +770,7 @@ public static class EndpointExtensions
         }
     }
 
-    /// <summary>Returns the action set shared by report-state operations for one route name.</summary>
+    /// <summary>Returns the action set shared by report-state operations for one configured definition.</summary>
     private static IReadOnlyCollection<InteractiveReportAction> OperationActions(
         string name,
         InteractiveReportAction action)

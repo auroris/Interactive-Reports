@@ -139,16 +139,15 @@ public sealed class ReportDefinition
     public ReportConsistency Consistency { get; set; } = ReportConsistency.None;
 
     /// <summary>
-    /// Gets or sets the developer's generated default view. An administrator-controlled primary
-    /// saved report titled "Default" replaces it until that report is unflagged.
+    /// Gets or sets the developer-owned state used to create or repair the persisted synthetic default.
     /// </summary>
     public ReportState? DefaultState { get; set; }
 
     /// <summary>
     /// Gets or sets report-document JSON files, resolved relative to the host content root unless
-    /// absolute. Files are exposed as global, read-only saved reports. Their primary
-    /// value seeds the stored administrator-controlled flag on first synchronization;
-    /// configured documents take precedence over database reports with the same title.
+    /// absolute. Files are exposed as global, read-only saved reports. Their default
+    /// value seeds the durable default flag when first synchronized. Configured titles
+    /// are deployment declarations and may collide with any configured or database report.
     /// </summary>
     public List<string>? DocumentFiles { get; set; }
 

@@ -45,7 +45,7 @@ public sealed class OpenApiMetadataTests
             lov.Metadata.GetOrderedMetadata<IProducesResponseTypeMetadata>(),
             response => response.StatusCode == 200 && response.Type == typeof(ReportLovResult));
 
-        var create = Route(routes, "/api/reports/{name}/saved", "POST");
+        var create = Route(routes, "/api/reports/{id:long}/saved", "POST");
         Assert.Equal(
             typeof(SaveReportRequest),
             create.Metadata.GetMetadata<IAcceptsMetadata>()?.RequestType);
@@ -64,7 +64,7 @@ public sealed class OpenApiMetadataTests
 
         var routes = Routes(app);
         Assert.True(IsExcluded(Route(routes, "/api/reports/ui/{file}", "GET")));
-        Assert.True(IsExcluded(Route(routes, "/api/reports/{name}/view", "GET")));
+        Assert.True(IsExcluded(Route(routes, "/api/reports/{id:long}/view", "GET")));
         Assert.True(IsExcluded(Route(routes, "/api/reports/admin", "GET")));
         Assert.False(IsExcluded(Route(routes, "/api/reports/whoami", "GET")));
     }

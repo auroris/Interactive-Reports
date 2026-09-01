@@ -72,6 +72,7 @@ public sealed class ColumnConfigurationHttpTests : IAsyncLifetime
             ["InteractiveReport:Reports:broken:Sql"] = "SELECT ID, LABEL FROM IR_COLUMN_TEST",
             ["InteractiveReport:Reports:broken:Authorization:AllowAnonymous"] = "true",
             ["InteractiveReport:Reports:broken:EditLink:UrlTemplate"] = "/rows/{GHOST}/edit",
+            ["InteractiveReport:SavedReports:Connection"] = "ColumnData",
         });
 
         builder.Services

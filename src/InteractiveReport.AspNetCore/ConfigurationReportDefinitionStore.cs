@@ -1,9 +1,8 @@
-using System.Text.RegularExpressions;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using InteractiveReport.Core.Definitions;
 using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Model;
-using InteractiveReport.Core.SavedReports;
 using InteractiveReport.Core.Schema;
 using Microsoft.Extensions.Options;
 
@@ -12,8 +11,8 @@ namespace InteractiveReport.AspNetCore;
 /// <summary>
 /// Resolves report definitions from monitored application configuration. Each lookup returns a detached,
 /// validated snapshot with its connection and dialect resolved. When saved-report storage is enabled,
-/// the store also synchronizes configured documents and lets a primary saved report replace the configured
-/// default state. Configuration reloads clear discovered schemas so subsequent requests cannot reuse stale metadata.
+/// configured document identities are synchronized before the persistence-backed administrative definition
+/// is resolved. Configuration reloads clear discovered schemas so subsequent requests cannot reuse stale metadata.
 /// </summary>
 public sealed partial class ConfigurationReportDefinitionStore :
     IReportDefinitionStore,
@@ -23,7 +22,6 @@ public sealed partial class ConfigurationReportDefinitionStore :
     private readonly IOptionsMonitor<InteractiveReportOptions> _options;
     private readonly ReportConnectionRegistry _registry;
     private readonly ConfiguredReportDocumentSynchronizer? _synchronizer;
-    private readonly ISavedReportStore? _savedReports;
     private readonly IDisposable? _reloadSubscription;
 
     /// <summary>
@@ -37,30 +35,27 @@ public sealed partial class ConfigurationReportDefinitionStore :
         IOptionsMonitor<InteractiveReportOptions> options,
         SchemaCache schemaCache,
         ReportConnectionRegistry registry)
-        : this(options, schemaCache, registry, synchronizer: null!, savedReports: null!)
+        : this(options, schemaCache, registry, synchronizer: null!)
     {
     }
 
     /// <summary>
-    /// Initializes a definition store with saved-report document synchronization and primary-default lookup.
+    /// Initializes a definition store with configured report-document synchronization.
     /// </summary>
     /// <param name="options">The monitored Interactive Reports configuration source.</param>
     /// <param name="schemaCache">The cache used to reuse discovered schemas across requests.</param>
     /// <param name="registry">Resolves connection names and SQL dialects for definitions.</param>
     /// <param name="synchronizer">Mirrors configured documents before saved-report reads.</param>
-    /// <param name="savedReports">Supplies the primary saved report that may override a definition's default state.</param>
     /// <remarks>Subscribes to option reloads and clears <paramref name="schemaCache"/> after each reload.</remarks>
     internal ConfigurationReportDefinitionStore(
         IOptionsMonitor<InteractiveReportOptions> options,
         SchemaCache schemaCache,
         ReportConnectionRegistry registry,
-        ConfiguredReportDocumentSynchronizer synchronizer,
-        ISavedReportStore savedReports)
+        ConfiguredReportDocumentSynchronizer synchronizer)
     {
         _options = options;
         _registry = registry;
         _synchronizer = synchronizer;
-        _savedReports = savedReports;
         _reloadSubscription = options.OnChange(_ => schemaCache.Clear());
     }
 
@@ -70,8 +65,8 @@ public sealed partial class ConfigurationReportDefinitionStore :
     /// <param name="name">The case-insensitive report name.</param>
     /// <param name="ct">Cancels document synchronization and saved-report lookup.</param>
     /// <returns>The validated definition snapshot, or <see langword="null"/> when the name is unknown or the internal constructor disables the built-in listing.</returns>
-    /// <exception cref="InvalidOperationException">Thrown when configuration is invalid or a persisted primary state cannot be read.</exception>
-    /// <remarks>May synchronize configured documents, create the saved-report table, and replace the snapshot's default state from persistence.</remarks>
+    /// <exception cref="InvalidOperationException">Thrown when configuration is invalid.</exception>
+    /// <remarks>May synchronize configured documents and create the saved-report table.</remarks>
     public async ValueTask<ReportDefinition?> Find(string name, CancellationToken ct = default)
     {
         if (SavedReportsListingDefinition.Matches(name))
@@ -105,32 +100,6 @@ public sealed partial class ConfigurationReportDefinitionStore :
         var snapshot = Snapshot(configuredName, def);
         Validate(snapshot);
         ResolveConnection(snapshot, _registry);
-        // Provider constraint: no persistence target means no persistence work. In particular,
-        // installing the package and resolving a report must never create a directory or SQLite
-        // file as an incidental side effect. Saved-report endpoints still resolve the target
-        // explicitly and return an error until one is configured.
-        if (_synchronizer is not null
-            && _savedReports is not null
-            && ReportConnectionRegistry.IsStoreConfigured(_options.CurrentValue.SavedReports))
-        {
-            await _synchronizer.EnsureSynced(ct);
-            var defaultPrimary = await _savedReports.FindPrimaryDefault(snapshot.Name, ct);
-            if (defaultPrimary is not null)
-            {
-                try
-                {
-                    snapshot.DefaultState = JsonSerializer.Deserialize<ReportState>(
-                        defaultPrimary.StateJson,
-                        IrJson.Options) ?? throw new JsonException("state is null");
-                }
-                catch (JsonException ex)
-                {
-                    throw new InvalidOperationException(
-                        $"Report '{snapshot.Name}': primary Default report '{defaultPrimary.Id}' has an invalid state document.",
-                        ex);
-                }
-            }
-        }
         return snapshot;
     }
 

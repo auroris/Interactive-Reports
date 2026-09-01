@@ -208,9 +208,10 @@ public sealed class DataSourceHttpTests : IAsyncLifetime
     [Fact]
     public async Task The_saved_report_store_lands_in_its_data_source()
     {
+        var id = await ReportDocumentTestIds.Default(_app!.Services, "literal");
         var body = new { title = "Kept", state = new { v = 3 } };
         using var created = await _client.PostAsync(
-            "/api/reports/literal/saved", JsonContent.Create(body));
+            $"/api/reports/{id}/saved", JsonContent.Create(body));
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
 
         Assert.True(File.Exists(_savedPath), "the dataSource-backed store file was not created");
@@ -218,7 +219,7 @@ public sealed class DataSourceHttpTests : IAsyncLifetime
         await connection.OpenAsync();
         await using var command = connection.CreateCommand();
         command.CommandText = "SELECT COUNT(*) FROM IR_SAVED_REPORTS";
-        Assert.Equal(1L, await command.ExecuteScalarAsync());
+        Assert.Equal(2L, await command.ExecuteScalarAsync());
     }
 
     [Fact]

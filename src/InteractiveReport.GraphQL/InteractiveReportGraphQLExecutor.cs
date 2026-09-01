@@ -18,11 +18,13 @@ namespace InteractiveReport.GraphQL;
 
 /// <summary>
 /// Executes one saved report for the GraphQL resolver while preserving the HTTP adapter's
-/// synchronization, authorization, context-parameter, validation, and error-sanitization boundaries.
+/// authorization, context-parameter, validation, and error-sanitization boundaries.
 /// </summary>
 internal sealed class InteractiveReportGraphQLExecutor(
     IHttpContextAccessor httpContextAccessor,
     ConfiguredReportDocumentSynchronizer synchronizer,
+    ConfiguredReportDocumentStore configuredDocuments,
+    DefaultReportDocumentService defaultDocuments,
     ISavedReportStore savedReports,
     IReportAccessService reportAccess,
     ReportExecutor executor,
@@ -37,11 +39,11 @@ internal sealed class InteractiveReportGraphQLExecutor(
     /// <param name="pageSize">The requested page size; <see langword="null"/> preserves the saved value.</param>
     /// <param name="ct">Signals that the operation should be canceled.</param>
     /// <returns>A task containing the executed report result.</returns>
-    /// <remarks>Synchronizes configured documents, reads persistence, may query the report database, and logs unexpected failures. Transport failures are returned as sanitized <see cref="ExecutionError"/> instances.</remarks>
+    /// <remarks>Trusts persisted document identities, reads a configured file body only after authorization, may query the report database, and logs unexpected failures. Transport failures are returned as sanitized <see cref="ExecutionError"/> instances.</remarks>
     /// <exception cref="ExecutionError">Thrown for invalid arguments, missing or denied reports, invalid saved state, and sanitized execution failures.</exception>
     /// <exception cref="InvalidOperationException">Thrown when no active HTTP request is available.</exception>
     public async Task<ReportResult?> Query(
-        string id,
+        long id,
         int? page,
         int? pageSize,
         CancellationToken ct)
@@ -54,7 +56,6 @@ internal sealed class InteractiveReportGraphQLExecutor(
         var context = httpContextAccessor.HttpContext
             ?? throw new InvalidOperationException("GraphQL report execution requires an active HTTP request.");
 
-        await synchronizer.EnsureSynced(ct);
         var saved = await savedReports.Get(id, ct);
         if (saved is null) throw NotFound();
         var metadata = saved.Metadata();
@@ -89,8 +90,31 @@ internal sealed class InteractiveReportGraphQLExecutor(
 
         try
         {
-            var state = JsonSerializer.Deserialize<ReportState>(saved.StateJson, IrJson.Options)
-                ?? throw new JsonException("state is null");
+            var contextParameters = await reportAccess.ResolveContextParameters(definition, context, ct);
+            ReportState state;
+            if (saved.Origin == SavedReportOrigin.Configured)
+            {
+                if (saved.SourceFile is null
+                    || configuredDocuments.Find(saved.ReportName, saved.SourceFile) is not { } file)
+                {
+                    await synchronizer.RemoveMissing(saved, ct);
+                    await defaultDocuments.CreateMissing(definition, ct);
+                    throw NotFound();
+                }
+                state = file.State;
+            }
+            else if (saved.IsDefault)
+            {
+                (_, state) = await defaultDocuments.LoadState(
+                    saved, definition, executor, contextParameters, ct);
+            }
+            else
+            {
+                state = JsonSerializer.Deserialize<ReportState>(
+                        saved.StateJson ?? throw new JsonException("state is null"),
+                        IrJson.Options)
+                    ?? throw new JsonException("state is null");
+            }
             if (page.HasValue || pageSize.HasValue)
             {
                 state.Page ??= new PageRequest();
@@ -98,7 +122,6 @@ internal sealed class InteractiveReportGraphQLExecutor(
                 if (pageSize.HasValue) state.Page.Size = pageSize.Value;
             }
 
-            var contextParameters = await reportAccess.ResolveContextParameters(definition, context, ct);
             return await executor.Query(definition, state, contextParameters, ct);
         }
         catch (ReportValidationException ex)

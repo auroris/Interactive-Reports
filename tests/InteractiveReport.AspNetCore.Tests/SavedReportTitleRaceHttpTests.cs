@@ -27,6 +27,7 @@ public sealed class SavedReportTitleRaceHttpTests : IAsyncLifetime
     private string _tempRoot = "";
     private WebApplication? _app;
     private HttpClient _client = null!;
+    private long _reportId;
 
     public async Task InitializeAsync()
     {
@@ -80,6 +81,7 @@ public sealed class SavedReportTitleRaceHttpTests : IAsyncLifetime
         var address = _app.Services.GetRequiredService<IServer>()
             .Features.Get<IServerAddressesFeature>()!.Addresses.Single();
         _client = new HttpClient { BaseAddress = new Uri(address) };
+        _reportId = await ReportDocumentTestIds.Default(_app.Services, ReportName);
     }
 
     public async Task DisposeAsync()
@@ -98,7 +100,7 @@ public sealed class SavedReportTitleRaceHttpTests : IAsyncLifetime
     public async Task A_save_losing_the_title_race_gets_the_same_409_as_the_pre_check()
     {
         using var raced = await _client.PostAsync(
-            $"/api/reports/{ReportName}/saved",
+            $"/api/reports/{_reportId}/saved",
             JsonContent.Create(new { title = "Contested", state = new { v = 3 } }));
 
         Assert.Equal(HttpStatusCode.Conflict, raced.StatusCode);
@@ -114,7 +116,7 @@ public sealed class SavedReportTitleRaceHttpTests : IAsyncLifetime
 
         // The rival's row survives; a save under a fresh title still works.
         using var retry = await _client.PostAsync(
-            $"/api/reports/{ReportName}/saved",
+            $"/api/reports/{_reportId}/saved",
             JsonContent.Create(new { title = "Uncontested", state = new { v = 3 } }));
         Assert.Equal(HttpStatusCode.Created, retry.StatusCode);
     }
@@ -126,31 +128,33 @@ public sealed class SavedReportTitleRaceHttpTests : IAsyncLifetime
 
         public async Task Create(SavedReport report, CancellationToken ct = default)
         {
-            if (Interlocked.Exchange(ref _raced, 1) == 0)
+            if (report.Title == "Contested" && Interlocked.Exchange(ref _raced, 1) == 0)
             {
                 await inner.Create(new SavedReport
                 {
-                    Id = SavedReport.NewId(),
+                    Id = 0,
                     ReportName = report.ReportName,
                     Title = report.Title,
-                    Owner = "rival",
+                    Owner = report.Owner,
                     StateJson = "{}",
                 }, ct);
             }
             await inner.Create(report, ct);
         }
 
-        public Task<SavedReport?> Get(string id, CancellationToken ct = default) => inner.Get(id, ct);
+        public Task<SavedReport?> Get(long id, CancellationToken ct = default) => inner.Get(id, ct);
 
         public Task<IReadOnlyList<SavedReport>> ListVisible(string reportName, string? identity, CancellationToken ct = default)
             => inner.ListVisible(reportName, identity, ct);
 
-        public Task<SavedReport?> FindByTitle(
+        public Task<SavedReport?> FindTitleCollision(
             string reportName,
             string title,
-            string? exceptId = null,
+            string? owner,
+            bool isPublic,
+            long? exceptId = null,
             CancellationToken ct = default)
-            => inner.FindByTitle(reportName, title, exceptId, ct);
+            => inner.FindTitleCollision(reportName, title, owner, isPublic, exceptId, ct);
 
         public Task<IReadOnlyList<SavedReport>> ListAll(CancellationToken ct = default) => inner.ListAll(ct);
 
@@ -169,6 +173,6 @@ public sealed class SavedReportTitleRaceHttpTests : IAsyncLifetime
         public Task<bool> Delete(SavedReport expected, CancellationToken ct = default)
             => inner.Delete(expected, ct);
 
-        public Task<bool> Delete(string id, CancellationToken ct = default) => inner.Delete(id, ct);
+        public Task<bool> Delete(long id, CancellationToken ct = default) => inner.Delete(id, ct);
     }
 }

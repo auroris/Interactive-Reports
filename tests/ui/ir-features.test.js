@@ -60,6 +60,13 @@ globalThis.fetch = async (url, options = {}) => {
     }
     if (String(url).endsWith("/whoami")) return json({ identity: "test-user" });
     if (String(url).endsWith("/saved")) return json([]);
+    if ((options.method ?? "GET") === "GET" && /\/[^/?]+$/.test(String(url))) {
+        const id = String(url).split("/").at(-1);
+        return json({
+            summary: { id, reportName: id, title: "Default", isDefault: true, isGlobal: true },
+            state: DEFAULT_STATES[id] ?? {},
+        });
+    }
     if (String(url).endsWith("/query")) {
         return json({
             columns: [{ name: "ID", label: "ID", type: "number" }],
@@ -102,7 +109,8 @@ test("a whitelisted report hides the chrome its features do not cover", async ()
     assert.equal(report.shadowRoot.querySelector(".ir-search").getAttribute("role"), "search");
     assert.equal(report.shadowRoot.querySelector(".ir-viewbtns").hidden, true, "no alternate view feature → the switcher goes");
     assert.equal(report.shadowRoot.querySelector(".ir-actionsbtn").hidden, false);
-    assert.equal(requests.some(r => r.url.endsWith("/saved")), false, "savedReports off → the saved list is never fetched");
+    assert.equal(requests.some(r => r.url.endsWith("/saved")), true,
+        "the report-document list remains part of activation even when save controls are hidden");
 
     report.shadowRoot.querySelector(".ir-actionsbtn").click();
     const labels = menuLabels(report);

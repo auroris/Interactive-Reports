@@ -38,6 +38,25 @@ internal sealed class Int64StringJsonConverter : JsonConverter<long>
         => writer.WriteStringValue(value.ToString(CultureInfo.InvariantCulture));
 }
 
+/// <summary>
+/// Report-document identities are database-generated keys, not query result values. They remain JSON
+/// numbers so clients can use the same numeric identity in routes and selector values.
+/// </summary>
+internal sealed class ReportDocumentIdJsonConverter : JsonConverter<long>
+{
+    public override long Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        => reader.TokenType switch
+        {
+            JsonTokenType.Number => reader.GetInt64(),
+            JsonTokenType.String => long.Parse(
+                reader.GetString()!, NumberStyles.Integer, CultureInfo.InvariantCulture),
+            _ => throw new JsonException("A report document id must be an integer."),
+        };
+
+    public override void Write(Utf8JsonWriter writer, long value, JsonSerializerOptions options)
+        => writer.WriteNumberValue(value);
+}
+
 /// <summary>Reads unsigned 64-bit integers from strings or numbers and writes them as invariant strings to preserve every digit in JavaScript clients.</summary>
 internal sealed class UInt64StringJsonConverter : JsonConverter<ulong>
 {

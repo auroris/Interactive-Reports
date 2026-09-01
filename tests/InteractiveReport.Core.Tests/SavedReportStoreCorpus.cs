@@ -16,7 +16,7 @@ public abstract class SavedReportStoreCorpus
 
     private static SavedReport Make(string title, string owner, bool global = false, string report = "orders") => new()
     {
-        Id = SavedReport.NewId(),
+        Id = 0,
         ReportName = report,
         Title = title,
         Owner = owner,
@@ -58,32 +58,33 @@ public abstract class SavedReportStoreCorpus
     }
 
     [SkippableFact]
-    public async Task Configured_rows_roundtrip_origin_null_owner_and_cfg_length_ids()
+    public async Task Configured_rows_roundtrip_generated_id_origin_file_reference_and_null_state()
     {
-        // Configured-document ids are 68 chars ("cfg_" + SHA-256 hex); the DDL must
-        // fit them on every dialect, not just typeless SQLite.
-        var id = "cfg_" + new string('a', 64);
         var stamp = new DateTime(2026, 8, 1, 12, 0, 0, DateTimeKind.Utc);
-        await Store.Put(new SavedReport
+        var report = new SavedReport
         {
-            Id = id,
+            Id = 0,
             ReportName = "orders",
+            SourceFile = "ReportDocuments/regional.json",
             Title = "Regional View",
             Owner = null,
             IsGlobal = true,
-            StateJson = """{"activeTable":"orders","tables":{"orders":{"from":"definition","composables":[]}}}""",
+            StateJson = null,
             ModifiedUtc = stamp,
             Origin = SavedReportOrigin.Configured,
-        });
+        };
+        await Store.Create(report);
 
-        var loaded = await Store.Get(id);
+        var loaded = await Store.Get(report.Id);
 
         Assert.NotNull(loaded);
-        Assert.Equal(id, loaded.Id);
+        Assert.True(loaded.Id > 0);
+        Assert.Equal(report.SourceFile, loaded.SourceFile);
         Assert.Null(loaded.Owner);
+        Assert.Null(loaded.StateJson);
         Assert.True(loaded.IsGlobal);
         Assert.Equal(SavedReportOrigin.Configured, loaded.Origin);
-        Assert.Equal(stamp, loaded.ModifiedUtc);
+        Assert.True(loaded.ModifiedUtc >= stamp);
     }
 
     [SkippableFact]
@@ -107,14 +108,11 @@ public abstract class SavedReportStoreCorpus
     }
 
     [SkippableFact]
-    public async Task Conditional_Put_rejects_an_expected_absent_insert_race()
+    public async Task Conditional_Put_inserts_with_a_generated_id()
     {
         var winner = Make("Insert winner", "alice");
         winner.ModifiedUtc = new DateTime(2026, 3, 4, 5, 6, 7, DateTimeKind.Utc);
         Assert.True(await Store.Put(winner, expected: null));
-
-        var loser = winner with { Title = "Insert loser" };
-        Assert.False(await Store.Put(loser, expected: null));
 
         var current = (await Store.Get(winner.Id))!;
         Assert.Equal("Insert winner", current.Title);
@@ -163,18 +161,21 @@ public abstract class SavedReportStoreCorpus
     }
 
     [SkippableFact]
-    public async Task FindByTitle_is_normalized_scoped_and_can_exclude_the_current_row()
+    public async Task FindTitleCollision_is_normalized_visibility_scoped_and_can_exclude_the_current_row()
     {
         var orders = Make("West region", "alice");
         var other = Make("West region", "bob", report: "big-orders");
         await Store.Create(orders);
         await Store.Create(other);
 
-        var found = await Store.FindByTitle("orders", "  WEST REGION  ");
+        var found = await Store.FindTitleCollision(
+            "orders", "  WEST REGION  ", owner: "alice", isPublic: false);
 
         Assert.Equal(orders.Id, found?.Id);
-        Assert.Null(await Store.FindByTitle("orders", "West region", orders.Id));
-        Assert.Equal(other.Id, (await Store.FindByTitle("big-orders", "west region"))?.Id);
+        Assert.Null(await Store.FindTitleCollision(
+            "orders", "West region", "alice", isPublic: false, exceptId: orders.Id));
+        Assert.Equal(other.Id, (await Store.FindTitleCollision(
+            "big-orders", "west region", "bob", isPublic: false))?.Id);
     }
 
     [SkippableFact]
@@ -285,7 +286,10 @@ public abstract class SavedReportStoreCorpus
         // Same normalized title (trim + case): the unique index is the atomic
         // backstop behind the endpoints' advisory pre-check.
         await Assert.ThrowsAsync<SavedReportTitleConflictException>(
-            () => Store.Create(Make("  west REGION ", "bob")));
+            () => Store.Create(Make("  west REGION ", "alice")));
+
+        // Private names owned by different users do not share a visible namespace.
+        await Store.Create(Make("West region", "bob"));
 
         // A different report definition keeps its own title namespace.
         await Store.Create(Make("West region", "bob", report: "big-orders"));
@@ -305,25 +309,32 @@ public abstract class SavedReportStoreCorpus
     }
 
     [SkippableFact]
-    public async Task Configured_rows_may_shadow_a_user_title_without_tripping_uniqueness()
+    public async Task Configured_rows_may_duplicate_user_and_configured_titles_without_tripping_uniqueness()
     {
-        // A checked-in document deliberately wins over a same-titled user row (the
-        // listing dedupes it); synchronization must never fail on that collision,
-        // so only user-origin rows live under the unique index.
+        // A checked-in document is a deployment declaration. Its title does not
+        // participate in the user-facing uniqueness constraint, even when another
+        // configured file or a visible user row already has that title.
         await Store.Create(Make("Shared title", "alice"));
-        await Store.Put(new SavedReport
+        var configured = new SavedReport
         {
-            Id = "cfg_" + new string('b', 64),
+            Id = 0,
             ReportName = "orders",
+            SourceFile = "ReportDocuments/shared.json",
             Title = "Shared title",
             Owner = null,
             IsGlobal = true,
-            StateJson = "{}",
+            StateJson = null,
             ModifiedUtc = DateTime.UtcNow,
             Origin = SavedReportOrigin.Configured,
+        };
+        await Store.Create(configured);
+        await Store.Create(configured with
+        {
+            Id = 0,
+            SourceFile = "ReportDocuments/also-shared.json",
         });
 
-        Assert.Equal(2, (await Store.ListVisible("orders", "alice")).Count);
+        Assert.Equal(3, (await Store.ListVisible("orders", "alice")).Count);
     }
 
     [SkippableFact]
@@ -337,8 +348,8 @@ public abstract class SavedReportStoreCorpus
         var broken = Make("Broken", "alice");
         broken.StateJson = null!;
 
-        await Assert.ThrowsAnyAsync<DbException>(() => store.Put(broken));
-        Assert.Null(await store.Get(broken.Id));
+        await Assert.ThrowsAsync<ArgumentException>(() => store.Put(broken));
+        Assert.Equal(0, broken.Id);
     }
 
     [SkippableFact]

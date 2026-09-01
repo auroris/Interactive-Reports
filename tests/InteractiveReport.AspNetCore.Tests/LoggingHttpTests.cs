@@ -80,6 +80,7 @@ public sealed class LoggingHttpTests
                 ["InteractiveReport:Reports:broken:Dialect"] = "Sqlite",
                 ["InteractiveReport:Reports:broken:Sql"] = "SELECT * FROM MISSING_LOG_TABLE",
                 ["InteractiveReport:Reports:broken:Authorization:AllowAnonymous"] = "true",
+                ["InteractiveReport:SavedReports:Connection"] = "Data",
             });
             builder.Services
                 .AddInteractiveReports(builder.Configuration)

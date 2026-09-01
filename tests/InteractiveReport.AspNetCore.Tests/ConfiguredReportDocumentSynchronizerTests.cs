@@ -18,7 +18,7 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
         _primaryPath = Path.Combine(_root, "orders.primary.json");
         _regionalPath = Path.Combine(_root, "orders.regional.json");
         File.WriteAllText(_primaryPath, """
-            { "title": "Committed Primary", "primary": true,
+            { "title": "Committed Default", "default": true,
               "state": { "activeTable": "base", "tables": { "base": { "from": "definition", "composables": [] } } } }
             """);
         File.WriteAllText(_regionalPath, """
@@ -66,7 +66,7 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
     }
 
     [Fact]
-    public async Task Sync_upserts_all_documents_and_seeds_the_primary_flag()
+    public async Task Sync_creates_numeric_file_identities_and_marks_the_configured_default()
     {
         var (synchronizer, store, _) = Build(_primaryPath, _regionalPath);
 
@@ -74,20 +74,41 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
 
         Assert.Equal(2, store.Rows.Count);
         var row = store.Rows.Values.Single(report => report.Title == "Regional View");
-        Assert.StartsWith("cfg_", row.Id);
+        Assert.True(row.Id > 0);
         Assert.Equal("orders", row.ReportName);
         Assert.Equal("Regional View", row.Title);
         Assert.Null(row.Owner);
         Assert.True(row.IsGlobal);
         Assert.False(row.IsPrimary);
         Assert.Equal(SavedReportOrigin.Configured, row.Origin);
-        Assert.Contains("ID = 1", row.StateJson);
-        Assert.Equal(File.GetLastWriteTimeUtc(_regionalPath), row.ModifiedUtc);
-        Assert.True(store.Rows.Values.Single(report => report.Title == "Committed Primary").IsPrimary);
+        Assert.Equal(_regionalPath, row.SourceFile);
+        Assert.Null(row.StateJson);
+        Assert.NotEqual(default, row.ModifiedUtc);
+        var defaultRow = store.Rows.Values.Single(report => report.Title == "Committed Default");
+        Assert.True(defaultRow.IsDefault);
+        Assert.Null(defaultRow.StateJson);
     }
 
     [Fact]
-    public async Task Sync_is_signature_gated_until_a_file_changes()
+    public async Task Configured_file_titles_may_duplicate_each_other()
+    {
+        File.WriteAllText(_regionalPath, """
+            { "title": "Committed Default",
+              "state": { "activeTable": "regional", "tables": { "regional": { "from": "definition", "composables": [] } } } }
+            """);
+        var (synchronizer, store, _) = Build(_primaryPath, _regionalPath);
+
+        await synchronizer.EnsureSynced();
+
+        var duplicates = store.Rows.Values
+            .Where(report => report.Title == "Committed Default")
+            .ToArray();
+        Assert.Equal(2, duplicates.Length);
+        Assert.Equal(2, duplicates.Select(report => report.SourceFile).Distinct().Count());
+    }
+
+    [Fact]
+    public async Task Existing_database_identities_are_not_reprobed_when_a_file_changes()
     {
         var (synchronizer, store, _) = Build(_primaryPath, _regionalPath);
         await synchronizer.EnsureSynced();
@@ -103,12 +124,13 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
         File.SetLastWriteTimeUtc(_regionalPath, DateTime.UtcNow.AddMinutes(1));
 
         await synchronizer.EnsureSynced();
-        var put = Assert.Single(store.Calls, call => call.StartsWith("put:", StringComparison.Ordinal));
-        Assert.Equal("Regional View v2", store.Rows[put["put:".Length..]].Title);
+        Assert.Empty(store.Calls);
+        Assert.Contains(store.Rows.Values, row => row.Title == "Regional View");
+        Assert.DoesNotContain(store.Rows.Values, row => row.Title == "Regional View v2");
     }
 
     [Fact]
-    public async Task Sync_detects_a_length_change_when_the_file_timestamp_is_preserved()
+    public async Task Existing_database_metadata_remains_authoritative_when_file_length_changes()
     {
         var originalTimestamp = File.GetLastWriteTimeUtc(_regionalPath);
         var (synchronizer, store, _) = Build(_primaryPath, _regionalPath);
@@ -123,10 +145,8 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
 
         await synchronizer.EnsureSynced();
 
-        var put = Assert.Single(store.Calls, call => call.StartsWith("put:", StringComparison.Ordinal));
-        var updated = store.Rows[put["put:".Length..]];
-        Assert.Equal("A substantially longer regional view title", updated.Title);
-        Assert.True(updated.ModifiedUtc > originalTimestamp);
+        Assert.Empty(store.Calls);
+        Assert.Contains(store.Rows.Values, row => row.Title == "Regional View");
     }
 
     [Fact]
@@ -135,7 +155,7 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
         var (synchronizer, store, monitor) = Build(_primaryPath, _regionalPath);
         var userRow = new SavedReport
         {
-            Id = SavedReport.NewId(),
+            Id = 0,
             ReportName = "orders",
             Title = "Mine",
             Owner = "alice",
@@ -157,76 +177,78 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
     }
 
     [Fact]
-    public async Task Sync_preserves_an_administrator_primary_override()
+    public async Task Configured_default_supersedes_the_synthetic_database_default()
     {
         var (synchronizer, store, _) = Build(_primaryPath);
+        var synthetic = new SavedReport
+        {
+            Id = 0,
+            ReportName = "orders",
+            Title = "Default",
+            Owner = null,
+            IsGlobal = true,
+            IsDefault = true,
+            StateJson = "{\"v\":3}",
+            ModifiedUtc = DateTime.UtcNow,
+        };
+        await store.Create(synthetic);
+
         await synchronizer.EnsureSynced();
-        var row = Assert.Single(store.Rows.Values);
-        Assert.True(row.IsPrimary);
 
-        row.IsPrimary = false;
-        File.WriteAllText(_primaryPath, """
-            { "title": "Committed Primary v2", "primary": true,
-              "state": { "activeTable": "base", "tables": { "base": { "from": "definition", "composables": [] } } } }
-            """);
-        File.SetLastWriteTimeUtc(_primaryPath, DateTime.UtcNow.AddMinutes(1));
-
-        await synchronizer.EnsureSynced();
-
-        var updated = Assert.Single(store.Rows.Values);
-        Assert.Equal("Committed Primary v2", updated.Title);
-        Assert.False(updated.IsPrimary);
+        var configured = Assert.Single(store.Rows.Values);
+        Assert.NotEqual(synthetic.Id, configured.Id);
+        Assert.Equal(SavedReportOrigin.Configured, configured.Origin);
+        Assert.True(configured.IsDefault);
     }
 
     [Fact]
-    public async Task Sync_rechecks_the_primary_override_after_a_conditional_Put_conflict()
+    public async Task Existing_database_default_selection_is_not_rewritten_from_file_edits()
     {
-        var (synchronizer, store, _) = Build(_primaryPath);
+        var (synchronizer, store, monitor) = Build(_primaryPath, _regionalPath);
         await synchronizer.EnsureSynced();
-        store.ReplaceBeforeNextPut(current => current with
-        {
-            IsPrimary = false,
-            ModifiedUtc = current.ModifiedUtc.AddTicks(1),
-        });
+        var originalIds = store.Rows.Values.ToDictionary(row => row.SourceFile!, row => row.Id);
 
         File.WriteAllText(_primaryPath, """
-            { "title": "Committed Primary after race", "primary": true,
+            { "title": "Committed Default",
+              "state": { "activeTable": "base", "tables": { "base": { "from": "definition", "composables": [] } } } }
+            """);
+        File.WriteAllText(_regionalPath, """
+            { "title": "Regional View", "default": true,
               "state": { "activeTable": "base", "tables": { "base": { "from": "definition", "composables": [] } } } }
             """);
         File.SetLastWriteTimeUtc(_primaryPath, DateTime.UtcNow.AddMinutes(1));
+        File.SetLastWriteTimeUtc(_regionalPath, DateTime.UtcNow.AddMinutes(1));
+        monitor.Swap(OptionsWith(_primaryPath, _regionalPath));
 
         await synchronizer.EnsureSynced();
 
-        var updated = Assert.Single(store.Rows.Values);
-        Assert.Equal("Committed Primary after race", updated.Title);
-        Assert.False(updated.IsPrimary);
+        Assert.Equal(2, store.Rows.Count);
+        Assert.All(store.Rows.Values, row => Assert.Equal(originalIds[row.SourceFile!], row.Id));
+        Assert.Equal(_primaryPath, Assert.Single(store.Rows.Values, row => row.IsDefault).SourceFile);
     }
 
     private sealed class RecordingStore : ISavedReportStore
     {
-        private Func<SavedReport, SavedReport>? _replaceBeforeNextPut;
-
-        public Dictionary<string, SavedReport> Rows { get; } = new(StringComparer.Ordinal);
+        private long _nextId;
+        public Dictionary<long, SavedReport> Rows { get; } = [];
         public List<string> Calls { get; } = [];
 
-        public void ReplaceBeforeNextPut(Func<SavedReport, SavedReport> replacement)
-            => _replaceBeforeNextPut = replacement;
-
-        public Task<SavedReport?> Get(string id, CancellationToken ct = default)
+        public Task<SavedReport?> Get(long id, CancellationToken ct = default)
         {
             Calls.Add($"get:{id}");
             return Task.FromResult(Rows.TryGetValue(id, out var row) ? row with { } : null);
         }
 
         public Task<IReadOnlyList<SavedReport>> ListVisible(string reportName, string? identity, CancellationToken ct = default)
-            => throw new NotSupportedException();
+            => Task.FromResult<IReadOnlyList<SavedReport>>(Rows.Values
+                .Where(row => row.ReportName == reportName
+                    && (row.IsPublic || row.Owner == identity))
+                .Select(row => row with { })
+                .ToArray());
 
-        public Task<SavedReport?> FindByTitle(
-            string reportName,
-            string title,
-            string? exceptId = null,
-            CancellationToken ct = default)
-            => throw new NotSupportedException();
+        public Task<SavedReport?> FindDefault(string reportName, CancellationToken ct = default)
+            => Task.FromResult(Rows.Values.SingleOrDefault(row =>
+                row.ReportName == reportName && row.IsDefault) is { } row ? row with { } : null);
 
         public Task<IReadOnlyList<SavedReport>> ListAll(CancellationToken ct = default)
         {
@@ -235,16 +257,34 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
         }
 
         public Task Create(SavedReport report, CancellationToken ct = default)
-            => throw new NotSupportedException();
+        {
+            report.Id = Interlocked.Increment(ref _nextId);
+            report.ModifiedUtc = DateTime.UtcNow;
+            Rows.Add(report.Id, report with { });
+            Calls.Add($"create:{report.Id}");
+            return Task.CompletedTask;
+        }
 
         public Task<bool> Update(
             SavedReport report,
             SavedReport expected,
             CancellationToken ct = default)
-            => throw new NotSupportedException();
+        {
+            Calls.Add($"update:{report.Id}");
+            if (!Rows.TryGetValue(report.Id, out var current) || !SameSnapshot(current, expected))
+                return Task.FromResult(false);
+            report.ModifiedUtc = current.ModifiedUtc.AddTicks(1);
+            Rows[report.Id] = report with { };
+            return Task.FromResult(true);
+        }
 
         public async Task Put(SavedReport report, CancellationToken ct = default)
         {
+            if (report.Id == 0)
+            {
+                await Create(report, ct);
+                return;
+            }
             Rows.TryGetValue(report.Id, out var expected);
             if (!await Put(report, expected, ct))
                 throw new InvalidOperationException("The recording-store write raced unexpectedly.");
@@ -257,12 +297,6 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
         {
             ct.ThrowIfCancellationRequested();
             Calls.Add($"put:{report.Id}");
-            if (_replaceBeforeNextPut is { } replace
-                && Rows.TryGetValue(report.Id, out var beforeRace))
-            {
-                Rows[report.Id] = replace(beforeRace);
-                _replaceBeforeNextPut = null;
-            }
             var exists = Rows.TryGetValue(report.Id, out var current);
             if (expected is null)
             {
@@ -279,14 +313,16 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
             return Task.FromResult(true);
         }
 
-        public Task<bool> Delete(string id, CancellationToken ct = default)
+        public Task<bool> Delete(long id, CancellationToken ct = default)
         {
             Calls.Add($"delete:{id}");
             return Task.FromResult(Rows.Remove(id));
         }
 
         public Task<bool> Delete(SavedReport expected, CancellationToken ct = default)
-            => throw new NotSupportedException();
+            => Task.FromResult(Rows.TryGetValue(expected.Id, out var current)
+                && SameSnapshot(current, expected)
+                && Rows.Remove(expected.Id));
 
         private static bool SameSnapshot(SavedReport current, SavedReport expected)
             => current == expected;

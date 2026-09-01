@@ -69,6 +69,13 @@ globalThis.fetch = async url => {
     }
     if (path.endsWith("/whoami")) return json({ identity: "test-user" });
     if (path.endsWith("/saved")) return json([]);
+    if (!path.endsWith("/query") && /\/[^/?]+$/.test(path)) {
+        const id = path.split("/").at(-1);
+        return json({
+            summary: { id, reportName: id, title: "Default", isDefault: true, isGlobal: true },
+            state: {},
+        });
+    }
     if (path.endsWith("/query")) {
         return json({
             columns: [

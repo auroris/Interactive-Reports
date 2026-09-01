@@ -36,7 +36,7 @@ public sealed class SavedReportConcurrencyHttpTests
 
         using var response = await host.Client.SendAsync(Request(
             HttpMethod.Put,
-            $"/api/reports/saved/{report.Id}",
+            $"/api/reports/{report.Id}",
             "alice",
             new { title = "Alice's stale write" }));
 
@@ -62,7 +62,7 @@ public sealed class SavedReportConcurrencyHttpTests
 
         using var response = await host.Client.SendAsync(Request(
             HttpMethod.Delete,
-            $"/api/reports/saved/{report.Id}",
+            $"/api/reports/{report.Id}",
             "alice"));
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
@@ -86,7 +86,7 @@ public sealed class SavedReportConcurrencyHttpTests
 
         using var response = await host.Client.SendAsync(Request(
             HttpMethod.Get,
-            $"/api/reports/saved/{report.Id}",
+            $"/api/reports/{report.Id}",
             "mallory"));
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -144,7 +144,7 @@ public sealed class SavedReportConcurrencyHttpTests
     {
         var report = new SavedReport
         {
-            Id = SavedReport.NewId(),
+            Id = 0,
             ReportName = "orders",
             Title = title,
             Owner = owner,
@@ -242,13 +242,13 @@ public sealed class SavedReportConcurrencyHttpTests
     private sealed class RacingStore(ISavedReportStore inner) : ISavedReportStore
     {
         private readonly object _gate = new();
-        private string? _replaceId;
+        private long? _replaceId;
         private Func<SavedReport, SavedReport>? _replacement;
 
         public bool ReplacementApplied { get; private set; }
 
         public void ReplaceAfterNextRead(
-            string id,
+            long id,
             Func<SavedReport, SavedReport> replacement)
         {
             lock (_gate)
@@ -259,13 +259,13 @@ public sealed class SavedReportConcurrencyHttpTests
             }
         }
 
-        public async Task<SavedReport?> Get(string id, CancellationToken ct = default)
+        public async Task<SavedReport?> Get(long id, CancellationToken ct = default)
         {
             var snapshot = await inner.Get(id, ct);
             Func<SavedReport, SavedReport>? replace = null;
             lock (_gate)
             {
-                if (snapshot is not null && string.Equals(id, _replaceId, StringComparison.Ordinal))
+                if (snapshot is not null && id == _replaceId)
                 {
                     replace = _replacement;
                     _replaceId = null;
@@ -291,17 +291,19 @@ public sealed class SavedReportConcurrencyHttpTests
             CancellationToken ct = default)
             => inner.ListVisible(reportName, identity, ct);
 
-        public Task<SavedReport?> FindPrimaryDefault(
+        public Task<SavedReport?> FindDefault(
             string reportName,
             CancellationToken ct = default)
-            => inner.FindPrimaryDefault(reportName, ct);
+            => inner.FindDefault(reportName, ct);
 
-        public Task<SavedReport?> FindByTitle(
+        public Task<SavedReport?> FindTitleCollision(
             string reportName,
             string title,
-            string? exceptId = null,
+            string? owner,
+            bool isPublic,
+            long? exceptId = null,
             CancellationToken ct = default)
-            => inner.FindByTitle(reportName, title, exceptId, ct);
+            => inner.FindTitleCollision(reportName, title, owner, isPublic, exceptId, ct);
 
         public Task<IReadOnlyList<SavedReport>> ListAll(CancellationToken ct = default)
             => inner.ListAll(ct);
@@ -327,7 +329,7 @@ public sealed class SavedReportConcurrencyHttpTests
         public Task<bool> Delete(SavedReport expected, CancellationToken ct = default)
             => inner.Delete(expected, ct);
 
-        public Task<bool> Delete(string id, CancellationToken ct = default)
+        public Task<bool> Delete(long id, CancellationToken ct = default)
             => inner.Delete(id, ct);
     }
 

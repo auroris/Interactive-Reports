@@ -37,6 +37,15 @@ const json = (value, status = 200) => new Response(JSON.stringify(value), {
 });
 globalThis.fetch = async (url, options = {}) => {
     const method = options.method ?? "GET";
+    if (String(url) === "/admin-api") {
+        return json([{
+            id: 1,
+            reportName: "__saved-reports",
+            title: "Saved Reports",
+            isDefault: true,
+            isGlobal: true,
+        }]);
+    }
     if (String(url).endsWith("/whoami")) {
         whoamiCalls++;
         return whoami === null

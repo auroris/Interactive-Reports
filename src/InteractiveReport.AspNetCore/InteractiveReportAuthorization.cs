@@ -54,7 +54,7 @@ public enum InteractiveReportAction
 /// <param name="IsPrimary">Whether the report is published as a primary report.</param>
 /// <param name="Origin">Whether the row originated from a user or configured document.</param>
 public sealed record SavedReportAuthorizationResource(
-    string Id,
+    long Id,
     string Title,
     string? Owner,
     bool IsGlobal,

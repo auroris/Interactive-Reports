@@ -38,7 +38,6 @@
         }
         .build-warning code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-weight: 600; }
     </style>
-    <script type="module" src="/api/reports/ui/ir.js"></script>
 </head>
 <body>
     <header>
@@ -55,7 +54,7 @@
                 <strong>Atelier en français</strong>
                 <small>Rapport hébergé en français canadien</small>
             </a>
-            <a href="/api/reports/orders/view">
+            <a data-document-path="view" href="#">
                 <strong>Packaged viewer</strong>
                 <small>Standalone report page shipped by the server package</small>
             </a>
@@ -83,13 +82,13 @@
                 <strong>Who am I?</strong>
                 <small>Identity and authorization bootstrap diagnostics</small>
             </a>
-            <a href="/api/reports/orders/schema">
+            <a data-definition-path="schema" href="#">
                 <strong>Orders schema</strong>
                 <small>Raw schema, capabilities, features, and limits JSON</small>
             </a>
         </nav>
 
-        <interactive-report report="orders" api-base="/api/reports"
+        <interactive-report api-base="/api/reports"
                             stylesheet="/report-overrides.css">
             <p class="build-warning">
                 You're seeing this message because you forgot to run
@@ -99,6 +98,22 @@
     </main>
 
     <script type="module">
+        const catalogue = await fetch("/api/reports").then(response => {
+            if (!response.ok) throw new Error(`Report catalogue failed (${response.status}).`);
+            return response.json();
+        });
+        const defaultReport = catalogue.find(report =>
+            report.reportName === "orders" && report.isDefault);
+        if (!defaultReport) throw new Error("The orders report has no default document.");
+
+        const reportId = String(defaultReport.id);
+        for (const link of document.querySelectorAll("[data-document-path]"))
+            link.href = `/api/reports/${encodeURIComponent(reportId)}/${link.dataset.documentPath}`;
+        for (const link of document.querySelectorAll("[data-definition-path]"))
+            link.href = `/api/reports/${encodeURIComponent(defaultReport.reportName)}/${link.dataset.definitionPath}`;
+        document.querySelector("interactive-report").setAttribute("report", reportId);
+        await import("/api/reports/ui/ir.js");
+
         const who = await fetch("/api/reports/whoami").then(r => r.ok ? r.json() : null).catch(() => null);
         if (who) document.getElementById("identity").textContent =
             (who.identity ?? "anonymous") + (who.isAdministrator ? " · admin" : "");

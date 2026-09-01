@@ -1,6 +1,4 @@
 using System.Collections.Concurrent;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using InteractiveReport.Core.Model;
 using Microsoft.Extensions.Hosting;
@@ -14,9 +12,6 @@ namespace InteractiveReport.AspNetCore;
 /// </summary>
 public sealed class ConfiguredReportDocumentStore : IDisposable
 {
-    /// <summary>The prefix that distinguishes deterministic configured-document ids from user saved-report ids.</summary>
-    internal const string IdPrefix = "cfg_";
-
     private readonly IOptionsMonitor<InteractiveReportOptions> _options;
     private readonly string _contentRoot;
     private readonly ConcurrentDictionary<string, CachedFile> _cache;
@@ -69,35 +64,57 @@ public sealed class ConfiguredReportDocumentStore : IDisposable
     }
 
     /// <summary>
-    /// Finds a configured document by its stable <c>cfg_</c> identifier.
+    /// Lists configured file references without probing the filesystem. Existing database
+    /// identities are the optimistic catalogue authority; the file body is dereferenced only
+    /// when a document is retrieved.
     /// </summary>
-    /// <param name="id">The case-sensitive deterministic configured-document id.</param>
-    /// <returns>The loaded document, or <see langword="null"/> when no configured path produces the id.</returns>
-    internal ConfiguredReportDocument? Find(string id)
+    internal IReadOnlyList<ConfiguredReportDocumentReference> ListReferences()
     {
-        if (!id.StartsWith(IdPrefix, StringComparison.Ordinal)) return null;
-
+        var references = new List<ConfiguredReportDocumentReference>();
         foreach (var (reportName, definition) in _options.CurrentValue.Reports)
         {
-            foreach (var configuredPath in definition.DocumentFiles ?? [])
+            if (definition.DocumentFiles is not { Count: > 0 }) continue;
+            var paths = new HashSet<string>(PathComparer);
+            foreach (var configuredPath in definition.DocumentFiles)
             {
-                if (string.IsNullOrWhiteSpace(configuredPath)) continue;
-                var fullPath = ResolvePath(configuredPath);
-                if (!string.Equals(DocumentId(reportName, fullPath), id, StringComparison.Ordinal)) continue;
-                return Load(reportName, definition.DocumentFiles).Single(document => document.Id == id);
+                if (string.IsNullOrWhiteSpace(configuredPath))
+                    throw new InvalidOperationException(
+                        $"Report '{reportName}': documentFiles contains a blank path.");
+                var sourceFile = configuredPath.Trim();
+                if (!paths.Add(ResolvePath(sourceFile)))
+                    throw new InvalidOperationException(
+                        $"Report '{reportName}': documentFiles references '{configuredPath}' more than once.");
+                references.Add(new ConfiguredReportDocumentReference(reportName, sourceFile));
             }
         }
+        return references;
+    }
 
-        return null;
+    /// <summary>
+    /// Finds a configured document by the report family and file reference persisted in the database.
+    /// </summary>
+    /// <param name="reportName">The configured report family.</param>
+    /// <param name="sourceFile">The file reference copied from <c>documentFiles</c>.</param>
+    /// <returns>The current loaded document, or <see langword="null"/> when the referenced file is absent.</returns>
+    internal ConfiguredReportDocument? Find(string reportName, string sourceFile)
+    {
+        try
+        {
+            return LoadOne(reportName, sourceFile.Trim());
+        }
+        catch (ConfiguredReportDocumentMissingException)
+        {
+            return null;
+        }
     }
 
     /// <summary>
     /// Validates and loads one report's configured document-file collection in declaration order.
     /// </summary>
-    /// <param name="reportName">The configured report name used for ids and diagnostics.</param>
+    /// <param name="reportName">The configured report name used for family identity and diagnostics.</param>
     /// <param name="configuredPaths">The authoritative configured-document paths retained during reconciliation.</param>
     /// <returns>Loaded documents in configured path order.</returns>
-    /// <exception cref="InvalidOperationException">Thrown for blank or duplicate paths, duplicate titles, invalid files, or missing state.</exception>
+    /// <exception cref="InvalidOperationException">Thrown for blank or duplicate paths, invalid files, or missing state.</exception>
     private IReadOnlyList<ConfiguredReportDocument> Load(
         string reportName,
         IReadOnlyCollection<string>? configuredPaths)
@@ -106,7 +123,7 @@ public sealed class ConfiguredReportDocumentStore : IDisposable
 
         var documents = new List<ConfiguredReportDocument>(configuredPaths.Count);
         var paths = new HashSet<string>(PathComparer);
-        var titles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var hasDefault = false;
 
         foreach (var configuredPath in configuredPaths)
         {
@@ -114,30 +131,39 @@ public sealed class ConfiguredReportDocumentStore : IDisposable
                 throw new InvalidOperationException(
                     $"Report '{reportName}': documentFiles contains a blank path.");
 
-            var fullPath = ResolvePath(configuredPath);
+            var sourceFile = configuredPath.Trim();
+            var fullPath = ResolvePath(sourceFile);
             if (!paths.Add(fullPath))
                 throw new InvalidOperationException(
                     $"Report '{reportName}': documentFiles references '{configuredPath}' more than once.");
 
-            var source = Read(reportName, configuredPath, fullPath);
-            if (!titles.Add(source.Title))
+            var document = LoadOne(reportName, sourceFile);
+            if (document.Default && hasDefault)
                 throw new InvalidOperationException(
-                    $"Report '{reportName}': configured report document title '{source.Title}' is duplicated (titles are case-insensitive).");
-            var state = JsonSerializer.Deserialize<ReportState>(source.StateJson, IrJson.Options)
-                ?? throw new InvalidOperationException(
-                    $"Report '{reportName}': document file '{configuredPath}' has no state.");
-            documents.Add(new ConfiguredReportDocument(
-                DocumentId(reportName, fullPath),
-                reportName,
-                source.Title,
-                source.Primary,
-                state,
-                source.StateJson,
-                source.ModifiedUtc,
-                source.Length));
+                    $"Report '{reportName}': only one configured report document may be marked as default.");
+            hasDefault |= document.Default;
+            documents.Add(document);
         }
 
         return documents;
+    }
+
+    /// <summary>Loads and parses one persisted source-file reference.</summary>
+    private ConfiguredReportDocument LoadOne(string reportName, string sourceFile)
+    {
+        var source = Read(reportName, sourceFile, ResolvePath(sourceFile));
+        var state = JsonSerializer.Deserialize<ReportState>(source.StateJson, IrJson.Options)
+            ?? throw new InvalidOperationException(
+                $"Report '{reportName}': document file '{sourceFile}' has no state.");
+        return new ConfiguredReportDocument(
+            reportName,
+            sourceFile,
+            source.Title,
+            source.Default,
+            state,
+            source.StateJson,
+            source.ModifiedUtc,
+            source.Length);
     }
 
     /// <summary>
@@ -153,7 +179,7 @@ public sealed class ConfiguredReportDocumentStore : IDisposable
     {
         var info = new FileInfo(fullPath);
         if (!info.Exists)
-            throw new InvalidOperationException(
+            throw new ConfiguredReportDocumentMissingException(
                 $"Report '{reportName}': document file '{configuredPath}' was not found at '{fullPath}'.");
 
         var modifiedUtc = info.LastWriteTimeUtc;
@@ -173,6 +199,18 @@ public sealed class ConfiguredReportDocumentStore : IDisposable
             throw new InvalidOperationException(
                 $"Report '{reportName}': document file '{configuredPath}' is not valid JSON: {ex.Message}", ex);
         }
+        catch (FileNotFoundException ex)
+        {
+            throw new ConfiguredReportDocumentMissingException(
+                $"Report '{reportName}': document file '{configuredPath}' was not found at '{fullPath}'.",
+                ex);
+        }
+        catch (DirectoryNotFoundException ex)
+        {
+            throw new ConfiguredReportDocumentMissingException(
+                $"Report '{reportName}': document file '{configuredPath}' was not found at '{fullPath}'.",
+                ex);
+        }
         catch (IOException ex)
         {
             throw new InvalidOperationException(
@@ -188,7 +226,7 @@ public sealed class ConfiguredReportDocumentStore : IDisposable
 
         var loaded = new CachedFile(
             envelope.Title.Trim(),
-            envelope.Primary,
+            envelope.Default,
             JsonSerializer.Serialize(envelope.State, IrJson.Options),
             modifiedUtc,
             length);
@@ -206,19 +244,6 @@ public sealed class ConfiguredReportDocumentStore : IDisposable
             ? configuredPath
             : Path.Combine(_contentRoot, configuredPath));
 
-    /// <summary>
-    /// Builds the stable identifier for a configured report document.
-    /// </summary>
-    /// <param name="reportName">The configured report name.</param>
-    /// <param name="fullPath">The normalized absolute path.</param>
-    /// <returns>The stable identifier assigned to the configured document.</returns>
-    private static string DocumentId(string reportName, string fullPath)
-    {
-        var pathIdentity = OperatingSystem.IsWindows() ? fullPath.ToUpperInvariant() : fullPath;
-        var bytes = Encoding.UTF8.GetBytes(reportName.ToUpperInvariant() + "\n" + pathIdentity);
-        return IdPrefix + Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
-    }
-
     /// <summary>Gets the platform-appropriate comparer used for normalized file paths.</summary>
     private static StringComparer PathComparer
         => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
@@ -231,26 +256,37 @@ public sealed class ConfiguredReportDocumentStore : IDisposable
     /// <summary>Contains a parsed configured-document file plus the metadata used to validate its cache entry.</summary>
     private sealed record CachedFile(
         string Title,
-        bool Primary,
+        bool Default,
         string StateJson,
         DateTime ModifiedUtc,
         long Length);
+
+    private sealed class ConfiguredReportDocumentMissingException : InvalidOperationException
+    {
+        internal ConfiguredReportDocumentMissingException(string message, Exception? inner = null)
+            : base(message, inner)
+        {
+        }
+    }
 }
 
+/// <summary>Identifies one configured file body without reading it.</summary>
+internal sealed record ConfiguredReportDocumentReference(string ReportName, string SourceFile);
+
 /// <summary>Contains one loaded configured document and both its typed and canonical JSON state.</summary>
-/// <param name="Id">The deterministic id derived from report name and normalized path.</param>
 /// <param name="ReportName">The configured report that owns the document.</param>
+/// <param name="SourceFile">The configured file reference persisted beside the generated database id.</param>
 /// <param name="Title">The validated display title.</param>
-/// <param name="Primary">The source-controlled initial primary flag.</param>
+/// <param name="Default">Whether this file is the report family's configured default.</param>
 /// <param name="State">The detached typed report state.</param>
 /// <param name="StateJson">The state serialized with the protocol options.</param>
 /// <param name="ModifiedUtc">The source file's last-write timestamp.</param>
 /// <param name="Length">The source file length used for cache invalidation.</param>
 internal sealed record ConfiguredReportDocument(
-    string Id,
     string ReportName,
+    string SourceFile,
     string Title,
-    bool Primary,
+    bool Default,
     ReportState State,
     string StateJson,
     DateTime ModifiedUtc,

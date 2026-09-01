@@ -72,14 +72,14 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<IOptionsMonitor<InteractiveReportOptions>>(),
             sp.GetRequiredService<SchemaCache>(),
             sp.GetRequiredService<ReportConnectionRegistry>(),
-            sp.GetRequiredService<ConfiguredReportDocumentSynchronizer>(),
-            sp.GetRequiredService<ISavedReportStore>()));
+            sp.GetRequiredService<ConfiguredReportDocumentSynchronizer>()));
         services.AddSingleton(sp => new ReportExecutor(
             sp.GetRequiredService<IReportConnectionFactory>(),
             sp.GetRequiredService<SchemaCache>(),
             logging.For<ReportExecutor>()));
         services.AddSingleton<IReportFileExporter, ReportFileExporter>();
         services.AddSingleton<IReportAccessService, ReportAccessService>();
+        services.AddSingleton<DefaultReportDocumentService>();
         services.TryAddSingleton<IContextParameterResolver, ClaimContextParameterResolver>();
 
         services.AddSingleton<ISavedReportStore>(sp => new SqlSavedReportStore(

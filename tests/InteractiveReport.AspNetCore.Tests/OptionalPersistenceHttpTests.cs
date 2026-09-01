@@ -17,7 +17,7 @@ namespace InteractiveReport.AspNetCore.Tests;
 public sealed class OptionalPersistenceHttpTests
 {
     [Fact]
-    public async Task Minimal_report_configuration_has_no_persistence_side_effects()
+    public async Task Report_document_catalogue_requires_configured_persistence()
     {
         var tempRoot = Directory.CreateTempSubdirectory("interactive-report-no-persistence-").FullName;
         var dataPath = Path.Combine(tempRoot, "report-data.db");
@@ -38,20 +38,34 @@ public sealed class OptionalPersistenceHttpTests
             using var schema = await host.Client.GetAsync("/api/reports/items/schema");
             Assert.Equal(HttpStatusCode.OK, schema.StatusCode);
 
-            using var query = await host.Client.PostAsync(
-                "/api/reports/items/query", JsonContent.Create(new { v = 3 }));
+            using var query = await host.Client.PostAsJsonAsync(
+                "/api/reports/items/query",
+                new { v = 3 });
             Assert.Equal(HttpStatusCode.OK, query.StatusCode);
+
+            using var lov = await host.Client.PostAsJsonAsync(
+                "/api/reports/items/lov",
+                new
+                {
+                    document = new { v = 3 },
+                    table = "definition",
+                    column = "LABEL",
+                });
+            Assert.Equal(HttpStatusCode.OK, lov.StatusCode);
+
+            using var export = await host.Client.PostAsJsonAsync(
+                "/api/reports/items/export?format=csv",
+                new { v = 3 });
+            Assert.Equal(HttpStatusCode.OK, export.StatusCode);
+
+            using var catalogue = await host.Client.GetAsync("/api/reports");
+            await AssertStorageFailure(catalogue);
 
             using var whoami = await host.Client.GetAsync("/api/reports/whoami");
             Assert.Equal(HttpStatusCode.OK, whoami.StatusCode);
             var identity = await ReadJson(whoami);
             Assert.True(identity.GetProperty("configuredAdministrator").GetBoolean());
             Assert.False(identity.GetProperty("databaseAdministrator").GetBoolean());
-
-            using var save = await host.Client.PostAsync(
-                "/api/reports/items/saved",
-                JsonContent.Create(new { title = "Mine", state = new { v = 3 } }));
-            await AssertStorageFailure(save);
 
             using var administration = await host.Client.GetAsync(
                 "/api/reports/admin/authorization");
@@ -96,13 +110,8 @@ public sealed class OptionalPersistenceHttpTests
         {
             await using var host = await Start(tempRoot, connectionString, inaccessibleStore);
 
-            using var save = await host.Client.PostAsync(
-                "/api/reports/items/saved",
-                JsonContent.Create(new { title = "Mine", state = new { v = 3 } }));
-            await AssertStorageFailure(
-                save,
-                "IR-1005",
-                "Report authorization failed");
+            using var catalogue = await host.Client.GetAsync("/api/reports");
+            await AssertStorageFailure(catalogue);
 
             using var administration = await host.Client.GetAsync(
                 "/api/reports/admin/authorization");

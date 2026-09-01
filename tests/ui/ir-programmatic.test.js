@@ -49,6 +49,13 @@ globalThis.fetch = async (url, options = {}) => {
     }
     if (request.url.endsWith("/whoami")) return json({ identity: "test-user" });
     if (request.url.endsWith("/saved")) return json([]);
+    if (request.method === "GET" && /\/[^/?]+$/.test(request.url)) {
+        const id = request.url.split("/").at(-1);
+        return json({
+            summary: { id, reportName: id, title: "Default", isDefault: true, isGlobal: true },
+            state: {},
+        });
+    }
     if (request.url.endsWith("/lov")) {
         const body = JSON.parse(request.body);
         return json({
@@ -199,7 +206,7 @@ test("client control overrides win over server suggestions and global disabled i
     assert.equal(report.isControlEnabled("search"), true);
     assert.equal(report.isControlEnabled("filter"), false);
     assert.equal(report.shadowRoot.querySelector(".ir-search").hidden, false);
-    assert.equal(requests.some(request => request.url.endsWith("/saved")), false);
+    assert.equal(requests.some(request => request.url.endsWith("/saved")), true);
 
     assert.equal(report.setControlEnabled("FILTER", true), true, "control names are case-insensitive");
     assert.equal(report.isControlEnabled("filter"), true);

@@ -63,7 +63,7 @@ public sealed class SqlLoggingTests
             savedLogger);
         await savedReports.Create(new SavedReport
         {
-            Id = "saved-sensitive",
+            Id = 0,
             ReportName = "orders",
             Title = sensitiveTitle,
             Owner = sensitiveIdentity,

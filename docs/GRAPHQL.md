@@ -79,9 +79,13 @@ graph; documents above that ceiling fail before authorization or execution, incl
 when parsed documents are cached. The adapter also caps its schema's execution
 concurrency at one without changing other GraphQL schemas registered by the host.
 
-`id` is the saved-report id returned by the existing saved-report listing and creation
-APIs. It is unique across report definitions and origins. Configured file-backed ids
-remain stable while their configured report name and resolved file path remain stable.
+`id` is the database-generated numeric report-document id returned by `GET /api/reports`
+and the ordinary creation APIs. It is unique across report families and origins.
+Configured file-backed documents receive an identity row keyed by their internal family
+and source filename; execution reads their current state from disk rather than from a
+mirrored database body. The row remains the optimistic authority for catalogue metadata.
+If its source file is absent when GraphQL dereferences it, the adapter deletes the stale
+row, restores a synthetic default when necessary, and returns `NOT_FOUND` for the old id.
 
 `page` and `pageSize` optionally replace only the saved state's paging request:
 
@@ -117,7 +121,7 @@ Variables:
 
 ```json
 {
-  "id": "cfg_0123456789abcdef",
+  "id": 42,
   "page": 1,
   "pageSize": 100
 }
@@ -143,9 +147,9 @@ Every saved report in `ISavedReportStore` is eligible:
 - global or primary database reports;
 - configured file-backed reports synchronized into the store.
 
-The adapter does not read configured files as a separate catalog. It synchronizes them
-through the existing document synchronizer and then performs the same saved-report
-lookup used for database rows.
+The adapter does not read configured files as a separate catalogue. It addresses the
+existing database identity directly and performs the same saved-report lookup used for
+database-backed rows; ordinary catalogue discovery synchronizes new configured identities.
 
 File-backed reports are strongly recommended when another application will rely on a
 report as a durable API surface. Their state is read-only through ordinary saved-report

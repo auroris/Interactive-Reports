@@ -171,7 +171,7 @@ Mutation follows these rules:
   evaluated first. All registered authorizers see the same definition instance.
 - Publication and owner actions are derived from the effective definition after the
   base action passes. Setting `Public = false` during create therefore removes an
-  unwanted publication request before the legacy administrator boundary is evaluated.
+  unwanted publication request before the administrator boundary is evaluated.
 - If an authorizer later adds a public, primary, or owner change, the server detects it
   and evaluates the corresponding administrator action before persistence.
 - A denial at any point discards all mutations because nothing has yet been stored.
@@ -189,10 +189,20 @@ This mutation surface is available through all three authorization integrations.
 direct callback is usually the clearest place for request normalization. Native
 resource handlers and resource-aware named policies receive the same mutable resource.
 
-Database reads retain their existing behavior. The ordinary saved-report load endpoint
-parses stored JSON only as JSON for response framing and sends it to the client without
-hydrating `InteractiveReportDefinition` or `ReportState`. Historical stored documents
-are therefore not rewritten or rejected merely because they are read.
+Ordinary user-document reads parse stored JSON only for response framing and send it to
+the client without hydrating `InteractiveReportDefinition` or `ReportState`. Historical
+user documents are therefore not rewritten or rejected merely because they are read.
+Configured documents read their state from the configured file. If that file is missing,
+the stale database identity is deleted and the original request returns 404. When the
+missing document was the default, the server also creates a new synthetic default for
+subsequent requests. Synthetic defaults are the sole repairable origin: invalid stored
+state is regenerated from current appsettings without changing the database id.
+
+Query, LOV, and export are addressed by configured definition key. They authorize that
+definition and execute the client-submitted document without reading the saved-report
+store. The submitted document has no required ID or persisted provenance. A client copy
+can therefore continue to execute after its source document's ownership or publication
+changes, provided the caller still has access to the configured definition.
 
 Authorization is expressed in facts rather than in how the caller reached an
 endpoint. For saved reports, the relevant facts are available on the resource:
@@ -222,7 +232,7 @@ use the same service before invoking their authorization store or user provider.
 | Action | Request that emits it | Built-in notes |
 |---|---|---|
 | `ViewReport` | Schema for an ordinary report | Report-definition authentication and policy run first. |
-| `Query` | Query for an ordinary report, or execute a saved report through GraphQL | Ordinary HTTP queries identify the report but not submitted state. GraphQL saved-report queries also supply `SavedReport` metadata. |
+| `Query` | Process a client document through HTTP, or execute a stored document through GraphQL | HTTP processing authorizes only the resolved report definition and never supplies original document metadata. GraphQL loads a stored document and supplies `SavedReport` metadata. |
 | `Export` | CSV export | The report's `download` feature must also be enabled. Admin-list export emits `ListAllSavedReports` as well. |
 | `ListSavedReports` | List visible saved reports for one report definition | Storage still filters to primary, global, and caller-owned rows. |
 | `ReadSavedReport` | Load one saved report, or execute it through GraphQL | Public, owner, and administrator access are distinguished from `SavedReport` metadata and the principal. |
@@ -236,7 +246,7 @@ use the same service before invoking their authorization store or user provider.
 | `ListAuthorizationUsers` | Resolve the protected administration user directory | Administrator action. Directory entries are choices, not grants. |
 | `ManageAuthorization` | List or change database administrators, report restrictions, and report-user grants | Administrator action. Configuration grants remain read-only. |
 | `DownloadReportDocument` | Download the canonical admin JSON envelope | Administrator action. |
-| `UploadReportDocument` | Validate and import an admin JSON envelope | Administrator action. A primary upload also emits `PublishPrimaryReport`. |
+| `UploadReportDocument` | Validate and import an admin JSON envelope | Administrator action. Upload always creates a private user document; file publication metadata is ignored. |
 
 One HTTP request can emit several actions. These examples assume authorization does
 not first narrow the typed definition:

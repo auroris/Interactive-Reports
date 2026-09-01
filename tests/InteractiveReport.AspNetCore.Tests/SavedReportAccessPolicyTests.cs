@@ -46,7 +46,7 @@ public sealed class SavedReportAccessPolicyTests
 
     private static SavedReport Report(bool global) => new()
     {
-        Id = "saved-1",
+        Id = 1,
         ReportName = "orders",
         Title = "Orders",
         Owner = "owner",

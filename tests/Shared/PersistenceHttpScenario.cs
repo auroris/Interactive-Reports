@@ -42,15 +42,14 @@ internal static class PersistenceHttpScenario
         Assert.False(await TableExists(createDataConnection, dialect, defaultStoreTable));
         Assert.False(await TableExists(createDataConnection, dialect, explicitStoreTable));
 
-        var fileSave = await SaveRestartAndLoad(
+        await SaveRestartAndLoad(
             dialect,
             createDataConnection,
             reportSql,
             expectedColumns,
             contentRoot,
             savedReportsConnection: null,
-            defaultStoreTable,
-            idThatMustBeAbsent: null);
+            defaultStoreTable);
 
         Assert.True(File.Exists(ExplicitFileStorePath(contentRoot)));
         Assert.False(await TableExists(createDataConnection, dialect, defaultStoreTable));
@@ -63,8 +62,7 @@ internal static class PersistenceHttpScenario
             expectedColumns,
             contentRoot,
             savedReportsConnection: DataConnectionName,
-            explicitStoreTable,
-            idThatMustBeAbsent: fileSave.Id);
+            explicitStoreTable);
 
         Assert.True(await TableExists(createDataConnection, dialect, explicitStoreTable));
     }
@@ -124,19 +122,18 @@ internal static class PersistenceHttpScenario
         await command.ExecuteNonQueryAsync();
     }
 
-    private static async Task<SavedDocument> SaveRestartAndLoad(
+    private static async Task SaveRestartAndLoad(
         ReportDialect dialect,
         Func<DbConnection> createDataConnection,
         string reportSql,
         IReadOnlyCollection<string> expectedColumns,
         string contentRoot,
         string? savedReportsConnection,
-        string savedReportsTable,
-        string? idThatMustBeAbsent)
+        string savedReportsTable)
     {
         var title = $"Persistence {Guid.NewGuid():N}";
         JsonElement defaultState;
-        string id;
+        long id;
 
         await using (var host = await Start(
                          dialect,
@@ -163,11 +160,11 @@ internal static class PersistenceHttpScenario
             }
 
             using var saveResponse = await host.Client.PostAsync(
-                $"/api/reports/{ReportName}/saved",
+                $"/api/reports/{host.ReportId}/saved",
                 JsonContent.Create(new { title, state = defaultState }));
             Assert.Equal(HttpStatusCode.Created, saveResponse.StatusCode);
             var saved = await ReadJson(saveResponse);
-            id = saved.GetProperty("id").GetString()!;
+            id = saved.GetProperty("id").GetInt64();
         }
 
         await using (var restarted = await Start(
@@ -178,23 +175,16 @@ internal static class PersistenceHttpScenario
                          savedReportsConnection,
                          savedReportsTable))
         {
-            if (idThatMustBeAbsent is not null)
-            {
-                using var absent = await restarted.Client.GetAsync($"/api/reports/saved/{idThatMustBeAbsent}");
-                Assert.Equal(HttpStatusCode.NotFound, absent.StatusCode);
-            }
+            var visible = await GetJson(restarted.Client, $"/api/reports/{restarted.ReportId}/saved");
+            Assert.Contains(visible.EnumerateArray(), item => item.GetProperty("id").GetInt64() == id);
 
-            var visible = await GetJson(restarted.Client, $"/api/reports/{ReportName}/saved");
-            Assert.Contains(visible.EnumerateArray(), item => item.GetProperty("id").GetString() == id);
-
-            var loaded = await GetJson(restarted.Client, $"/api/reports/saved/{id}");
+            var loaded = await GetJson(restarted.Client, $"/api/reports/{id}");
             Assert.Equal(title, loaded.GetProperty("summary").GetProperty("title").GetString());
             Assert.True(JsonNode.DeepEquals(
                 JsonNode.Parse(defaultState.GetRawText()),
                 JsonNode.Parse(loaded.GetProperty("state").GetRawText())));
         }
 
-        return new SavedDocument(id);
     }
 
     private static async Task<RunningHost> Start(
@@ -250,7 +240,13 @@ internal static class PersistenceHttpScenario
 
         var server = app.Services.GetRequiredService<IServer>();
         var address = server.Features.Get<IServerAddressesFeature>()!.Addresses.Single();
-        return new RunningHost(app, new HttpClient { BaseAddress = new Uri(address) });
+        var client = new HttpClient { BaseAddress = new Uri(address) };
+        var catalogue = await GetJson(client, "/api/reports");
+        var reportId = catalogue.EnumerateArray()
+            .Single(item => item.GetProperty("reportName").GetString() == ReportName
+                && item.GetProperty("isDefault").GetBoolean())
+            .GetProperty("id").GetInt64();
+        return new RunningHost(app, client, reportId);
     }
 
     private static async Task<JsonElement> GetJson(HttpClient client, string path)
@@ -285,11 +281,10 @@ internal static class PersistenceHttpScenario
             throw new ArgumentException("Table names must be plain SQL identifiers.", nameof(value));
     }
 
-    private sealed record SavedDocument(string Id);
-
-    private sealed class RunningHost(WebApplication app, HttpClient client) : IAsyncDisposable
+    private sealed class RunningHost(WebApplication app, HttpClient client, long reportId) : IAsyncDisposable
     {
         public HttpClient Client { get; } = client;
+        public long ReportId { get; } = reportId;
 
         public async ValueTask DisposeAsync()
         {

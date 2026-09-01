@@ -126,9 +126,10 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
     [Fact]
     public async Task Database_report_executes_for_its_owner_and_uses_resource_authorization()
     {
+        var reportId = await DefaultId();
         using var save = await Send(
             HttpMethod.Post,
-            $"/api/reports/{ReportName}/saved",
+            $"/api/reports/{reportId}/saved",
             "alice",
             new
             {
@@ -151,7 +152,7 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
                 },
             });
         Assert.Equal(HttpStatusCode.Created, save.StatusCode);
-        var id = (await ReadJson(save)).GetProperty("id").GetString()!;
+        var id = (await ReadJson(save)).GetProperty("id").GetInt64();
         _authorization.Clear();
 
         using var response = await GraphQL(id, "alice", page: 2, pageSize: 1);
@@ -195,12 +196,13 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
     [Fact]
     public async Task Configured_report_uses_the_same_saved_report_lookup_and_executes_anonymously()
     {
-        using var list = await Send(HttpMethod.Get, $"/api/reports/{ReportName}/saved", identity: null);
+        var reportId = await DefaultId();
+        using var list = await Send(HttpMethod.Get, $"/api/reports/{reportId}/saved", identity: null);
         Assert.Equal(HttpStatusCode.OK, list.StatusCode);
         var reports = await ReadJson(list);
         var configured = reports.EnumerateArray().Single(item =>
             item.GetProperty("title").GetString() == "File View");
-        var id = configured.GetProperty("id").GetString()!;
+        var id = configured.GetProperty("id").GetInt64();
         Assert.True(configured.GetProperty("isReadOnly").GetBoolean());
 
         _authorization.Clear();
@@ -216,7 +218,7 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
     [Fact]
     public async Task Unknown_report_and_invalid_pagination_return_stable_GraphQL_error_codes()
     {
-        using var missing = await GraphQL("missing", "alice");
+        using var missing = await GraphQL(long.MaxValue, "alice");
         var missingBody = await ReadJson(missing);
         Assert.Equal("NOT_FOUND", missingBody.GetProperty("errors")[0]
             .GetProperty("extensions").GetProperty("code").GetString());
@@ -254,6 +256,7 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
     [Fact]
     public async Task The_same_saved_document_has_rest_and_GraphQL_result_parity()
     {
+        var reportId = await DefaultId();
         var state = new
         {
             activeTable = "result",
@@ -280,11 +283,11 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
         };
         using var save = await Send(
             HttpMethod.Post,
-            $"/api/reports/{ReportName}/saved",
+            $"/api/reports/{reportId}/saved",
             "alice",
             new { title = "Transport parity", state });
         Assert.Equal(HttpStatusCode.Created, save.StatusCode);
-        var savedId = (await ReadJson(save)).GetProperty("id").GetString()!;
+        var savedId = (await ReadJson(save)).GetProperty("id").GetInt64();
 
         using var restResponse = await Send(
             HttpMethod.Post,
@@ -456,19 +459,23 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
         Assert.Contains("GET and POST", body.GetProperty("description").GetString());
     }
 
-    private async Task<string> CreatePrivateReport(string owner, string title)
+    private async Task<long> CreatePrivateReport(string owner, string title)
     {
+        var reportId = await DefaultId();
         using var response = await Send(
             HttpMethod.Post,
-            $"/api/reports/{ReportName}/saved",
+            $"/api/reports/{reportId}/saved",
             owner,
             new { title, state = new { v = 3 } });
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        return (await ReadJson(response)).GetProperty("id").GetString()!;
+        return (await ReadJson(response)).GetProperty("id").GetInt64();
     }
 
+    private Task<long> DefaultId()
+        => ReportDocumentTestIds.Default(_app!.Services, ReportName);
+
     private Task<HttpResponseMessage> GraphQL(
-        string id,
+        long id,
         string? identity,
         int? page = null,
         int? pageSize = null)

@@ -14,21 +14,30 @@ public interface ISavedReportStore
     /// Authorization paths rely on this snapshot boundary before they inspect metadata and consume the
     /// state.
     /// </summary>
-    /// <param name="id">The case-sensitive saved-report identifier.</param>
+    /// <param name="id">The numeric report-document identifier.</param>
     /// <param name="ct">Cancels persistence access.</param>
     /// <returns>The detached row, or <see langword="null"/> when no id matches.</returns>
-    Task<SavedReport?> Get(string id, CancellationToken ct = default);
+    Task<SavedReport?> Get(long id, CancellationToken ct = default);
 
     /// <summary>
     /// Reads only authorization and presentation metadata. Implementations should avoid
     /// fetching the state document; the default preserves compatibility for custom stores that have not
     /// added a projection yet.
     /// </summary>
-    /// <param name="id">The case-sensitive saved-report identifier.</param>
+    /// <param name="id">The numeric report-document identifier.</param>
     /// <param name="ct">Cancels persistence access.</param>
     /// <returns>The detached metadata, or <see langword="null"/> when no id matches.</returns>
-    async Task<SavedReportMetadata?> GetMetadata(string id, CancellationToken ct = default)
+    async Task<SavedReportMetadata?> GetMetadata(long id, CancellationToken ct = default)
         => (await Get(id, ct))?.Metadata();
+
+    /// <summary>Finds the database identity assigned to one configured report-document file.</summary>
+    async Task<SavedReport?> FindConfiguredFile(
+        string reportName,
+        string sourceFile,
+        CancellationToken ct = default)
+        => (await ListAll(ct)).SingleOrDefault(report =>
+            string.Equals(report.ReportName, reportName, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(report.SourceFile, sourceFile, StringComparison.Ordinal));
 
     /// <summary>
     /// Lists saved reports for one report definition visible to an identity: primary and global rows
@@ -54,39 +63,39 @@ public interface ISavedReportStore
         => (await ListVisible(reportName, identity, ct)).Select(report => report.Metadata()).ToList();
 
     /// <summary>
-    /// Finds the primary report titled <c>Default</c> that overrides a configured definition.
-    /// User-origin rows win an externally introduced configured-title collision.
+    /// Finds the specially flagged default document for one report family.
     /// </summary>
     /// <param name="reportName">The canonical report name that scopes the search.</param>
     /// <param name="ct">Cancels persistence access.</param>
-    /// <returns>The preferred primary default, or <see langword="null"/> when none exists.</returns>
-    async Task<SavedReport?> FindPrimaryDefault(string reportName, CancellationToken ct = default)
+    /// <returns>The flagged default document, or <see langword="null"/> when none exists.</returns>
+    async Task<SavedReport?> FindDefault(string reportName, CancellationToken ct = default)
         => (await ListVisible(reportName, identity: null, ct))
-            .Where(report => report.IsPrimary
-                && string.Equals(report.Title, "Default", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(report => report.Origin == SavedReportOrigin.User ? 0 : 1)
-            .ThenByDescending(report => report.ModifiedUtc)
+            .Where(report => report.IsDefault)
             .FirstOrDefault();
 
     /// <summary>
-    /// Finds a title collision within one already-authorized report definition. The scoped
-    /// lookup prevents endpoint uniqueness checks from loading unrelated saved reports into memory.
+    /// Finds a title collision in the proposed document's visibility scope.
     /// </summary>
     /// <param name="reportName">The canonical report name that scopes title uniqueness.</param>
     /// <param name="title">The title to trim and compare case-insensitively.</param>
     /// <param name="exceptId">A saved-report identifier to exclude from the title-collision search; <see langword="null"/> excludes none; defaults to <c>null</c>.</param>
     /// <param name="ct">Cancels persistence access.</param>
     /// <returns>The configured row first, otherwise a user row, or <see langword="null"/> when available.</returns>
-    async Task<SavedReport?> FindByTitle(
+    async Task<SavedReport?> FindTitleCollision(
         string reportName,
         string title,
-        string? exceptId = null,
+        string? owner,
+        bool isPublic,
+        long? exceptId = null,
         CancellationToken ct = default)
         => (await ListAll(ct))
-            .Where(report => !string.Equals(report.Id, exceptId, StringComparison.OrdinalIgnoreCase)
+            .Where(report => report.Id != exceptId
                              && string.Equals(report.ReportName, reportName, StringComparison.OrdinalIgnoreCase)
-                             && string.Equals(report.Title, title.Trim(), StringComparison.OrdinalIgnoreCase))
-            .OrderBy(report => report.Origin == SavedReportOrigin.Configured ? 0 : 1)
+                             && string.Equals(report.Title, title.Trim(), StringComparison.OrdinalIgnoreCase)
+                             && (isPublic
+                                 ? report.IsPublic
+                                 : report.IsPublic || string.Equals(report.Owner, owner, StringComparison.Ordinal)))
+            .OrderByDescending(report => report.IsPublic)
             .FirstOrDefault();
 
     /// <summary>
@@ -165,7 +174,7 @@ public interface ISavedReportStore
     /// <param name="id">The exact saved-report identifier to remove.</param>
     /// <param name="ct">Cancels persistence.</param>
     /// <returns>A task whose result is <see langword="true"/> when the requested row was deleted; otherwise, <see langword="false"/>.</returns>
-    Task<bool> Delete(string id, CancellationToken ct = default);
+    Task<bool> Delete(long id, CancellationToken ct = default);
 }
 
 /// <summary>Identifies where a saved-report row originates; public persistence APIs treat configured rows as read-only.</summary>
@@ -186,37 +195,40 @@ public enum SavedReportOrigin
 public sealed record SavedReport
 {
     /// <summary>Gets the stable row identifier.</summary>
-    public required string Id { get; init; }
+    public long Id { get; set; }
     /// <summary>Gets the canonical report definition name.</summary>
     public required string ReportName { get; init; }
-    /// <summary>Gets or sets the unique display title within the report definition.</summary>
+    /// <summary>Gets the configured file reference for a file-backed document.</summary>
+    public string? SourceFile { get; init; }
+    /// <summary>
+    /// Gets or sets the display title. API-authored rows are unique within the caller-visible
+    /// public/private scope; configured file identities deliberately bypass title uniqueness.
+    /// </summary>
     public required string Title { get; set; }
     /// <summary>Gets or sets the canonical owner identity; configured rows have no owner.</summary>
     public required string? Owner { get; set; }
     /// <summary>Gets or sets whether all callers authorized for the report may load this row.</summary>
     public bool IsGlobal { get; set; }
+    /// <summary>Gets or sets whether this is the durable default document for its report family.</summary>
+    public bool IsDefault { get; set; }
     /// <summary>
     /// Gets or sets the administrator-controlled publication flag. Primary reports are visible to
-    /// everyone who can access their underlying report definition. A primary report
-    /// titled "Default" replaces that definition's generated default state.
+    /// everyone who can access their underlying report definition.
     /// </summary>
     public bool IsPrimary { get; set; }
     /// <summary>Gets or sets the state document stored as JSON text.</summary>
-    public required string StateJson { get; set; }
+    public string? StateJson { get; set; }
     /// <summary>
     /// Gets or sets the persisted optimistic-concurrency revision. Create uses the current UTC time;
     /// configured-row inserts may seed it from a file mtime, but every subsequent
     /// replacement must advance it even when that source timestamp is unchanged.
     /// </summary>
     public DateTime ModifiedUtc { get; set; }
-    /// <summary>Gets or sets whether the row was authored by a user or mirrored from configuration.</summary>
+    /// <summary>Gets or sets whether the row was authored by a user or identifies a configured file.</summary>
     public SavedReportOrigin Origin { get; set; } = SavedReportOrigin.User;
 
-    /// <summary>
-    /// Generates a new stable saved-report identifier.
-    /// </summary>
-    /// <returns>A lowercase 32-character GUID without separators.</returns>
-    public static string NewId() => Guid.NewGuid().ToString("n");
+    /// <summary>Gets whether the document belongs to the public name and visibility scope.</summary>
+    public bool IsPublic => IsDefault || IsGlobal || IsPrimary || Origin == SavedReportOrigin.Configured;
 
     /// <summary>
     /// Projects a complete saved report into its metadata-only representation.
@@ -225,9 +237,11 @@ public sealed record SavedReport
     public SavedReportMetadata Metadata() => new(
         Id,
         ReportName,
+        SourceFile,
         Title,
         Owner,
         IsGlobal,
+        IsDefault,
         IsPrimary,
         ModifiedUtc,
         Origin);
@@ -235,14 +249,20 @@ public sealed record SavedReport
 
 /// <summary>Contains saved-report fields needed for access checks and summaries, without state JSON.</summary>
 public sealed record SavedReportMetadata(
-    string Id,
+    long Id,
     string ReportName,
+    string? SourceFile,
     string Title,
     string? Owner,
     bool IsGlobal,
+    bool IsDefault,
     bool IsPrimary,
     DateTime ModifiedUtc,
-    SavedReportOrigin Origin);
+    SavedReportOrigin Origin)
+{
+    /// <summary>Gets whether the document belongs to the public name and visibility scope.</summary>
+    public bool IsPublic => IsDefault || IsGlobal || IsPrimary || Origin == SavedReportOrigin.Configured;
+}
 
 /// <summary>Defines saved-report storage; the connection name resolves through <c>IReportConnectionFactory</c>.</summary>
 public sealed partial record SavedReportStoreConfig(

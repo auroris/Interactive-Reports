@@ -73,7 +73,8 @@ in-process execution and export, REST routes, and the browser element, see the
    app.MapInteractiveReports("/reports");
    ```
 
-4. Done — browse **`/reports/orders/view`**. The packaged page hosts the report;
+4. Done — call **`GET /reports`**, select the `isDefault` document whose
+   `reportName` is `orders`, then browse `/reports/{id}/view`. The packaged page hosts the report;
    embedding `<interactive-report>` in your own pages (below) remains the primary
    path for real applications. Saved reports and administration require the explicit
    storage configuration below. The administration page is at `/reports/admin`;
@@ -148,13 +149,13 @@ the host's content root unless absolute:
 }
 ```
 
-Each file contains its selector title, an optional initial primary flag, and the
+Each file contains its selector title, an optional default flag, and the
 normal state document:
 
 ```json
 {
   "title": "Default",
-  "primary": true,
+  "default": true,
   "state": {
     "activeTable": "pivot",
     "tables": {
@@ -250,26 +251,29 @@ per document. Within the selected composition, the stacked limits are 20
 computed-column rules, 50 filter rules, and 50 highlight rules. Pivot and Chart caps
 provide additional bounds for data-dependent relations.
 
-With saved-report storage configured, all files appear as global saved reports and are synced into the saved-report store
-whenever they change, as rows marked with a configured origin. A file's `primary`
-value seeds the row when it is first synchronized; after that an administrator can
-flag or unflag it without editing the file. File content remains read-only, although
-Save As can create an editable database copy under another title. A configured title
-takes precedence over an existing database report with the same title, and new title
-collisions are rejected. Ensure the host project copies these files to its build and
-publish output; the Workbench project shows one way to do that.
+With saved-report storage configured, every configured file receives a database-generated
+numeric identity. Its row is the optimistic catalogue authority for the report key,
+source filename, display title, and default flag; only the state body is read from disk
+when the document is retrieved. Configured titles are deployment declarations and may
+duplicate any public, private, or other configured title. File content remains read-only,
+although Save As can create an editable database copy. At most one file per report may
+set `default: true`; synchronizing that file removes the synthetic default and gives the
+file-backed row the default role. Without a configured file default, the server lazily
+creates a synthetic default row. Invalid stored synthetic state is rebuilt in place from
+current configuration, retaining the same id. If a referenced file is missing during
+retrieval, its stale database row is deleted, a synthetic default is inserted when the
+missing row was the default, and the vanished numeric id returns 404. Ensure the host
+project copies the referenced files to its build and publish output; the Workbench project
+shows one way to do that.
 
-Auto-created stores add `IS_PRIMARY` to an existing current-shape table in place and
-create the adjacent `IR_REPORT_AUTHORIZATION` table. `savedReports.tablePrefix` is
-prepended to both physical storage table names. Hosts with
-`savedReports.autoCreate: false` must manage both tables and add the non-null 0/1
-saved-report column themselves.
+Auto-created stores create the report-document and adjacent `IR_REPORT_AUTHORIZATION`
+tables. This release uses the replacement schema and does not upgrade an older table in
+place. `savedReports.tablePrefix` is prepended to both physical storage table names.
+Hosts with `savedReports.autoCreate: false` must provision both current schemas.
 
-Primary is an administrator-controlled publication flag. Every primary report is
-visible to anyone who can access the underlying dataset. The generated report named
-`Default` always exists; a stored primary report whose title is `Default`
-(case-insensitive) replaces that generated state. Unflagging or deleting it restores
-the generated Default. Other primary reports remain selectable alternatives.
+Primary remains an administrator-controlled publication flag. Every primary report is
+visible to anyone who can access the underlying dataset, but it does not choose the
+family default. The dedicated `isDefault` row does that.
 
 The packaged administration panel lists every saved report through an embedded
 `<interactive-report>` bound to the built-in, administrator-only `__saved-reports`
@@ -364,13 +368,12 @@ Grant the administrator that report separately when its data should also be visi
 Configuration entries remain read-only in the editor; database entries can be added or
 removed there.
 
-The panel can download any listed report as the canonical `{ title, primary, state }`
+The panel can download any listed report as the canonical `{ title, default, state }`
 JSON envelope. This makes a database-backed saved report ready to add to
 `documentFiles` without manually reconstructing the file. **Upload JSON…** takes a
-configured report name and one of these envelopes, validates its state against that
-report's current schema through the same ingestion pipeline as query and export, and
-imports it as the administrator's saved report for live testing. The envelope's
-`primary` flag is preserved as the stored primary publication flag.
+numeric default document selection and one of these envelopes, validates its state
+against that report's current schema through the same ingestion pipeline as query and
+export, and imports it as the administrator's private saved report for live testing.
 
 ## Application authorization
 
@@ -525,7 +528,7 @@ English (`en`) and Canadian French (`fr-CA`). Set `lang` on the component, or on
 its ancestors:
 
 ```html
-<interactive-report lang="fr-CA" report="orders"></interactive-report>
+<interactive-report lang="fr-CA" report="42"></interactive-report>
 ```
 
 The nearest `lang` value wins, including across the component's shadow root. The page
@@ -536,7 +539,7 @@ accessible labels, plural messages, and client-formatted numbers and dates follo
 selected locale. Report titles, column labels, query data, and server error `details`
 remain application data and are displayed as supplied.
 
-The packaged `{prefix}/{name}/view` and `{prefix}/admin` pages set their document
+The packaged `{prefix}/{id}/view` and `{prefix}/admin` pages set their document
 language from ASP.NET Core Request Localization when configured, then from the request's
 `Accept-Language` header. Their page title and JavaScript fallback copy use the same
 locale.
@@ -563,7 +566,7 @@ one `<link>` inside the report's shadow root after the packaged styles, so its r
 target report internals without leaking into the host page. For example:
 
 ```html
-<interactive-report report="orders" stylesheet="/css/orders-report.css">
+<interactive-report report="42" stylesheet="/css/orders-report.css">
 </interactive-report>
 ```
 
@@ -688,7 +691,13 @@ and Chart-point limits still apply.
 
 Save updates the selected saved report. Save As creates a new report when its name is
 unused; when the name matches an editable report, it asks for confirmation and replaces
-that report instead. Saved-report titles are case-insensitively unique per report.
+that report instead. Titles are case-insensitively unique in the caller's view: a private
+title conflicts with public documents and that owner's private documents, but not with
+another owner's private documents. Public and Private selector groups make a later
+public/private duplicate unambiguous, and an existing private document remains editable.
+Configured file synchronization bypasses these save-time title rules, leaving deployment
+collisions for the programmer to resolve; numeric ids and selector groups keep them
+addressable.
 
 Highlights have a report-facing name and a positive sequence. Matching rules are
 applied from lower to higher sequence, so the highest sequence wins when rules set the
@@ -704,17 +713,18 @@ not reach the host page.
 ```html
 <script type="module" src="/assets/ir.js"></script>
 <interactive-report
-  report="open-orders"
-  saved-report="My Open Orders"
+  report="42"
+  saved-report="87"
   api-base="/api/reports"
   stylesheet="/assets/report-overrides.css">
 </interactive-report>
 ```
 
-`report` is required and is the only report-definition name the component requests.
-There is no configured-report catalog or report selector. Server authorization still
-applies when the component requests that report's schema, saved reports, queries, and
-exports.
+`report` is the numeric id of the report family's anchor document, normally its default.
+`saved-report`, when present, is another numeric document id in the same family. Resolve
+these values from `GET /api/reports`; titles are presentation only and duplicate titles
+remain distinguishable by their Public and Private groups. Server authorization still
+applies when the component requests schema, saved reports, queries, and exports.
 
 Once the initial report has loaded, an embedding application can retrieve an export
 without presenting it as a browser download. `getExport` accepts the format token and
@@ -887,10 +897,8 @@ Control-break columns render in the break heading instead of repeating in each d
 row. A subtotal appears only with the logical end of its break group, even when that
 group crosses a page boundary, and grand totals appear only on the report's final page.
 
-`saved-report` is optional. When present, the component finds a visible saved report by
-its title (case-insensitive) and loads it before the first query. The title must identify
-exactly one visible saved report. A missing or ambiguous title loads Default and shows
-a warning. Omit the attribute to start from Default.
+`saved-report` is optional. When present, the component loads that visible numeric
+document id before the first query. Omit it to load the document named by `report`.
 
 `api-base` may be a relative path or an absolute URL. If it is omitted, the
 component infers the API prefix from the script URL. The older `base` attribute

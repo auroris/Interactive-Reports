@@ -64,35 +64,33 @@ export function canManageSaved(w, s) {
  */
 export function refreshSavedSelect(w) {
     const { savedSel, savedWrap } = w.els;
-    const defaultSaved = (w.savedList ?? []).find(s => s.isPrimary && sameTitle(s.title, "Default"));
-    savedSel.replaceChildren(new Option(w.t("saved.default"), defaultSaved?.id ?? ""));
+    savedSel.replaceChildren();
     const group = (label, items) => {
-        if (!items.length) return;
         const g = el("optgroup", { label });
         for (const s of items) g.append(new Option(s.title, s.id));
         savedSel.append(g);
     };
-    group(w.t("saved.primary"), w.savedList.filter(s => s.isPrimary && s !== defaultSaved));
-    group(w.t("saved.global"), w.savedList.filter(s => !s.isPrimary && s.isGlobal));
-    group(w.t("saved.private"), w.savedList.filter(s => !s.isPrimary && !s.isGlobal));
-    savedSel.value = w.currentSaved?.id ?? defaultSaved?.id ?? "";
-    savedWrap.hidden = w.savedList.length === 0 || !featureEnabled(w, "savedReports");
+    const isPublic = saved => saved.isDefault || saved.isGlobal || saved.isPrimary;
+    group(w.t("saved.public"), w.savedList.filter(isPublic));
+    group(w.t("saved.private"), w.savedList.filter(saved => !isPublic(saved)));
+    savedSel.value = w.currentSaved?.id ?? "";
+    savedWrap.hidden = !featureEnabled(w, "savedReports") || w.savedList.length === 0;
 }
 
 /**
  * Loads visible saved-report summaries when the initiating report context is still current.
  *
- * @param {object} w - The report controller whose report name, request sequence, and summary cache are used.
+ * @param {object} w - The report controller whose report id, request sequence, and summary cache are used.
  * @returns {Promise<void>} Resolves after the cache is updated, the optional feature is marked absent, or a failure notification is shown.
  *
  * Side effects: performs a network request, may replace `savedList`, and may show a warning. It does not rebuild the selector.
  */
 export async function loadSavedList(w) {
     const sequence = w._seq;
-    const reportName = w.reportName;
-    const stillCurrent = () => sequence === w._seq && reportName === w.reportName;
+    const reportId = w.reportId;
+    const stillCurrent = () => sequence === w._seq && reportId === w.reportId;
     try {
-        const saved = await api(w.reportUrl("saved"));
+        const saved = await api(w.documentFamilyUrl("saved"));
         if (stillCurrent()) w.savedList = saved;
     } catch (err) {
         // Protocol contract: a save/delete refresh can finish after the element has switched
@@ -148,8 +146,10 @@ function removeSavedSummary(w, id) {
 export async function loadSavedById(w, id) {
     const transition = w.beginStateTransition();
     try {
-        const docResponse = await api(apiUrl(w.base, "saved", id));
+        const docResponse = await api(apiUrl(w.base, id));
         if (!w.isCurrentStateTransition(transition)) return;
+        if (docResponse.summary?.reportName !== w.definitionName)
+            throw new Error("The selected report document belongs to a different report definition.");
         w.currentSaved = docResponse.summary;
         // Protocol contract: liberal acceptance: the document is adopted as-is and the server
         // judges it on query. A rejection lands in the catch and rolls back.
@@ -174,28 +174,20 @@ export async function loadSavedById(w, id) {
 }
 
 /**
- * Restores the report definition's primary state.
+ * Restores the report definition's default document.
  *
- * @param {object} w - The report controller whose primary summary and schema default will be adopted.
+ * @param {object} w - The report controller whose default summary will be adopted.
  * @returns {Promise<void>} Resolves after the default query succeeds or the previous validated state is restored.
  *
  * Side effects: changes saved selection and working state, refreshes the selector, runs a query, and may roll back.
  */
 export async function resetToPrimary(w) {
-    const transition = w.beginStateTransition();
-    w.currentSaved = (w.savedList ?? []).find(s => s.isPrimary && sameTitle(s.title, "Default")) ?? null;
-    w.adoptState(w.schema?.defaultState);
-    refreshSavedSelect(w);
-    try {
-        const result = await w.runQuery({ source: "saved-report" });
-        if (!result && w.isCurrentStateTransition(transition)) w.restoreLastGood();
-    } catch {
-        if (w.isCurrentStateTransition(transition)) w.restoreLastGood();
-    }
+    const defaultReport = (w.savedList ?? []).find(report => report.isDefault);
+    if (defaultReport) await loadSavedById(w, defaultReport.id);
 }
 
 /**
- * Restores the last validated saved or primary document as the working copy.
+ * Restores the last validated saved or default document as the working copy.
  *
  * @param {object} w - The report controller whose current saved or primary state will be restored.
  * @returns {Promise<void>} Resolves after cancellation or after the chosen state has been loaded and queried.
@@ -228,7 +220,7 @@ export async function saveReport(w, { title, isGlobal, isPrimary, asNew, target 
     const revision = w.stateRevision;
     let savedSummary;
     if (asNew) {
-        savedSummary = await api(w.reportUrl("saved"), {
+        savedSummary = await api(w.documentFamilyUrl("saved"), {
             method: "POST", body: { title, state, isGlobal, isPrimary },
         });
     } else {
@@ -239,7 +231,7 @@ export async function saveReport(w, { title, isGlobal, isPrimary, asNew, target 
             body.isGlobal = isGlobal;
             body.isPrimary = isPrimary;
         }
-        savedSummary = await api(apiUrl(w.base, "saved", saved.id), {
+        savedSummary = await api(apiUrl(w.base, saved.id), {
             method: "PUT", body,
         });
     }
@@ -267,7 +259,7 @@ export async function deleteCurrentSaved(w) {
     if (!await confirmDialog(w, w.t("saved.deleteTitle"), w.t("saved.deleteConfirm", { title: s.title }))) return;
     const revision = w.stateRevision;
     try {
-        await api(apiUrl(w.base, "saved", s.id), { method: "DELETE" });
+        await api(apiUrl(w.base, s.id), { method: "DELETE" });
         const deletedCurrent = w.currentSaved?.id === s.id;
         if (deletedCurrent) w.currentSaved = null;
         w.forgetSaved(s.id);

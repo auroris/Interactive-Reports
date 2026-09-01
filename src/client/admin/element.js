@@ -61,8 +61,21 @@ export class InteractiveReportAdminElement extends WidgetElement {
         const seq = ++this._seq;
         this.whoami = null;
 
+        let availableReports;
+        try {
+            availableReports = await api(this.base);
+        } catch (error) {
+            if (seq !== this._seq || !this.isConnected) return;
+            this._mount.replaceChildren(banner("error", error.message, null, this));
+            return;
+        }
+        if (seq !== this._seq || !this.isConnected) return;
+        this.availableReports = availableReports;
+        const listingReport = availableReports.find(report =>
+            report.reportName === LISTING_REPORT && report.isDefault);
+
         const report = el("interactive-report", {
-            report: LISTING_REPORT,
+            report: listingReport?.id ?? "",
             "api-base": this.apiBase,
             lang: this.locale,
         });
@@ -162,7 +175,7 @@ export class InteractiveReportAdminElement extends WidgetElement {
      */
     async toggleGlobal(id, row) {
         const makeGlobal = row.SCOPE !== "Global";
-        await api(apiUrl(this.base, "saved", id), { method: "PUT", body: { isGlobal: makeGlobal } });
+        await api(apiUrl(this.base, id), { method: "PUT", body: { isGlobal: makeGlobal } });
         this.notify(this.t(makeGlobal ? "admin.nowGlobal" : "admin.nowPrivate", {
             title: row.TITLE,
             owner: row.OWNER,
@@ -171,7 +184,7 @@ export class InteractiveReportAdminElement extends WidgetElement {
     }
 
     /**
-     * Updates whether a saved report is the primary default.
+     * Updates whether a saved report has the primary publication flag.
      *
      * @param {string} id - The saved-report identifier to update.
      * @param {object} row - Listing row containing the current primary status and title.
@@ -181,7 +194,7 @@ export class InteractiveReportAdminElement extends WidgetElement {
      */
     async togglePrimary(id, row) {
         const makePrimary = row.PRIMARY_STATUS !== "Yes";
-        await api(apiUrl(this.base, "saved", id), { method: "PUT", body: { isPrimary: makePrimary } });
+        await api(apiUrl(this.base, id), { method: "PUT", body: { isPrimary: makePrimary } });
         this.notify(this.t(makePrimary ? "admin.nowPrimary" : "admin.noLongerPrimary", {
             title: row.TITLE,
         }));
@@ -230,7 +243,7 @@ export class InteractiveReportAdminElement extends WidgetElement {
             onApply: async () => {
                 const owner = ownerInp.value.trim();
                 if (!owner) throw new Error(this.t("admin.enterIdentity"));
-                await api(apiUrl(this.base, "saved", id), { method: "PUT", body: { owner } });
+                await api(apiUrl(this.base, id), { method: "PUT", body: { owner } });
                 this.notify(this.t("admin.reassigned", { title: row.TITLE, owner }));
                 this.refresh();
             },
@@ -430,7 +443,7 @@ export class InteractiveReportAdminElement extends WidgetElement {
      * Side effects: fetches the saved report and opens a read-only JSON dialog.
      */
     async viewState(id, row) {
-        const doc = await api(apiUrl(this.base, "saved", id));
+        const doc = await api(apiUrl(this.base, id));
         openDialog({
             owner: this,
             title: this.t("admin.stateDocumentTitle", { title: row.TITLE }),
@@ -472,7 +485,7 @@ export class InteractiveReportAdminElement extends WidgetElement {
             this,
             this.t("saved.deleteTitle"),
             this.t("admin.deleteConfirm", { scope, title: row.TITLE }))) return;
-        await api(apiUrl(this.base, "saved", id), { method: "DELETE" });
+        await api(apiUrl(this.base, id), { method: "DELETE" });
         this.notify(this.t("admin.deleted", { title: row.TITLE }));
         this.refresh();
     }
@@ -485,10 +498,10 @@ export class InteractiveReportAdminElement extends WidgetElement {
      * Side effects: opens an upload dialog whose apply handler reads and parses the selected file, imports it, displays a notice, and refreshes the listing.
      */
     uploadDocument() {
-        const reportInp = el("input", {
-            class: "ir-input", type: "text", placeholder: this.t("admin.reportNamePlaceholder"),
-            autocomplete: "off", required: true,
-        });
+        const reportInp = sel((this.availableReports ?? [])
+            .filter(report => report.isDefault && report.reportName !== LISTING_REPORT)
+            .map(report => ({ value: report.id, label: report.title })));
+        reportInp.required = true;
         const fileInp = el("input", {
             class: "ir-input", type: "file", accept: ".json,application/json", required: true,
         });
@@ -503,8 +516,8 @@ export class InteractiveReportAdminElement extends WidgetElement {
                 el("p", { class: "ir-dialog-note" },
                     this.t("admin.uploadNote"))),
             onApply: async () => {
-                const reportName = reportInp.value.trim();
-                if (!reportName) throw new Error(this.t("admin.enterReportName"));
+                const reportId = reportInp.value;
+                if (!reportId) throw new Error(this.t("admin.enterReportName"));
                 const file = fileInp.files?.[0];
                 if (!file) throw new Error(this.t("admin.chooseJson"));
 
@@ -515,13 +528,11 @@ export class InteractiveReportAdminElement extends WidgetElement {
                     throw new Error(this.t("admin.invalidJson"));
                 }
 
-                const imported = await api(apiUrl(this.base, "admin", reportName, "documents"), {
+                const imported = await api(apiUrl(this.base, "admin", reportId, "documents"), {
                     method: "POST",
                     body: document,
                 });
-                this.notify(this.t(imported.isPrimary
-                    ? "admin.uploadedPrimary"
-                    : "admin.uploadedPrivate", { title: imported.title }));
+                this.notify(this.t("admin.uploadedPrivate", { title: imported.title }));
                 this.refresh();
             },
         });

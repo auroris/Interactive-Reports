@@ -204,7 +204,7 @@ public sealed class SaveReportRequest
     public ReportState? State { get; set; }
     /// <summary>Gets or sets whether all authorized report users may load the saved report.</summary>
     public bool IsGlobal { get; set; }
-    /// <summary>Gets or sets whether this saved report should become the report's primary default.</summary>
+    /// <summary>Gets or sets whether this saved report should receive the administrator-controlled primary publication flag.</summary>
     public bool IsPrimary { get; set; }
 }
 
@@ -225,10 +225,11 @@ public sealed class UpdateSavedReportRequest
 
 /// <summary>Contains saved-report metadata visible to the current caller.</summary>
 public sealed record SavedReportSummary(
-    string Id,
+    [property: System.Text.Json.Serialization.JsonConverter(typeof(ReportDocumentIdJsonConverter))] long Id,
     string ReportName,
     string Title,
     bool IsGlobal,
+    bool IsDefault,
     bool IsPrimary,
     bool Mine,
     bool IsReadOnly,
