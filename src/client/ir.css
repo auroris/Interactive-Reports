@@ -81,14 +81,16 @@
 }
 
 /* Dark theme active on the custom element host or inherited from ancestor context. */
-:host([data-theme="dark"]),
-:host([theme="dark"]),
-:host(.dark),
-:host([dark]),
-:host-context([data-theme="dark"]):not([data-theme="light"]):not([theme="light"]):not(.light):not([light]),
-:host-context([data-bs-theme="dark"]):not([data-theme="light"]):not([theme="light"]):not(.light):not([light]),
-:host-context(.dark):not([data-theme="light"]):not([theme="light"]):not(.light):not([light]),
-:host-context([theme="dark"]):not([data-theme="light"]):not([theme="light"]):not(.light):not([light]) {
+:is(
+    :host([data-theme="dark"]),
+    :host([theme="dark"]),
+    :host(.dark),
+    :host([dark]),
+    :host-context([data-theme="dark"]),
+    :host-context([data-bs-theme="dark"]),
+    :host-context(.dark),
+    :host-context([theme="dark"])
+) {
     color-scheme: dark;
     --ir-accent: #3898ec;
     --ir-accent-soft: rgba(56, 152, 236, 0.16);
@@ -214,14 +216,16 @@
 }
 
 /* Explicit light mode overrides on the custom element host or inherited from ancestor context. */
-:host([data-theme="light"]),
-:host([theme="light"]),
-:host(.light),
-:host([light]),
-:host-context([data-theme="light"]),
-:host-context([data-bs-theme="light"]),
-:host-context(.light),
-:host-context([theme="light"]) {
+:is(
+    :host([data-theme="light"]),
+    :host([theme="light"]),
+    :host(.light),
+    :host([light]),
+    :host-context([data-theme="light"]),
+    :host-context([data-bs-theme="light"]),
+    :host-context(.light),
+    :host-context([theme="light"])
+) {
     color-scheme: light;
     --ir-accent: #0572ce;
     --ir-accent-soft: #eef5fc;

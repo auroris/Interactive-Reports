@@ -56,6 +56,9 @@ test("ir.css contains complete light and dark theme declarations", () => {
     // 6. Explicit light mode overrides
     assert.match(irCss, /:host\(\[theme="light"\]\)/);
     assert.match(irCss, /:host-context\(\[data-theme="light"\]\)/);
+
+    // 7. Forgiving selector list (:is) so Firefox and Safari do not drop the rule due to :host-context
+    assert.match(irCss, /:is\([\s\S]*:host\(\[theme="dark"\]\)[\s\S]*:host-context\(/);
 });
 
 test("ir.css component elements use theme variables instead of hardcoded light colors", () => {
