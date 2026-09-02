@@ -166,6 +166,7 @@ export function discoverSchema(db, definition) {
         title: definition.title || prettify(definition.name),
         columns,
         editLink: definition.editLink || null,
+        createLink: definition.createLink || null,
         columnOverrides: definition.columns || null,
         defaultState,
         capabilities: {

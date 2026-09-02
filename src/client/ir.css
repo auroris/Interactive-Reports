@@ -379,6 +379,10 @@
 .ir-viewbtn[aria-pressed="true"] { background: var(--ir-accent-soft); color: var(--ir-accent); }
 
 .ir-actionsbtn { font-weight: 500; }
+/* The definition's create button: an anchor or a button, styled identically. */
+.ir-create { display: inline-flex; }
+.ir-createbtn { font-weight: 500; text-decoration: none; }
+.ir-createbtn:hover { color: #fff; }
 .ir-spacer { flex: 1; }
 .ir-helpbtn { color: var(--ir-text-muted); padding: 4px 7px; justify-content: center; }
 .ir-helpbtn:hover:not(:disabled) { color: var(--ir-accent); }
@@ -541,6 +545,8 @@
     padding: 2px;
     border-radius: 3px;
 }
+/* Event-mode pencils are buttons; strip the native chrome so both modes look alike. */
+button.ir-cell-edit { border: 0; background: none; font: inherit; cursor: pointer; }
 .ir-cell-edit:hover { background: var(--ir-accent-soft); }
 .ir-cell-edit:focus-visible { outline: 2px solid var(--ir-accent); outline-offset: 0; }
 

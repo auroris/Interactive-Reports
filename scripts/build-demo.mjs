@@ -65,4 +65,13 @@ if (fs.existsSync(path.join(uiDist, "help.en.html"))) {
     fs.copyFileSync(path.join(uiDist, "help.en.html"), path.join(DEMO_DIR, "help.en.html"));
 }
 
+// 6. Copy Cloudflare Pages assets (_headers, 404.html) into demo/
+console.log("Copying Cloudflare Pages assets into demo/...");
+for (const cfFile of ["_headers", "404.html"]) {
+    const srcPath = path.join(DEMO_SRC, cfFile);
+    if (fs.existsSync(srcPath)) {
+        fs.copyFileSync(srcPath, path.join(DEMO_DIR, cfFile));
+    }
+}
+
 console.log("Self-contained demo build complete in demo/");

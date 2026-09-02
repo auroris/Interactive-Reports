@@ -135,7 +135,7 @@ context; mutation routes use the id directly.
 | `documentFiles` | Source-controlled saved-report envelopes, relative to the content root unless absolute. |
 | `maxRows`, `defaultPageSize`, `maxPageSize`, `maxPivotColumns`, `maxChartPoints` | Execution limits. |
 | `commandTimeoutSeconds`, `consistency`, `timeZone` | Database execution policy. |
-| `columnLabels`, `columns`, `editLink` | Definition-owned presentation and behavior hints. |
+| `columnLabels`, `columns`, `editLink`, `createLink` | Definition-owned presentation and behavior hints; the two links carry a `mode` of `navigate` or `event`. |
 
 Configuration is validated at startup. Reports require authentication unless their
 authorization block explicitly sets `allowAnonymous`. `features` is a client hint,

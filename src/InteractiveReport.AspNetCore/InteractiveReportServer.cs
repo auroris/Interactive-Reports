@@ -655,6 +655,7 @@ internal sealed class InteractiveReportServer(
                 Title: definition.Title ?? ColumnModel.Prettify(definition.Name),
                 Columns: columns.Select(c => new ColumnInfo(c.Name, c.Label, c.KindName, c.IsComputed)).ToArray(),
                 EditLink: ResolveEditLink(definition, columns),
+                CreateLink: ResolveCreateLink(definition),
                 ColumnOverrides: ResolveColumnOverrides(definition, columns),
                 DefaultState: ReportDocumentDefaults.Create(definition),
                 Capabilities: new InteractiveReportCapabilities(
@@ -712,10 +713,30 @@ internal sealed class InteractiveReportServer(
                 editLink.UrlTemplate,
                 name => schema.TryGetValue(name, out var col) ? col.Name : name),
             Label: string.IsNullOrWhiteSpace(editLink.Label) ? "Edit" : editLink.Label.Trim(),
-            Target: string.Equals(editLink.Target, "_blank", StringComparison.OrdinalIgnoreCase)
-                ? "_blank"
-                : "_self");
+            Target: ResolveLinkTarget(editLink.Target),
+            Mode: ResolveLinkMode(editLink.Mode));
     }
+
+    /// <summary>
+    /// Normalizes the configured create button. It has no schema dependency: the URL is a constant
+    /// (validated at load), so nothing here can disable it.
+    /// </summary>
+    private static InteractiveReportCreateLink? ResolveCreateLink(ReportDefinition definition)
+    {
+        if (definition.CreateLink is not { } createLink) return null;
+
+        return new InteractiveReportCreateLink(
+            Url: string.IsNullOrWhiteSpace(createLink.Url) ? null : createLink.Url.Trim(),
+            Label: string.IsNullOrWhiteSpace(createLink.Label) ? "Create" : createLink.Label.Trim(),
+            Target: ResolveLinkTarget(createLink.Target),
+            Mode: ResolveLinkMode(createLink.Mode));
+    }
+
+    private static string ResolveLinkTarget(string? target)
+        => string.Equals(target, "_blank", StringComparison.OrdinalIgnoreCase) ? "_blank" : "_self";
+
+    private static string ResolveLinkMode(string? mode)
+        => string.Equals(mode, "event", StringComparison.OrdinalIgnoreCase) ? "event" : "navigate";
 
     /// <summary>
     /// Resolves per-column behavior flags, filtered to live schema columns and keyed by canonical

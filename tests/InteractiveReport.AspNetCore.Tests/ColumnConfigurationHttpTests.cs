@@ -62,6 +62,10 @@ public sealed class ColumnConfigurationHttpTests : IAsyncLifetime
             ["InteractiveReport:Reports:managed:EditLink:UrlTemplate"] = "/rows/{id}/edit",
             ["InteractiveReport:Reports:managed:EditLink:Label"] = "Edit row",
             ["InteractiveReport:Reports:managed:EditLink:Target"] = "_blank",
+            ["InteractiveReport:Reports:managed:EditLink:Mode"] = "EVENT",
+            // Event mode without a URL: the schema carries no url property at all.
+            ["InteractiveReport:Reports:managed:CreateLink:Label"] = " New row ",
+            ["InteractiveReport:Reports:managed:CreateLink:Mode"] = "event",
             ["InteractiveReport:Reports:managed:Columns:NOTES:HideLabel"] = "true",
             ["InteractiveReport:Reports:managed:Columns:NOTES:Sortable"] = "false",
             ["InteractiveReport:Reports:managed:Columns:NOTES:Filterable"] = "false",
@@ -72,6 +76,8 @@ public sealed class ColumnConfigurationHttpTests : IAsyncLifetime
             ["InteractiveReport:Reports:broken:Sql"] = "SELECT ID, LABEL FROM IR_COLUMN_TEST",
             ["InteractiveReport:Reports:broken:Authorization:AllowAnonymous"] = "true",
             ["InteractiveReport:Reports:broken:EditLink:UrlTemplate"] = "/rows/{GHOST}/edit",
+            // Defaults resolve server-side: navigate, _self, "Create".
+            ["InteractiveReport:Reports:broken:CreateLink:Url"] = "/rows/new",
             ["InteractiveReport:SavedReports:Connection"] = "ColumnData",
         });
 
@@ -118,6 +124,13 @@ public sealed class ColumnConfigurationHttpTests : IAsyncLifetime
         Assert.Equal("/rows/{ID}/edit", editLink.GetProperty("urlTemplate").GetString());
         Assert.Equal("Edit row", editLink.GetProperty("label").GetString());
         Assert.Equal("_blank", editLink.GetProperty("target").GetString());
+        Assert.Equal("event", editLink.GetProperty("mode").GetString());
+
+        var createLink = schema.GetProperty("createLink");
+        Assert.False(createLink.TryGetProperty("url", out _), "event mode without a URL delivers none");
+        Assert.Equal("New row", createLink.GetProperty("label").GetString());
+        Assert.Equal("_self", createLink.GetProperty("target").GetString());
+        Assert.Equal("event", createLink.GetProperty("mode").GetString());
 
         var overrides = schema.GetProperty("columnOverrides");
         var notes = overrides.GetProperty("NOTES");
@@ -142,6 +155,12 @@ public sealed class ColumnConfigurationHttpTests : IAsyncLifetime
     {
         var schema = await GetJson("/api/reports/broken/schema");
         Assert.False(schema.TryGetProperty("editLink", out _));
+        // The create link has no schema dependency, so it survives the broken edit link.
+        var createLink = schema.GetProperty("createLink");
+        Assert.Equal("/rows/new", createLink.GetProperty("url").GetString());
+        Assert.Equal("Create", createLink.GetProperty("label").GetString());
+        Assert.Equal("_self", createLink.GetProperty("target").GetString());
+        Assert.Equal("navigate", createLink.GetProperty("mode").GetString());
 
         using var response = await _client.PostAsync(
             "/api/reports/broken/query", JsonContent.Create(new { v = 3 }));

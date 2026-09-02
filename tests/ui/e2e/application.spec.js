@@ -833,6 +833,11 @@ test("a definition edit link and per-column overrides shape the managed report",
     await expect(pencil).toHaveAttribute("aria-label", "Edit order");
     expect(await pencil.getAttribute("target")).toBeNull();
 
+    // The definition's create button joins the toolbar as a real anchor.
+    const create = page.locator("interactive-report .ir-createbtn");
+    await expect(create).toHaveAttribute("href", "/orders/new");
+    await expect(create).toHaveText(/New order/);
+
     // hideLabel: the NOTES header shows no text but keeps its accessible name,
     // and its menu offers no sort, filter, or break — presentation survives.
     const notesButton = page.getByRole("columnheader", { name: "Notes", exact: true }).getByRole("button");

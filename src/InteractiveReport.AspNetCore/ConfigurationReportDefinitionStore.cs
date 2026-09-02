@@ -358,6 +358,7 @@ public sealed partial class ConfigurationReportDefinitionStore :
         }
 
         ValidateEditLink(def);
+        ValidateCreateLink(def);
         ValidateColumnOverrides(def);
     }
 
@@ -387,24 +388,75 @@ public sealed partial class ConfigurationReportDefinitionStore :
         // relative URLs (the primary case) always pass, and substituted values cannot introduce
         // a scheme because the client URL-encodes them.
         var probe = EditLinkTemplate.Rewrite(editLink.UrlTemplate, _ => "x").Replace("{", "").Replace("}", "");
-        if (Uri.TryCreate(probe, UriKind.RelativeOrAbsolute, out var probeUri)
-            && probeUri.IsAbsoluteUri
-            && !string.Equals(probeUri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(probeUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        if (!IsNavigableUrl(probe))
             throw new InvalidOperationException(
                 $"Report '{def.Name}': editLink.urlTemplate absolute URLs must use http or https.");
 
-        if (editLink.Label is not null && string.IsNullOrWhiteSpace(editLink.Label))
+        ValidateLinkPresentation(def, "editLink", editLink.Label, editLink.Target, editLink.Mode);
+    }
+
+    /// <summary>
+    /// Validates a definition's toolbar create button. The URL is a constant: placeholders are
+    /// rejected because no row exists to substitute, and the URL may be omitted only in event mode.
+    /// </summary>
+    /// <param name="def">The definition whose optional create link is being validated.</param>
+    /// <exception cref="InvalidOperationException">Thrown when the URL, label, target, or mode violates the public contract.</exception>
+    private static void ValidateCreateLink(ReportDefinition def)
+    {
+        if (def.CreateLink is not { } createLink) return;
+
+        var eventMode = string.Equals(createLink.Mode, "event", StringComparison.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(createLink.Url))
+        {
+            if (!eventMode)
+                throw new InvalidOperationException(
+                    $"Report '{def.Name}': createLink.url is required unless createLink.mode is 'event'.");
+        }
+        else
+        {
+            if (createLink.Url.Length > 2048)
+                throw new InvalidOperationException(
+                    $"Report '{def.Name}': createLink.url must be at most 2048 characters.");
+            if (createLink.Url.Contains('{') || createLink.Url.Contains('}'))
+                throw new InvalidOperationException(
+                    $"Report '{def.Name}': createLink.url does not take {{COLUMN}} placeholders — there is no row to create from.");
+            if (!IsNavigableUrl(createLink.Url.Trim()))
+                throw new InvalidOperationException(
+                    $"Report '{def.Name}': createLink.url absolute URLs must use http or https.");
+        }
+
+        ValidateLinkPresentation(def, "createLink", createLink.Label, createLink.Target, createLink.Mode);
+    }
+
+    /// <summary>
+    /// Applies the stylesheet URL rule: relative URLs always pass; absolute URLs must be http(s).
+    /// </summary>
+    private static bool IsNavigableUrl(string candidate)
+        => !Uri.TryCreate(candidate, UriKind.RelativeOrAbsolute, out var uri)
+            || !uri.IsAbsoluteUri
+            || string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Validates the label, target, and mode shared by the edit and create links.</summary>
+    private static void ValidateLinkPresentation(
+        ReportDefinition def, string setting, string? label, string? target, string? mode)
+    {
+        if (label is not null && string.IsNullOrWhiteSpace(label))
             throw new InvalidOperationException(
-                $"Report '{def.Name}': editLink.label must not be blank.");
-        if (editLink.Label is { Length: > 200 })
+                $"Report '{def.Name}': {setting}.label must not be blank.");
+        if (label is { Length: > 200 })
             throw new InvalidOperationException(
-                $"Report '{def.Name}': editLink.label must be at most 200 characters.");
-        if (editLink.Target is not null
-            && !string.Equals(editLink.Target, "_self", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(editLink.Target, "_blank", StringComparison.OrdinalIgnoreCase))
+                $"Report '{def.Name}': {setting}.label must be at most 200 characters.");
+        if (target is not null
+            && !string.Equals(target, "_self", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(target, "_blank", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException(
-                $"Report '{def.Name}': editLink.target must be '_self' or '_blank'.");
+                $"Report '{def.Name}': {setting}.target must be '_self' or '_blank'.");
+        if (mode is not null
+            && !string.Equals(mode, "navigate", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(mode, "event", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                $"Report '{def.Name}': {setting}.mode must be 'navigate' or 'event'.");
     }
 
     /// <summary>

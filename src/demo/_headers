@@ -1,0 +1,29 @@
+# Cloudflare Pages HTTP headers configuration
+# https://developers.cloudflare.com/pages/configuration/headers/
+
+# Security and cross-origin isolation headers for all routes
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: SAMEORIGIN
+  Referrer-Policy: strict-origin-when-cross-origin
+  Cross-Origin-Opener-Policy: same-origin-allow-popups
+
+# SQLite WebAssembly binary: strict MIME type and immutable long-term caching
+/*.wasm
+  Content-Type: application/wasm
+  Cache-Control: public, max-age=31536000, immutable
+
+# JavaScript bundles: cached with stale-while-revalidate
+/*.js
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+
+# Source maps
+/*.js.map
+  Cache-Control: public, max-age=86400
+
+# HTML documents: always revalidate so deployments update immediately
+/*.html
+  Cache-Control: public, max-age=0, must-revalidate
+
+/
+  Cache-Control: public, max-age=0, must-revalidate

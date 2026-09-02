@@ -158,6 +158,12 @@ public sealed class ReportDefinition
     public ReportEditLink? EditLink { get; set; }
 
     /// <summary>
+    /// Gets or sets the toolbar's create-record button. Like <see cref="EditLink"/> it is definition
+    /// chrome rather than report state or a feature token: configuring it is what shows the button.
+    /// </summary>
+    public ReportCreateLink? CreateLink { get; set; }
+
+    /// <summary>
     /// Gets or sets per-column presentation and behavior overrides, keyed by base column name
     /// (case-insensitive). Unknown names are tolerated like columnLabels (schema
     /// drift); labels here supersede columnLabels, and configuring the same column's
@@ -207,6 +213,40 @@ public sealed class ReportEditLink
 
     /// <summary>Gets or sets <c>_self</c> by default or <c>_blank</c>; the client adds <c>rel="noopener"</c>.</summary>
     public string? Target { get; set; }
+
+    /// <summary>
+    /// Gets or sets how the pencil behaves: <c>navigate</c> (default) renders an anchor that follows the
+    /// substituted URL; <c>event</c> renders a button that only dispatches the client's <c>ir-edit</c>
+    /// event so the host application can open its own editor. Both modes dispatch the event; the
+    /// template is still required in event mode because it declares which row values ride along.
+    /// </summary>
+    public string? Mode { get; set; }
+}
+
+/// <summary>
+/// Defines the report's toolbar create button. A constant URL (no row exists yet, so no
+/// placeholders) or, in event mode, no URL at all.
+/// </summary>
+public sealed class ReportCreateLink
+{
+    /// <summary>
+    /// Gets or sets the destination, for example <c>/orders/new</c>. Required in navigate mode and
+    /// optional in event mode, where it is only passed along to the host's handler.
+    /// </summary>
+    public string? Url { get; set; }
+
+    /// <summary>Gets or sets the button text and accessible name; the client defaults it to <c>Create</c>.</summary>
+    public string? Label { get; set; }
+
+    /// <summary>Gets or sets <c>_self</c> by default or <c>_blank</c>; the client adds <c>rel="noopener"</c>.</summary>
+    public string? Target { get; set; }
+
+    /// <summary>
+    /// Gets or sets how the button behaves: <c>navigate</c> (default) renders an anchor to
+    /// <see cref="Url"/>; <c>event</c> renders a button that only dispatches the client's
+    /// <c>ir-create</c> event. Both modes dispatch the event.
+    /// </summary>
+    public string? Mode { get; set; }
 }
 
 /// <summary>Contains developer-set overrides for one base column; absent properties change nothing.</summary>

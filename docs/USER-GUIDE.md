@@ -45,8 +45,10 @@ Rows tinted a different colour are matched by a **highlight** rule. A thin progr
 strip under the toolbar animates while the report is loading.
 
 A pencil icon at the start of a row, when present, is an **edit link** the report's
-author added. It opens the matching record; middle-click or Ctrl+click opens it in a
-new tab. Edit links appear only in the Grid view.
+author added. It opens the matching record, either as a page (middle-click or
+Ctrl+click opens it in a new tab) or in the application's own editor. Edit links
+appear only in the Grid view. A **Create** button on the toolbar, when present, starts
+a new record the same way.
 
 ---
 
@@ -63,6 +65,9 @@ new tab. Edit links appear only in the Grid view.
 | 5 | **Actions** | Opens the menu of everything you can do to the report. See [The Actions menu](#the-actions-menu). |
 | 6 | **Saved Report** | Loads one of the report's saved layouts. Hidden when the report has no saved reports. See [Saved reports](#saved-reports). |
 | 7 | **Help** | Opens this guide in a window you can keep open, and move aside, while you work. |
+
+When the report's author allows new records, a **Create** button (the label may differ)
+sits after **Actions**. It opens the application's form for a new record.
 
 The toolbar wraps onto more than one line when the window is narrow.
 

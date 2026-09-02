@@ -184,9 +184,11 @@ saved-report select render only for listed features. Independently, the server r
 CSV export and saved-report creation when their configured `download` / `savedReports`
 policies are absent.
 
-A definition's `editLink` pencil navigates like an ordinary anchor — relative
-templates resolve against the host page, and routing to the edit form is entirely
-the host application's concern.
+A definition's `editLink` pencil and `createLink` button navigate like ordinary
+anchors — relative URLs resolve against the host page, and routing to the edit or
+create form is entirely the host application's concern. A host that would rather open
+its own editor listens for `ir-edit` / `ir-create` instead (see
+[Edit links, create buttons, and column overrides](#edit-links-create-buttons-and-column-overrides)).
 
 Page size is configured through **Actions → Pagination**. The standard choices are
 10, 50, 100, 500, 1000, and All; numeric choices above a definition's `maxPageSize`
@@ -306,10 +308,10 @@ button label — a NULL label renders no button — and clicking dispatches a co
 where the row includes the format's schema-bound `keyColumn` value. The built-in
 admin listing is its first consumer; in CSV an action cell exports its raw label.
 
-## Edit links and column overrides
+## Edit links, create buttons, and column overrides
 
-A definition can also declare an APEX-style edit pencil and per-column overrides —
-configuration, not report state:
+A definition can also declare an APEX-style edit pencil, a create-record button, and
+per-column overrides — configuration, not report state:
 
 ```json
 "orders": {
@@ -318,6 +320,10 @@ configuration, not report state:
   "editLink": {
     "urlTemplate": "/orders/{ORDER_ID}/edit",
     "label": "Edit order"
+  },
+  "createLink": {
+    "url": "/orders/new",
+    "label": "New order"
   },
   "columns": {
     "AMOUNT": { "helpText": "Order total before tax." },
@@ -334,6 +340,49 @@ result is an ordinary anchor — middle-click and open-in-new-tab work, `target:
 pencil. The edit column has an empty heading (its `label` is the accessible name and
 tooltip), never appears in column pickers, search, sorts, or filters, and is absent
 from CSV exports and grouped/pivoted/charted views.
+
+`createLink` renders a primary-styled button on the toolbar, after **Actions**, in every
+view. Its `url` is a constant (there is no row yet, so placeholders are rejected at
+load), `label` is the button text (default *Create*), and `target` behaves as for the
+pencil. Unlike the toolbar's feature-driven controls it is never hidden by the
+`features` policy or a client override: configuring it is what shows it.
+
+### Observing edit and create activations
+
+Every activation of either control dispatches a bubbling, composed, **cancelable**
+CustomEvent from the report element: `ir-edit` with `{ url, row }` (the row copy
+includes the hidden template columns, so the key is always there) and `ir-create`
+with `{ url }`. In the default `"mode": "navigate"` the anchor then follows its URL
+unless a listener calls `preventDefault()`, which lets a host intercept selectively —
+route through a single-page-app router, say, and fall back to the real link for
+modifier clicks.
+
+A host that never wants navigation sets `"mode": "event"` on the link. The control is
+then rendered as a `<button>` with the same icon, label, and accessible name, so
+keyboard and assistive-technology activation behave like any button, and the event is
+its whole behavior. In event mode `createLink.url` may be omitted (`url` arrives as
+`null`); `editLink.urlTemplate` stays required because it is what declares which row
+values ride along with the event. Substitution and the protocol allowlist still apply,
+so a NULL key still withholds the pencil.
+
+```js
+report.addEventListener("ir-create", event => {
+  event.preventDefault();          // no-op in event mode; cancels navigation otherwise
+  openOrderEditor(null);
+});
+
+report.addEventListener("ir-edit", event => {
+  event.preventDefault();
+  openOrderEditor(event.detail.row.ORDER_ID);
+});
+
+// After the host saves, re-run the current document so the grid reflects the write
+// without disturbing the user's search, filters, sort, or page.
+await report.submitReportDocument(report.getReportDocument());
+```
+
+The Workbench sample's `crud.html` page and the in-browser demo both host a slide-over
+editor on exactly this pattern.
 
 `columns` overrides one column at a time: `label` replaces `columnLabels` for that
 column (configuring both is rejected), `hideLabel` blanks the table heading while

@@ -80,6 +80,7 @@ export const messages = {
     "toolbar.pivot": "Tableau croisé",
     "toolbar.chart": "Graphique",
     "toolbar.actions": "Actions",
+    "toolbar.create": "Créer",
     "toolbar.savedReport": "Rapport enregistré",
     "toolbar.help": "Aide",
     "help.title": "Aide",

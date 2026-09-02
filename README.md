@@ -100,7 +100,7 @@ saved-report storage, the administration page, authorization, and the rest.
 |---|---|
 | [Getting started](docs/GETTING-STARTED.md) | Packages, configuration, data sources, Umbraco, saved-report storage, configured report documents, administration, logging, localization. |
 | [User Guide](docs/USER-GUIDE.md) | The end-user manual for the report UI. It is also the built-in help behind the toolbar's **?** button. |
-| [Embedding the report](docs/EMBEDDING.md) | The custom element, host JavaScript API, events, client controls, theming, stylesheets, renderers, and edit links. |
+| [Embedding the report](docs/EMBEDDING.md) | The custom element, host JavaScript API, events, client controls, theming, stylesheets, renderers, edit links, and create buttons. |
 | [Integration API](docs/API.md) | Server registration, authorization hooks, trusted context, in-process execution and export, REST routes, and element reference tables. |
 | [Authorization](docs/AUTHORIZATION.md) | The action and resource model, the three integration styles, administrator resolution, and denial behaviour. |
 | [GraphQL adapter](docs/GRAPHQL.md) | The optional query-only transport for saved reports. |

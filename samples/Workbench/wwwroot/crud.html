@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>InteractiveReport — Orders editor</title>
+    <link rel="stylesheet" href="/workbench-theme.css">
+    <style>
+        /* Invariant: host-page chrome only — everything inside <interactive-report> ships with
+           the package. The slide-over below is the host application's editor, not the report's. */
+        :root { color-scheme: light; }
+        body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; background: #eef1f4; color: #1f2733; }
+        body > header {
+            display: flex; align-items: center; gap: 1.25rem;
+            background: #123a5e; color: #fff; padding: .65rem 1.25rem;
+        }
+        body > header h1 { font-size: 1rem; margin: 0; font-weight: 600; letter-spacing: .01em; }
+        body > header .links { margin-left: auto; display: flex; gap: 1rem; align-items: center; font-size: .8rem; }
+        body > header a { color: #bcd8f2; text-decoration: none; }
+        body > header a:hover { color: #fff; text-decoration: underline; }
+        main { max-width: 72rem; margin: 1.25rem auto; padding: 0 1rem; }
+        .intro { font-size: .85rem; line-height: 1.5; color: #3d4852; margin: 0 0 .75rem; }
+        .intro code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: .8rem; }
+        .status { font-size: .8rem; min-height: 1.2em; margin: 0 0 .5rem; color: #174e78; }
+        .build-warning {
+            max-width: 44rem; margin: 3rem auto; padding: 1rem 1.25rem;
+            background: #fff8e1; border: 1px solid #e3c86d; border-radius: .4rem;
+            color: #5b4611; line-height: 1.5;
+        }
+        .build-warning code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-weight: 600; }
+
+        /* The slide-over: a native <dialog> for its focus trap and Escape handling, pinned to the
+           right edge. */
+        .slide-over {
+            position: fixed; inset: 0 0 0 auto; width: min(26rem, 100vw);
+            height: 100vh; max-height: none; max-width: none; margin: 0; padding: 0; border: 0;
+            border-left: 1px solid #cdd6df; background: #fff; color: #1f2733;
+            box-shadow: -8px 0 24px rgba(0, 0, 0, .18);
+        }
+        .slide-over[open] { display: flex; flex-direction: column; animation: slide-in .18s ease-out; }
+        .slide-over::backdrop { background: rgba(18, 58, 94, .35); }
+        @keyframes slide-in { from { transform: translateX(100%); } to { transform: none; } }
+        .slide-over header {
+            display: flex; align-items: center; gap: .75rem;
+            background: #123a5e; color: #fff; padding: .75rem 1.25rem;
+        }
+        .slide-over h2 { font-size: .95rem; margin: 0; font-weight: 600; flex: 1; }
+        .panel-note {
+            margin: 0; padding: .7rem 1.25rem; font-size: .78rem; line-height: 1.45; color: #5b4611;
+            background: #fff8e1; border-bottom: 1px solid #e3c86d;
+        }
+        .panel-note code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: .75rem; }
+        .slide-over .close {
+            font: inherit; font-size: 1.1rem; line-height: 1; color: #fff; background: none;
+            border: 0; cursor: pointer; padding: .2rem .4rem; border-radius: .25rem;
+        }
+        .slide-over .close:hover { background: rgba(255, 255, 255, .15); }
+        .slide-over form { display: grid; gap: .8rem; padding: 1.25rem; overflow: auto; flex: 1; align-content: start; }
+        .slide-over label { display: grid; gap: .3rem; font-size: .8rem; font-weight: 600; }
+        .slide-over input, .slide-over select, .slide-over textarea {
+            font: inherit; font-weight: 400; padding: .45rem .55rem;
+            border: 1px solid #cdd6df; border-radius: .3rem; background: #fff; color: inherit;
+        }
+        .slide-over textarea { resize: vertical; }
+        .field-error { color: #b42318; font-size: .75rem; font-weight: 400; min-height: 1em; margin: 0; }
+        .panel-actions { display: flex; gap: .5rem; padding: 1rem 1.25rem; border-top: 1px solid #e3e8ee; }
+        .btn {
+            font: inherit; font-size: .85rem; padding: .45rem .9rem; border-radius: .3rem; cursor: pointer;
+            border: 1px solid #cdd6df; background: #fff; color: #1f2733;
+        }
+        .btn:hover { background: #f4f7fa; }
+        .btn-primary { background: #1a6fb5; border-color: #1a6fb5; color: #fff; }
+        .btn-primary:hover { background: #135a95; }
+        .btn-danger { background: #fff; border-color: #d92d20; color: #b42318; }
+        .btn-danger:hover { background: #fef3f2; }
+        .btn-cancel { margin-left: auto; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>InteractiveReport Workbench — Orders editor</h1>
+        <div class="links">
+            <div class="theme-toggle" role="radiogroup" aria-label="Theme">
+                <input type="radio" id="theme-light" name="workbench-theme" value="light">
+                <label for="theme-light" class="theme-btn" title="Light theme">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+                    Light
+                </label>
+                <input type="radio" id="theme-dark" name="workbench-theme" value="dark">
+                <label for="theme-dark" class="theme-btn" title="Dark theme">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+                    Dark
+                </label>
+            </div>
+            <a href="/">Back to the workbench</a>
+        </div>
+    </header>
+
+    <main>
+        <p class="intro">
+            This page hosts the <code>orders-crud</code> report, whose edit pencil and
+            <strong>New order</strong> button are configured with <code>"mode": "event"</code>.
+            The report dispatches <code>ir-edit</code> and <code>ir-create</code> instead of
+            navigating; the page owns the slide-over editor, writes through its own
+            <code>/api/orders</code> endpoints, and then re-submits the current report document so
+            the grid reflects the change.
+        </p>
+        <p id="status" class="status" role="status" aria-live="polite"></p>
+
+        <interactive-report report="orders-crud"
+                            api-base="/api/reports"
+                            stylesheet="/report-overrides.css">
+            <p class="build-warning">
+                You're seeing this message because you forgot to run
+                <code>npm install &amp;&amp; npm run build</code>.
+            </p>
+        </interactive-report>
+    </main>
+
+    <dialog id="order-panel" class="slide-over" aria-labelledby="order-panel-title">
+        <header>
+            <h2 id="order-panel-title">New order</h2>
+            <button type="button" class="close" id="close-order" aria-label="Close">&#x2715;</button>
+        </header>
+        <p class="panel-note">
+            This form is a stand-in. In a real application, the edit form is provided by your
+            own record editor; the report only raises <code>ir-edit</code> and
+            <code>ir-create</code> and leaves the rest to you.
+        </p>
+        <form id="order-form" novalidate>
+            <label>Customer
+                <input name="customer" maxlength="200" required autocomplete="organization">
+                <span class="field-error" data-for="customer"></span>
+            </label>
+            <label>Region
+                <select name="region">
+                    <option>NORTH</option><option>SOUTH</option><option>EAST</option><option>WEST</option>
+                </select>
+                <span class="field-error" data-for="region"></span>
+            </label>
+            <label>Status
+                <select name="status">
+                    <option>NEW</option><option>PENDING</option><option>SHIPPED</option><option>CANCELLED</option>
+                </select>
+                <span class="field-error" data-for="status"></span>
+            </label>
+            <label>Amount
+                <input name="amount" type="number" step="0.01" min="0" required>
+                <span class="field-error" data-for="amount"></span>
+            </label>
+            <label>Order date
+                <input name="orderDate" type="date" required>
+                <span class="field-error" data-for="orderDate"></span>
+            </label>
+            <label>Notes
+                <textarea name="notes" rows="3" maxlength="2000"></textarea>
+                <span class="field-error" data-for="notes"></span>
+            </label>
+            <p class="field-error" data-for="form" role="alert"></p>
+            <div class="panel-actions">
+                <button type="submit" class="btn btn-primary">Save</button>
+                <button type="button" class="btn btn-danger" id="delete-order" hidden>Delete</button>
+                <button type="button" class="btn btn-cancel" id="cancel-order">Cancel</button>
+            </div>
+        </form>
+    </dialog>
+
+    <script type="module">
+        import "/workbench-theme.js";
+        await import("/api/reports/ui/ir.js");
+
+        const report = document.querySelector("interactive-report");
+        const panel = document.getElementById("order-panel");
+        const form = document.getElementById("order-form");
+        const title = document.getElementById("order-panel-title");
+        const deleteBtn = document.getElementById("delete-order");
+        const status = document.getElementById("status");
+        let editingId = null;
+
+        const errorSlots = () => form.querySelectorAll(".field-error");
+        function showErrors(errors) {
+            for (const slot of errorSlots()) slot.textContent = "";
+            for (const [field, messages] of Object.entries(errors)) {
+                const slot = form.querySelector(`.field-error[data-for="${CSS.escape(field)}"]`)
+                    ?? form.querySelector('.field-error[data-for="form"]');
+                slot.textContent = [].concat(messages).join(" ");
+            }
+        }
+
+        function openPanel(order) {
+            editingId = order?.orderId ?? null;
+            title.textContent = editingId === null ? "New order" : `Edit order #${editingId}`;
+            deleteBtn.hidden = editingId === null;
+            showErrors({});
+            form.elements.customer.value = order?.customer ?? "";
+            form.elements.region.value = order?.region ?? "NORTH";
+            form.elements.status.value = order?.status ?? "NEW";
+            form.elements.amount.value = order?.amount ?? "";
+            form.elements.orderDate.value = order?.orderDate ?? new Date().toISOString().slice(0, 10);
+            form.elements.notes.value = order?.notes ?? "";
+            panel.showModal();
+            form.elements.customer.focus();
+        }
+
+        // Re-submitting the accepted document re-runs the same query, so the grid shows the write
+        // without disturbing the user's search, filters, sort, or page.
+        async function refreshReport(message) {
+            await report.submitReportDocument(report.getReportDocument());
+            status.textContent = message;
+        }
+
+        // Both links are event-mode, so there is no navigation to cancel; preventDefault() is kept so
+        // the page keeps behaving if the definition is ever switched back to navigate mode.
+        report.addEventListener("ir-create", event => {
+            event.preventDefault();
+            openPanel(null);
+        });
+        report.addEventListener("ir-edit", async event => {
+            event.preventDefault();
+            const id = event.detail.row.ORDER_ID;
+            const response = await fetch(`/api/orders/${encodeURIComponent(id)}`);
+            if (!response.ok) {
+                status.textContent = `Order #${id} could not be loaded (${response.status}).`;
+                return;
+            }
+            openPanel(await response.json());
+        });
+
+        form.addEventListener("submit", async event => {
+            event.preventDefault();
+            const payload = {
+                customer: form.elements.customer.value,
+                region: form.elements.region.value,
+                status: form.elements.status.value,
+                amount: form.elements.amount.value === "" ? null : Number(form.elements.amount.value),
+                orderDate: form.elements.orderDate.value,
+                notes: form.elements.notes.value || null,
+            };
+            const creating = editingId === null;
+            const response = await fetch(creating ? "/api/orders" : `/api/orders/${editingId}`, {
+                method: creating ? "POST" : "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+            if (response.status === 400) {
+                showErrors((await response.json()).errors ?? { form: ["The order could not be saved."] });
+                return;
+            }
+            if (!response.ok) {
+                showErrors({ form: [`Save failed (${response.status}).`] });
+                return;
+            }
+            const saved = await response.json();
+            panel.close();
+            await refreshReport(creating ? `Order #${saved.orderId} created.` : `Order #${saved.orderId} updated.`);
+        });
+
+        deleteBtn.addEventListener("click", async () => {
+            if (!confirm(`Delete order #${editingId}?`)) return;
+            const response = await fetch(`/api/orders/${editingId}`, { method: "DELETE" });
+            if (!response.ok) {
+                showErrors({ form: [`Delete failed (${response.status}).`] });
+                return;
+            }
+            const id = editingId;
+            panel.close();
+            await refreshReport(`Order #${id} deleted.`);
+        });
+
+        document.getElementById("cancel-order").addEventListener("click", () => panel.close());
+        document.getElementById("close-order").addEventListener("click", () => panel.close());
+    </script>
+</body>
+</html>

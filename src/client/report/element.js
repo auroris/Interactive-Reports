@@ -1131,6 +1131,8 @@ class ReportController {
  * @fires ir-before-query Cancelable query-transform event with a detached document.
  * @fires ir-query-complete Observational event after a current result is adopted and rendered.
  * @fires ir-action Application action event emitted by an action-format cell.
+ * @fires ir-edit Cancelable event emitted by the definition's edit pencil with `{ url, row }`; preventing it cancels navigation.
+ * @fires ir-create Cancelable event emitted by the definition's create button with `{ url }`; preventing it cancels navigation.
  */
 export class InteractiveReportElement extends HTMLElement {
     static observedAttributes = [

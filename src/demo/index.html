@@ -178,6 +178,54 @@
             overflow: hidden;
         }
 
+        /* The host-owned order editor: a native <dialog> pinned to the right edge. It is this
+           page's UI, not the report's — the report only dispatches ir-edit / ir-create. */
+        .slide-over {
+            position: fixed; inset: 0 0 0 auto; width: min(26rem, 100vw);
+            height: 100vh; max-height: none; max-width: none; margin: 0; padding: 0; border: 0;
+            border-left: 1px solid var(--border-color); background: var(--header-bg); color: var(--text-color);
+            box-shadow: -8px 0 24px rgba(0, 0, 0, .18);
+            font-family: inherit;
+        }
+        .slide-over[open] { display: flex; flex-direction: column; animation: slide-in .18s ease-out; }
+        .slide-over::backdrop { background: rgba(15, 23, 42, .45); }
+        @keyframes slide-in { from { transform: translateX(100%); } to { transform: none; } }
+        .slide-over header {
+            display: flex; align-items: center; gap: .75rem;
+            padding: .85rem 1.25rem; border-bottom: 1px solid var(--border-color);
+        }
+        .slide-over h2 { font-size: 1rem; margin: 0; font-weight: 600; flex: 1; }
+        .panel-note {
+            margin: 0; padding: .7rem 1.25rem; font-size: .78rem; line-height: 1.45;
+            color: #64748b; background: var(--bg-color); border-bottom: 1px solid var(--border-color);
+        }
+        .panel-note code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: .75rem; }
+        .slide-over .close {
+            font: inherit; font-size: 1.1rem; line-height: 1; color: inherit; background: none;
+            border: 0; cursor: pointer; padding: .2rem .4rem; border-radius: .25rem;
+        }
+        .slide-over .close:hover { background: rgba(125, 125, 125, .15); }
+        .slide-over form { display: grid; gap: .8rem; padding: 1.25rem; overflow: auto; flex: 1; align-content: start; }
+        .slide-over label { display: grid; gap: .3rem; font-size: .8rem; font-weight: 600; }
+        .slide-over input, .slide-over select, .slide-over textarea {
+            font: inherit; font-weight: 400; padding: .45rem .55rem;
+            border: 1px solid var(--border-color); border-radius: .3rem;
+            background: var(--bg-color); color: inherit;
+        }
+        .slide-over textarea { resize: vertical; }
+        .field-error { color: #dc2626; font-size: .75rem; font-weight: 400; min-height: 1em; margin: 0; }
+        .panel-actions { display: flex; gap: .5rem; padding: 1rem 1.25rem; border-top: 1px solid var(--border-color); }
+        .btn {
+            font: inherit; font-size: .85rem; padding: .45rem .9rem; border-radius: 6px; cursor: pointer;
+            border: 1px solid var(--border-color); background: var(--header-bg); color: var(--text-color);
+        }
+        .btn:hover { background: rgba(125, 125, 125, .12); }
+        .btn-primary { background: var(--accent-color); border-color: var(--accent-color); color: #fff; }
+        .btn-primary:hover { filter: brightness(.92); }
+        .btn-danger { border-color: #dc2626; color: #dc2626; }
+        .btn-cancel { margin-left: auto; }
+        .status { font-size: .85rem; min-height: 1.2em; margin: 0 0 .75rem; color: #64748b; }
+
         @media (prefers-color-scheme: dark) {
             :root:not([data-theme="light"]) {
                 --bg-color: #0f172a;
@@ -283,10 +331,59 @@
             Initializing SQLite WebAssembly database and seeding 500 sample orders…
         </div>
 
+        <p id="status" class="status" role="status" aria-live="polite"></p>
+
         <div id="report-container">
             <!-- Custom element will be mounted here -->
         </div>
     </main>
+
+    <!-- The Orders report's pencil and New Order button are event-mode links: this page opens
+         the editor and writes to the in-browser database itself. -->
+    <dialog id="order-panel" class="slide-over" aria-labelledby="order-panel-title">
+        <header>
+            <h2 id="order-panel-title">New order</h2>
+            <button type="button" class="close" id="close-order" aria-label="Close">&#x2715;</button>
+        </header>
+        <p class="panel-note">
+            This form is a stand-in. In a real application, the edit form is provided by your
+            own record editor; the report only raises <code>ir-edit</code> and
+            <code>ir-create</code> and leaves the rest to you.
+        </p>
+        <form id="order-form" novalidate>
+            <label>Customer
+                <input name="customer" maxlength="200" required autocomplete="organization">
+                <span class="field-error" data-for="customer"></span>
+            </label>
+            <label>Region
+                <select name="region">
+                    <option>NORTH</option><option>SOUTH</option><option>EAST</option><option>WEST</option>
+                </select>
+            </label>
+            <label>Status
+                <select name="status">
+                    <option>NEW</option><option>PENDING</option><option>SHIPPED</option><option>CANCELLED</option>
+                </select>
+            </label>
+            <label>Amount
+                <input name="amount" type="number" step="0.01" min="0" required>
+                <span class="field-error" data-for="amount"></span>
+            </label>
+            <label>Order date
+                <input name="orderDate" type="date" required>
+                <span class="field-error" data-for="orderDate"></span>
+            </label>
+            <label>Notes
+                <textarea name="notes" rows="3" maxlength="2000"></textarea>
+            </label>
+            <p class="field-error" data-for="form" role="alert"></p>
+            <div class="panel-actions">
+                <button type="submit" class="btn btn-primary">Save</button>
+                <button type="button" class="btn btn-danger" id="delete-order" hidden>Delete</button>
+                <button type="button" class="btn btn-cancel" id="cancel-order">Cancel</button>
+            </div>
+        </form>
+    </dialog>
 
     <script type="module">
         import { createSqliteDb, InteractiveReportServer, installFetchInterceptor } from "./browser-server.js";
@@ -319,9 +416,17 @@
                         CUSTOMER: "Customer Name",
                         ORDER_DATE: "Ordered On",
                     },
+                    // Event-mode links: the pencil and the toolbar's New Order button dispatch
+                    // ir-edit / ir-create instead of navigating, and the page's slide-over
+                    // editor (below) does the rest.
                     editLink: {
                         urlTemplate: "/orders/{ORDER_ID}/edit",
                         label: "Edit Order",
+                        mode: "event",
+                    },
+                    createLink: {
+                        label: "New Order",
+                        mode: "event",
                     },
                 });
 
@@ -420,6 +525,110 @@
                 });
 
                 renderReport("orders");
+
+                // 8. Host-owned order editor. ir-edit / ir-create are composed events that bubble
+                // out of the element's shadow root, so listening on the container survives
+                // every re-mount above. Writes go straight to the in-browser database, then the
+                // current report document is re-submitted so the grid reflects them without
+                // losing the user's search, filters, sort, or page.
+                const panel = document.getElementById("order-panel");
+                const form = document.getElementById("order-form");
+                const panelTitle = document.getElementById("order-panel-title");
+                const deleteBtn = document.getElementById("delete-order");
+                const statusEl = document.getElementById("status");
+                let editingId = null;
+
+                function showErrors(errors) {
+                    for (const slot of form.querySelectorAll(".field-error")) slot.textContent = "";
+                    for (const [field, message] of Object.entries(errors)) {
+                        const slot = form.querySelector(`.field-error[data-for="${CSS.escape(field)}"]`)
+                            ?? form.querySelector('.field-error[data-for="form"]');
+                        slot.textContent = message;
+                    }
+                }
+
+                function openPanel(order) {
+                    editingId = order?.ORDER_ID ?? null;
+                    panelTitle.textContent = editingId === null ? "New order" : `Edit order #${editingId}`;
+                    deleteBtn.hidden = editingId === null;
+                    showErrors({});
+                    form.elements.customer.value = order?.CUSTOMER ?? "";
+                    form.elements.region.value = order?.REGION ?? "NORTH";
+                    form.elements.status.value = order?.STATUS ?? "NEW";
+                    form.elements.amount.value = order?.AMOUNT ?? "";
+                    form.elements.orderDate.value = order?.ORDER_DATE ?? new Date().toISOString().slice(0, 10);
+                    form.elements.notes.value = order?.NOTES ?? "";
+                    panel.showModal();
+                    form.elements.customer.focus();
+                }
+
+                async function refreshReport(message) {
+                    const ir = containerEl.querySelector("interactive-report");
+                    if (ir) await ir.submitReportDocument(ir.getReportDocument());
+                    statusEl.textContent = message;
+                }
+
+                containerEl.addEventListener("ir-create", event => {
+                    event.preventDefault();
+                    openPanel(null);
+                });
+                containerEl.addEventListener("ir-edit", event => {
+                    event.preventDefault();
+                    const { rows } = db.query(
+                        "SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS WHERE ORDER_ID = ?",
+                        [event.detail.row.ORDER_ID]);
+                    if (rows.length === 0) {
+                        statusEl.textContent = `Order #${event.detail.row.ORDER_ID} no longer exists.`;
+                        return;
+                    }
+                    openPanel(rows[0]);
+                });
+
+                form.addEventListener("submit", event => {
+                    event.preventDefault();
+                    const customer = form.elements.customer.value.trim();
+                    const amount = Number(form.elements.amount.value);
+                    const orderDate = form.elements.orderDate.value;
+                    const errors = {};
+                    if (!customer) errors.customer = "Customer is required.";
+                    if (form.elements.amount.value === "" || !Number.isFinite(amount) || amount < 0)
+                        errors.amount = "Amount must be a non-negative number.";
+                    if (!/^\d{4}-\d{2}-\d{2}$/.test(orderDate)) errors.orderDate = "Order date is required.";
+                    if (Object.keys(errors).length > 0) { showErrors(errors); return; }
+
+                    const values = [
+                        customer,
+                        form.elements.region.value,
+                        form.elements.status.value,
+                        Math.round(amount * 100) / 100,
+                        orderDate,
+                        form.elements.notes.value.trim() || null,
+                    ];
+                    let message;
+                    if (editingId === null) {
+                        db.run(
+                            "INSERT INTO ORDERS (CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES) VALUES (?, ?, ?, ?, ?, ?)",
+                            values);
+                        message = `Order #${db.queryScalar("SELECT last_insert_rowid()")} created.`;
+                    } else {
+                        db.run(
+                            "UPDATE ORDERS SET CUSTOMER = ?, REGION = ?, STATUS = ?, AMOUNT = ?, ORDER_DATE = ?, NOTES = ? WHERE ORDER_ID = ?",
+                            [...values, editingId]);
+                        message = `Order #${editingId} updated.`;
+                    }
+                    panel.close();
+                    refreshReport(message);
+                });
+
+                deleteBtn.addEventListener("click", () => {
+                    if (!confirm(`Delete order #${editingId}?`)) return;
+                    db.run("DELETE FROM ORDERS WHERE ORDER_ID = ?", [editingId]);
+                    const id = editingId;
+                    panel.close();
+                    refreshReport(`Order #${id} deleted.`);
+                });
+                document.getElementById("cancel-order").addEventListener("click", () => panel.close());
+                document.getElementById("close-order").addEventListener("click", () => panel.close());
 
                 loadingEl.style.display = "none";
                 containerEl.style.display = "block";

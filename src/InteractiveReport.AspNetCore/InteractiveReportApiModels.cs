@@ -150,6 +150,7 @@ public sealed record InteractiveReportSchema(
     string Title,
     IReadOnlyList<ColumnInfo> Columns,
     InteractiveReportEditLink? EditLink,
+    InteractiveReportCreateLink? CreateLink,
     IReadOnlyDictionary<string, InteractiveReportColumnOptions>? ColumnOverrides,
     ReportState DefaultState,
     InteractiveReportCapabilities Capabilities,
@@ -158,7 +159,12 @@ public sealed record InteractiveReportSchema(
     InteractiveReportAuthorizationHint Authorization);
 
 /// <summary>Describes an application-owned edit link resolved against the report schema.</summary>
-public sealed record InteractiveReportEditLink(string UrlTemplate, string Label, string Target);
+/// <remarks><paramref name="Mode"/> is <c>navigate</c> or <c>event</c>.</remarks>
+public sealed record InteractiveReportEditLink(string UrlTemplate, string Label, string Target, string Mode);
+
+/// <summary>Describes an application-owned create button. <paramref name="Url"/> is null only in event mode.</summary>
+/// <remarks><paramref name="Mode"/> is <c>navigate</c> or <c>event</c>.</remarks>
+public sealed record InteractiveReportCreateLink(string? Url, string Label, string Target, string Mode);
 
 /// <summary>Describes presentation behavior applied to one report column.</summary>
 public sealed record InteractiveReportColumnOptions(

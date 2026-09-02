@@ -1,12 +1,14 @@
 // Definition-owned per-row edit links: a leading synthetic grid column
-// built from the schema payload's editLink (urlTemplate/label/target). Definition chrome, not a
+// built from the schema payload's editLink (urlTemplate/label/target/mode). Definition chrome, not a
 // ColumnFormat renderer. It exists independent of the document's column selection and uses
 // template columns the server projects as hidden row data. Substituted values are URL-encoded
 // and the result still passes the renderer protocol allowlist, so row data can never smuggle a
-// scheme.
+// scheme. Every activation dispatches `ir-edit` from the host; navigate mode then follows the
+// anchor unless the event was prevented, and event mode renders a button that never navigates.
 
 import { el, icon } from "../../core/dom.js";
 import { translate } from "../../core/localization.js";
+import { anchorClickHandler, dispatchLinkEvent, eventMode } from "../link-events.js";
 import { safeRendererUrl } from "./column-renderers.js";
 
 /**
@@ -51,21 +53,35 @@ export function substituteEditUrl(template, row) {
 }
 
 /**
- * The cell content for one row: an anchor with the pencil icon, or "" when the row withholds its link.
- * A real href with no click handler, so middle-click, ctrl-click, and open-in-new-tab behave natively.
+ * The cell content for one row: a pencil anchor or button, or "" when the row withholds its link.
+ * Navigate mode is a real href whose click first dispatches `ir-edit`; middle-click, ctrl-click,
+ * and open-in-new-tab behave natively unless a listener prevents the event. Event mode is a
+ * button whose only behavior is that event, for hosts that open their own editor.
  *
- * @param {object} editLink - The edit-link definition used to build the row-specific anchor.
- * @param {object} row - The result row supplying URL-template values.
- * @param {Element|object|string|null} [context=null] - The localization context for the default edit label.
- * @returns {string|HTMLAnchorElement} A detached pencil link, or an empty string when substitution or protocol validation fails.
+ * @param {object} editLink - The edit-link definition used to build the row-specific control.
+ * @param {object} row - The result row supplying URL-template values and the event's row copy.
+ * @param {object} w - The report controller or host element: localization context and event target.
+ * @returns {string|HTMLAnchorElement|HTMLButtonElement} A detached pencil control, or an empty string when substitution or protocol validation fails.
  *
- * Side effects: creates a detached anchor and icon when a safe link is available.
+ * Side effects: creates a detached control and icon when a safe link is available; activating it dispatches `ir-edit`.
  */
-export function renderEditCell(editLink, row, context = null) {
+export function renderEditCell(editLink, row, w) {
     const url = substituteEditUrl(editLink.urlTemplate, row);
+    // The allowlist applies in both modes: the URL reaches the host's handler in event mode, and
+    // a definition that cannot navigate should not hand out a scheme it could not follow itself.
     const href = url === null ? null : safeRendererUrl(url, "link");
     if (!href) return "";
-    const label = editLink.label ?? translate(context, "grid.edit");
+    const label = editLink.label ?? translate(w, "grid.edit");
+    const detail = () => ({ url: href, row: { ...row } });
+    if (eventMode(editLink)) {
+        return el("button", {
+            type: "button",
+            class: "ir-cell-edit",
+            "aria-label": label,
+            title: label,
+            onclick: () => dispatchLinkEvent(w, "ir-edit", detail()),
+        }, icon("pencil"));
+    }
     const blank = editLink.target === "_blank";
     return el("a", {
         class: "ir-cell-edit",
@@ -74,5 +90,6 @@ export function renderEditCell(editLink, row, context = null) {
         title: label,
         target: blank ? "_blank" : undefined,
         rel: blank ? "noopener" : undefined,
+        onclick: anchorClickHandler(w, "ir-edit", detail),
     }, icon("pencil"));
 }

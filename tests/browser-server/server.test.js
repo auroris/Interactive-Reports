@@ -41,6 +41,22 @@ test("server discovers schema and generates column metadata", async () => {
 
     assert.ok(schema.capabilities.expressionFunctions.includes("CONTAINS"));
     assert.ok(schema.features.includes("search"));
+    assert.equal(schema.editLink, null);
+    assert.equal(schema.createLink, null);
+});
+
+test("server passes definition edit and create links through to the schema", async () => {
+    const { server } = await setupServer();
+    server.registerReport({
+        name: "orders-crud",
+        sql: "SELECT ORDER_ID, CUSTOMER FROM ORDERS",
+        editLink: { urlTemplate: "/orders/{ORDER_ID}/edit", label: "Edit order", mode: "event" },
+        createLink: { label: "New order", mode: "event" },
+    });
+
+    const schema = server.getSchema("orders-crud");
+    assert.deepEqual(schema.editLink, { urlTemplate: "/orders/{ORDER_ID}/edit", label: "Edit order", mode: "event" });
+    assert.deepEqual(schema.createLink, { label: "New order", mode: "event" });
 });
 
 test("server executes basic paged query", async () => {

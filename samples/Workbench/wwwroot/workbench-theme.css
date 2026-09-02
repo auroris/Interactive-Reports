@@ -1,0 +1,180 @@
+/* Workbench theme styles: pushbuttons toggle bar and dark theme chrome. */
+
+.theme-toggle {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    border-radius: 6px;
+    background-color: rgba(0, 0, 0, 0.2);
+    padding: 2px;
+    gap: 2px;
+}
+
+.theme-toggle input[type="radio"] {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+    margin: 0;
+    pointer-events: none;
+}
+
+.theme-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.25rem 0.6rem;
+    border-radius: 4px;
+    font-size: 0.78rem;
+    font-weight: 500;
+    cursor: pointer;
+    color: #bcd8f2;
+    background: transparent;
+    transition: background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+    user-select: none;
+    line-height: 1.2;
+}
+
+.theme-btn:hover {
+    background-color: rgba(255, 255, 255, 0.12);
+    color: #ffffff;
+}
+
+.theme-toggle input[type="radio"]:checked + .theme-btn {
+    background-color: #3898ec;
+    color: #ffffff;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+.theme-toggle input[type="radio"]:focus-visible + .theme-btn {
+    outline: 2px solid #3898ec;
+    outline-offset: 1px;
+}
+
+.theme-btn svg {
+    width: 13px;
+    height: 13px;
+}
+
+/* Dark theme host page chrome */
+
+html[data-theme="dark"] {
+    color-scheme: dark;
+}
+
+html[data-theme="dark"] body {
+    background: #0f141c;
+    color: #f0f3f6;
+}
+
+html[data-theme="dark"] header {
+    background: #182332;
+    border-bottom: 1px solid #28364a;
+}
+
+html[data-theme="dark"] header a {
+    color: #7bb5e8;
+}
+
+html[data-theme="dark"] header a:hover {
+    color: #ffffff;
+}
+
+html[data-theme="dark"] #identity {
+    background: rgba(255, 255, 255, 0.08);
+    color: #93c5fd;
+}
+
+html[data-theme="dark"] .workbench-links a {
+    border-color: #28364a;
+    background: #182332;
+    color: #7bb5e8;
+}
+
+html[data-theme="dark"] .workbench-links a:hover {
+    border-color: #3898ec;
+    background: #1f2d40;
+}
+
+html[data-theme="dark"] .workbench-links small {
+    color: #94a3b8;
+}
+
+html[data-theme="dark"] .build-warning {
+    background: #2a2210;
+    border-color: #5a441b;
+    color: #fde68a;
+}
+
+/* crud.html slide-over and host elements in dark mode */
+html[data-theme="dark"] .intro {
+    color: #94a3b8;
+}
+
+html[data-theme="dark"] .status {
+    color: #7bb5e8;
+}
+
+html[data-theme="dark"] .slide-over {
+    background: #182332;
+    color: #f0f3f6;
+    border-left-color: #28364a;
+    box-shadow: -8px 0 24px rgba(0, 0, 0, 0.6);
+}
+
+html[data-theme="dark"] .slide-over::backdrop {
+    background: rgba(0, 0, 0, 0.65);
+}
+
+html[data-theme="dark"] .slide-over header {
+    background: #131d2b;
+    border-bottom: 1px solid #28364a;
+}
+
+html[data-theme="dark"] .panel-note {
+    background: #2a2210;
+    border-bottom-color: #5a441b;
+    color: #fde68a;
+}
+
+html[data-theme="dark"] .slide-over input,
+html[data-theme="dark"] .slide-over select,
+html[data-theme="dark"] .slide-over textarea {
+    background: #0f141c;
+    border-color: #38465a;
+    color: #f0f3f6;
+}
+
+html[data-theme="dark"] .panel-actions {
+    border-top-color: #28364a;
+}
+
+html[data-theme="dark"] .btn {
+    border-color: #38465a;
+    background: #1f2d40;
+    color: #f0f3f6;
+}
+
+html[data-theme="dark"] .btn:hover {
+    background: #283850;
+}
+
+html[data-theme="dark"] .btn-primary {
+    background: #0572ce;
+    border-color: #0572ce;
+    color: #ffffff;
+}
+
+html[data-theme="dark"] .btn-primary:hover {
+    background: #3898ec;
+}
+
+html[data-theme="dark"] .btn-danger {
+    background: #3c1618;
+    border-color: #6e2528;
+    color: #fca5a5;
+}
+
+html[data-theme="dark"] .btn-danger:hover {
+    background: #4e1c20;
+}

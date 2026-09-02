@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>InteractiveReport — Workbench</title>
+    <link rel="stylesheet" href="/workbench-theme.css">
     <style>
         /* Invariant: host-page chrome only — everything inside <interactive-report> ships with
            the package. */
@@ -43,6 +44,18 @@
     <header>
         <h1>InteractiveReport Workbench</h1>
         <div class="links">
+            <div class="theme-toggle" role="radiogroup" aria-label="Theme">
+                <input type="radio" id="theme-light" name="workbench-theme" value="light">
+                <label for="theme-light" class="theme-btn" title="Light theme">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+                    Light
+                </label>
+                <input type="radio" id="theme-dark" name="workbench-theme" value="dark">
+                <label for="theme-dark" class="theme-btn" title="Dark theme">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+                    Dark
+                </label>
+            </div>
             <span id="identity"></span>
             <a href="#workbench-links">Tools &amp; endpoints</a>
         </div>
@@ -53,6 +66,10 @@
             <a href="/fr.html" lang="fr-CA" hreflang="fr-CA">
                 <strong>Atelier en français</strong>
                 <small>Rapport hébergé en français canadien</small>
+            </a>
+            <a href="/crud.html">
+                <strong>Orders editor</strong>
+                <small>Event-mode edit pencil and Create button driving a host-owned slide-over</small>
             </a>
             <a href="/api/reports/orders/view">
                 <strong>Packaged viewer</strong>
@@ -99,6 +116,7 @@
     </main>
 
     <script type="module">
+        import "/workbench-theme.js";
         await import("/api/reports/ui/ir.js");
 
         const who = await fetch("/api/reports/whoami").then(r => r.ok ? r.json() : null).catch(() => null);

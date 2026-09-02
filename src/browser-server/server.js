@@ -77,7 +77,8 @@ export class InteractiveReportServer {
      * @param {Record<string, string>} [def.columnLabels] - Friendly display names for columns
      * @param {Array<string>} [def.features] - Feature whitelist
      * @param {object} [def.defaultState] - Optional initial default report state document
-     * @param {object} [def.editLink] - Optional edit link template
+     * @param {object} [def.editLink] - Optional edit link template ({ urlTemplate, label, target, mode })
+     * @param {object} [def.createLink] - Optional toolbar create button ({ url, label, target, mode })
      * @param {object} [def.columns] - Optional column overrides
      */
     registerReport(def) {

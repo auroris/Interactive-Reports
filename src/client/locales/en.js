@@ -80,6 +80,7 @@ export const messages = {
     "toolbar.pivot": "Pivot",
     "toolbar.chart": "Chart",
     "toolbar.actions": "Actions",
+    "toolbar.create": "Create",
     "toolbar.savedReport": "Saved Report",
     "toolbar.help": "Help",
     "help.title": "Help",

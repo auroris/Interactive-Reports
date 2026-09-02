@@ -514,18 +514,82 @@ public sealed class ConfigurationReportDefinitionStoreTests
     }
 
     [Theory]
-    [InlineData(" ", null, "editLink.label must not be blank")]
-    [InlineData(null, "middle", "editLink.target must be '_self' or '_blank'")]
-    public async Task Invalid_edit_link_label_or_target_fails_fast(string? label, string? target, string expected)
+    [InlineData(" ", null, null, "editLink.label must not be blank")]
+    [InlineData(null, "middle", null, "editLink.target must be '_self' or '_blank'")]
+    [InlineData(null, null, "popup", "editLink.mode must be 'navigate' or 'event'")]
+    public async Task Invalid_edit_link_label_target_or_mode_fails_fast(
+        string? label, string? target, string? mode, string expected)
     {
         var def = OrdersDefinition();
-        def.EditLink = new ReportEditLink { UrlTemplate = "/orders/{ORDER_ID}/edit", Label = label, Target = target };
+        def.EditLink = new ReportEditLink
+        {
+            UrlTemplate = "/orders/{ORDER_ID}/edit", Label = label, Target = target, Mode = mode,
+        };
         using var store = StoreFor(def);
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(
             async () => await store.Find("orders"));
 
         Assert.Contains(expected, error.Message);
+    }
+
+    [Theory]
+    [InlineData(null, null, null, null, "createLink.url is required unless createLink.mode is 'event'")]
+    [InlineData(" ", null, null, "navigate", "createLink.url is required unless createLink.mode is 'event'")]
+    [InlineData("/orders/{ORDER_ID}/new", null, null, null, "does not take {COLUMN} placeholders")]
+    [InlineData("javascript:alert(1)", null, null, null, "createLink.url absolute URLs must use http or https")]
+    [InlineData("javascript:alert(1)", null, null, "event", "createLink.url absolute URLs must use http or https")]
+    [InlineData("/orders/new", " ", null, null, "createLink.label must not be blank")]
+    [InlineData("/orders/new", null, "middle", null, "createLink.target must be '_self' or '_blank'")]
+    [InlineData("/orders/new", null, null, "popup", "createLink.mode must be 'navigate' or 'event'")]
+    public async Task Invalid_create_links_fail_fast(
+        string? url, string? label, string? target, string? mode, string expected)
+    {
+        var def = OrdersDefinition();
+        def.CreateLink = new ReportCreateLink { Url = url, Label = label, Target = target, Mode = mode };
+        using var store = StoreFor(def);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await store.Find("orders"));
+
+        Assert.Contains(expected, error.Message);
+    }
+
+    [Fact]
+    public async Task Oversized_create_link_url_fails_fast()
+    {
+        var def = OrdersDefinition();
+        def.CreateLink = new ReportCreateLink { Url = "/orders/new?" + new string('x', 2048) };
+        using var store = StoreFor(def);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await store.Find("orders"));
+
+        Assert.Contains("at most 2048 characters", error.Message);
+    }
+
+    [Fact]
+    public async Task Create_link_accepts_constant_urls_and_url_less_event_mode()
+    {
+        foreach (var link in new ReportCreateLink[]
+        {
+            new() { Url = "/orders/new" },
+            new() { Url = "orders/new?source=report", Label = "New order", Target = "_BLANK" },
+            new() { Url = "https://apps.example.com/orders/new", Mode = "NAVIGATE" },
+            new() { Url = "/orders/new", Mode = "event" },
+            new() { Mode = "event" },
+            new() { Url = null, Label = "New order", Mode = "Event" },
+        })
+        {
+            var def = OrdersDefinition();
+            def.CreateLink = link;
+            using var store = StoreFor(def);
+
+            var snapshot = await store.Find("orders");
+
+            Assert.Equal(link.Url, snapshot!.CreateLink!.Url);
+            Assert.Equal(link.Mode, snapshot.CreateLink.Mode);
+        }
     }
 
     [Fact]
@@ -669,6 +733,14 @@ public sealed class ConfigurationReportDefinitionStoreTests
             UrlTemplate = "/orders/{ORDER_ID}/edit",
             Label = "Edit order",
             Target = "_blank",
+            Mode = "event",
+        };
+        def.CreateLink = new ReportCreateLink
+        {
+            Url = "/orders/new",
+            Label = "New order",
+            Target = "_blank",
+            Mode = "event",
         };
         def.Columns = new()
         {
@@ -692,6 +764,12 @@ public sealed class ConfigurationReportDefinitionStoreTests
         Assert.Equal("/orders/{ORDER_ID}/edit", snapshot.EditLink!.UrlTemplate);
         Assert.Equal("Edit order", snapshot.EditLink.Label);
         Assert.Equal("_blank", snapshot.EditLink.Target);
+        Assert.Equal("event", snapshot.EditLink.Mode);
+        Assert.NotSame(def.CreateLink, snapshot.CreateLink);
+        Assert.Equal("/orders/new", snapshot.CreateLink!.Url);
+        Assert.Equal("New order", snapshot.CreateLink.Label);
+        Assert.Equal("_blank", snapshot.CreateLink.Target);
+        Assert.Equal("event", snapshot.CreateLink.Mode);
         Assert.NotSame(def.Columns, snapshot.Columns);
         Assert.Contains("NOTES", snapshot.Columns!.Keys);   // map key casing intact
         var notes = snapshot.Columns["NOTES"];

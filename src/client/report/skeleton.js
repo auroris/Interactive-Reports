@@ -1,7 +1,7 @@
-// Report widget shell: toolbar (search, view buttons, Actions, and the saved-report
-// select), notice slots, chip strip, table, chart container, and pager. It builds `w.els`, the
-// fixed set of mount points every renderer targets, and wires toolbar events to the widget and
-// its feature modules.
+// Report widget shell: toolbar (search, view buttons, Actions, the definition's create button,
+// and the saved-report select), notice slots, chip strip, table, chart container, and pager. It
+// builds `w.els`, the fixed set of mount points every renderer targets, and wires toolbar events
+// to the widget and its feature modules.
 
 import { el, icon } from "../core/dom.js";
 import { featureEnabled } from "./schema.js";
@@ -9,6 +9,7 @@ import { doSearch, openSearchScopeMenu } from "./search.js";
 import { actionsMenuItems, openActionsMenu } from "./menus.js";
 import { loadSavedById, refreshSavedSelect, resetToDefault } from "./saved.js";
 import { openHelpDialog } from "./help.js";
+import { applyCreateButton } from "./create-link.js";
 
 /**
  * Creates the report widget's persistent toolbar, banner, content, and paging regions.
@@ -48,6 +49,9 @@ export function buildSkeleton(w) {
         "aria-haspopup": "menu", "aria-expanded": "false",
         onclick: () => openActionsMenu(w, actionsBtn),
     }, w.t("toolbar.actions"), icon("caret"));
+    // The definition's create button lives here once the schema says whether there is one; the
+    // slot stays hidden until then so the toolbar never flashes an empty gap.
+    const createSlot = el("span", { class: "ir-create", hidden: true });
 
     const savedSel = el("select", {
         class: "ir-select ir-saved-select",
@@ -67,7 +71,7 @@ export function buildSkeleton(w) {
         onsubmit: event => { event.preventDefault(); doSearch(w); },
     }, scopeBtn, search, go);
     w.els = {
-        search, searchWrap, views, actionsBtn, savedSel, savedWrap, helpBtn,
+        search, searchWrap, views, actionsBtn, createSlot, savedSel, savedWrap, helpBtn,
         errorSlot: el("div", { role: "alert", "aria-atomic": "true" }),
         transientSlot: el("div", { role: "status", "aria-live": "polite", "aria-atomic": "true" }),
         ignoredSlot: el("div", { role: "status", "aria-live": "polite", "aria-atomic": "true" }),
@@ -80,7 +84,7 @@ export function buildSkeleton(w) {
 
     w._mount.replaceChildren(
         el("div", { class: "ir-toolbar", part: "toolbar" },
-            searchWrap, views, actionsBtn,
+            searchWrap, views, actionsBtn, createSlot,
             el("span", { class: "ir-spacer" }),
             savedWrap,
             helpBtn),
@@ -95,14 +99,15 @@ export function buildSkeleton(w) {
 // Invariant: fit the toolbar to the effective control policy once the schema has delivered its
 // suggestion and the host's overrides have been applied. The skeleton builds full-width first:
 // search bar, per-mode view buttons (the whole group goes when grid is the only choice left),
-// the Actions button when no menu entry survives, and the saved-report select.
+// the Actions button when no menu entry survives, and the saved-report select. The definition's
+// create button is not a feature: it follows the schema's createLink alone.
 /**
  * Shows or hides report controls according to the effective server suggestion and client overrides.
  *
  * @param {object} w - The loaded report controller whose schema features and saved reports drive visibility.
  * @returns {void} No value.
  *
- * Side effects: changes toolbar control visibility and refreshes saved-report selector options.
+ * Side effects: changes toolbar control visibility, rebuilds the create button, and refreshes saved-report selector options.
  */
 export function applyFeatureChrome(w) {
     w.els.searchWrap.hidden = !featureEnabled(w, "search");
@@ -114,5 +119,6 @@ export function applyFeatureChrome(w) {
     }
     w.els.views.hidden = !anyAlternateView;
     w.els.actionsBtn.hidden = actionsMenuItems(w).length === 0;
+    applyCreateButton(w);
     refreshSavedSelect(w);
 }

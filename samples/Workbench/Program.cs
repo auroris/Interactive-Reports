@@ -90,6 +90,8 @@ var interactiveReportLogger = app.Services.GetRequiredService<ILoggerFactory>()
     .CreateLogger("InteractiveReport");
 app.MapInteractiveReportJson("/api/reports", interactiveReportLogger);
 app.MapInteractiveReportFileDownload("/api/download");
+// Workbench-only: the order editor behind crud.html writes through these, not through the packages.
+app.MapWorkbenchOrdersCrud(connectionString);
 app.MapInteractiveReportGraphQL("/graphql");
 if (app.Environment.IsDevelopment())
     app.MapGraphQLGraphiQL("/graphiql", new GraphiQLOptions

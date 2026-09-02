@@ -121,7 +121,13 @@ optional interface retain the original full-definition lookup path.
       "editLink": {
         "urlTemplate": "/orders/{ORDER_ID}/edit",  // {COLUMN} = definition-schema columns
         "label": "Edit order",                     // pencil aria-label/tooltip; default "Edit"
-        "target": "_self"                          // or "_blank" (rendered with rel="noopener")
+        "target": "_self",                         // or "_blank" (rendered with rel="noopener")
+        "mode": "navigate"                         // or "event": a button that only dispatches ir-edit
+      },
+      "createLink": {
+        "url": "/orders/new",                      // constant; optional when mode is "event"
+        "label": "New order",                      // toolbar button text; default "Create"
+        "mode": "navigate"                         // or "event": a button that only dispatches ir-create
       },
       "columns": {
         "AMOUNT": { "helpText": "Order total before tax." },
@@ -246,6 +252,20 @@ Notes:
   braces, zero placeholders, non-http(s) absolute URLs); a placeholder naming no
   live schema column disables the pencil for that schema (omitted from the payload,
   logged, and surfaced as an `ignored[]` notice on queries) rather than erroring.
+  Every pencil activation dispatches a cancelable, composed `ir-edit` CustomEvent from
+  the host element with `{ url, row }` (the row copy including the hidden template
+  columns); in the default `mode: "navigate"` the anchor then follows its href unless a
+  listener prevented the event, and `mode: "event"` renders a button instead, so the
+  host application owns what happens next. The template stays required in event mode
+  because it is what declares the projected row values.
+- `createLink` is the toolbar's create-record button, the same shape of definition
+  chrome: a constant `url` (placeholders are rejected — there is no row yet), `label`
+  (default `Create`), `target`, and `mode`. It is independent of the active view and of
+  the `features` policy. Activation dispatches a cancelable, composed `ir-create` event
+  with `{ url }`; navigate mode is a primary-styled anchor, event mode a button, and
+  only event mode may omit the URL. Both links share the load-time rules: labels
+  1–200 characters, targets `_self`/`_blank`, modes `navigate`/`event`, absolute URLs
+  http(s) only.
   Config keys cannot express column names containing `:` (a configuration-binder
   limitation shared with `columnLabels`).
 - `columns` is the per-column override map (keyed by definition column name,
@@ -1842,6 +1862,17 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   possibly unsaved report document and ordinary Query authorization. Search is a
   case-insensitive substring; accepted text is an exact case-insensitive condition unless
   unselected typed input uses the portable `*` wildcard. Responses are capped at 50.
+- **M23 — Create button + host-observable link events** ✅ *(2026-09-02)*: the
+  definition's `createLink` (`url`/`label`/`target`/`mode`) renders a toolbar
+  create-record button, independent of view and feature policy, validated at load like
+  `editLink`. Both links gain `mode`: `navigate` (anchor, default) or `event` (button, no
+  navigation), and both dispatch cancelable composed events — `ir-edit` with
+  `{ url, row }`, `ir-create` with `{ url }` — so a host can open its own editor;
+  preventing the event cancels a navigate-mode anchor. Verified: renderer units for
+  both modes and prevented navigation, mounted-widget toolbar test, browser-server
+  passthrough, config fail-fast matrix + snapshot round-trip, HTTP schema payload. The
+  Workbench (`crud.html` + `/api/orders`) and the demo page host slide-over editors
+  driven by the events.
 
 ## Appendix: decision log
 

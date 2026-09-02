@@ -47,6 +47,7 @@ globalThis.fetch = async url => {
             ],
             capabilities: { aggregateFunctions: {}, expressionFunctions: [] },
             editLink: { urlTemplate: "/rows/{ID}/edit", label: "Edit row", target: "_self" },
+            createLink: { url: "/rows/new", label: "New row", target: "_self", mode: "navigate" },
             columnOverrides: {
                 NOTES: { hideLabel: true, sortable: false, filterable: false, helpText: "Free-form notes." },
             },
@@ -126,6 +127,37 @@ test("the edit pencil leads every grid row and withholds itself on null keys", a
     assert.equal(total.children[0].className, "ir-td-edit");
     assert.equal(total.children[0].textContent.trim(), "");
     assert.match(total.children[1].textContent, /^Count:/);
+
+    report.remove();
+});
+
+test("the create button joins the toolbar after Actions and dispatches ir-create from the element", async () => {
+    const report = await mount();
+    const events = [];
+    // preventDefault keeps the anchor from navigating the test window away from the fixture.
+    report.addEventListener("ir-create", event => { event.preventDefault(); events.push(event.detail); });
+
+    const toolbar = report.shadowRoot.querySelector(".ir-toolbar");
+    const create = toolbar.querySelector(".ir-createbtn");
+    assert.equal(create.tagName, "A");
+    assert.equal(create.getAttribute("href"), "/rows/new");
+    assert.equal(create.textContent.trim(), "New row");
+    assert.equal(create.closest(".ir-create").hidden, false);
+    const order = [...toolbar.children];
+    assert.equal(
+        order.indexOf(create.closest(".ir-create")) - order.indexOf(toolbar.querySelector(".ir-actionsbtn")), 1,
+        "the create control immediately follows Actions");
+
+    create.click();
+    assert.deepEqual(events, [{ url: "/rows/new" }], "the event escapes the shadow root to the host element");
+
+    // The edit pencil's event reaches the host the same way, with the hidden key.
+    const edits = [];
+    report.addEventListener("ir-edit", event => { event.preventDefault(); edits.push(event.detail); });
+    report.shadowRoot.querySelector("tbody a.ir-cell-edit").click();
+    assert.equal(edits.length, 1);
+    assert.equal(edits[0].url, "/rows/41/edit");
+    assert.equal(edits[0].row.ID, 41);
 
     report.remove();
 });
