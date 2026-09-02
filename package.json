@@ -11,7 +11,7 @@
     "build:client": "node scripts/build-client.mjs",
     "build:dotnet": "dotnet build InteractiveReport.slnx",
     "build:help": "npm run build:screenshots && node scripts/build-help.mjs",
-    "build:demo": "npm run build:client && node scripts/build-demo.mjs",
+    "build:demo": "npm run build:client && node scripts/build-help.mjs && node scripts/build-demo.mjs",
     "build:watch": "node scripts/build-client.mjs --watch",
     "build:screenshots": "node scripts/build-screenshots.mjs",
     "start": "dotnet run --project samples/Workbench --no-build --launch-profile http",
