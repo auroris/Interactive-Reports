@@ -10,10 +10,12 @@
     "build": "npm run build:client && npm run build:help",
     "build:client": "node scripts/build-client.mjs",
     "build:help": "node scripts/build-help.mjs",
+    "build:demo": "npm run build && node scripts/build-demo.mjs",
     "docs:screenshots": "node scripts/docs-screenshots.mjs",
     "dev": "node scripts/build-client.mjs --watch",
-    "test": "npm run test:unit",
+    "test": "npm run test:unit && npm run test:server",
     "test:unit": "npm run build:client && npm run unit",
+    "test:server": "node --test tests/browser-server/*.test.js",
     "unit": "node --test tests/ui/*.test.js",
     "test:ui": "npm run build:client && npm run e2e",
     "e2e": "playwright test",
@@ -31,6 +33,7 @@
   },
   "dependencies": {
     "big.js": "7.0.1",
-    "intl-messageformat": "11.2.14"
+    "intl-messageformat": "11.2.14",
+    "sql.js": "^1.14.2"
   }
 }
