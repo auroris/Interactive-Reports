@@ -1,4 +1,4 @@
-// Pagination renderer for previous/next controls, the visible row range, and elapsed time. Page
+// Pagination renderer for first/previous/next/last controls, the visible row range, and elapsed time. Page
 // size lives in Actions → Pagination so the report document has one authoritative control. Page moves go
 // through w.apply like every other state change; a page move is the one mutation that must not
 // reset the page index back to 1.
@@ -43,10 +43,17 @@ export function renderPager(w, container) {
     const start = zero ? totalCount : all ? parseReportNumber(1) : parseReportNumber(index - 1).times(size).plus(1);
     const end = zero ? totalCount : start.plus(result.rows.length).minus(1);
     const hasNext = !all && parseReportNumber(index).times(size).lt(totalCount);
+    // Round the arbitrary-precision count before converting the protocol's page index back to a
+    // JavaScript number. This avoids deriving the last page from a lossy totalRows conversion.
+    const lastIndex = all || zero ? 1 : Number(totalCount.div(size).round(0, 3).toFixed(0));
     const paginationEnabled = featureEnabled(w, "pagination");
 
     container.replaceChildren(
         el("div", { class: "ir-pager-left" },
+            el("button", {
+                type: "button", class: "ir-btn ir-page-btn", disabled: !paginationEnabled || index <= 1,
+                "aria-label": translate(w, "pagination.first"), onclick: () => gotoPage(w, 1),
+            }, "«"),
             el("button", {
                 type: "button", class: "ir-btn ir-page-btn", disabled: !paginationEnabled || index <= 1,
                 "aria-label": translate(w, "pagination.previous"), onclick: () => gotoPage(w, index - 1),
@@ -62,6 +69,10 @@ export function renderPager(w, container) {
             el("button", {
                 type: "button", class: "ir-btn ir-page-btn", disabled: !paginationEnabled || !hasNext,
                 "aria-label": translate(w, "pagination.next"), onclick: () => gotoPage(w, index + 1),
-            }, "›")),
+            }, "›"),
+            el("button", {
+                type: "button", class: "ir-btn ir-page-btn", disabled: !paginationEnabled || !hasNext,
+                "aria-label": translate(w, "pagination.last"), onclick: () => gotoPage(w, lastIndex),
+            }, "»")),
         el("div", { class: "ir-pager-right" }, translate(w, "pagination.elapsed", { milliseconds: result.elapsedMs })));
 }

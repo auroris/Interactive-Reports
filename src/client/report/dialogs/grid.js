@@ -1,7 +1,7 @@
-// Table-shaping dialogs: pagination, sort order, control breaks, and aggregate rows. Every
-// operation follows the same active terminal-table context.
+// Table-shaping dialogs: sort order, control breaks, and aggregate rows. Every operation follows
+// the same active terminal-table context. (Page size is a submenu, not a dialog; see page-size.js.)
 
-import { el, labeled, sel } from "../../core/dom.js";
+import { el, sel } from "../../core/dom.js";
 import { openDialog } from "../../core/dialog.js";
 import { tableContext } from "../table.js";
 import {
@@ -12,44 +12,6 @@ import {
     rowField,
     rowList,
 } from "./parts.js";
-
-const PAGE_LIMITS = [10, 50, 100, 500, 1000];
-
-/**
- * Opens the page-size editor using server limits and preserves a nonstandard current size.
- *
- * @param {object} w - The report controller containing page state, limits, localization, and the apply pipeline.
- * @returns {void} No value.
- *
- * Side effects: opens a dialog; applying it updates page size and runs the report.
- */
-export function paginationDialog(w) {
-    const current = w.lastResult?.page?.size ?? w.doc.page?.size ?? w.schema?.limits?.defaultPageSize ?? 50;
-    const max = w.schema?.limits?.maxPageSize ?? 1000;
-    const numeric = PAGE_LIMITS.filter(size => size <= max);
-    // Preserve a developer-defined/default size that is outside the APEX choices. It remains
-    // selectable until the user deliberately replaces it.
-    if (current > 0 && current <= max && !numeric.includes(current)) numeric.push(current);
-    numeric.sort((a, b) => a - b);
-    const limit = sel([
-        ...numeric.map(size => ({ value: String(size), label: String(size) })),
-        { value: "0", label: w.t("common.all") },
-    ], String(current));
-    limit.setAttribute("aria-label", w.t("pagination.limit"));
-
-    openDialog({
-        owner: w,
-        title: w.t("pagination.title"),
-        width: "20rem",
-        build: body => body.append(
-            labeled(w.t("pagination.limit"), limit),
-            el("p", { class: "ir-dialog-note" }, w.t("pagination.allNote"))),
-        onApply: () => w.apply(d => {
-            d.page ??= { index: 1, size: current };
-            d.page.size = Number(limit.value);
-        }),
-    });
-}
 
 /**
  * Opens the active table's ordered multi-column sort editor.

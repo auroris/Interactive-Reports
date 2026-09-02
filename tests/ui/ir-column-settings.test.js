@@ -465,7 +465,7 @@ test("without the columns feature the dialog offers no visibility checkbox", asy
     report.shadowRoot.querySelector(".ir-actionsbtn").click();
     const labels = [...report.shadowRoot.querySelectorAll(".ir-popup .ir-menu-item, .ir-popup .ir-menu-heading")]
         .map(item => item.textContent.replace("✓", "").trim());
-    assert.deepEqual(labels, ["Column Settings…", "Report", "Reset"]);
+    assert.deepEqual(labels, ["Column Settings…", "Reset"]);
 
     clickMenuItem(report, "Column Settings");
     const dialog = report.shadowRoot.querySelector(".ir-dialog");

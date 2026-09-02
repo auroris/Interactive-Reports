@@ -191,7 +191,7 @@ its own editor listens for `ir-edit` / `ir-create` instead (see
 [Edit links, create buttons, and column overrides](#edit-links-create-buttons-and-column-overrides)).
 
 Page size is configured through **Actions → Pagination**. The standard choices are
-10, 50, 100, 500, 1000, and All; numeric choices above a definition's `maxPageSize`
+10, 25, 50, 100, 500, 1000, and All; numeric choices above a definition's `maxPageSize`
 are omitted. All is stored as `page.size: 0`. A positive definition `maxRows` is a
 hard response cap for All grid rows, All Group By groups, and CSV export regardless of
 the client request. Set `maxRows` to `0` or a negative number for unlimited results.

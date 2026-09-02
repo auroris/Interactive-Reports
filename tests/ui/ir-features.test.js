@@ -99,8 +99,9 @@ async function mount(reportName) {
     return report;
 }
 
+// Entries read by their label span so a submenu parent's hint and arrow do not leak into the name.
 const menuLabels = report => [...report.shadowRoot.querySelectorAll(".ir-popup .ir-menu-item, .ir-popup .ir-menu-heading")]
-    .map(item => item.textContent.replace("✓", "").trim());
+    .map(item => (item.querySelector(".ir-menu-label") ?? item).textContent.replace("✓", "").trim());
 
 test("a whitelisted report hides the chrome its features do not cover", async () => {
     requests.length = 0;
@@ -116,7 +117,14 @@ test("a whitelisted report hides the chrome its features do not cover", async ()
 
     report.shadowRoot.querySelector(".ir-actionsbtn").click();
     const labels = menuLabels(report);
-    assert.deepEqual(labels, ["Sort…", "Report", "Reset", "Download", "CSV"]);
+    assert.deepEqual(labels, ["Sort…", "Reset", "Download"]);
+    // Download is a submenu of formats; opening it reveals CSV.
+    const download = [...report.shadowRoot.querySelectorAll(".ir-popup .ir-menu-item")]
+        .find(item => item.querySelector(".ir-menu-label").textContent === "Download");
+    assert.equal(download.getAttribute("aria-haspopup"), "menu");
+    download.click();
+    assert.deepEqual([...report.shadowRoot.querySelectorAll(".ir-submenu .ir-menu-label")].map(l => l.textContent), ["CSV"]);
+    report.shadowRoot.querySelector(".ir-actionsbtn").click();
 
     // The header menu only offers what survived: sorting.
     const headerButton = report.shadowRoot.querySelector("th.ir-th-menu .ir-th-button");
@@ -141,9 +149,20 @@ test("a schema without a features field (older server) leaves everything on", as
     report.shadowRoot.querySelector(".ir-actionsbtn").click();
     const labels = menuLabels(report);
     assert.equal(labels.includes("Columns…"), true);
-    assert.equal(labels.includes("Pagination…"), true);
-    assert.equal(labels.includes("Save As…"), true);
-    assert.equal(labels.includes("CSV"), true);
+    assert.equal(labels.includes("Pagination"), true);
+    const pagination = [...report.shadowRoot.querySelectorAll(".ir-popup .ir-menu-item")]
+        .find(item => item.querySelector(".ir-menu-label").textContent === "Pagination");
+    assert.equal(pagination.getAttribute("aria-haspopup"), "menu", "page size is a submenu, not a dialog");
+    assert.equal(pagination.querySelector(".ir-menu-hint").textContent, "25", "the entry shows the current page size");
+    assert.equal(labels.includes("Report"), true, "saved-report management is a submenu");
+    assert.equal(labels.includes("Reset"), true, "Reset stays on the base menu");
+    assert.equal(labels.includes("Download"), true);
+    assert.equal(labels.includes("Save As…"), false, "submenu entries render only once opened");
+    [...report.shadowRoot.querySelectorAll(".ir-popup .ir-menu-item")]
+        .find(item => item.querySelector(".ir-menu-label").textContent === "Report").click();
+    // The default document is a global one this user cannot manage, so only Save As is offered.
+    assert.deepEqual([...report.shadowRoot.querySelectorAll(".ir-submenu .ir-menu-label")].map(l => l.textContent),
+        ["Save As…"]);
 
     report.remove();
 });

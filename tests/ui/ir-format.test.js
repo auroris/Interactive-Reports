@@ -12,6 +12,7 @@ import { formatForColumn, renderColumnValue } from "../../src/client/report/rend
 import { canRenderChart, chartResultColumns, renderChartView } from "../../src/client/report/render/chart-view.js";
 import { renderGrid } from "../../src/client/report/render/grid.js";
 import { renderPager } from "../../src/client/report/render/pager.js";
+import { applyPageSize, pageSizeChoices } from "../../src/client/report/page-size.js";
 import { reportState, sourceComposableOf } from "./report-state-fixture.js";
 
 const window = new Window({ url: "https://host.example/reports/orders" });
@@ -19,6 +20,8 @@ Object.assign(globalThis, {
     window,
     document: window.document,
     Node: window.Node,
+    HTMLElement: window.HTMLElement,
+    ShadowRoot: window.ShadowRoot,
     Option: function Option(text = "", value = "") {
         const option = window.document.createElement("option");
         option.text = text;
@@ -496,6 +499,34 @@ test("pager arithmetic and display preserve an Int64 count", () => {
     assert.equal(container.querySelector('[aria-label="Next page"]').disabled, false);
 });
 
+test("pager first and last controls request the boundary pages", () => {
+    const requests = [];
+    const w = {
+        doc: reportState(),
+        lastResult: {
+            page: { index: 3, size: 25 },
+            totalRows: "101",
+            rows: Array.from({ length: 25 }, () => ({})),
+            elapsedMs: "1",
+        },
+        applyOrBanner(mutator, options) {
+            const document = { page: { index: 3, size: 25 } };
+            mutator(document);
+            requests.push({ index: document.page.index, options });
+        },
+    };
+    const container = document.createElement("div");
+
+    renderPager(w, container);
+    container.querySelector('[aria-label="First page"]').click();
+    container.querySelector('[aria-label="Last page"]').click();
+
+    assert.deepEqual(requests, [
+        { index: 1, options: { resetPage: false } },
+        { index: 5, options: { resetPage: false } },
+    ]);
+});
+
 test("an All result is one unpaged range with no next page", () => {
     const w = {
         doc: reportState(),
@@ -512,9 +543,54 @@ test("an All result is one unpaged range with no next page", () => {
     renderPager(w, container);
 
     assert.equal(digits(container.querySelector(".ir-page-info").textContent), "139223372036854775807");
+    assert.equal(container.querySelector('[aria-label="First page"]').disabled, true);
     assert.equal(container.querySelector('[aria-label="Previous page"]').disabled, true);
     assert.equal(container.querySelector('[aria-label="Next page"]').disabled, true);
+    assert.equal(container.querySelector('[aria-label="Last page"]').disabled, true);
     assert.equal(container.querySelector("select"), null);
+});
+
+test("page-size choices offer 25 among the standard limits and mark the current size", () => {
+    const w = {
+        doc: reportState(),
+        lastResult: { page: { size: 50 } },
+        schema: { limits: { defaultPageSize: 50, maxPageSize: 1000 } },
+        t: key => key,
+    };
+    const choices = pageSizeChoices(w);
+    assert.deepEqual(choices.map(c => c.size), [10, 25, 50, 100, 500, 1000, 0]);
+    assert.deepEqual(choices.map(c => c.label), ["10", "25", "50", "100", "500", "1000", "common.all"]);
+    assert.deepEqual(choices.filter(c => c.current).map(c => c.size), [50]);
+
+    // A nonstandard current size stays selectable; sizes above the maximum are omitted; All is current at 0.
+    w.lastResult.page.size = 37;
+    w.schema.limits.maxPageSize = 100;
+    assert.deepEqual(pageSizeChoices(w).map(c => c.size), [10, 25, 37, 50, 100, 0]);
+    w.lastResult.page.size = 0;
+    assert.deepEqual(pageSizeChoices(w).filter(c => c.current).map(c => c.label), ["common.all"]);
+});
+
+test("applying a page size writes the document's page node through the banner-reporting apply", () => {
+    const applied = [];
+    const w = {
+        doc: reportState(),
+        lastResult: { page: { size: 50 } },
+        schema: { limits: { defaultPageSize: 50, maxPageSize: 1000 } },
+        t: key => key,
+        applyOrBanner(mutate) {
+            const d = { page: { index: 3, size: 50 } };
+            mutate(d);
+            applied.push(d.page);
+            return Promise.resolve();
+        },
+    };
+    applyPageSize(w, 0);
+    assert.deepEqual(applied, [{ index: 3, size: 0 }]);
+
+    // A document without a page node gains one seeded from the current size.
+    w.applyOrBanner = mutate => { const d = {}; mutate(d); applied.push(d.page); return Promise.resolve(); };
+    applyPageSize(w, 25);
+    assert.deepEqual(applied[1], { index: 1, size: 25 });
 });
 
 test("control breaks own their columns and defer subtotal and grand total to logical boundaries", () => {

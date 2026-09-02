@@ -637,6 +637,13 @@ button.ir-cell-edit { border: 0; background: none; font: inherit; cursor: pointe
         margin-top: 2px;
         position-try-fallbacks: flip-block, flip-inline;
     }
+    /* A submenu opens beside the entry that owns it, first entry aligned with that entry, and
+       flips to the other side or slides up only when the viewport leaves no room. */
+    .ir-popup.ir-submenu {
+        position-area: right span-bottom;
+        position-try-fallbacks: flip-inline, flip-block;
+        margin-top: -5px;
+    }
 }
 .ir-menu-item {
     display: flex;
@@ -654,9 +661,11 @@ button.ir-cell-edit { border: 0; background: none; font: inherit; cursor: pointe
 }
 .ir-menu-item:hover:not(:disabled), .ir-menu-item:focus-visible { background: var(--ir-accent-soft); outline: none; }
 .ir-menu-item:disabled { color: var(--ir-menu-item-disabled); cursor: default; }
+.ir-menu-item.ir-menu-parent[aria-expanded="true"]:not(:disabled) { background: var(--ir-accent-soft); }
 .ir-menu-check { width: 13px; font-size: 11px; color: var(--ir-accent); flex: none; }
 .ir-menu-label { flex: 1; }
 .ir-menu-hint { color: var(--ir-text-muted); font-size: 11px; }
+.ir-menu-arrow { flex: none; color: var(--ir-text-muted); font-size: 14px; line-height: 1; }
 .ir-menu-heading {
     padding: 8px 12px 3px;
     font-size: 10.5px;

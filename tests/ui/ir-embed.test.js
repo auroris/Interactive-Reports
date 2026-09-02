@@ -411,7 +411,11 @@ test("a read-only saved report never offers Save or Delete, even to an administr
         await new Promise(resolve => setTimeout(resolve, 5));
 
     report.shadowRoot.querySelector(".ir-actionsbtn").click();
-    const labels = [...report.shadowRoot.querySelectorAll(".ir-popup .ir-menu-item")]
+    // Saved-report commands live in the Report submenu.
+    [...report.shadowRoot.querySelectorAll(".ir-popup .ir-menu-item")]
+        .find(item => item.querySelector(".ir-menu-label").textContent === "Report")
+        .click();
+    const labels = [...report.shadowRoot.querySelectorAll(".ir-submenu .ir-menu-item .ir-menu-label")]
         .map(item => item.textContent.trim());
     assert.equal(labels.includes("Save As…"), true);
     assert.equal(labels.includes("Save"), false);

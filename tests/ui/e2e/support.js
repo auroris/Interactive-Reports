@@ -23,9 +23,9 @@ export async function waitForQuery(page, action, predicate = response => respons
     return matched;
 }
 
-export async function clickAction(page, name) {
+export async function clickAction(page, ...names) {
     await page.getByRole("button", { name: "Actions", exact: true }).click();
-    await page.getByRole("menuitem", { name, exact: true }).click();
+    for (const name of names) await page.getByRole("menuitem", { name, exact: true }).click();
 }
 
 export async function reportId(request, reportName = "orders", options = {}) {

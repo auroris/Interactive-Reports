@@ -64,7 +64,7 @@ async function gridSnapshot(page) {
 
 async function downloadCsv(page) {
     const downloadPromise = page.waitForEvent("download");
-    await clickAction(page, "CSV");
+    await clickAction(page, "Download", "CSV");
     const download = await downloadPromise;
     return readFile(await download.path(), "utf8");
 }

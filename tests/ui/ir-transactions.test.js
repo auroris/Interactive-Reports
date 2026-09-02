@@ -182,16 +182,21 @@ const selectSaved = (report, id) => {
     select.dispatchEvent(new window.Event("change", { bubbles: true }));
 };
 
-const clickAction = (report, label) => {
+// Walks a path of entry labels: the first is found on the Actions menu, each later one inside the
+// submenu the previous pick opened.
+const clickAction = (report, ...labels) => {
     report.shadowRoot.querySelector(".ir-actionsbtn").click();
-    const item = [...report.shadowRoot.querySelectorAll(".ir-popup .ir-menu-item")]
-        .find(candidate => candidate.textContent.includes(label));
-    assert.ok(item, `Actions contains ${label}`);
-    item.click();
+    labels.forEach((label, depth) => {
+        const scope = depth === 0 ? ".ir-popup > .ir-menu-item" : ".ir-submenu > .ir-menu-item";
+        const item = [...report.shadowRoot.querySelectorAll(scope)]
+            .find(candidate => candidate.querySelector(".ir-menu-label").textContent.includes(label));
+        assert.ok(item, `Actions contains ${labels.slice(0, depth + 1).join(" › ")}`);
+        item.click();
+    });
 };
 
 const beginSaveAs = (report, title) => {
-    clickAction(report, "Save As");
+    clickAction(report, "Report", "Save As");
     const dialog = report.shadowRoot.querySelector(".ir-dialog");
     assert.ok(dialog, "Save As opens a dialog");
     dialog.querySelector('input[type="text"]').value = title;
@@ -446,7 +451,7 @@ test("a successful delete stays removed from the local list when its refresh fai
     await settle(() => report.getReportDocument().search === "delete");
 
     savedListStatus = 500;
-    clickAction(report, "Delete");
+    clickAction(report, "Report", "Delete");
     await settle(() => report.shadowRoot.querySelector("dialog.ir-dialog-modal"));
     report.shadowRoot.querySelector("dialog.ir-dialog-modal .ir-btn-primary").click();
     await settle(() => warnText(report).includes("could not be refreshed"));

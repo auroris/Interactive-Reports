@@ -171,7 +171,7 @@ are not shown at all.
 | [Column Settings…](#column-settings) | Alignment, number and date formats, colours, links, and images. |
 | [Filter…](#filter) | Add a filter written as an expression. |
 | [Sort…](#sort) | Sort by up to six columns. |
-| [Pagination…](#pagination) | How many rows a page shows. |
+| [Pagination ▸](#pagination) | How many rows a page shows. The current choice appears beside the entry. |
 | [Control Break…](#control-break) | Group rows under headings, with subtotals. |
 | [Highlight…](#highlight) | Colour rows or cells that match a rule. |
 | [Aggregate…](#aggregate) | Totals, averages, counts, and more. |
@@ -179,8 +179,9 @@ are not shown at all.
 | [Group By…](#group-by) | Summarise rows by one to three columns. |
 | [Pivot…](#pivot) | Cross-tabulate two sets of columns. |
 | [Chart…](#chart) | Draw the data as a bar, line, area, or pie chart. |
-| **Report: Save / Save As… / Delete… / Reset** | Manage saved reports. See [Saved reports](#saved-reports). |
-| **Download: CSV** | Download the current report. See [Downloading](#downloading). |
+| **Report ▸** Save / Save As… / Delete… | Manage saved reports. See [Saved reports](#saved-reports). |
+| **Reset** | Discard unsaved changes and return to the saved layout. Kept on the main menu so it is always one pick away. |
+| **Download ▸** CSV | Download the current report. See [Downloading](#downloading). |
 
 Every dialog has an **Apply** button (sometimes named for the action, such as **Save**)
 and **Cancel**. Applying re-runs the report straight away. If the server rejects the
@@ -291,8 +292,10 @@ always sort before these; in a Pivot the row dimensions come first.
 
 ### Pagination
 
-**Limit** sets the number of rows per page: 10, 50, 100, 500, or 1000 (up to the
-maximum the report allows), or **All**, which returns every matching row in one page.
+**Pagination** opens a submenu rather than a window. Pick the number of rows per page:
+10, 25, 50, 100, 500, or 1000 (up to the maximum the report allows), or **All**, which
+returns every matching row in one page. The current choice is ticked in the submenu and
+shown beside the **Pagination** entry itself, and the report re-runs as soon as you pick.
 
 ### Control Break
 
@@ -571,14 +574,18 @@ On narrow screens (phones and small tablets) windows stay in a fixed position an
 cannot be moved.
 
 **Menus** (Actions, search scope, column headings) open with a click or Enter, and the
-first entry is focused:
+first entry is focused. An entry marked ▸ opens its submenu when you point at it, and the
+submenu stays open while the pointer travels towards it, even across the entries in
+between:
 
 | Key | Action |
 |---|---|
 | ↑ ↓ | Move between entries |
 | Home / End | First or last entry |
 | Enter or Space | Choose the entry |
-| Esc | Close the menu |
+| → | Open the entry's submenu (entries marked ▸ also open when you point at them) |
+| ← | Close the submenu and return to its entry |
+| Esc | Close the menu (an open submenu closes first) |
 | Tab | Close the menu and move on |
 
 Confirmations for deleting or resetting are small modal boxes: **Delete** or **Reset**

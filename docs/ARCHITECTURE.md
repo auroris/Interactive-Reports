@@ -1512,7 +1512,7 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   served-prefix inference + canonical error text), `localization.js` (locale selection,
   ICU formatting, and locale-aware scalar helpers), `identity.js` (the shared
   optional-whoami policy and concurrent-request coalescing), `dom.js` (element
-  builder, icons, banners, form helpers), `menu.js` (popup menus), `dialog.js`
+  builder, icons, banners, form helpers), `menu.js` (popup menus with nested submenus; hovering holds an open submenu while the pointer is measured to be heading for it, instead of a close delay), `dialog.js`
   (modal dialogs), `widget.js` (shadow-root mount/teardown, shared notices,
   compiles in `ir.css`). `report/` is the report
   widget: `element.js` (a small public custom-element facade over a closure-owned
@@ -1551,9 +1551,10 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   four names outright (§13). Embedding in host
   pages remains the primary consumption path.
 - **Feature surface**: scoped toolbar search (all text columns or one typed column → expression filter);
-  Actions menu (Columns shuttle, Column Settings, Filter, Sort, Control Break, Highlight, Aggregate,
-  Compute with token-insert helpers, Group By, Pivot, Chart, Save/Save As/Delete/Reset,
-  CSV download); column-header menus (sort/rename/column settings/hide/break/filter — Rename writes a
+  Actions menu (Columns shuttle, Column Settings, Filter, Sort, Pagination as a submenu of
+  page sizes with the current one ticked and echoed on the entry, Control Break, Highlight, Aggregate,
+  Compute with token-insert helpers, Group By, Pivot, Chart, a Report submenu of
+  Save/Save As/Delete with Reset kept on the base menu, a Download submenu of formats — CSV so far); column-header menus (sort/rename/column settings/hide/break/filter — Rename writes a
   `labels` override for ordinary columns and edits the rule label for computed ones; blank
   restores the schema default). The Column Settings dialog edits one column at a time
   (edits are staged per column, so several columns can be configured in one visit): a
@@ -1787,8 +1788,10 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   and projected only as renderer inputs. The file client converts those modes to CSV-safe
   text and URLs while browser HTML remains in the JavaScript client. DOM construction,
   HTML encoding, and a URL protocol allowlist keep report data out of active-content surfaces.
-- **M16 — Actions pagination** ✅ *(2026-08-07)*: Actions → Pagination owns the
-  report document's page limit with APEX choices 10, 50, 100, 500, 1000, and All.
+- **M16 — Actions pagination** ✅ *(2026-08-07; revised 2026-09-02)*: Actions → Pagination owns the
+  report document's page limit with APEX choices 10, 25, 50, 100, 500, 1000, and All,
+  offered as a submenu of pickable sizes (the current size ticked and echoed on the menu
+  entry) rather than a dialog; `menu.js` gained one level of nested submenus for it.
   Numeric values respect `maxPageSize`; All is the explicit `page.size: 0` protocol
   value. A positive `maxRows` caps All non-Chart completed-table results, while zero or
   a negative value leaves them unlimited. The footer is navigation-only, and export remains

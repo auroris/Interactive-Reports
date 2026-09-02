@@ -59,9 +59,9 @@ async function runAndWaitForQuery(page, action) {
     return response;
 }
 
-async function clickAction(page, name) {
+async function clickAction(page, ...names) {
     await page.getByRole("button", { name: "Actions", exact: true }).click();
-    await page.getByRole("menuitem", { name, exact: true }).click();
+    for (const name of names) await page.getByRole("menuitem", { name, exact: true }).click();
 }
 
 async function search(page, value) {
@@ -131,13 +131,23 @@ test("loads the stored default document, queries data, paginates from Actions, a
     await expect.poll(() => filteredRows.evaluateAll(rows =>
         rows.every(row => row.textContent.includes("Acme Corp")))).toBe(true);
 
-    await clickAction(page, "Pagination…");
-    let dialog = page.getByRole("dialog");
-    const limit = dialog.getByRole("combobox", { name: "Limit" });
-    await expect(limit.locator("option")).toHaveText(["10", "50", "100", "500", "1000", "All"]);
-    await limit.selectOption("10");
+    // Page size is a submenu: the entry echoes the current size, the submenu ticks it.
+    const actions = page.getByRole("button", { name: "Actions", exact: true });
+    const pagination = page.getByRole("menuitem", { name: /^Pagination/ });
+    const submenu = page.locator("interactive-report .ir-submenu");
+    await actions.click();
+    await expect(pagination).toContainText("50");
+    await expect(pagination).toHaveAttribute("aria-haspopup", "menu");
+    await pagination.click();
+    await expect(pagination).toHaveAttribute("aria-expanded", "true");
+    await expect(submenu.locator(".ir-menu-item .ir-menu-label"))
+        .toHaveText(["10", "25", "50", "100", "500", "1000", "All"]);
+    await expect(submenu.locator(".ir-menu-item.ir-checked .ir-menu-label")).toHaveText("50");
+    await expect(submenu.locator(".ir-menu-item").first()).toBeFocused();
     await runAndWaitForQuery(page, () =>
-        dialog.getByRole("button", { name: "Apply", exact: true }).click());
+        submenu.getByRole("menuitem", { name: "10", exact: true }).click());
+    await expect(page.getByRole("menu")).toHaveCount(0);
+    await expect(actions).toBeFocused();
     await expect(filteredRows).toHaveCount(10);
     await expect(page.getByText(/^1 – 10 of \d+ rows$/)).toBeVisible();
 
@@ -145,11 +155,20 @@ test("loads the stored default document, queries data, paginates from Actions, a
         page.getByRole("button", { name: "Next page" }).click());
     await expect(page.getByText(/^11 – 20 of \d+ rows$/)).toBeVisible();
 
-    await clickAction(page, "Pagination…");
-    dialog = page.getByRole("dialog");
-    await dialog.getByRole("combobox", { name: "Limit" }).selectOption("0");
+    // Keyboard: ArrowRight opens the submenu on its entry, ArrowLeft closes only the submenu.
+    await actions.click();
+    await expect(pagination).toContainText("10");
+    await pagination.focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(submenu.locator(".ir-menu-item.ir-checked .ir-menu-label")).toHaveText("10");
+    await expect(submenu.locator(".ir-menu-item").first()).toBeFocused();
+    await page.keyboard.press("ArrowLeft");
+    await expect(submenu).toHaveCount(0);
+    await expect(pagination).toBeFocused();
+    await expect(page.getByRole("menu")).toHaveCount(1);
+    await page.keyboard.press("ArrowRight");
     const allResponse = await runAndWaitForQuery(page, () =>
-        dialog.getByRole("button", { name: "Apply", exact: true }).click());
+        submenu.getByRole("menuitem", { name: "All", exact: true }).click());
     const allResult = await allResponse.json();
     expect(allResult.page).toEqual({ index: 1, size: 0 });
     expect(allResult.rows).toHaveLength(Number(allResult.totalRows));
@@ -185,9 +204,42 @@ test("menus close on Tab and hand focus back to their trigger on pick", async ({
     expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(page.viewportSize().height - 8);
     expect(await menu.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true);
     const download = page.waitForEvent("download");
+    await page.getByRole("menuitem", { name: /^Download/ }).click();
     await page.getByRole("menuitem", { name: "CSV", exact: true }).click();
     await download;
     await expect(actions).toBeFocused();
+});
+
+test("an open submenu survives the pointer crossing neighbouring entries on its way there", async ({ page }) => {
+    await openWorkbench(page);
+    await page.getByRole("button", { name: "Actions", exact: true }).click();
+    const pagination = page.getByRole("menuitem", { name: /^Pagination/ });
+    const submenu = page.locator("interactive-report .ir-submenu");
+    const from = await pagination.boundingBox();
+    await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+    await expect(submenu).toBeVisible();
+
+    // Walk in a straight line from the Pagination entry to the last size. The line leaves the
+    // Actions menu several entries below Pagination, so it crosses Control Break, Highlight and
+    // friends; each of those would close the submenu were the pointer not measured to be aiming at it.
+    const target = submenu.getByRole("menuitem", { name: "1000", exact: true });
+    const to = await target.boundingBox();
+    await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 12 });
+    await expect(pagination).toHaveAttribute("aria-expanded", "true");
+    await expect(target).toBeVisible();
+    await expect(page.locator("interactive-report .ir-submenu")).toHaveCount(1);
+
+    await runAndWaitForQuery(page, () => target.click());
+    await expect(page.getByText("1 – 500 of 500 rows", { exact: true })).toBeVisible();
+    await expect(page.getByRole("menu")).toHaveCount(0);
+
+    // The same crossing without aiming: heading straight down the Actions menu closes it.
+    await page.getByRole("button", { name: "Actions", exact: true }).click();
+    await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+    await expect(submenu).toBeVisible();
+    await page.mouse.move(from.x + from.width / 2, from.y + from.height * 2.5, { steps: 6 });
+    await expect(submenu).toHaveCount(0);
+    await expect(pagination).toHaveAttribute("aria-expanded", "false");
 });
 
 test("a tall menu uses the roomier side and scrolls its final command into view", async ({ page }) => {
@@ -207,6 +259,10 @@ test("a tall menu uses the roomier side and scrolls its final command into view"
     expect(await menu.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true);
 
     await page.keyboard.press("End");
+    const download = page.getByRole("menuitem", { name: /^Download/ });
+    await expect(download).toBeFocused();
+    await expect(download).toBeInViewport();
+    await page.keyboard.press("ArrowRight");
     const csv = page.getByRole("menuitem", { name: "CSV", exact: true });
     await expect(csv).toBeFocused();
     await expect(csv).toBeInViewport();
@@ -214,9 +270,9 @@ test("a tall menu uses the roomier side and scrolls its final command into view"
 
 test("editor windows are named, modeless, movable, and leave the report interactive", async ({ page }) => {
     await openWorkbench(page);
-    await clickAction(page, "Pagination…");
+    await clickAction(page, "Sort…");
 
-    const dialog = page.getByRole("dialog", { name: "Pagination", exact: true });
+    const dialog = page.getByRole("dialog", { name: "Sort", exact: true });
     await expect(dialog).toHaveAttribute("popover", "manual");
     await expect(dialog).not.toHaveAttribute("aria-modal", "true");
     expect(await dialog.evaluate(element => element.matches(":popover-open"))).toBe(true);
@@ -260,7 +316,7 @@ test("exports the current report state as CSV", async ({ page }) => {
     await search(page, "Acme Corp");
 
     const downloadPromise = page.waitForEvent("download");
-    await clickAction(page, "CSV");
+    await clickAction(page, "Download", "CSV");
     const download = await downloadPromise;
     expect(download.suggestedFilename()).toBe("orders.csv");
 
@@ -476,7 +532,7 @@ test("a saved report retains its configured tables and switches them without reo
         expect(modeOf(configured)).toBe("pivot");
         expect(shapeOf(configured, "chart").kind).toBe("chart");
 
-        await clickAction(page, "Save As…");
+        await clickAction(page, "Report", "Save As…");
         const saveDialog = page.getByRole("dialog");
         await saveDialog.getByPlaceholder("Saved report name").fill(title);
         const saveResponsePromise = page.waitForResponse(response =>
@@ -536,7 +592,7 @@ test("Save As confirms and replaces an existing report instead of creating a dup
 
     try {
         await openWorkbench(page);
-        await clickAction(page, "Save As…");
+        await clickAction(page, "Report", "Save As…");
         let dialog = page.getByRole("dialog");
         await dialog.getByPlaceholder("Saved report name").fill(title);
         const createPromise = page.waitForResponse(response =>
@@ -550,7 +606,7 @@ test("Save As confirms and replaces an existing report instead of creating a dup
             page.getByRole("combobox", { name: "Saved Report" }).selectOption({ label: "Default" }));
         await search(page, "Acme Corp");
 
-        await clickAction(page, "Save As…");
+        await clickAction(page, "Report", "Save As…");
         dialog = page.getByRole("dialog");
         await dialog.getByPlaceholder("Saved report name").fill(title.toUpperCase());
         await dialog.getByRole("button", { name: "Save", exact: true }).click();
@@ -587,7 +643,7 @@ test("saves and reloads a report, then administers its complete lifecycle", asyn
         await openWorkbench(page);
         await search(page, "Acme Corp");
 
-        await clickAction(page, "Save As…");
+        await clickAction(page, "Report", "Save As…");
         const saveDialog = page.getByRole("dialog");
         await expect(saveDialog).toContainText("Save Report As");
         await saveDialog.getByPlaceholder("Saved report name").fill(title);
@@ -764,7 +820,7 @@ test("a feature-whitelisted report pares the UI down and the server enforces the
     await expect(page.getByRole("group", { name: "View" })).toBeHidden();
     await expect(page.getByRole("combobox", { name: "Saved Report" })).toBeHidden();
     await page.getByRole("button", { name: "Actions", exact: true }).click();
-    await expect(page.getByRole("menuitem")).toHaveText(["Sort…", "Reset", "CSV"]);
+    await expect(page.getByRole("menuitem")).toHaveText(["Sort…", "Reset", /^Download/]);
     await page.keyboard.press("Escape");
 
     // The definition's default filter is visible but locked: no toggle, edit, or remove.
@@ -784,7 +840,7 @@ test("a feature-whitelisted report pares the UI down and the server enforces the
     expect(denied.status()).toBe(403);
 
     const downloadPromise = page.waitForEvent("download");
-    await clickAction(page, "CSV");
+    await clickAction(page, "Download", "CSV");
     expect((await downloadPromise).suggestedFilename()).toBe("orders-kiosk.csv");
 });
 
@@ -874,7 +930,7 @@ test("a definition edit link and per-column overrides shape the managed report",
 
     // Exports carry data columns only — the pencil is chrome, like APEX's.
     const downloadPromise = page.waitForEvent("download");
-    await clickAction(page, "CSV");
+    await clickAction(page, "Download", "CSV");
     const download = await downloadPromise;
     expect(download.suggestedFilename()).toBe("orders-managed.csv");
     const lines = (await readFile(await download.path(), "utf8")).trim().split(/\r?\n/);

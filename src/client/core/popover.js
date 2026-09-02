@@ -9,8 +9,11 @@
  * @returns {boolean} Whether the element is currently open.
  */
 export function popoverIsOpen(node) {
+    // The fallback marker is only ever set on hosts without the Popover API, so it is decisive
+    // when present; hosts that merely fail to parse the pseudo-class are treated as closed.
+    if (node.hasAttribute("data-ir-popover-open")) return true;
     try { return node.matches(":popover-open"); }
-    catch { return node.hasAttribute("data-ir-popover-open"); }
+    catch { return false; }
 }
 
 /**

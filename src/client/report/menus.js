@@ -1,6 +1,6 @@
 // The two popup menus: the toolbar Actions menu and the per-column header menu. Menus are pure
-// dispatch: every entry opens a dialog or applies a one-line document mutation; nothing here owns
-// state of its own. Every entry is gated by the effective client control policy and enabled per
+// dispatch: every entry opens a dialog, opens a submenu of pickable values, or applies a one-line
+// document mutation; nothing here owns state of its own. Every entry is gated by the effective client control policy and enabled per
 // the active table's capabilities: the same Columns/Compute/Filter/Sort/Highlight surfaces
 // operate on whichever named table is active.
 
@@ -10,7 +10,8 @@ import { tableContext, visibleTableColumnNames } from "./table.js";
 import { sameColumn } from "./state.js";
 import { columnSettingsDialog, columnsDialog, renameDialog } from "./dialogs/columns.js";
 import { filterDialog, computeDialog, highlightDialog } from "./dialogs/rules.js";
-import { paginationDialog, sortDialog, breakDialog, aggregateDialog } from "./dialogs/grid.js";
+import { sortDialog, breakDialog, aggregateDialog } from "./dialogs/grid.js";
+import { applyPageSize, currentPageSize, pageSizeChoices, pageSizeLabel } from "./page-size.js";
 import { groupByDialog, pivotDialog, chartDialog } from "./dialogs/view.js";
 import { saveDialog } from "./dialogs/save.js";
 import { canManageCurrentSaved, deleteCurrentSaved, resetWorkingCopy } from "./saved.js";
@@ -38,6 +39,31 @@ export function headerMenuAvailable(w) {
 const joinSections = sections => sections.filter(s => s.length)
     .flatMap((section, i) => i === 0 ? section : ["-", ...section]);
 
+/**
+ * Builds the Pagination submenu: one pickable entry per page size, the current size ticked, and the
+ * current choice repeated as the parent entry's hint so it reads without opening the submenu.
+ *
+ * @param {object} w - The report controller containing page state, limits, and localization.
+ * @param {boolean} enabled - Whether the active table supports pagination.
+ * @returns {object} The submenu-parent entry for the Actions menu.
+ */
+function paginationEntry(w, enabled) {
+    return {
+        label: w.t("menu.pagination"),
+        hint: pageSizeLabel(w, currentPageSize(w)),
+        disabled: !enabled,
+        items: [
+            ...pageSizeChoices(w).map(choice => ({
+                label: choice.label,
+                checked: choice.current,
+                onPick: () => applyPageSize(w, choice.size),
+            })),
+            "-",
+            { note: w.t("pagination.allNote") },
+        ],
+    };
+}
+
 // Invariant: the Actions menu entries the effective control policy leaves standing. Exported so the toolbar
 // can hide the Actions button when nothing remains. Entries the active table cannot use stay
 // visible but disabled. The menu shape is stable while the active table changes.
@@ -58,11 +84,7 @@ export function actionsMenuItems(w) {
             ...feature("columnSettings", { label: w.t("menu.columnSettings"), disabled: !caps.columnSettings, onPick: () => columnSettingsDialog(w) }),
             ...feature("filter", { label: w.t("menu.filter"), disabled: !caps.filter, onPick: () => filterDialog(w, {}) }),
             ...feature("sort", { label: w.t("menu.sort"), disabled: !caps.sort, onPick: () => sortDialog(w) }),
-            ...feature("pagination", {
-                label: w.t("menu.pagination"),
-                disabled: !caps.pagination,
-                onPick: () => paginationDialog(w),
-            }),
+            ...feature("pagination", paginationEntry(w, caps.pagination)),
         ],
         [
             ...feature("controlBreak", { label: w.t("menu.controlBreak"), disabled: !caps.break, onPick: () => breakDialog(w) }),
@@ -76,19 +98,26 @@ export function actionsMenuItems(w) {
             ...feature("chart", { label: w.t("menu.chart"), onPick: () => chartDialog(w) }),
         ],
     ]);
+    // Saved-report management lives in a Report submenu. Reset stays on the base menu as long as
+    // the document can diverge at all: it is the way back from a state the disabled dialogs could no
+    // longer undo, and it should never be more than one pick away.
     const report = [
-        ...feature("savedReports",
-            ...(canSave ? [{ label: w.t("menu.save"), onPick: () => saveDialog(w, { asNew: false }) }] : []),
-            { label: w.t("menu.saveAs"), onPick: () => saveDialog(w, { asNew: true }) },
-            ...(canSave ? [{ label: w.t("menu.delete"), onPick: () => deleteCurrentSaved(w) }] : [])),
-        // Reset stays as long as the document can diverge at all. It is the way back from a state
-        // the disabled dialogs could no longer undo.
+        ...feature("savedReports", {
+            label: w.t("menu.report"),
+            items: [
+                ...(canSave ? [{ label: w.t("menu.save"), onPick: () => saveDialog(w, { asNew: false }) }] : []),
+                { label: w.t("menu.saveAs"), onPick: () => saveDialog(w, { asNew: true }) },
+                ...(canSave ? [{ label: w.t("menu.delete"), onPick: () => deleteCurrentSaved(w) }] : []),
+            ],
+        }),
         ...(anyMutableFeature(w) ? [{ label: w.t("menu.reset"), onPick: () => resetWorkingCopy(w) }] : []),
     ];
-    if (report.length) items.push({ heading: w.t("menu.report") }, ...report);
-    if (featureEnabled(w, "download"))
-        items.push({ heading: w.t("menu.download") }, { label: w.t("menu.csv"), onPick: () => downloadExport(w, "csv") });
-    return items;
+    // Download is a submenu of formats; CSV is the only one so far.
+    const download = feature("download", {
+        label: w.t("menu.download"),
+        items: [{ label: w.t("menu.csv"), onPick: () => downloadExport(w, "csv") }],
+    });
+    return joinSections([items, report, download]);
 }
 
 /**
