@@ -331,7 +331,7 @@ filters. It never enters the memoized export, changes a schema cache, or affects
         { "kind": "labels", "labels": { "ORDER_ID": "Ticket #" } },
         { "kind": "formats", "formats": {
           "CUSTOMER": { "displayAs": "link", "urlColumn": "CUSTOMER_URL" },
-          "AMOUNT": { "mask": "currency:USD", "align": "right" }
+          "AMOUNT": { "mask": "$#,##0.00", "align": "right" }
         } }
       ]
     },
@@ -354,7 +354,7 @@ filters. It never enters the memoized export, changes a schema cache, or affects
         { "kind": "sort", "sorts": [ { "col": "ir4", "dir": "desc" } ] },
         { "kind": "labels", "labels": { "ir1203710688847562946": "Shipped Total" } },
         { "kind": "formats",
-          "formats": { "ir8813168485634683321": { "mask": "decimal2" } } }
+          "formats": { "ir8813168485634683321": { "mask": "#,##0.00" } } }
       ]
     },
     "groupBy": {
@@ -534,11 +534,12 @@ provides typed membership. Blank behavior is written explicitly as `IS NULL`, or
   classes, renderer modes, commands, and renderer dependency columns remain local to
   their owner. Generated columns may inherit an exported mask through explicit
   provenance. The effective Default state can carry formats so definitions can ship
-  default formatting. Masks are a closed client-side token vocabulary per
-  column type (`integer`, `decimal1`…`decimal4`, `plain`, `currency:CAD|USD|EUR|GBP|JPY`,
-  and `percent0`…`percent2` for numbers; `date`, `datetime`, `datetimeSeconds`, `time`,
-  `timeSeconds`, `dateMedium`, `dateLong`, `dateTimeMedium`, and `dateTimeLong` for
-  dates); unknown tokens and indigestible values fall
+  default formatting. Masks are user-entered Excel format codes (`#,##0.00`, `0.0%`,
+  `#,##0.00;(#,##0.00)`, `yyyy-mm-dd hh:mm`) parsed by one validated grammar on the
+  client and, for file downloads, in `InteractiveReport.Core.Formatting.FormatCodes`, so a
+  future workbook export can write the stored code straight into a cell style.
+  Masks longer than 64 characters, unsupported constructs (`E+00`, `@`, `[h]`, bare
+  letters), and indigestible values fall
   through to default rendering — a mask is a lens, never a gate. Inline styling is the
   same constrained property set highlights use. `classes` selects rules from the
   application integrator's shadow-root stylesheet; the client accepts conservative CSS

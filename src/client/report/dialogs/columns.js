@@ -9,7 +9,7 @@ import { featureEnabled, typeOf } from "../schema.js";
 import { structuralTableColumns, tableContext, visibleTableColumnNames } from "../table.js";
 import { lookupValue, sameColumn, setMapEntry } from "../state.js";
 import { colorPick, colOptions } from "./parts.js";
-import { masksFor } from "../render/format.js";
+import { MAX_MASK_LENGTH, maskIsValid, masksFor } from "../render/format.js";
 import { formatForColumn, renderColumnValue } from "../render/column-renderers.js";
 import { columnClasses } from "../classes.js";
 import { presentationStyle } from "../render/presentation.js";
@@ -128,8 +128,26 @@ export function columnSettingsDialog(w, initialCol) {
         { value: "center", label: w.t("columns.center") },
         { value: "right", label: w.t("columns.right") },
     ]);
-    const maskSel = sel([{ value: "", label: w.t("common.default") }]);
-    const maskField = labeled(w.t("columns.formatMask"), maskSel);
+    // The mask is free text in Excel format-code syntax. The preset list is a typing aid: choosing
+    // a preset copies its code into the text box, and the list shows "Custom" whenever the text
+    // matches no preset, so hand-written masks survive a visit untouched.
+    const maskInp = el("input", {
+        type: "text", class: "ir-input ir-mask-input", maxLength: MAX_MASK_LENGTH,
+        spellcheck: false, autocomplete: "off",
+        placeholder: w.t("columns.maskPlaceholder"),
+    });
+    const maskPresetSel = sel([{ value: "", label: w.t("columns.maskCustom") }]);
+    maskPresetSel.classList.add("ir-mask-preset");
+    const maskHint = el("p", { class: "ir-dialog-note ir-mask-hint" });
+    const maskField = el("div", { class: "ir-mask-field" },
+        labeled(w.t("columns.formatMask"), maskInp),
+        labeled(w.t("columns.maskPreset"), maskPresetSel),
+        maskHint);
+    // Reflects the text box in the preset list without touching the text.
+    const syncPreset = () => {
+        const value = maskInp.value.trim();
+        maskPresetSel.value = value && [...maskPresetSel.options].some(o => o.value === value) ? value : "";
+    };
     const boldChk = el("input", { type: "checkbox" });
     const italicChk = el("input", { type: "checkbox" });
     const fgPick = colorPick(w.t("columns.textColor"), null, "#9f1239", w);
@@ -146,7 +164,8 @@ export function columnSettingsDialog(w, initialCol) {
         [urlColumnSel, w.t("columns.urlColumn")],
         [textColumnSel, w.t("columns.linkTextColumn")],
         [alignSel, w.t("columns.alignment")],
-        [maskSel, w.t("columns.formatMask")],
+        [maskInp, w.t("columns.formatMask")],
+        [maskPresetSel, w.t("columns.maskPreset")],
     ]) control.setAttribute("aria-label", label);
 
     // Captures every control into one staged settings value for the currently active column.
@@ -156,7 +175,7 @@ export function columnSettingsDialog(w, initialCol) {
         displayAs: withDisplayAs ? (displayAsSel.value || null) : null,
         urlColumn: urlColumnSel.value || colSel.value,
         textColumn: textColumnSel.value || colSel.value,
-        mask: maskSel.value || null,
+        mask: maskInp.value.trim() || null,
         align: alignSel.value || null,
         bold: boldChk.checked,
         italic: italicChk.checked,
@@ -228,6 +247,9 @@ export function columnSettingsDialog(w, initialCol) {
         maskField.hidden = masksFor(type, w).length === 0
             || s.displayAs === "image"
             || (s.displayAs === "link" && s.textColumn !== name);
+        const maskOk = maskIsValid(type, s.mask, w);
+        maskHint.textContent = w.t(maskOk ? "columns.maskNote" : "columns.maskInvalid");
+        maskHint.classList.toggle("ir-mask-invalid", !maskOk);
     };
 
     let active = colSel.value;
@@ -239,9 +261,12 @@ export function columnSettingsDialog(w, initialCol) {
         urlColumnSel.value = s.urlColumn;
         textColumnSel.value = s.textColumn;
         alignSel.value = s.align ?? "";
-        const masks = masksFor(columnType(name), w);
-        maskSel.replaceChildren(new Option(w.t("common.default"), ""), ...masks.map(m => new Option(m.label, m.value)));
-        maskSel.value = masks.some(m => m.value === s.mask) ? s.mask : "";
+        const presets = masksFor(columnType(name), w);
+        maskPresetSel.replaceChildren(
+            new Option(w.t("columns.maskCustom"), ""),
+            ...presets.map(p => new Option(`${p.value} · ${p.example}`, p.value)));
+        maskInp.value = s.mask ?? "";
+        syncPreset();
         boldChk.checked = s.bold;
         italicChk.checked = s.italic;
         fgPick.write(s.fg);
@@ -254,9 +279,15 @@ export function columnSettingsDialog(w, initialCol) {
         active = colSel.value;
         load(active);
     };
-    for (const control of [visChk, displayAsSel, urlColumnSel, textColumnSel, alignSel, maskSel,
+    for (const control of [visChk, displayAsSel, urlColumnSel, textColumnSel, alignSel, maskInp,
         boldChk, italicChk, fgPick.node, bgPick.node, classesInp])
         control.addEventListener("input", updatePreview);
+    maskInp.addEventListener("input", syncPreset);
+    maskPresetSel.addEventListener("change", () => {
+        if (!maskPresetSel.value) return;
+        maskInp.value = maskPresetSel.value;
+        updatePreview();
+    });
     load(active);
 
     openDialog({

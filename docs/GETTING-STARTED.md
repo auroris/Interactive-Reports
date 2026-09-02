@@ -172,7 +172,7 @@ normal state document:
               "displayAs": "image",
               "urlColumn": "THUMBNAIL_URL"
             },
-            "AMOUNT": { "mask": "currency:CAD", "classes": [ "amount-column", "emphasized" ] }
+            "AMOUNT": { "mask": "$#,##0.00", "classes": [ "amount-column", "emphasized" ] }
           } }
         ]
       },

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using InteractiveReport.Core.Formatting;
 using InteractiveReport.Core.Model;
 
 namespace InteractiveReport.Client.FileDownload;
@@ -150,7 +151,7 @@ public static class CsvReportPresentation
 
         if (IsNumber(column) && TryDecimal(value, out var number))
         {
-            var masked = FormatNumberMask(number, mask);
+            var masked = FormatCodes.FormatNumber(number, mask);
             if (masked is not null)
                 return masked;
             var unmasked = !decimalColumn && decimal.Truncate(number) == number
@@ -161,22 +162,10 @@ public static class CsvReportPresentation
 
         if (IsDate(column) && TryDate(value, out var date))
         {
-            var formatted = mask switch
-            {
-                "date" => date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-                "datetime" => date.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture),
-                "datetimeSeconds" => date.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
-                "time" => date.ToString("h:mm tt", CultureInfo.InvariantCulture),
-                "timeSeconds" => date.ToString("h:mm:ss tt", CultureInfo.InvariantCulture),
-                "dateMedium" => date.ToString("MMM d, yyyy", CultureInfo.InvariantCulture),
-                "dateLong" => date.ToString("MMMM d, yyyy", CultureInfo.InvariantCulture),
-                "dateTimeMedium" => date.ToString("MMM d, yyyy, h:mm tt", CultureInfo.InvariantCulture),
-                "dateTimeLong" => date.ToString("MMMM d, yyyy, h:mm:ss tt", CultureInfo.InvariantCulture),
-                _ => date.TimeOfDay == TimeSpan.Zero
+            return FormatCodes.FormatDate(date, mask)
+                ?? (date.TimeOfDay == TimeSpan.Zero
                     ? date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
-                    : date.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
-            };
-            return formatted;
+                    : date.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture));
         }
 
         return value switch
@@ -425,62 +414,6 @@ public static class CsvReportPresentation
                     || scheme.Equals("tel", StringComparison.OrdinalIgnoreCase)));
         }
         return Uri.TryCreate(value, UriKind.Relative, out _);
-    }
-
-    private static string? FormatNumberMask(decimal number, string? mask)
-    {
-        var digits = mask switch
-        {
-            "integer" => 0,
-            "decimal1" => 1,
-            "decimal2" => 2,
-            "decimal3" => 3,
-            "decimal4" => 4,
-            _ => -1,
-        };
-        if (digits >= 0)
-            return decimal.Round(number, digits, MidpointRounding.AwayFromZero)
-                .ToString($"N{digits}", CultureInfo.InvariantCulture);
-        if (mask == "plain")
-            return decimal.Round(number, 2, MidpointRounding.AwayFromZero)
-                .ToString("F2", CultureInfo.InvariantCulture);
-
-        if (mask is not null && mask.StartsWith("currency:", StringComparison.Ordinal))
-        {
-            var (symbol, currencyDigits) = mask[9..] switch
-            {
-                "CAD" => ("CA$", 2),
-                "USD" => ("$", 2),
-                "EUR" => ("€", 2),
-                "GBP" => ("£", 2),
-                "JPY" => ("¥", 0),
-                _ => ((string?)null, 0),
-            };
-            if (symbol is not null)
-            {
-                var formatted = decimal.Round(number, currencyDigits, MidpointRounding.AwayFromZero)
-                    .ToString($"N{currencyDigits}", CultureInfo.InvariantCulture);
-                return formatted.StartsWith("-", StringComparison.Ordinal)
-                    ? $"-{symbol}{formatted[1..]}"
-                    : $"{symbol}{formatted}";
-            }
-        }
-
-        if (mask is { Length: 8 } && mask.StartsWith("percent", StringComparison.Ordinal)
-            && mask[7] is >= '0' and <= '2')
-        {
-            try
-            {
-                var percentDigits = mask[7] - '0';
-                return decimal.Round(number * 100m, percentDigits, MidpointRounding.AwayFromZero)
-                    .ToString($"N{percentDigits}", CultureInfo.InvariantCulture) + "%";
-            }
-            catch (OverflowException)
-            {
-                return null;
-            }
-        }
-        return null;
     }
 
     private static string RawString(object? value) => value switch

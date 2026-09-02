@@ -472,7 +472,7 @@ public sealed class ComposablePipelineSafetyTests : IClassFixture<SqliteE2EFixtu
             {
                 Formats = new Dictionary<string, ColumnFormat>
                 {
-                    ["AMOUNT"] = new() { Mask = "currency:USD" },
+                    ["AMOUNT"] = new() { Mask = "$#,##0.00" },
                 },
             },
             tail:
@@ -488,7 +488,7 @@ public sealed class ComposablePipelineSafetyTests : IClassFixture<SqliteE2EFixtu
                             {
                                 DisplayAs = "link",
                                 UrlColumn = "STATUS",
-                                Mask = "decimal2",
+                                Mask = "#,##0.00",
                             },
                         },
                     }),

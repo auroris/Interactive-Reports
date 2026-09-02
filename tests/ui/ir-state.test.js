@@ -710,13 +710,13 @@ test("presentation maps infer the shape boundary independently of storage order"
                 from: "definition",
                 composables: [
                     { kind: "labels", labels: { CUSTOMER: "Account", AMOUNT: "Revenue" } },
-                    { kind: "formats", formats: { AMOUNT: { mask: "plain" } } },
+                    { kind: "formats", formats: { AMOUNT: { mask: "0.00" } } },
                 ],
             },
             grouped: {
                 from: "base",
                 composables: [
-                    { kind: "formats", formats: { ir1: { mask: "integer" } } },
+                    { kind: "formats", formats: { ir1: { mask: "#,##0" } } },
                     { kind: "group", by: ["CUSTOMER"], values: [{ id: "ir1", col: "AMOUNT", fn: "sum" }] },
                 ],
             },
@@ -728,8 +728,8 @@ test("presentation maps infer the shape boundary independently of storage order"
         input: { CUSTOMER: "Account", AMOUNT: "Revenue" }, output: { ir1: "Sales" },
     });
     assert.deepEqual(composedFormats(state), {
-        AMOUNT: { mask: "plain" },
-        ir1: { mask: "integer" },
+        AMOUNT: { mask: "0.00" },
+        ir1: { mask: "#,##0" },
     });
 });
 
@@ -741,7 +741,7 @@ test("an empty post-shape presentation map clears inherited source metadata", ()
                 from: "definition",
                 composables: [
                     { kind: "labels", labels: { AMOUNT: "Revenue" } },
-                    { kind: "formats", formats: { AMOUNT: { mask: "currency:CAD" } } },
+                    { kind: "formats", formats: { AMOUNT: { mask: "$#,##0.00" } } },
                 ],
             },
             grouped: {
@@ -780,7 +780,7 @@ test("same-table metadata clears once before every overlay in either storage ord
             { kind: "labels", labels: { CUSTOMER: "Client" } },
         ];
         const formats = [
-            { kind: "formats", formats: { ir1: { mask: "integer" } } },
+            { kind: "formats", formats: { ir1: { mask: "#,##0" } } },
             { kind: "formats", formats: { CUSTOMER: { bold: true } } },
         ];
         const resetLabels = { kind: "labels", labels: {} };
@@ -796,7 +796,7 @@ test("same-table metadata clears once before every overlay in either storage ord
                     ],
                     composables: [
                         { kind: "labels", labels: { CUSTOMER: "Account", AMOUNT: "Revenue" } },
-                        { kind: "formats", formats: { AMOUNT: { mask: "currency:CAD" } } },
+                        { kind: "formats", formats: { AMOUNT: { mask: "$#,##0.00" } } },
                     ],
                 },
                 grouped: {
@@ -831,7 +831,7 @@ test("same-table metadata clears once before every overlay in either storage ord
             output: { ir1: "Sales", CUSTOMER: "Client" },
         });
         assert.deepEqual(composedFormats(state), {
-            ir1: { mask: "integer" },
+            ir1: { mask: "#,##0" },
             CUSTOMER: { bold: true },
         });
         assert.deepEqual(terminalTableColumns({ doc: state }).map(column => [column.name, column.label]), [
@@ -947,7 +947,7 @@ test("metadata and owner-local edits do not invalidate exported schema caches", 
     };
     const after = structuredClone(before);
     after.tables.base.composables[0].columns = [];
-    after.tables.base.composables[1].formats.ID = { mask: "integer", italic: true };
+    after.tables.base.composables[1].formats.ID = { mask: "#,##0", italic: true };
     after.tables.base.composables[2].labels.ID = "Record";
     after.tables.base.composables[3].sorts[0].dir = "desc";
 
@@ -1014,7 +1014,7 @@ test("input computed deletion strips exact input nodes and removes only dependen
                     sorts: [{ col: "ir1", dir: "desc" }, { col: "CUSTOMER", dir: "asc" }],
                     filters: [{ expr: "ir1 > 100" }, { expr: "CUSTOMER = 'ir1'" }, { expr: "ir10 > 100" }],
                     formats: {
-                        ir1: { mask: "currency:CAD" },
+                        ir1: { mask: "$#,##0.00" },
                         CUSTOMER: { displayAs: "link", urlColumn: "ir1", textColumn: "CUSTOMER", bold: true },
                     },
                 }),
@@ -1467,9 +1467,9 @@ test("case-insensitive map helpers prevent stale casing variants", () => {
     assert.equal(lookupValue({ Amount: 1 }, "missing"), undefined);
     assert.equal(nextFreeId(new Set(["h1", "h3"]), "h"), "h2");
 
-    const formats = { amount: { mask: "integer" }, OTHER: { bold: true } };
-    setMapEntry(formats, "AMOUNT", { mask: "currency:CAD" });
-    assert.deepEqual(formats, { OTHER: { bold: true }, AMOUNT: { mask: "currency:CAD" } });
+    const formats = { amount: { mask: "#,##0" }, OTHER: { bold: true } };
+    setMapEntry(formats, "AMOUNT", { mask: "$#,##0.00" });
+    assert.deepEqual(formats, { OTHER: { bold: true }, AMOUNT: { mask: "$#,##0.00" } });
     setMapEntry(formats, "Amount", undefined);
     assert.deepEqual(formats, { OTHER: { bold: true } });
 });

@@ -317,7 +317,7 @@ test("a scalar mask follows immediate lineage through two Shapes without rendere
                         kind: "formats",
                         formats: {
                             AMOUNT: {
-                                mask: "currency:USD",
+                                mask: "$#,##0.00",
                                 align: "center",
                                 bold: true,
                                 italic: true,

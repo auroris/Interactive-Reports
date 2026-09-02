@@ -30,7 +30,7 @@ const filter = {
 };
 const formats = {
     kind: "formats",
-    formats: { ir3: { mask: "currency:CAD" } },
+    formats: { ir3: { mask: "$#,##0.00" } },
 };
 const select = { kind: "select", columns: ["REGION", "ir3"] };
 const sort = { kind: "sort", sorts: [{ col: "ir3", dir: "desc" }] };
@@ -137,7 +137,7 @@ test("a child consumes exported relation and mask state while parent result pres
                         kind: "formats",
                         formats: {
                             ir1: {
-                                mask: "currency:CAD",
+                                mask: "$#,##0.00",
                                 bold: true,
                                 fg: "#123456",
                                 bg: "#ffeeaa",

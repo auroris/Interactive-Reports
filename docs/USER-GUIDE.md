@@ -212,10 +212,45 @@ with the current settings.
 | **Visible** | Same as showing or hiding the column in **Columns…**. A column shown again is added at the end. |
 | **Display As** | *Text (Default)*, *Link*, or *Image*. For a link, **URL Column** is the column holding the address and **Link Text Column** the column holding the text to show. For an image, **URL Column** holds the image address. Only `http`, `https`, `mailto`, and `tel` addresses become links, and only `http` and `https` addresses become images. |
 | **Alignment** | Left, Center, Right, or the default (numbers right, everything else left). |
-| **Format Mask** | Number columns: *Number* with 0 to 4 decimals, *Plain* (no grouping separators), *Currency* (CAD, USD, EUR, GBP, JPY), and *Percent* with 0 to 2 decimals (0.25 displays as 25%). Date columns: date only, date and time, with seconds, time only, and medium or long written forms. Each choice shows an example in your language. |
+| **Format Mask** | An Excel-style format code for number and date columns, typed by hand or chosen from the **Preset** list, which copies the code into the box and shows an example beside each choice. See [Format masks](#format-masks). |
 | **Bold / Italic** | Text style for the column's cells. |
 | **Text / Background** | Tick the box and pick a colour. Highlight rules take precedence over column colours. |
 | **CSS Classes** | For page designers: class names from the hosting page's stylesheet, separated by spaces. Names starting with `ir-` are reserved. |
+
+#### Format masks
+
+Format masks use the same codes as Excel's custom number and date formats, so a mask
+you write here works unchanged in a spreadsheet. The **Preview** shows the result as you
+type, and the note under the box says when a mask is not understood; an unrecognized mask
+leaves the column in its default format. Separators and month names follow the report
+language, so `#,##0.00` shows `1 234,50` in French.
+
+**Numbers**
+
+| Code | Meaning | 1234.567 becomes |
+|---|---|---|
+| `0` | A digit, shown even when it is zero | `0000` → `1235` |
+| `#` | A digit, hidden when it is zero | `#,##0.##` → `1,234.57` |
+| `,` between digits | Thousands separators | `#,##0` → `1,235` |
+| `,` after the digits | Divide by a thousand per comma | `#,##0,"K"` → `1K` |
+| `.` | Decimal point; the digits after it set the decimals | `0.00` → `1234.57` |
+| `%` | Multiply by 100 and show a percent sign | `0.0%` → `123456.7%` |
+| `"text"` | Literal text; use `"%"` for a percent sign without multiplying | `#,##0.00"%"` → `1,234.57%` |
+| `$` `€` `£` `¥` and spaces | Shown as typed | `$#,##0.00` → `$1,234.57` |
+| `;` | Separates positive;negative;zero formats | `#,##0.00;(#,##0.00);"-"` |
+
+**Dates and times**
+
+| Code | Meaning | 2026-08-07 14:30:45 becomes |
+|---|---|---|
+| `yyyy` / `yy` | Year | `2026` / `26` |
+| `m` / `mm` / `mmm` / `mmmm` | Month as number, two digits, short name, full name | `8` / `08` / `Aug` / `August` |
+| `d` / `dd` / `ddd` / `dddd` | Day as number, two digits, short weekday, full weekday | `7` / `07` / `Fri` / `Friday` |
+| `h` / `hh` | Hour; 24-hour unless `AM/PM` is present | `14` / `14` |
+| `mm` beside `h` or `ss` | Minutes | `hh:mm` → `14:30` |
+| `ss` | Seconds | `45` |
+| `AM/PM` or `am/pm` | 12-hour clock with the marker | `h:mm AM/PM` → `2:30 PM` |
+| `-` `/` `:` `,` spaces and `"text"` | Shown as typed | `yyyy-mm-dd` → `2026-08-07` |
 
 ### Filter
 
@@ -424,7 +459,7 @@ show a condition, wrap it in `CASE`.
 | `AMOUNT * 1.13` | Arithmetic with `+`, `-`, `*`, `/`. Division always keeps decimals. |
 | `ROUND(AMOUNT * 1.13, 2)` | Rounded to 2 decimals (`ROUND(x)` rounds to a whole number) |
 | `ABS(BALANCE)` | Absolute value |
-| `CUSTOMER || ' — ' || REGION` | Joined text (`CONCAT(a, b, …)` does the same, up to 8 pieces) |
+| `CUSTOMER \|\| ' — ' \|\| REGION` | Joined text (`CONCAT(a, b, …)` does the same, up to 8 pieces) |
 | `UPPER(REGION)`, `LOWER(EMAIL)`, `TRIM(NOTES)` | Case and whitespace |
 | `LENGTH(NOTES)` | Number of characters |
 | `SUBSTR(ORDER_CODE, 1, 3)` | Part of a text, starting at position 1 |

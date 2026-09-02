@@ -105,8 +105,22 @@ export async function executeReport(db, definition, requestedState, discoveredSc
         limitClause = ` LIMIT ${fetchLimit} OFFSET ${offset}`;
     }
 
-    // 6. Projections for main page rows
-    const selectColPieces = columns.map(c => {
+    // 6. Projections for main page rows. Link and image renderer inputs (URL and text columns)
+    // ride along as hidden values so the grid and the CSV export can render them, matching the
+    // .NET server's hidden projections.
+    const projected = [...columns];
+    for (const c of columns) {
+        const format = relation.formats[c.name.toUpperCase()];
+        const renderer = String(format?.displayAs ?? "").trim().toLowerCase();
+        if (renderer !== "link" && renderer !== "image") continue;
+        for (const source of [format.urlColumn, renderer === "link" ? format.textColumn : null]) {
+            if (typeof source !== "string" || !source.trim()) continue;
+            const column = availableColumns.find(a => a.name.toUpperCase() === source.trim().toUpperCase());
+            if (column && !projected.some(p => p.name.toUpperCase() === column.name.toUpperCase()))
+                projected.push(column);
+        }
+    }
+    const selectColPieces = projected.map(c => {
         const phys = relation.physicalColumns[c.name.toUpperCase()] || c.name;
         return `"${phys}" AS "${c.name}"`;
     });

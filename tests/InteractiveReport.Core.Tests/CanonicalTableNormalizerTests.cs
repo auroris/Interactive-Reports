@@ -323,7 +323,7 @@ public class CanonicalTableNormalizerTests
                     Kind = "formats",
                     Formats = new Dictionary<string, ColumnFormat>
                     {
-                        ["amount"] = new() { Mask = "integer" },
+                        ["amount"] = new() { Mask = "#,##0" },
                     },
                 },
             ],
@@ -561,7 +561,7 @@ public class CanonicalTableNormalizerTests
 
         columns[0] = "AMOUNT";
         classes[0] = "changed";
-        format.Mask = "integer";
+        format.Mask = "#,##0";
 
         Assert.Equal(["REGION"], normalized.Local.Selection!.Columns.ToArray());
         Assert.Equal("decimal-2", normalized.Metadata.Formats["AMOUNT"].Mask);

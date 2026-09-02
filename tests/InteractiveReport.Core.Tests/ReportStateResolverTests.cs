@@ -133,7 +133,7 @@ public sealed class ReportStateResolverTests
                 {
                     ["AMOUNT"] = new ColumnFormat
                     {
-                        Mask = "decimal2",
+                        Mask = "#,##0.00",
                         Classes = ["amount-column"],
                         DisplayAs = "link",
                         UrlColumn = "NOTES",
@@ -166,7 +166,7 @@ public sealed class ReportStateResolverTests
         Assert.NotSame(originalSource.Composables!.Single(c => c.Kind == "highlight").Highlights![0], highlight);
         Assert.NotSame(request.Tables[request.ActiveTable!].Composables![0].Values![0], metric);
 
-        Assert.Equal("decimal2", format.Mask);
+        Assert.Equal("#,##0.00", format.Mask);
         Assert.Equal(["amount-column"], format.Classes);
         Assert.Equal(("link", "NOTES", "CUSTOMER", "open", "ORDER_ID"),
             (format.DisplayAs, format.UrlColumn, format.TextColumn, format.Command, format.KeyColumn));

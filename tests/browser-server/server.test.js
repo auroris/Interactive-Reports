@@ -434,3 +434,89 @@ test("switching between multiple reports preserves default document for each", a
     assert.ok(ordersList2.some(r => r.isDefault && r.reportName === "orders"));
     assert.notEqual(ordersList1[0].id, bigList[0].id);
 });
+
+test("CSV export applies labels and format masks like the .NET file client", async () => {
+    const { server } = await setupServer();
+    const csv = await server.export("orders", {
+        activeTable: "base",
+        tables: {
+            base: {
+                from: "definition",
+                composables: [
+                    { kind: "sort", sorts: [{ col: "ORDER_ID", dir: "asc" }] },
+                    { kind: "select", columns: ["ORDER_ID", "AMOUNT", "ORDER_DATE"] },
+                    { kind: "labels", labels: { AMOUNT: "Share" } },
+                    { kind: "formats", formats: {
+                        AMOUNT: { mask: "#,##0.00\"%\"", bold: true },
+                        ORDER_DATE: { mask: "mmmm d, yyyy" },
+                    } },
+                ],
+            },
+        },
+    });
+
+    const lines = csv.slice(1).trim().split("\r\n");
+    assert.equal(lines[0], "Order #,Share,Ordered On");
+    assert.match(lines[1], /^1,"6,590\.01%","[A-Z][a-z]+ \d{1,2}, 20\d\d"$/);
+});
+
+test("CSV export writes link text and image URLs and drops hidden renderer inputs", async () => {
+    const { server } = await setupServer();
+    server.registerReport({
+        name: "linked-orders",
+        title: "Linked Orders",
+        sql: `SELECT ORDER_ID, CUSTOMER, CUSTOMER AS PHOTO, AMOUNT,
+                     '/customers/' || ORDER_ID AS LINK_URL,
+                     'https://images.example/' || ORDER_ID || '.png' AS IMAGE_URL
+              FROM ORDERS`,
+        columnLabels: { ORDER_ID: "Order #" },
+    });
+    const csv = await server.export("linked-orders", {
+        activeTable: "base",
+        tables: {
+            base: {
+                from: "definition",
+                composables: [
+                    { kind: "sort", sorts: [{ col: "ORDER_ID", dir: "asc" }] },
+                    { kind: "select", columns: ["ORDER_ID", "CUSTOMER", "PHOTO", "AMOUNT"] },
+                    { kind: "formats", formats: {
+                        CUSTOMER: { displayAs: "link", urlColumn: "LINK_URL", textColumn: "AMOUNT" },
+                        PHOTO: { displayAs: "image", urlColumn: "IMAGE_URL" },
+                        AMOUNT: { mask: "$#,##0.00" },
+                    } },
+                ],
+            },
+        },
+    });
+
+    const lines = csv.slice(1).trim().split("\r\n");
+    assert.equal(lines[0], "Order #,Customer,Photo,Amount");
+    assert.equal(lines[1], '1,"$6,590.01",https://images.example/1.png,"$6,590.01"');
+    assert.doesNotMatch(csv, /LINK_URL|IMAGE_URL|<a |<img/);
+});
+
+test("CSV export inherits a scalar mask through a Group By table", async () => {
+    const { server } = await setupServer();
+    const csv = await server.export("orders", {
+        activeTable: "grouped",
+        tables: {
+            base: {
+                from: "definition",
+                composables: [
+                    { kind: "formats", formats: { AMOUNT: { mask: "$#,##0.00", bold: true } } },
+                ],
+            },
+            grouped: {
+                from: "base",
+                composables: [
+                    { kind: "group", by: ["REGION"], values: [{ id: "TOT_AMT", col: "AMOUNT", fn: "sum" }] },
+                ],
+            },
+        },
+    });
+
+    const lines = csv.slice(1).trim().split("\r\n");
+    assert.equal(lines.length, 5, "a header and four regions");
+    for (const line of lines.slice(1))
+        assert.match(line, /"\$\d{1,3}(,\d{3})*\.\d{2}"$/, `the summed amount carries the inherited mask: ${line}`);
+});

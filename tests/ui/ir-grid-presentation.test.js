@@ -43,7 +43,7 @@ globalThis.fetch = async url => {
                         breaks: ["AMOUNT"],
                         formats: {
                             ID: { bg: "blue" },
-                            AMOUNT: { mask: "integer" },
+                            AMOUNT: { mask: "#,##0" },
                         },
                         highlights: [
                             {

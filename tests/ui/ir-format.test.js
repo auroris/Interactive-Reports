@@ -31,26 +31,26 @@ const digits = value => value.replace(/\D/g, "");
 test("exact numeric strings format without an IEEE-754 conversion", () => {
     assert.equal(parseReportNumber("9.007199254740993e15").toFixed(0), "9007199254740993");
     assert.equal(formatValue("9007199254740993", "number"), "9007199254740993");
-    assert.equal(applyMask("12345678901234567890.125", "number", "plain"), "12345678901234567890.13");
-    assert.equal(applyMask("-12345678901234567890.125", "number", "plain"), "-12345678901234567890.13");
+    assert.equal(applyMask("12345678901234567890.125", "number", "0.00"), "12345678901234567890.13");
+    assert.equal(applyMask("-12345678901234567890.125", "number", "0.00"), "-12345678901234567890.13");
     assert.equal(hasFraction("999999999999999999.000000001"), true);
     assert.equal(digits(formatInteger("9223372036854775807")), "9223372036854775807");
 });
 
-test("currency, percentage, and expanded date/time masks use the exact scalar formatter", () => {
-    const currency = applyMask("9007199254740993.125", "number", "currency:USD");
-    const percent = applyMask("0.1234567890123456789", "number", "percent2");
+test("currency, percentage, and date/time format codes use the exact scalar formatter", () => {
+    const currency = applyMask("9007199254740993.125", "number", "$#,##0.00");
+    const percent = applyMask("0.1234567890123456789", "number", "0.00%");
 
     assert.equal(digits(currency), "900719925474099313");
     assert.equal(digits(percent), "1235");
     assert.match(percent, /%/);
-    assert.equal(applyMask("2026-08-07T14:30:45", "date", "datetimeSeconds"), "2026-08-07 14:30:45");
-    assert.match(applyMask("2026-08-07T14:30:45", "date", "timeSeconds"), /30.*45/);
+    assert.equal(applyMask("2026-08-07T14:30:45", "date", "yyyy-mm-dd hh:mm:ss"), "2026-08-07 14:30:45");
+    assert.match(applyMask("2026-08-07T14:30:45", "date", "h:mm:ss AM/PM"), /30.*45/);
 });
 
 test("number, date, and boolean presentation follows the report locale", () => {
-    const decimal = applyMask("1234.5", "number", "decimal2", "fr-CA");
-    const date = applyMask("2026-08-07T14:30:45", "date", "dateLong", "fr-CA");
+    const decimal = applyMask("1234.5", "number", "#,##0.00", "fr-CA");
+    const date = applyMask("2026-08-07T14:30:45", "date", "mmmm d, yyyy", "fr-CA");
 
     assert.match(decimal, /1[\s\u00a0\u202f]234,50/);
     assert.match(date.toLocaleLowerCase("fr-CA"), /août/);
@@ -64,7 +64,7 @@ test("link text composes the source column's ordinary formatter", () => {
             ...reportState({
                 formats: {
                     CUSTOMER: { displayAs: "link", urlColumn: "URL", textColumn: "AMOUNT" },
-                    AMOUNT: { mask: "plain" },
+                    AMOUNT: { mask: "0.00" },
                 },
             }),
         },
@@ -86,10 +86,10 @@ test("link text composes the source column's ordinary formatter", () => {
 });
 
 test("computed, group, and pivot values all use the normal mask path", () => {
-    const source = reportState({ formats: { AMOUNT: { mask: "plain" } } });
+    const source = reportState({ formats: { AMOUNT: { mask: "0.00" } } });
     const w = {
         doc: reportState(
-            { formats: { AMOUNT: { mask: "plain" } } },
+            { formats: { AMOUNT: { mask: "0.00" } } },
             { kind: "group", by: ["STATUS"], values: [{ id: "ir1", col: "AMOUNT", fn: "sum" }] }),
         lastResult: {
             columns: [
@@ -113,12 +113,12 @@ test("computed, group, and pivot values all use the normal mask path", () => {
     assert.equal(table.querySelector("tbody tr").children[1].textContent, "9007199254740993.13");
 
     // A Format node owned by the grouped table overrides the inherited source mask.
-    w.doc.tables.groupBy.composables.push({ kind: "formats", formats: { ir1: { mask: "integer" } } });
+    w.doc.tables.groupBy.composables.push({ kind: "formats", formats: { ir1: { mask: "#,##0" } } });
     renderGrid(w, table);
     assert.equal(table.querySelector("tbody tr").children[1].textContent, "9,007,199,254,740,993");
 
     w.doc = source;
-    sourceComposableOf(w.doc, "formats").formats.ir1 = { mask: "plain" };
+    sourceComposableOf(w.doc, "formats").formats.ir1 = { mask: "0.00" };
     w.lastResult.columns = [{ name: "ir1", label: "Computed", type: "number", computed: true }];
     w.lastResult.rows = [{ ir1: "999999999999999999.999" }];
     renderGrid(w, table);
@@ -144,7 +144,7 @@ test("computed, group, and pivot values all use the normal mask path", () => {
 test("the chart data table retains an exact masked metric", () => {
     const w = {
         doc: reportState(
-            { formats: { AMOUNT: { mask: "plain" } } },
+            { formats: { AMOUNT: { mask: "0.00" } } },
             { kind: "chart", type: "bar", label: "STATUS", value: "AMOUNT", fn: "sum" }),
         lastResult: {
             // Chart metrics keep the synthetic v0/__count response names.
@@ -221,13 +221,13 @@ test("presentation formats compose through intermediate table ancestry", () => {
             tables: {
                 source: {
                     from: "definition",
-                    composables: [{ kind: "formats", formats: { AMOUNT: { mask: "plain" } } }],
+                    composables: [{ kind: "formats", formats: { AMOUNT: { mask: "0.00" } } }],
                 },
                 grouped: {
                     from: "source",
                     composables: [
                         { kind: "group", by: ["STATUS"], values: [{ id: "ir1", col: "AMOUNT", fn: "sum" }] },
-                        { kind: "formats", formats: { ir1: { mask: "integer" } } },
+                        { kind: "formats", formats: { ir1: { mask: "#,##0" } } },
                     ],
                 },
                 decorated: { from: "grouped", schema: columns, composables: [] },
@@ -250,7 +250,7 @@ test("presentation formats compose through intermediate table ancestry", () => {
 
 test("named-table boundaries export masks without leaking owner renderers or styles", () => {
     const parentFormat = {
-        mask: "currency:CAD",
+        mask: "$#,##0.00",
         align: "center",
         bold: true,
         italic: true,
@@ -264,7 +264,7 @@ test("named-table boundaries export masks without leaking owner renderers or sty
         keyColumn: "ID",
     };
     const groupedFormat = {
-        mask: "integer",
+        mask: "#,##0",
         bold: true,
         displayAs: "image",
         urlColumn: "URL",
@@ -305,7 +305,7 @@ test("named-table boundaries export masks without leaking owner renderers or sty
     doc.activeTable = "plain";
     assert.deepEqual(
         formatForColumn(w, { name: "AMOUNT", type: "number" }),
-        { mask: "currency:CAD" },
+        { mask: "$#,##0.00" },
         "an unchanged child column receives only the safe scalar mask");
 
     doc.activeTable = "grouped";
@@ -317,7 +317,7 @@ test("named-table boundaries export masks without leaking owner renderers or sty
     doc.activeTable = "second";
     assert.deepEqual(
         formatForColumn(w, { name: "ir2", type: "number", formatSource: "ir1" }),
-        { mask: "integer" },
+        { mask: "#,##0" },
         "a later shape inherits the intermediate metric mask, not its renderer/style");
 });
 
@@ -327,13 +327,13 @@ test("same-table source formats do not leak backward through a Shape", () => {
         tables: {
             base: {
                 from: "definition",
-                composables: [{ kind: "formats", formats: { AMOUNT: { mask: "plain" } } }],
+                composables: [{ kind: "formats", formats: { AMOUNT: { mask: "0.00" } } }],
             },
             grouped: {
                 from: "base",
                 composables: [
                     { kind: "group", by: ["STATUS"], values: [{ id: "ir1", col: "AMOUNT", fn: "sum" }] },
-                    { kind: "formats", formats: { AMOUNT: { mask: "integer" } } },
+                    { kind: "formats", formats: { AMOUNT: { mask: "#,##0" } } },
                 ],
             },
         },
@@ -341,7 +341,7 @@ test("same-table source formats do not leak backward through a Shape", () => {
 
     assert.deepEqual(
         formatForColumn({ doc }, { name: "ir1", type: "number", formatSource: "AMOUNT" }),
-        { mask: "plain" },
+        { mask: "0.00" },
         "the generated metric inherits its imported mask, not an unknown same-table source assignment");
 });
 
@@ -358,7 +358,7 @@ test("removed source formats cannot cross two completed Shape schemas", () => {
                     { name: "STATUS", label: "Status", type: "text" },
                     { name: "AMOUNT", label: "Amount", type: "number" },
                 ],
-                composables: [{ kind: "formats", formats: { AMOUNT: { mask: "plain" } } }],
+                composables: [{ kind: "formats", formats: { AMOUNT: { mask: "0.00" } } }],
             },
             first: {
                 from: "base",
@@ -373,7 +373,7 @@ test("removed source formats cannot cross two completed Shape schemas", () => {
                     { kind: "group", by: ["STATUS"], values: [{ id: "ir1", col: "AMOUNT", fn: "sum" }] },
                     // AMOUNT is not in this completed export. The server ignores
                     // this stale assignment, so the client must not export it.
-                    { kind: "formats", formats: { AMOUNT: { mask: "integer" } } },
+                    { kind: "formats", formats: { AMOUNT: { mask: "#,##0" } } },
                 ],
             },
             second: {
@@ -386,7 +386,7 @@ test("removed source formats cannot cross two completed Shape schemas", () => {
         },
     };
 
-    assert.deepEqual(formatForColumn({ doc }, column), { mask: "plain" },
+    assert.deepEqual(formatForColumn({ doc }, column), { mask: "0.00" },
         "only the mask carried by first's real ir1 export reaches the second Shape");
 });
 
@@ -412,7 +412,7 @@ test("a retained dimension format cannot cross through a sibling metric", () => 
                 ],
                 composables: [
                     { kind: "group", by: ["AMOUNT"], values: [{ id: "ir1", col: "AMOUNT", fn: "sum" }] },
-                    { kind: "formats", formats: { AMOUNT: { mask: "integer" } } },
+                    { kind: "formats", formats: { AMOUNT: { mask: "#,##0" } } },
                 ],
             },
             second: {
@@ -436,13 +436,13 @@ test("a later shape inherits a direct format from its intermediate metric", () =
             tables: {
                 source: {
                     from: "definition",
-                    composables: [{ kind: "formats", formats: { AMOUNT: { mask: "currency:CAD" } } }],
+                    composables: [{ kind: "formats", formats: { AMOUNT: { mask: "$#,##0.00" } } }],
                 },
                 first: {
                     from: "source",
                     composables: [
                         { kind: "group", by: ["STATUS"], values: [{ id: "ir1", col: "AMOUNT", fn: "sum" }] },
-                        { kind: "formats", formats: { ir1: { mask: "integer" } } },
+                        { kind: "formats", formats: { ir1: { mask: "#,##0" } } },
                     ],
                 },
                 second: {
@@ -456,7 +456,7 @@ test("a later shape inherits a direct format from its intermediate metric", () =
         },
     };
 
-    assert.equal(formatForColumn(w, column).mask, "integer");
+    assert.equal(formatForColumn(w, column).mask, "#,##0");
 });
 
 test("a chart with a required output column hidden is a valid non-chartable table", () => {

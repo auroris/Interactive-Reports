@@ -170,6 +170,11 @@ export const messages = {
     "columns.colorAria": "{label} color",
     "columns.right": "Right",
     "columns.formatMask": "Format Mask",
+    "columns.maskPreset": "Preset",
+    "columns.maskCustom": "Custom",
+    "columns.maskPlaceholder": "e.g. #,##0.00 or yyyy-mm-dd",
+    "columns.maskNote": "Excel-style format code. Numbers: 0 # , . % and \"text\", with positive;negative;zero sections. Dates: yyyy mm dd hh mm ss AM/PM.",
+    "columns.maskInvalid": "Unrecognized format mask; the default format is shown.",
     "columns.textColor": "Text",
     "columns.cssClasses": "CSS Classes",
     "columns.cssPlaceholder": "e.g. amount-column emphasized",
@@ -317,10 +322,6 @@ export const messages = {
     "chart.blank": "(blank)",
     "chart.loadFailed": "The charting module failed to load. Reload the page and try again.",
 
-    "format.number": "Number: {example}",
-    "format.plain": "Plain: {example}",
-    "format.currency": "Currency: {currency}",
-    "format.percent": "Percent: {example}",
     "format.true": "true",
     "format.false": "false",
 

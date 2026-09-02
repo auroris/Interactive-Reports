@@ -212,7 +212,7 @@ public class CsvWriterTests
                                         TextColumn = "LINK_TEXT",
                                         UrlColumn = "LINK_URL",
                                     },
-                                    ["AMOUNT"] = new() { Mask = "currency:USD" },
+                                    ["AMOUNT"] = new() { Mask = "$#,##0.00" },
                                     ["PHOTO"] = new()
                                     {
                                         DisplayAs = "image",

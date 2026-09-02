@@ -53,7 +53,7 @@ public sealed class FormatInheritanceBoundaryTests : IClassFixture<SqliteE2EFixt
         });
 
         var effective = Assert.Contains("AMOUNT", plan.Formats);
-        Assert.Equal("currency:USD", effective.Mask);
+        Assert.Equal("$#,##0.00", effective.Mask);
         Assert.Null(effective.DisplayAs);
         Assert.Null(effective.UrlColumn);
         Assert.Null(effective.Bold);
@@ -92,9 +92,9 @@ public sealed class FormatInheritanceBoundaryTests : IClassFixture<SqliteE2EFixt
         var plan = await Compile(document);
 
         Assert.Equal("AMOUNT", Assert.Single(result.Columns).FormatSource);
-        Assert.Equal("currency:USD", plan.Formats["ir1"].Mask);
+        Assert.Equal("$#,##0.00", plan.Formats["ir1"].Mask);
         Assert.Null(plan.Formats["ir1"].DisplayAs);
-        Assert.Equal("currency:USD", plan.Export.Formats["ir1"].Mask);
+        Assert.Equal("$#,##0.00", plan.Export.Formats["ir1"].Mask);
         Assert.Null(plan.Export.Formats["ir1"].DisplayAs);
         Assert.DoesNotContain("AMOUNT", plan.Formats);
         Assert.DoesNotContain("AMOUNT", plan.Export.Formats);
@@ -210,14 +210,14 @@ public sealed class FormatInheritanceBoundaryTests : IClassFixture<SqliteE2EFixt
         });
 
         var effective = plan.Formats["AMOUNT"];
-        Assert.Equal("currency:USD", effective.Mask);
+        Assert.Equal("$#,##0.00", effective.Mask);
         Assert.Equal("link", effective.DisplayAs);
         Assert.Equal("NOTES", effective.UrlColumn);
         Assert.True(effective.Bold);
         Assert.Equal(["money"], effective.Classes);
 
         var inherited = plan.Export.Formats["AMOUNT"];
-        Assert.Equal("currency:USD", inherited.Mask);
+        Assert.Equal("$#,##0.00", inherited.Mask);
         Assert.Null(inherited.DisplayAs);
         Assert.Null(inherited.Bold);
         Assert.Null(inherited.Classes);
@@ -266,7 +266,7 @@ public sealed class FormatInheritanceBoundaryTests : IClassFixture<SqliteE2EFixt
         var plan = await Compile(document);
 
         var dimension = plan.Formats["AMOUNT"];
-        Assert.Equal("currency:USD", dimension.Mask);
+        Assert.Equal("$#,##0.00", dimension.Mask);
         Assert.Null(dimension.DisplayAs);
         Assert.Null(dimension.UrlColumn);
 
@@ -383,7 +383,7 @@ public sealed class FormatInheritanceBoundaryTests : IClassFixture<SqliteE2EFixt
                             Kind = "formats",
                             Formats = new Dictionary<string, ColumnFormat>
                             {
-                                ["AMOUNT"] = new() { Mask = "integer" },
+                                ["AMOUNT"] = new() { Mask = "#,##0" },
                             },
                         },
                     ],
@@ -448,7 +448,7 @@ public sealed class FormatInheritanceBoundaryTests : IClassFixture<SqliteE2EFixt
                         {
                             ["AMOUNT"] = new()
                             {
-                                Mask = "currency:USD",
+                                Mask = "$#,##0.00",
                                 Align = "right",
                                 Bold = true,
                                 Italic = true,

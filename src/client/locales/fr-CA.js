@@ -170,6 +170,11 @@ export const messages = {
     "columns.colorAria": "Couleur : {label}",
     "columns.right": "Droite",
     "columns.formatMask": "Masque de format",
+    "columns.maskPreset": "Modèle",
+    "columns.maskCustom": "Personnalisé",
+    "columns.maskPlaceholder": "p. ex. #,##0.00 ou yyyy-mm-dd",
+    "columns.maskNote": "Code de format de style Excel. Nombres : 0 # , . % et « texte », avec des sections positif;négatif;zéro. Dates : yyyy mm dd hh mm ss AM/PM.",
+    "columns.maskInvalid": "Masque de format non reconnu; le format par défaut est affiché.",
     "columns.textColor": "Texte",
     "columns.cssClasses": "Classes CSS",
     "columns.cssPlaceholder": "p. ex. colonne-montant accentuée",
@@ -317,10 +322,6 @@ export const messages = {
     "chart.blank": "(vide)",
     "chart.loadFailed": "Impossible de charger le module de graphiques. Rechargez la page et réessayez.",
 
-    "format.number": "Nombre : {example}",
-    "format.plain": "Simple : {example}",
-    "format.currency": "Devise : {currency}",
-    "format.percent": "Pourcentage : {example}",
     "format.true": "vrai",
     "format.false": "faux",
 

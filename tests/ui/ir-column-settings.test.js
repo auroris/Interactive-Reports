@@ -65,7 +65,7 @@ const groupedDocument = () => ({
                 kind: "formats",
                 formats: {
                     AMOUNT: {
-                        mask: "currency:CAD",
+                        mask: "$#,##0.00",
                         displayAs: "image",
                         urlColumn: "URL",
                     },
@@ -200,16 +200,21 @@ test("column settings write doc.formats and the grid renders mask, alignment, an
     const colSel = fieldControl(dialog, "Column");
     const alignSel = fieldControl(dialog, "Alignment");
     const maskSel = fieldControl(dialog, "Format Mask");
+    const presetSel = fieldControl(dialog, "Preset");
     assert.equal(colSel.value, "ID", "the invoking column is preselected");
-    assert.ok([...maskSel.options].some(option => option.value === "currency:CAD"));
-    assert.ok([...maskSel.options].some(option => option.value === "percent2"));
-    assert.ok([...maskSel.options].some(option => option.value === "decimal3"));
+    assert.equal(maskSel.tagName, "INPUT", "the mask is free text");
+    assert.ok([...presetSel.options].some(option => option.value === "#,##0.00"));
+    assert.ok([...presetSel.options].some(option => option.value === "0.00%"));
+    assert.ok([...presetSel.options].some(option => option.value === "$#,##0.00"));
+    assert.ok([...presetSel.options].every(option => !option.value || option.text.includes(" · ")),
+        "each preset documents itself with a rendered example");
     alignSel.value = "center";
-    maskSel.value = "integer";
+    maskSel.value = "#,##0";
     maskSel.dispatchEvent(new window.Event("input", { bubbles: true }));
+    assert.equal(presetSel.value, "#,##0", "typing a preset code selects it in the list");
     const boldChk = dialog.querySelectorAll('input[type="checkbox"]')[1];
     boldChk.checked = true;
-    const classesInp = dialog.querySelector('input[type="text"]');
+    const classesInp = fieldControl(dialog, "CSS Classes");
     classesInp.value = "amount-column emphasized";
     classesInp.dispatchEvent(new window.Event("input", { bubbles: true }));
 
@@ -221,7 +226,7 @@ test("column settings write doc.formats and the grid renders mask, alignment, an
     const doc = await applyDialog(report);
     assert.deepEqual(inputNode(doc, "formats").formats, {
         ID: {
-            mask: "integer", align: "center", bold: true,
+            mask: "#,##0", align: "center", bold: true,
             classes: ["amount-column", "emphasized"],
         },
     });
@@ -350,7 +355,7 @@ test("restyling a grouped metric preserves its inherited mask without parent ren
     clickMenuItem(report, "Column Settings");
     const dialog = report.shadowRoot.querySelector(".ir-dialog");
     assert.equal(fieldControl(dialog, "Column").value, "ir2");
-    assert.equal(fieldControl(dialog, "Format Mask").value, "currency:CAD");
+    assert.equal(fieldControl(dialog, "Format Mask").value, "$#,##0.00");
     assert.equal(fieldControl(dialog, "Display As").value, "");
     assert.equal(fieldControl(dialog, "URL Column").value, "ir2");
 
@@ -359,7 +364,7 @@ test("restyling a grouped metric preserves its inherited mask without parent ren
     const doc = await applyDialog(report);
 
     assert.deepEqual(terminalNode(doc, "formats").formats.ir2, {
-        mask: "currency:CAD",
+        mask: "$#,##0.00",
         bold: true,
     });
 
@@ -403,12 +408,12 @@ test("column settings reject component-reserved CSS classes without leaking stag
     // Stage a VALID edit on ID first, then an invalid class on NAME: the failed
     // apply must discard the whole visit, not leave ID's edit in the live doc.
     const maskSel = fieldControl(dialog, "Format Mask");
-    maskSel.value = "integer";
+    maskSel.value = "#,##0";
     maskSel.dispatchEvent(new window.Event("input", { bubbles: true }));
     const column = fieldControl(dialog, "Column");
     column.value = "NAME";
     column.dispatchEvent(new window.Event("change", { bubbles: true }));
-    const classesInp = dialog.querySelector('input[type="text"]');
+    const classesInp = fieldControl(dialog, "CSS Classes");
     classesInp.value = "ir-empty";
     dialog.querySelector(".ir-btn-primary").click();
 
@@ -466,6 +471,54 @@ test("without the columns feature the dialog offers no visibility checkbox", asy
     const dialog = report.shadowRoot.querySelector(".ir-dialog");
     // bold, italic, text color, background — but no Visible checkbox.
     assert.equal(dialog.querySelectorAll('input[type="checkbox"]').length, 4);
+
+    report.remove();
+});
+
+test("the preset list copies a format code into the mask box and tracks hand-written masks", async () => {
+    requests.length = 0;
+    const report = await mount("orders");
+
+    report.shadowRoot.querySelector("th.ir-th-menu .ir-th-button").click();
+    clickMenuItem(report, "Column Settings");
+    const dialog = report.shadowRoot.querySelector(".ir-dialog");
+    const maskInp = fieldControl(dialog, "Format Mask");
+    const presetSel = fieldControl(dialog, "Preset");
+    const hint = dialog.querySelector(".ir-mask-hint");
+    const preview = () => dialog.querySelector(".ir-format-preview").textContent;
+
+    assert.equal(maskInp.value, "", "no mask is staged for a fresh column");
+    assert.equal(presetSel.value, "", "the list starts on Custom");
+    assert.equal(hint.classList.contains("ir-mask-invalid"), false);
+    assert.match(presetSel.options[1].text, /^#,##0 · 1,235$/, "presets show code and rendered sample");
+
+    presetSel.value = "$#,##0.00";
+    presetSel.dispatchEvent(new window.Event("change", { bubbles: true }));
+    assert.equal(maskInp.value, "$#,##0.00", "choosing a preset overwrites the text");
+    assert.equal(preview(), "$1,234.50", "the preview renders the preset immediately");
+
+    maskInp.value = "abc";
+    maskInp.dispatchEvent(new window.Event("input", { bubbles: true }));
+    assert.equal(presetSel.value, "", "text matching no preset shows Custom");
+    assert.equal(hint.classList.contains("ir-mask-invalid"), true, "an unrecognized mask is flagged");
+    assert.match(hint.textContent, /unrecognized/i);
+    assert.equal(preview(), "1,234.50", "an unrecognized mask previews the default format");
+
+    maskInp.value = "#,##0.00\"%\"";
+    maskInp.dispatchEvent(new window.Event("input", { bubbles: true }));
+    assert.equal(presetSel.value, "#,##0.00\"%\"", "typing a preset's code selects it in the list");
+    assert.equal(hint.classList.contains("ir-mask-invalid"), false);
+    assert.equal(preview(), "1,234.50%");
+
+    maskInp.value = "  0.0;(0.0);\"zero\"  ";
+    maskInp.dispatchEvent(new window.Event("input", { bubbles: true }));
+    assert.equal(presetSel.value, "", "a custom section code stays Custom");
+    assert.equal(preview(), "1234.5");
+
+    const doc = await applyDialog(report);
+    assert.deepEqual(inputNode(doc, "formats").formats, { ID: { mask: "0.0;(0.0);\"zero\"" } },
+        "the trimmed hand-written code is stored as the mask");
+    assert.equal(report.shadowRoot.querySelector("tbody tr td").textContent, "1234.5");
 
     report.remove();
 });

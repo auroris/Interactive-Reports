@@ -59,7 +59,7 @@ public sealed class BoundOutputContractTests
             formats: new Dictionary<string, CanonicalColumnFormat>(StringComparer.OrdinalIgnoreCase)
             {
                 ["AMOUNT"] = Format(
-                    mask: "currency:USD",
+                    mask: "$#,##0.00",
                     bold: true,
                     displayAs: "link",
                     urlColumn: "CUSTOMER"),
@@ -108,7 +108,7 @@ public sealed class BoundOutputContractTests
             Schema,
             formats: new Dictionary<string, CanonicalColumnFormat>(StringComparer.OrdinalIgnoreCase)
             {
-                ["AMOUNT"] = Format("currency:USD"),
+                ["AMOUNT"] = Format("$#,##0.00"),
             },
             formatSources: new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
             {
@@ -124,7 +124,7 @@ public sealed class BoundOutputContractTests
         Assert.Null(amount.LocalFormat);
         Assert.Null(amount.ExportedMask);
         Assert.Null(amount.FormatSourceLogicalId);
-        Assert.Equal("currency:USD", original.GetRequired("AMOUNT").ExportedMask);
+        Assert.Equal("$#,##0.00", original.GetRequired("AMOUNT").ExportedMask);
     }
 
     [Fact]

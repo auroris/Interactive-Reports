@@ -5,60 +5,74 @@
 import Big from "big.js";
 import { resolveLocale, translate } from "../../core/localization.js";
 
-// Format masks are a closed token vocabulary per column type. Legacy number tokens remain valid
-// report-document data even as the chooser grows.
-/** Closed numeric-mask catalog presented by the column-format editor. */
-export const NUMBER_MASKS = [
-    { value: "integer", key: "format.number", sample: "1234.6" },
-    { value: "decimal1", key: "format.number", sample: "1234.56" },
-    { value: "decimal2", key: "format.number", sample: "1234.567" },
-    { value: "decimal3", key: "format.number", sample: "1234.5678" },
-    { value: "decimal4", key: "format.number", sample: "1234.56789" },
-    { value: "plain", key: "format.plain", sample: "1234.567" },
-    { value: "currency:CAD", key: "format.currency", currency: "CAD" },
-    { value: "currency:USD", key: "format.currency", currency: "USD" },
-    { value: "currency:EUR", key: "format.currency", currency: "EUR" },
-    { value: "currency:GBP", key: "format.currency", currency: "GBP" },
-    { value: "currency:JPY", key: "format.currency", currency: "JPY" },
-    { value: "percent0", key: "format.percent", sample: "0.123456" },
-    { value: "percent1", key: "format.percent", sample: "0.123456" },
-    { value: "percent2", key: "format.percent", sample: "0.123456" },
+// Format masks are Excel-style format codes entered by the report user (`#,##0.00`,
+// `0.0%`, `yyyy-mm-dd hh:mm`). Anything the grammar does not understand renders nothing so
+// the cell falls through to its default text.
+/** Preset numeric format codes offered by the column-format editor. */
+export const NUMBER_MASK_PRESETS = [
+    "#,##0",
+    "#,##0.0",
+    "#,##0.00",
+    "#,##0.000",
+    "#,##0.0000",
+    "0.00",
+    "#,##0.00;(#,##0.00)",
+    "$#,##0.00",
+    "€#,##0.00",
+    "£#,##0.00",
+    "¥#,##0",
+    "#,##0.00 \"CAD\"",
+    "0%",
+    "0.0%",
+    "0.00%",
+    "#,##0.00\"%\"",
 ];
 
-/** Closed date/time-mask catalog presented by the column-format editor. */
-export const DATE_MASKS = [
-    { value: "date" },
-    { value: "datetime" },
-    { value: "datetimeSeconds" },
-    { value: "time" },
-    { value: "timeSeconds" },
-    { value: "dateMedium" },
-    { value: "dateLong" },
-    { value: "dateTimeMedium" },
-    { value: "dateTimeLong" },
+/** Preset date/time format codes offered by the column-format editor. */
+export const DATE_MASK_PRESETS = [
+    "yyyy-mm-dd",
+    "yyyy-mm-dd hh:mm",
+    "yyyy-mm-dd hh:mm:ss",
+    "h:mm AM/PM",
+    "hh:mm:ss",
+    "mm/dd/yyyy",
+    "dd/mm/yyyy",
+    "mmm d, yyyy",
+    "mmmm d, yyyy",
+    "mmm d, yyyy h:mm AM/PM",
+    "dddd, mmmm d, yyyy",
 ];
 
-const CURRENCY_DIGITS = { CAD: 2, USD: 2, EUR: 2, GBP: 2, JPY: 0 };
+/** Sample values rendered beside each preset so the picker documents itself. */
+export const MASK_SAMPLES = { number: "1234.567", date: "2026-08-07T14:30:45" };
+
+/** Longest format code accepted from report state; longer masks fall through to default rendering. */
+export const MAX_MASK_LENGTH = 64;
 
 /**
- * Returns the format masks compatible with a column's data type.
+ * Returns the preset format codes compatible with a column's data type, each with its rendered sample.
  *
  * @param {string} type - The value or column type to classify.
- * @param {Element|object|string|null} [context=null] - The locale or DOM context used to render mask labels and examples.
- * @returns {Array<{value: string, label: string}>} Localized mask choices for number or date columns; other types return an empty array.
+ * @param {Element|object|string|null} [context=null] - The locale or DOM context used to render the examples.
+ * @returns {Array<{value: string, example: string}>} Preset codes for number or date columns; other types return an empty array.
  */
 export function masksFor(type, context = null) {
-    if (type === "number") return NUMBER_MASKS.map(mask => ({
-        value: mask.value,
-        label: translate(context, mask.key, mask.currency
-            ? { currency: mask.currency }
-            : { example: applyMask(mask.sample, "number", mask.value, context) }),
-    }));
-    if (type === "date") return DATE_MASKS.map(mask => ({
-        value: mask.value,
-        label: applyMask("2026-08-07T14:30:45", "date", mask.value, context),
-    }));
-    return [];
+    const presets = type === "number" ? NUMBER_MASK_PRESETS : type === "date" ? DATE_MASK_PRESETS : [];
+    return presets.map(value => ({ value, example: applyMask(MASK_SAMPLES[type], type, value, context) ?? "" }));
+}
+
+/**
+ * Determines whether a mask renders a column type's sample value rather than falling through to default text.
+ *
+ * @param {string} type - The column type the mask is meant for.
+ * @param {string|null|undefined} mask - The mask text to test.
+ * @param {Element|object|string|null} [context=null] - The locale or DOM context used for rendering.
+ * @returns {boolean} `true` for a blank mask or one the formatter understands.
+ */
+export function maskIsValid(type, mask, context = null) {
+    if (typeof mask !== "string" || !mask.trim()) return true;
+    if (!Object.hasOwn(MASK_SAMPLES, type)) return false;
+    return applyMask(MASK_SAMPLES[type], type, mask, context) !== null;
 }
 
 /**
@@ -118,20 +132,21 @@ function numberLocaleParts(locale) {
     let parts = localeParts.get(locale);
     if (!parts) {
         const digitFormatter = new Intl.NumberFormat(locale, { useGrouping: false, maximumFractionDigits: 0 });
+        const integerFormat = new Intl.NumberFormat(locale, { useGrouping: true, maximumFractionDigits: 0 });
         parts = {
-            integerFormat: new Intl.NumberFormat(locale, { useGrouping: true, maximumFractionDigits: 0 }),
+            integerFormat,
             decimalSeparator: new Intl.NumberFormat(locale, {
                 minimumFractionDigits: 1,
                 maximumFractionDigits: 1,
             }).formatToParts(1.1).find(part => part.type === "decimal")?.value ?? ".",
+            groupSeparator: integerFormat.formatToParts(1234567).find(part => part.type === "group")?.value ?? ",",
+            minusSign: integerFormat.formatToParts(-1).find(part => part.type === "minusSign")?.value ?? "-",
             digits: Array.from({ length: 10 }, (_, digit) => digitFormatter.format(digit)),
         };
         localeParts.set(locale, parts);
     }
     return parts;
 }
-const numericPartTypes = new Set(["integer", "group", "decimal", "fraction", "nan", "infinity"]);
-
 /**
  * Applies locale-specific digit grouping to exact integer and fraction text.
  *
@@ -149,110 +164,24 @@ function localizedMagnitude(parts, grouping, locale) {
     return fraction ? `${integer}${grouping ? formats.decimalSeparator : "."}${fraction}` : integer;
 }
 
-// Intl formatter construction dominates per-cell formatting cost (an order of magnitude over
-// formatting itself), so instances are cached per shape. The closed mask vocabulary keeps both
-// caches tiny.
-const decorationFormats = new Map();
 /**
- * Returns a cached number formatter used only for locale-specific decoration parts.
- *
- * @param {string} locale - The resolved locale identifier.
- * @param {string} style - The number-decoration style, such as decimal, percent, or currency.
- * @param {string|null} currency - The ISO currency code for currency style, otherwise `null`.
- * @param {number} fractionDigits - The number of fractional digits to preserve in the formatted value.
- * @returns {Intl.NumberFormat} A cached formatter used only to obtain non-numeric decoration parts.
- *
- * Side effects: populates the decoration-formatter cache on first use.
- */
-function decorationFormat(locale, style, currency, fractionDigits) {
-    const key = `${locale}:${style}:${currency ?? ""}:${fractionDigits}`;
-    let format = decorationFormats.get(key);
-    if (!format) {
-        const options = { style, minimumFractionDigits: fractionDigits, maximumFractionDigits: fractionDigits };
-        if (currency) options.currency = currency;
-        format = new Intl.NumberFormat(locale, options);
-        decorationFormats.set(key, format);
-    }
-    return format;
-}
-
-// Invariant: obtain signs, spacing, currency placement, and percent placement from Intl, but
-// replace its numeric run with our exact string. Intl never receives the real value.
-/**
- * Applies locale-specific sign, currency, or percent decoration to exact numeric text.
- *
- * @param {string} numberText - The exact numeric digits to decorate without converting through a floating-point value.
- * @param {boolean} negative - Whether the exact numeric text represents a negative value.
- * @param {string} locale - The resolved locale identifier.
- * @param {string} style - The number-decoration style, such as decimal, percent, or currency.
- * @param {string|null} currency - The ISO currency code for currency style, otherwise `null`.
- * @param {number} fractionDigits - The number of fractional digits to preserve in the formatted value.
- * @returns {string} The exact number with locale-specific sign and style decoration.
- */
-function decorateNumber(numberText, negative, locale, style, currency, fractionDigits) {
-    const parts = decorationFormat(locale, style, currency, fractionDigits).formatToParts(negative ? -1 : 1);
-    let inserted = false;
-    let result = "";
-    for (const part of parts) {
-        if (numericPartTypes.has(part.type)) {
-            if (!inserted) result += numberText;
-            inserted = true;
-        } else {
-            result += part.value;
-        }
-    }
-    return result;
-}
-
-/**
- * Formats an exact report number without converting its significant digits through floating point.
+ * Formats an exact report number in the locale's default decimal style without converting its
+ * significant digits through floating point.
  *
  * @param {unknown} value - A report number accepted by `parseReportNumber`.
- * @param {{minimum?: number, maximum?: number, grouping?: boolean, style?: string, currency?: string|null, scale?: number}} [options={}] - Precision, grouping, decoration, currency, and decimal power scaling.
- * @param {Element|object|string|null} [context=null] - The locale or DOM context used for separators and decorations.
+ * @param {{minimum?: number, maximum?: number}} [options={}] - The least and most fractional digits to show.
+ * @param {Element|object|string|null} [context=null] - The locale or DOM context used for separators.
  * @returns {string|null} The locale-formatted exact number, or `null` when the input is not numeric.
  */
-function exactNumber(value, { minimum = 0, maximum = minimum, grouping = true, style = "decimal", currency = null, scale = 0 } = {}, context = null) {
+function exactNumber(value, { minimum = 0, maximum = minimum } = {}, context = null) {
     const number = parseReportNumber(value);
     if (!number) return null;
-    const adjusted = scale
-        ? number.times(new Big(10).pow(scale))
-        : number;
-    const parts = fixedParts(adjusted, maximum);
+    const parts = fixedParts(number, maximum);
     while (parts.fraction.length > minimum && parts.fraction.endsWith("0"))
         parts.fraction = parts.fraction.slice(0, -1);
     const locale = resolveLocale(context);
-    const magnitude = localizedMagnitude(parts, grouping, locale);
-    if (!grouping && style === "decimal") return `${parts.negative ? "-" : ""}${magnitude}`;
-    return decorateNumber(magnitude, parts.negative, locale, style, currency, parts.fraction.length);
-}
-
-const LOCALIZED_DATE_MASKS = {
-    time: { hour: "numeric", minute: "2-digit" },
-    timeSeconds: { hour: "numeric", minute: "2-digit", second: "2-digit" },
-    dateMedium: { year: "numeric", month: "short", day: "numeric" },
-    dateLong: { year: "numeric", month: "long", day: "numeric" },
-    dateTimeMedium: { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" },
-    dateTimeLong: { year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" },
-};
-const dateMaskFormats = new Map();
-/**
- * Returns the date-format options represented by a supported display mask.
- *
- * @param {string} locale - The resolved locale identifier.
- * @param {string} mask - A key in the supported localized date-mask catalog.
- * @returns {Intl.DateTimeFormat} The cached formatter for the locale and mask.
- *
- * Side effects: populates the date-formatter cache on first use.
- */
-function dateMaskFormat(locale, mask) {
-    const key = `${locale}:${mask}`;
-    let format = dateMaskFormats.get(key);
-    if (!format) {
-        format = new Intl.DateTimeFormat(locale, LOCALIZED_DATE_MASKS[mask]);
-        dateMaskFormats.set(key, format);
-    }
-    return format;
+    const magnitude = localizedMagnitude(parts, true, locale);
+    return (parts.negative ? numberLocaleParts(locale).minusSign : "") + magnitude;
 }
 
 /**
@@ -273,57 +202,351 @@ const parseDateText = value => {
     };
 };
 
+// ---------------------------------------------------------------------------------------------
+// Excel-style format codes. The grammar is the subset of Excel number and date format codes
+// that survives a round trip into a workbook cell: digit placeholders, grouping, scaling
+// commas, percent, quoted or escaped literals, positive;negative;zero sections, and the
+// y/m/d/h/s date tokens. Parsing never touches the value; the value is formatted exactly and
+// then dropped into the code's literal frame. Unknown constructs make the whole code invalid,
+// and an invalid code renders nothing so the caller falls through to default text.
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Splits a format code at semicolons that sit outside quotes, brackets, and escapes.
+ *
+ * @param {string} code - The complete format code.
+ * @returns {Array<string>} The raw section texts in order.
+ */
+function splitSections(code) {
+    const sections = [];
+    let current = "";
+    let quoted = false;
+    let bracket = false;
+    for (let i = 0; i < code.length; i++) {
+        const ch = code[i];
+        if (quoted) { current += ch; if (ch === "\"") quoted = false; continue; }
+        if (bracket) { current += ch; if (ch === "]") bracket = false; continue; }
+        if (ch === "\\") { current += ch + (code[i + 1] ?? ""); i++; continue; }
+        if (ch === "\"") { quoted = true; current += ch; continue; }
+        if (ch === "[") { bracket = true; current += ch; continue; }
+        if (ch === ";") { sections.push(current); current = ""; continue; }
+        current += ch;
+    }
+    sections.push(current);
+    return sections;
+}
+
+/**
+ * Reads one literal construct at a position shared by number and date codes.
+ *
+ * @param {string} section - The section text.
+ * @param {number} index - The index of the construct's first character.
+ * @returns {{text: string, next: number}|null} The literal text and the index after it, or `null` when no literal construct starts here or it is malformed.
+ */
+function readLiteral(section, index) {
+    const ch = section[index];
+    if (ch === "\"") {
+        const end = section.indexOf("\"", index + 1);
+        return end < 0 ? null : { text: section.slice(index + 1, end), next: end + 1 };
+    }
+    if (ch === "\\") return index + 1 < section.length ? { text: section[index + 1], next: index + 2 } : null;
+    if (ch === "_") return index + 1 < section.length ? { text: " ", next: index + 2 } : null;
+    if (ch === "*") return index + 1 < section.length ? { text: "", next: index + 2 } : null;
+    if (ch === "[") {
+        const end = section.indexOf("]", index + 1);
+        if (end < 0) return null;
+        const body = section.slice(index + 1, end);
+        // [$€-407] carries a currency symbol; [Red] and [Color 10] are display colors with no text.
+        if (body.startsWith("$")) return { text: body.slice(1).split("-")[0], next: end + 1 };
+        if (/^[A-Za-z]+\s?\d*$/.test(body)) return { text: "", next: end + 1 };
+        return null;
+    }
+    return null;
+}
+
+const NUMBER_LITERAL_CHARS = new Set([" ", "$", "+", "-", "/", "(", ")", ":", "!", "^", "&", "'", "~", "{", "}", "<", ">", "="]);
+
+/**
+ * Parses one number section of a format code.
+ *
+ * @param {string} section - The section text.
+ * @returns {object|null} The section shape, or `null` when it uses an unsupported construct.
+ */
+function parseNumberSection(section) {
+    const spec = { prefix: "", suffix: "", minInteger: 0, minFraction: 0, maxFraction: 0, grouping: false, scale: 0, digits: false };
+    let literal = "";
+    let inFraction = false;
+    let started = false;
+    let pendingCommas = 0;
+    // Literals seen after the digit body become the suffix; another digit after them has no
+    // sensible cell position.
+    const numeric = () => {
+        if (started && literal) return false;
+        if (!started) { spec.prefix += literal; literal = ""; started = true; }
+        return true;
+    };
+    for (let i = 0; i < section.length;) {
+        const ch = section[i];
+        const read = readLiteral(section, i);
+        if (read) { literal += read.text; i = read.next; continue; }
+        if (ch === "0" || ch === "#" || ch === "?") {
+            if (!numeric()) return null;
+            if (inFraction) {
+                if (pendingCommas) return null;
+                spec.maxFraction++;
+                if (ch === "0") spec.minFraction = spec.maxFraction;
+            } else {
+                if (pendingCommas) { spec.grouping = true; pendingCommas = 0; }
+                if (ch === "0") spec.minInteger++;
+            }
+            spec.digits = true;
+            i++;
+            continue;
+        }
+        if (ch === "." && !inFraction) {
+            if (!numeric()) return null;
+            inFraction = true;
+            i++;
+            continue;
+        }
+        if (ch === "," && started && !literal) { pendingCommas++; i++; continue; }
+        if (ch === "%") { spec.scale += 2; literal += "%"; i++; continue; }
+        if (ch === "\"" || ch === "\\" || ch === "_" || ch === "*" || ch === "[") return null;
+        if (NUMBER_LITERAL_CHARS.has(ch) || ch === "." || ch === "," || (ch >= "1" && ch <= "9") || ch.charCodeAt(0) > 127) {
+            literal += ch;
+            i++;
+            continue;
+        }
+        return null;
+    }
+    // Commas after the last integer digit divide by a thousand each (#,##0, shows thousands).
+    spec.scale -= 3 * pendingCommas;
+    if (started) spec.suffix = literal;
+    else spec.prefix = literal;
+    return spec;
+}
+
+const numberCodes = new Map();
+/**
+ * Parses and caches a complete number format code.
+ *
+ * @param {string} code - The format code text.
+ * @returns {{positive: object, negative: object|null, zero: object|null}|null} The section shapes, or `null` when the code is invalid.
+ *
+ * Side effects: populates the number-code cache on first use.
+ */
+function numberCode(code) {
+    if (numberCodes.has(code)) return numberCodes.get(code);
+    if (numberCodes.size > 256) numberCodes.clear();
+    const sections = splitSections(code).map(parseNumberSection);
+    const spec = sections.length <= 3 && sections.every(Boolean) && sections[0].digits
+        ? { positive: sections[0], negative: sections[1] ?? null, zero: sections[2] ?? null }
+        : null;
+    numberCodes.set(code, spec);
+    return spec;
+}
+
+/**
+ * Renders unsigned integer digits with locale grouping, preserving zero padding the code requested.
+ *
+ * @param {string} integer - The unsigned integer digits, possibly zero padded or empty.
+ * @param {boolean} grouping - Whether the code asked for thousands grouping.
+ * @param {object} formats - The locale's cached separators and digits.
+ * @returns {string} The localized integer text.
+ */
+function codeInteger(integer, grouping, formats) {
+    if (!integer) return "";
+    if (grouping && (integer[0] !== "0" || integer === "0")) return formats.integerFormat.format(BigInt(integer));
+    const digits = [...integer].map(digit => formats.digits[+digit]);
+    if (!grouping) return digits.join("");
+    const groups = [];
+    for (let end = digits.length; end > 0; end -= 3) groups.unshift(digits.slice(Math.max(0, end - 3), end).join(""));
+    return groups.join(formats.groupSeparator);
+}
+
+/**
+ * Formats one exact number through one parsed section.
+ *
+ * @param {Big} number - The exact value; negative only when the code has no negative section.
+ * @param {object} section - The parsed section shape.
+ * @param {string} locale - The resolved locale identifier.
+ * @returns {string} The section's literal frame around the localized digits.
+ */
+function formatNumberSection(number, section, locale) {
+    if (!section.digits) return section.prefix + section.suffix;
+    const formats = numberLocaleParts(locale);
+    const scaled = section.scale ? number.times(new Big(10).pow(section.scale)) : number;
+    const parts = fixedParts(scaled, section.maxFraction);
+    while (parts.fraction.length > section.minFraction && parts.fraction.endsWith("0"))
+        parts.fraction = parts.fraction.slice(0, -1);
+    let integer = parts.integer === "0" && section.minInteger === 0 ? "" : parts.integer;
+    if (integer.length < section.minInteger) integer = integer.padStart(section.minInteger, "0");
+    const fraction = [...parts.fraction].map(digit => formats.digits[+digit]).join("");
+    const magnitude = codeInteger(integer, section.grouping, formats)
+        + (fraction ? formats.decimalSeparator + fraction : "");
+    return (parts.negative ? formats.minusSign : "") + section.prefix + magnitude + section.suffix;
+}
+
+/**
+ * Formats an exact report number through an Excel-style number format code.
+ *
+ * @param {unknown} value - A report number accepted by `parseReportNumber`.
+ * @param {string} code - The format code text.
+ * @param {Element|object|string|null} context - The locale or DOM context used for separators.
+ * @returns {string|null} The formatted text, or `null` when the code or value is unsupported.
+ */
+function formatNumberCode(value, code, context) {
+    const spec = numberCode(code);
+    if (!spec) return null;
+    const number = parseReportNumber(value);
+    if (!number) return null;
+    const locale = resolveLocale(context);
+    if (number.lt(0) && spec.negative) return formatNumberSection(number.abs(), spec.negative, locale);
+    if (number.eq(0) && spec.zero) return formatNumberSection(number, spec.zero, locale);
+    return formatNumberSection(number, spec.positive, locale);
+}
+
+/**
+ * Parses a date format code into date tokens and literal runs.
+ *
+ * @param {string} code - The format code text.
+ * @returns {Array<{token: string, width: number}|{literal: string}>|null} The token list, or `null` when the code is invalid.
+ */
+function parseDateCode(code) {
+    const tokens = [];
+    const literal = text => {
+        const last = tokens[tokens.length - 1];
+        if (last && "literal" in last) last.literal += text;
+        else tokens.push({ literal: text });
+    };
+    for (let i = 0; i < code.length;) {
+        const ch = code[i];
+        // Elapsed-time brackets ([h]:mm) and colors have no place in a date cell.
+        if (ch === "[") return null;
+        const read = readLiteral(code, i);
+        if (read) { literal(read.text); i = read.next; continue; }
+        const meridiem = /^(AM\/PM|am\/pm|A\/P|a\/p)/.exec(code.slice(i));
+        if (meridiem) { tokens.push({ token: "ampm", width: meridiem[1].length, upper: meridiem[1][0] === "A" }); i += meridiem[1].length; continue; }
+        const lower = ch.toLowerCase();
+        if ("ymdhs".includes(lower)) {
+            let width = 0;
+            while (code[i + width]?.toLowerCase() === lower) width++;
+            tokens.push({ token: lower, width });
+            i += width;
+            continue;
+        }
+        if (/[a-z"\\_*\[\]]/i.test(ch)) return null;
+        literal(ch);
+        i++;
+    }
+    const dateTokens = tokens.filter(t => "token" in t);
+    if (!dateTokens.length) return null;
+    // m means minutes beside hours or seconds, and months everywhere else.
+    dateTokens.forEach((t, index) => {
+        if (t.token !== "m" || t.width > 2) return;
+        const previous = dateTokens[index - 1]?.token;
+        const next = dateTokens[index + 1]?.token;
+        if (previous === "h" || next === "s") t.token = "minute";
+    });
+    const limits = { y: 4, m: 5, d: 4, h: 2, s: 2, minute: 2 };
+    if (dateTokens.some(t => t.token !== "ampm" && t.width > limits[t.token])) return null;
+    return tokens;
+}
+
+const dateCodes = new Map();
+const dateNameFormats = new Map();
+/**
+ * Returns a cached localized month or weekday name formatter.
+ *
+ * @param {string} locale - The resolved locale identifier.
+ * @param {string} part - `month` or `weekday`.
+ * @param {string} style - `long` or `short`.
+ * @returns {Intl.DateTimeFormat} The cached formatter.
+ *
+ * Side effects: populates the name-formatter cache on first use.
+ */
+function dateNameFormat(locale, part, style) {
+    const key = `${locale}:${part}:${style}`;
+    let format = dateNameFormats.get(key);
+    if (!format) {
+        format = new Intl.DateTimeFormat(locale, { [part]: style });
+        dateNameFormats.set(key, format);
+    }
+    return format;
+}
+
+/**
+ * Formats a session-local date through an Excel-style date format code.
+ *
+ * @param {unknown} value - A value whose leading text matches `YYYY-MM-DD[ T]HH:MM[:SS]`.
+ * @param {string} code - The format code text.
+ * @param {Element|object|string|null} context - The locale or DOM context used for month and weekday names.
+ * @returns {string|null} The formatted text, or `null` when the code or value is unsupported.
+ *
+ * Side effects: populates the date-code cache on first use.
+ */
+function formatDateCode(value, code, context) {
+    if (!dateCodes.has(code)) {
+        if (dateCodes.size > 256) dateCodes.clear();
+        dateCodes.set(code, parseDateCode(code));
+    }
+    const tokens = dateCodes.get(code);
+    if (!tokens) return null;
+    const parsed = parseDateText(value);
+    if (!parsed) return null;
+    const date = parsed.date;
+    const locale = resolveLocale(context);
+    const twelveHour = tokens.some(t => t.token === "ampm");
+    const pad = (n, width) => String(n).padStart(width, "0");
+    let result = "";
+    for (const t of tokens) {
+        if ("literal" in t) { result += t.literal; continue; }
+        switch (t.token) {
+            case "y": result += t.width <= 2 ? pad(date.getFullYear() % 100, 2) : pad(date.getFullYear(), 4); break;
+            case "m":
+                result += t.width === 1 ? String(date.getMonth() + 1)
+                    : t.width === 2 ? pad(date.getMonth() + 1, 2)
+                    : t.width === 3 ? dateNameFormat(locale, "month", "short").format(date)
+                    : t.width === 4 ? dateNameFormat(locale, "month", "long").format(date)
+                    : dateNameFormat(locale, "month", "long").format(date).slice(0, 1).toLocaleUpperCase(locale);
+                break;
+            case "d":
+                result += t.width === 1 ? String(date.getDate())
+                    : t.width === 2 ? pad(date.getDate(), 2)
+                    : t.width === 3 ? dateNameFormat(locale, "weekday", "short").format(date)
+                    : dateNameFormat(locale, "weekday", "long").format(date);
+                break;
+            case "h": {
+                const hours = twelveHour ? (date.getHours() % 12 || 12) : date.getHours();
+                result += t.width === 1 ? String(hours) : pad(hours, 2);
+                break;
+            }
+            case "minute": result += t.width === 1 ? String(date.getMinutes()) : pad(date.getMinutes(), 2); break;
+            case "s": result += t.width === 1 ? String(date.getSeconds()) : pad(date.getSeconds(), 2); break;
+            case "ampm": {
+                const text = date.getHours() < 12 ? "AM" : "PM";
+                const shown = t.width === 3 ? text[0] : text;
+                result += t.upper ? shown : shown.toLowerCase();
+                break;
+            }
+        }
+    }
+    return result;
+}
+
 /**
  * Applies one supported numeric or date mask without converting exact numeric digits through floating point.
  *
  * @param {unknown} value - The report value to format.
  * @param {string} type - The protocol column type.
- * @param {string} mask - A token from the supported mask catalog.
+ * @param {string} mask - An Excel-style format code.
  * @param {Element|object|string|null} [context=null] - The locale or DOM context used for localized output.
- * @returns {string|null} The formatted value, or `null` when the type, mask, input, or runtime currency is unsupported.
+ * @returns {string|null} The formatted value, or `null` when the type, mask, or input is unsupported.
  */
 export function applyMask(value, type, mask, context = null) {
-    if (type === "number") {
-        const fixed = /^decimal([1-4])$/.exec(mask);
-        if (fixed) return exactNumber(value, { minimum: +fixed[1], maximum: +fixed[1] }, context);
-        const currency = /^currency:([A-Z]{3})$/.exec(mask);
-        if (currency && Object.hasOwn(CURRENCY_DIGITS, currency[1])) {
-            const digits = CURRENCY_DIGITS[currency[1]];
-            try {
-                return exactNumber(value, {
-                    minimum: digits,
-                    maximum: digits,
-                    style: "currency",
-                    currency: currency[1],
-                }, context);
-            } catch (error) {
-                if (!(error instanceof RangeError)) throw error;
-                return null;
-            }
-        }
-        const percent = /^percent([0-2])$/.exec(mask);
-        if (percent) {
-            const digits = +percent[1];
-            return exactNumber(value, { minimum: digits, maximum: digits, style: "percent", scale: 2 }, context);
-        }
-        switch (mask) {
-            case "integer": return exactNumber(value, { maximum: 0 }, context);
-            case "plain": return exactNumber(value, { minimum: 2, maximum: 2, grouping: false }, context);
-        }
-        return null;
-    }
-
-    if (type === "date") {
-        const parsed = parseDateText(value);
-        if (!parsed) return null;
-        switch (mask) {
-            case "date": return parsed.text;
-            case "datetime": return `${parsed.text} ${parsed.time}`;
-            case "datetimeSeconds": return `${parsed.text} ${parsed.timeSeconds}`;
-        }
-        if (Object.hasOwn(LOCALIZED_DATE_MASKS, mask))
-            return dateMaskFormat(resolveLocale(context), mask).format(parsed.date);
-    }
+    if (typeof mask !== "string" || !mask || mask.length > MAX_MASK_LENGTH) return null;
+    if (type === "number") return formatNumberCode(value, mask, context);
+    if (type === "date") return formatDateCode(value, mask, context);
     return null;
 }
 

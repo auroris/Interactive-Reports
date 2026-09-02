@@ -4,6 +4,7 @@
 
 import { discoverSchema } from "./schema.js";
 import { executeReport, executeLov, exportCsv } from "./executor.js";
+import { renderCsvTable } from "./presentation.js";
 import { EphemeralSavedReportStore } from "./saved-reports.js";
 
 function jsonResponse(data, status = 200) {
@@ -171,8 +172,10 @@ export class InteractiveReportServer {
             page: { index: 1, size: 0 },
         };
         const result = await this.query(reportName, unpagedState);
+        // Labels, masks, link text, and image URLs follow the same rules as the .NET file client.
+        const table = renderCsvTable(result);
         return {
-            content: exportCsv(result.rows, result.columns),
+            content: exportCsv(table.rows, table.columns),
             truncated: result.rows.length < result.totalRows,
         };
     }

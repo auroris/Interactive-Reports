@@ -255,7 +255,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                     UrlColumn = "ir1",
                     TextColumn = "AMOUNT",
                 },
-                ["AMOUNT"] = new ColumnFormat { Mask = "currency:USD" },
+                ["AMOUNT"] = new ColumnFormat { Mask = "$#,##0.00" },
             },
         }), NoParams);
 
@@ -1444,7 +1444,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                             DisplayAs = "link",
                             UrlColumn = "ir2",
                             TextColumn = shipped,
-                            Mask = "currency:USD",
+                            Mask = "$#,##0.00",
                         },
                     },
                 }),
@@ -1667,7 +1667,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                     {
                         DisplayAs = "link",
                         UrlColumn = "NOTES",
-                        Mask = "currency:USD",
+                        Mask = "$#,##0.00",
                     },
                 },
             },
@@ -1702,7 +1702,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                         DisplayAs = "link",
                         UrlColumn = "ir2",
                         TextColumn = "ir1",
-                        Mask = "currency:USD",
+                        Mask = "$#,##0.00",
                     },
                 },
             });
@@ -1716,7 +1716,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                 {
                     DisplayAs = "link",
                     UrlColumn = "NOTES",
-                    Mask = "currency:USD",
+                    Mask = "$#,##0.00",
                 },
             },
         };
@@ -2176,7 +2176,7 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
                     DisplayAs = "link",
                     UrlColumn = "ir2",
                     TextColumn = "v0",
-                    Mask = "currency:USD",
+                    Mask = "$#,##0.00",
                 },
             },
         }));

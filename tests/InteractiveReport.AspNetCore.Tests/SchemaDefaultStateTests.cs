@@ -92,7 +92,7 @@ public sealed class SchemaDefaultStateTests
                 ["ORDER_ID"] = new ColumnFormat
                 {
                     Align = "center",
-                    Mask = "integer",
+                    Mask = "#,##0",
                     Classes = ["identifier-column"],
                     DisplayAs = "link",
                     UrlColumn = "ORDER_ID",
@@ -105,7 +105,7 @@ public sealed class SchemaDefaultStateTests
         var formats = Node(state, "formats").Formats!;
         var configuredFormats = Node(def.DefaultState, "formats").Formats!;
 
-        Assert.Equal(("center", "integer", "link", "ORDER_ID", "ORDER_ID"),
+        Assert.Equal(("center", "#,##0", "link", "ORDER_ID", "ORDER_ID"),
             (formats["ORDER_ID"].Align, formats["ORDER_ID"].Mask, formats["ORDER_ID"].DisplayAs,
                 formats["ORDER_ID"].UrlColumn, formats["ORDER_ID"].TextColumn));
         Assert.Equal(["identifier-column"], formats["ORDER_ID"].Classes);

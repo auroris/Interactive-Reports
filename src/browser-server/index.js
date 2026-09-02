@@ -7,4 +7,5 @@ export { discoverSchema, prettify, mapSqliteType, ALL_FEATURES } from "./schema.
 export { parseExpression, ExprError } from "./expressions/parser.js";
 export { emitSqlite, escapeLikePattern } from "./expressions/emitter.js";
 export { executeReport, executeLov, exportCsv } from "./executor.js";
+export { renderCsvTable } from "./presentation.js";
 export { EphemeralSavedReportStore } from "./saved-reports.js";
