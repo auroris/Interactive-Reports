@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Reports — In-Browser SQLite WASM Demo</title>
+    <style>
+        :root {
+            --bg-color: #f8fafc;
+            --header-bg: #ffffff;
+            --border-color: #e2e8f0;
+            --text-color: #0f172a;
+            --accent-color: #2563eb;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+        }
+
+        header {
+            background-color: var(--header-bg);
+            border-bottom: 1px solid var(--border-color);
+            padding: 1rem 1.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+
+        .title-group h1 {
+            margin: 0;
+            font-size: 1.25rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .badge {
+            background-color: #dbeafe;
+            color: #1e40af;
+            font-size: 0.75rem;
+            font-weight: 500;
+            padding: 0.15rem 0.5rem;
+            border-radius: 9999px;
+            border: 1px solid #bfdbfe;
+        }
+
+        .subtitle {
+            margin: 0.25rem 0 0 0;
+            font-size: 0.85rem;
+            color: #64748b;
+        }
+
+        .controls {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        select {
+            padding: 0.4rem 0.75rem;
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+            font-size: 0.9rem;
+            background-color: #ffffff;
+            color: var(--text-color);
+            cursor: pointer;
+        }
+
+        .github-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.38rem 0.75rem;
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+            background-color: #ffffff;
+            color: var(--text-color);
+            text-decoration: none;
+            font-size: 0.875rem;
+            font-weight: 500;
+            transition: background-color 0.15s ease, border-color 0.15s ease;
+        }
+
+        .github-link:hover {
+            background-color: #f1f5f9;
+            border-color: #cbd5e1;
+        }
+
+        .github-link svg {
+            width: 16px;
+            height: 16px;
+            fill: currentColor;
+        }
+
+        main {
+            padding: 1.5rem;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .loading-banner {
+            background: #f1f5f9;
+            border: 1px dashed #cbd5e1;
+            border-radius: 8px;
+            padding: 2rem;
+            text-align: center;
+            color: #475569;
+        }
+
+        #report-container {
+            display: none;
+            background: #ffffff;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+            border: 1px solid var(--border-color);
+            overflow: hidden;
+        }
+    </style>
+
+    <!-- Load local SQLite WASM -->
+    <script src="./sql-wasm.js"></script>
+</head>
+<body>
+    <header>
+        <div class="title-group">
+            <h1>
+                Interactive Reports
+                <span class="badge">SQLite WASM (In-Browser)</span>
+            </h1>
+            <p class="subtitle">
+                Pure client-side JavaScript port of the C# Interactive Reports server. No backend required.
+            </p>
+        </div>
+        <div class="controls">
+            <label for="report-select"><strong>Report:</strong></label>
+            <select id="report-select">
+                <option value="orders" selected>Orders (Full Feature Set)</option>
+                <option value="big-orders">Big Orders (Control Break & Aggregates)</option>
+                <option value="orders-kiosk">Orders Kiosk (Whitelisted Features)</option>
+            </select>
+            <a href="https://github.com/auroris/Interactive-Reports" target="_blank" rel="noopener noreferrer" class="github-link" title="View Interactive Reports on GitHub">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+                GitHub
+            </a>
+        </div>
+    </header>
+
+    <main>
+        <div id="loading" class="loading-banner">
+            Initializing SQLite WebAssembly database and seeding 500 sample orders…
+        </div>
+
+        <div id="report-container">
+            <!-- Custom element will be mounted here -->
+        </div>
+    </main>
+
+    <script type="module">
+        import { createSqliteDb, InteractiveReportServer, installFetchInterceptor } from "./browser-server.js";
+        import { seedSampleOrders } from "./sample-data.js";
+
+        async function initDemo() {
+            const loadingEl = document.getElementById("loading");
+            const containerEl = document.getElementById("report-container");
+            const selectEl = document.getElementById("report-select");
+
+            try {
+                // 1. Initialize in-memory SQLite database
+                const db = await createSqliteDb({
+                    locateFile: file => new URL(file, import.meta.url).href
+                });
+
+                // 2. Seed 500 deterministic orders
+                seedSampleOrders(db);
+
+                // 3. Create browser server & register report definitions
+                const server = new InteractiveReportServer(db, { apiPrefix: "/api/reports" });
+
+                // Report 1: Orders (full default report)
+                server.registerReport({
+                    name: "orders",
+                    title: "Orders",
+                    sql: "SELECT ORDER_ID, CUSTOMER, REGION, STATUS, AMOUNT, ORDER_DATE, NOTES FROM ORDERS",
+                    columnLabels: {
+                        ORDER_ID: "Order #",
+                        CUSTOMER: "Customer Name",
+                        ORDER_DATE: "Ordered On",
+                    },
+                    editLink: {
+                        urlTemplate: "/orders/{ORDER_ID}/edit",
+                        label: "Edit Order",
+                    },
+                });
+
+                // Report 2: Big orders with control break and totals
+                server.registerReport({
+                    name: "big-orders",
+                    title: "Big Orders (over 5k)",
+                    sql: "SELECT ORDER_ID, CUSTOMER, REGION, AMOUNT, ORDER_DATE FROM ORDERS WHERE AMOUNT > 5000",
+                    columnLabels: {
+                        ORDER_ID: "Order #",
+                    },
+                    defaultState: {
+                        activeTable: "large",
+                        tables: {
+                            large: {
+                                from: "definition",
+                                composables: [
+                                    { kind: "sort", sorts: [{ col: "AMOUNT", dir: "desc" }] },
+                                    { kind: "break", breaks: ["REGION"] },
+                                    {
+                                        kind: "aggregate",
+                                        aggregates: [
+                                            { col: "AMOUNT", fn: "sum" },
+                                            { col: "AMOUNT", fn: "avg" },
+                                        ],
+                                    },
+                                ],
+                            },
+                        },
+                    },
+                });
+
+                // Report 3: Orders kiosk with restricted features
+                server.registerReport({
+                    name: "orders-kiosk",
+                    title: "Orders Kiosk",
+                    sql: "SELECT ORDER_ID, CUSTOMER, REGION, AMOUNT, ORDER_DATE FROM ORDERS",
+                    columnLabels: {
+                        ORDER_ID: "Order #",
+                    },
+                    features: ["search", "sort", "download"],
+                });
+
+                // 4. Install fetch interceptor
+                installFetchInterceptor(server, { apiPrefix: "/api/reports" });
+
+                // 5. Load the custom element bundle
+                await import("./ir.js");
+
+                // 6. Mount report element
+                function renderReport(name) {
+                    containerEl.innerHTML = "";
+                    const ir = document.createElement("interactive-report");
+                    ir.setAttribute("report", name);
+                    ir.setAttribute("api-base", "/api/reports");
+                    containerEl.appendChild(ir);
+                }
+
+                selectEl.addEventListener("change", e => {
+                    renderReport(e.target.value);
+                });
+
+                renderReport("orders");
+
+                loadingEl.style.display = "none";
+                containerEl.style.display = "block";
+
+            } catch (err) {
+                loadingEl.innerHTML = `<strong style="color: #dc2626;">Initialization error:</strong> ${err.message}`;
+                console.error(err);
+            }
+        }
+
+        initDemo();
+    </script>
+</body>
+</html>

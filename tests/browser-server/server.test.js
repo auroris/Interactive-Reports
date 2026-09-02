@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createSqliteDb, InteractiveReportServer, installFetchInterceptor } from "../../src/browser-server/index.js";
-import { seedSampleOrders } from "../../demo/sample-data.js";
+import { seedSampleOrders } from "../../src/demo/sample-data.js";
 
 async function setupServer() {
     const db = await createSqliteDb();

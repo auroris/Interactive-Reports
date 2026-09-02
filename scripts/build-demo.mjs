@@ -6,6 +6,9 @@ import { build } from "esbuild";
 
 const ROOT = process.cwd();
 const DEMO_DIR = path.join(ROOT, "demo");
+const DEMO_SRC = path.join(ROOT, "src", "demo");
+
+fs.mkdirSync(DEMO_DIR, { recursive: true });
 
 // 1. Ensure client UI bundle is built
 const uiDist = path.join(ROOT, "src", "InteractiveReport.Client.Json", "Ui", "dist");
@@ -15,7 +18,12 @@ if (!fs.existsSync(path.join(uiDist, "ir.js"))) {
     execSync("npm run build:client", { stdio: "inherit" });
 }
 
-// 2. Bundle browser-server into demo/browser-server.js
+// 2. Copy demo HTML and sample data sources into demo/
+console.log("Copying demo sources into demo/...");
+fs.copyFileSync(path.join(DEMO_SRC, "index.html"), path.join(DEMO_DIR, "index.html"));
+fs.copyFileSync(path.join(DEMO_SRC, "sample-data.js"), path.join(DEMO_DIR, "sample-data.js"));
+
+// 3. Bundle browser-server into demo/browser-server.js
 console.log("Bundling browser-server for demo...");
 await build({
     entryPoints: [path.join(ROOT, "src", "browser-server", "index.js")],
@@ -29,13 +37,13 @@ await build({
     logLevel: "info",
 });
 
-// 3. Copy sql.js wasm assets into demo/
+// 4. Copy sql.js wasm assets into demo/
 console.log("Copying SQLite WASM assets into demo/...");
 const sqlJsDist = path.join(ROOT, "node_modules", "sql.js", "dist");
 fs.copyFileSync(path.join(sqlJsDist, "sql-wasm.js"), path.join(DEMO_DIR, "sql-wasm.js"));
 fs.copyFileSync(path.join(sqlJsDist, "sql-wasm.wasm"), path.join(DEMO_DIR, "sql-wasm.wasm"));
 
-// 4. Copy ir.js, ir-chart.js, help.en.html into demo/
+// 5. Copy ir.js, ir-chart.js, help.en.html into demo/
 console.log("Copying Interactive Reports client assets into demo/...");
 fs.copyFileSync(path.join(uiDist, "ir.js"), path.join(DEMO_DIR, "ir.js"));
 fs.copyFileSync(path.join(uiDist, "ir-chart.js"), path.join(DEMO_DIR, "ir-chart.js"));

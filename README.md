@@ -6,12 +6,17 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <img alt=".NET 8" src="https://img.shields.io/badge/.NET-8.0-512BD4.svg">
-  <img alt="Databases" src="https://img.shields.io/badge/SQL%20Server%20%7C%20PostgreSQL%20%7C%20Oracle%20%7C%20SQLite-supported-2ea44f.svg">
+  <a href="LICENSE"><img alt="MIT license" src="docs/images/badge-license.svg"></a>
+  <img alt=".NET 8" src="docs/images/badge-dotnet.svg">
+  <img alt="Databases" src="docs/images/badge-databases.svg">
+  <a href="https://interactive-report.pages.dev/"><img alt="Live Demo" src="docs/images/badge-demo.svg"></a>
 </p>
 
 ![An interactive report: toolbar, settings chips, a control break by region, a highlighted cell, computed column, and pager](docs/images/hero.png)
+
+<p align="center">
+  <strong><a href="https://interactive-report.pages.dev/">🚀 Try the Interactive Demo</a></strong>
+</p>
 
 ## What it is
 
@@ -111,6 +116,7 @@ saved-report storage, the administration page, authorization, and the rest.
 
 ```sh
 npm ci && npm run build      # browser bundles and the packaged help page
+npm run build:demo           # standalone in-browser demo for Cloudflare Pages
 dotnet run --project samples/Workbench
 ```
 
