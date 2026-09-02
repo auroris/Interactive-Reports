@@ -66,6 +66,20 @@ const css = `
 .ir-help hr { border: 0; border-top: 1px solid var(--ir-border-light, #e8ebee); margin: 22px 0; }
 .ir-help strong { font-weight: 600; }
 body.ir-help-page { margin: 0; padding: 24px 16px 40px; background: #fff; }
+@media (prefers-color-scheme: dark) {
+    body.ir-help-page {
+        background: #1e2227;
+        color: #f0f3f6;
+    }
+    body.ir-help-page .ir-help {
+        --ir-text: #f0f3f6;
+        --ir-accent: #3898ec;
+        --ir-border: #383f48;
+        --ir-border-light: #2c323a;
+        --ir-bg-header: #292f37;
+        --ir-bg-soft: #252a30;
+    }
+}
 `;
 
 /** Renders one Markdown guide into a self-contained HTML document. */

@@ -208,6 +208,12 @@ class ReportController {
             this.refreshDisabledState();
             return;
         }
+        if (name === "theme") {
+            if (this._chart && this._chartModule) {
+                this._chart = renderChartView(this, this.els.chartWrap, this._chartModule);
+            }
+            return;
+        }
         if (this._initialized) this.scheduleInit();
     }
 
@@ -1128,7 +1134,7 @@ class ReportController {
  */
 export class InteractiveReportElement extends HTMLElement {
     static observedAttributes = [
-        "report", "saved-report", "api-base", "base", "lang", "disabled", "stylesheet",
+        "report", "saved-report", "api-base", "base", "lang", "disabled", "stylesheet", "theme",
     ];
 
     constructor() {
@@ -1196,6 +1202,18 @@ export class InteractiveReportElement extends HTMLElement {
     get disabled() { return this.hasAttribute("disabled"); }
     /** @param {boolean} value - Whether to set the standard boolean `disabled` attribute. */
     set disabled(value) { this.toggleAttribute("disabled", Boolean(value)); }
+
+    /**
+     * The explicit theme override on this report element ('dark', 'light', or null for auto).
+     *
+     * @returns {string|null} The theme attribute value.
+     */
+    get theme() { return this.getAttribute("theme"); }
+    /** @param {string|null|undefined} value - The theme override; nullish removes the attribute. */
+    set theme(value) {
+        if (value === null || value === undefined) this.removeAttribute("theme");
+        else this.setAttribute("theme", String(value));
+    }
 
     /**
      * Returns the accepted report document as a detached JSON-compatible object.

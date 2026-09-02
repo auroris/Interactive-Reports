@@ -5,6 +5,7 @@
 :host {
     all: initial;
     display: block;
+    color-scheme: light;
     --ir-accent: #0572ce;
     --ir-accent-soft: #eef5fc;
     --ir-border: #d5dbe1;
@@ -31,6 +32,45 @@
     --ir-chart-8: #e34948;
     --ir-chart-grid: var(--ir-border-light);
     --ir-chart-text: var(--ir-text-muted);
+
+    /* UI component tokens (light theme defaults) */
+    --ir-control-border: #c3cbd3;
+    --ir-btn-hover: #f0f3f6;
+    --ir-btn-primary-hover: #0468bc;
+    --ir-btn-danger-hover: #99201a;
+    --ir-chips-bg: #fbfcfd;
+    --ir-chip-border: #c8d3dd;
+    --ir-table-th-color: #3d4854;
+    --ir-th-hover: #e8edf2;
+    --ir-row-border: #eef1f3;
+    --ir-row-hover: #f5f9fd;
+    --ir-break-bg: #e9eef4;
+    --ir-break-border: #c9d4de;
+    --ir-break-text: #33404d;
+    --ir-break-total-bg: #f7f9fb;
+    --ir-break-total-text: #3e4a56;
+    --ir-grand-total-bg: #f0f5fa;
+    --ir-grand-total-border: #a9bccc;
+    --ir-popup-border: #ccd4dc;
+    --ir-popup-shadow: 0 6px 18px rgba(31, 39, 51, .18);
+    --ir-menu-item-disabled: #a6adb5;
+    --ir-dialog-border: transparent;
+    --ir-dialog-shadow: 0 14px 40px rgba(15, 23, 33, .35);
+    --ir-dialog-backdrop: rgba(23, 32, 44, .45);
+    --ir-banner-error-bg: #fdecea;
+    --ir-banner-error-border: #f2c4bd;
+    --ir-banner-error-text: #8c1d18;
+    --ir-banner-warn-bg: #fff8e1;
+    --ir-banner-warn-border: #ecdba4;
+    --ir-banner-warn-text: #6d4f00;
+    --ir-banner-ok-bg: #e9f5ea;
+    --ir-banner-ok-border: #c0e0c3;
+    --ir-banner-ok-text: #1e5b24;
+    --ir-token-bg: #eef3f8;
+    --ir-token-border: #cddcea;
+    --ir-token-text: #2c4a63;
+    --ir-token-hover: #dcebf7;
+
     font-family: var(--ir-font);
     font-size: var(--ir-font-size);
     line-height: normal;
@@ -38,6 +78,208 @@
     background: var(--ir-bg);
     border: 1px solid var(--ir-border);
     border-radius: 4px;
+}
+
+/* Dark theme active on the custom element host or inherited from ancestor context. */
+:host([data-theme="dark"]),
+:host([theme="dark"]),
+:host(.dark),
+:host([dark]),
+:host-context([data-theme="dark"]):not([data-theme="light"]):not([theme="light"]):not(.light):not([light]),
+:host-context([data-bs-theme="dark"]):not([data-theme="light"]):not([theme="light"]):not(.light):not([light]),
+:host-context(.dark):not([data-theme="light"]):not([theme="light"]):not(.light):not([light]),
+:host-context([theme="dark"]):not([data-theme="light"]):not([theme="light"]):not(.light):not([light]) {
+    color-scheme: dark;
+    --ir-accent: #3898ec;
+    --ir-accent-soft: rgba(56, 152, 236, 0.16);
+    --ir-border: #383f48;
+    --ir-border-light: #2c323a;
+    --ir-bg: #1e2227;
+    --ir-bg-soft: #252a30;
+    --ir-bg-header: #292f37;
+    --ir-text: #f0f3f6;
+    --ir-text-muted: #9aa4af;
+    --ir-danger: #e5534b;
+    --ir-chart-1: #3898ec;
+    --ir-chart-2: #f07d4f;
+    --ir-chart-3: #27c48d;
+    --ir-chart-4: #f5b324;
+    --ir-chart-5: #f093b6;
+    --ir-chart-6: #34a853;
+    --ir-chart-7: #8a7ff0;
+    --ir-chart-8: #f06463;
+    --ir-chart-grid: var(--ir-border-light);
+    --ir-chart-text: var(--ir-text-muted);
+
+    --ir-control-border: #444c56;
+    --ir-btn-hover: #2d333b;
+    --ir-btn-primary-hover: #4ba3f0;
+    --ir-btn-danger-hover: #ec655e;
+    --ir-chips-bg: #1b1f24;
+    --ir-chip-border: #3d4550;
+    --ir-table-th-color: #e1e7ec;
+    --ir-th-hover: #333a44;
+    --ir-row-border: #282e36;
+    --ir-row-hover: rgba(56, 152, 236, 0.08);
+    --ir-break-bg: #29303a;
+    --ir-break-border: #3d4653;
+    --ir-break-text: #e1e7ec;
+    --ir-break-total-bg: #22272e;
+    --ir-break-total-text: #9aa4af;
+    --ir-grand-total-bg: #262d36;
+    --ir-grand-total-border: #485260;
+    --ir-popup-border: #3d4550;
+    --ir-popup-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+    --ir-menu-item-disabled: #636e7b;
+    --ir-dialog-border: var(--ir-border);
+    --ir-dialog-shadow: 0 16px 48px rgba(0, 0, 0, 0.65);
+    --ir-dialog-backdrop: rgba(0, 0, 0, 0.7);
+    --ir-banner-error-bg: #3c1618;
+    --ir-banner-error-border: #6e2528;
+    --ir-banner-error-text: #fca5a5;
+    --ir-banner-warn-bg: #382d14;
+    --ir-banner-warn-border: #635020;
+    --ir-banner-warn-text: #fde68a;
+    --ir-banner-ok-bg: #16331e;
+    --ir-banner-ok-border: #235c34;
+    --ir-banner-ok-text: #86efac;
+    --ir-token-bg: #253342;
+    --ir-token-border: #384b60;
+    --ir-token-text: #b8d7f5;
+    --ir-token-hover: #2e3e50;
+}
+
+/* Automatic dark mode matching OS / browser preferences. */
+@media (prefers-color-scheme: dark) {
+    :host(:not([data-theme="light"]):not([theme="light"]):not(.light):not([light])) {
+        color-scheme: dark;
+        --ir-accent: #3898ec;
+        --ir-accent-soft: rgba(56, 152, 236, 0.16);
+        --ir-border: #383f48;
+        --ir-border-light: #2c323a;
+        --ir-bg: #1e2227;
+        --ir-bg-soft: #252a30;
+        --ir-bg-header: #292f37;
+        --ir-text: #f0f3f6;
+        --ir-text-muted: #9aa4af;
+        --ir-danger: #e5534b;
+        --ir-chart-1: #3898ec;
+        --ir-chart-2: #f07d4f;
+        --ir-chart-3: #27c48d;
+        --ir-chart-4: #f5b324;
+        --ir-chart-5: #f093b6;
+        --ir-chart-6: #34a853;
+        --ir-chart-7: #8a7ff0;
+        --ir-chart-8: #f06463;
+        --ir-chart-grid: var(--ir-border-light);
+        --ir-chart-text: var(--ir-text-muted);
+
+        --ir-control-border: #444c56;
+        --ir-btn-hover: #2d333b;
+        --ir-btn-primary-hover: #4ba3f0;
+        --ir-btn-danger-hover: #ec655e;
+        --ir-chips-bg: #1b1f24;
+        --ir-chip-border: #3d4550;
+        --ir-table-th-color: #e1e7ec;
+        --ir-th-hover: #333a44;
+        --ir-row-border: #282e36;
+        --ir-row-hover: rgba(56, 152, 236, 0.08);
+        --ir-break-bg: #29303a;
+        --ir-break-border: #3d4653;
+        --ir-break-text: #e1e7ec;
+        --ir-break-total-bg: #22272e;
+        --ir-break-total-text: #9aa4af;
+        --ir-grand-total-bg: #262d36;
+        --ir-grand-total-border: #485260;
+        --ir-popup-border: #3d4550;
+        --ir-popup-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+        --ir-menu-item-disabled: #636e7b;
+        --ir-dialog-border: var(--ir-border);
+        --ir-dialog-shadow: 0 16px 48px rgba(0, 0, 0, 0.65);
+        --ir-dialog-backdrop: rgba(0, 0, 0, 0.7);
+        --ir-banner-error-bg: #3c1618;
+        --ir-banner-error-border: #6e2528;
+        --ir-banner-error-text: #fca5a5;
+        --ir-banner-warn-bg: #382d14;
+        --ir-banner-warn-border: #635020;
+        --ir-banner-warn-text: #fde68a;
+        --ir-banner-ok-bg: #16331e;
+        --ir-banner-ok-border: #235c34;
+        --ir-banner-ok-text: #86efac;
+        --ir-token-bg: #253342;
+        --ir-token-border: #384b60;
+        --ir-token-text: #b8d7f5;
+        --ir-token-hover: #2e3e50;
+    }
+}
+
+/* Explicit light mode overrides on the custom element host or inherited from ancestor context. */
+:host([data-theme="light"]),
+:host([theme="light"]),
+:host(.light),
+:host([light]),
+:host-context([data-theme="light"]),
+:host-context([data-bs-theme="light"]),
+:host-context(.light),
+:host-context([theme="light"]) {
+    color-scheme: light;
+    --ir-accent: #0572ce;
+    --ir-accent-soft: #eef5fc;
+    --ir-border: #d5dbe1;
+    --ir-border-light: #e8ebee;
+    --ir-bg: #ffffff;
+    --ir-bg-soft: #f7f8f9;
+    --ir-bg-header: #f2f4f6;
+    --ir-text: #1f2733;
+    --ir-text-muted: #5d6771;
+    --ir-danger: #b3261e;
+    --ir-chart-1: #0572ce;
+    --ir-chart-2: #eb6834;
+    --ir-chart-3: #1baf7a;
+    --ir-chart-4: #eda100;
+    --ir-chart-5: #e87ba4;
+    --ir-chart-6: #008300;
+    --ir-chart-7: #4a3aa7;
+    --ir-chart-8: #e34948;
+    --ir-chart-grid: var(--ir-border-light);
+    --ir-chart-text: var(--ir-text-muted);
+
+    --ir-control-border: #c3cbd3;
+    --ir-btn-hover: #f0f3f6;
+    --ir-btn-primary-hover: #0468bc;
+    --ir-btn-danger-hover: #99201a;
+    --ir-chips-bg: #fbfcfd;
+    --ir-chip-border: #c8d3dd;
+    --ir-table-th-color: #3d4854;
+    --ir-th-hover: #e8edf2;
+    --ir-row-border: #eef1f3;
+    --ir-row-hover: #f5f9fd;
+    --ir-break-bg: #e9eef4;
+    --ir-break-border: #c9d4de;
+    --ir-break-text: #33404d;
+    --ir-break-total-bg: #f7f9fb;
+    --ir-break-total-text: #3e4a56;
+    --ir-grand-total-bg: #f0f5fa;
+    --ir-grand-total-border: #a9bccc;
+    --ir-popup-border: #ccd4dc;
+    --ir-popup-shadow: 0 6px 18px rgba(31, 39, 51, .18);
+    --ir-menu-item-disabled: #a6adb5;
+    --ir-dialog-border: transparent;
+    --ir-dialog-shadow: 0 14px 40px rgba(15, 23, 33, .35);
+    --ir-dialog-backdrop: rgba(23, 32, 44, .45);
+    --ir-banner-error-bg: #fdecea;
+    --ir-banner-error-border: #f2c4bd;
+    --ir-banner-error-text: #8c1d18;
+    --ir-banner-warn-bg: #fff8e1;
+    --ir-banner-warn-border: #ecdba4;
+    --ir-banner-warn-text: #6d4f00;
+    --ir-banner-ok-bg: #e9f5ea;
+    --ir-banner-ok-border: #c0e0c3;
+    --ir-banner-ok-text: #1e5b24;
+    --ir-token-bg: #eef3f8;
+    --ir-token-border: #cddcea;
+    --ir-token-text: #2c4a63;
+    --ir-token-hover: #dcebf7;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -53,7 +295,7 @@
     font-size: var(--ir-font-size);
     color: var(--ir-text);
     background: var(--ir-bg);
-    border: 1px solid #c3cbd3;
+    border: 1px solid var(--ir-control-border);
     border-radius: var(--ir-radius);
     padding: 4px 10px;
     cursor: pointer;
@@ -62,19 +304,19 @@
     gap: 5px;
     line-height: 1.35;
 }
-.ir-btn:hover:not(:disabled) { background: #f0f3f6; }
+.ir-btn:hover:not(:disabled) { background: var(--ir-btn-hover); }
 .ir-btn:disabled { opacity: .45; cursor: default; }
 .ir-btn-primary { background: var(--ir-accent); border-color: var(--ir-accent); color: #fff; }
-.ir-btn-primary:hover:not(:disabled) { background: #0468bc; }
-.ir-btn-danger { background: var(--ir-danger); border-color: var(--ir-danger); }
-.ir-btn-danger:hover:not(:disabled) { background: #99201a; }
+.ir-btn-primary:hover:not(:disabled) { background: var(--ir-btn-primary-hover); }
+.ir-btn-danger { background: var(--ir-danger); border-color: var(--ir-danger); color: #fff; }
+.ir-btn-danger:hover:not(:disabled) { background: var(--ir-btn-danger-hover); }
 
 .ir-input, .ir-select, .ir-textarea {
     font: inherit;
     font-size: var(--ir-font-size);
     color: var(--ir-text);
     background: var(--ir-bg);
-    border: 1px solid #c3cbd3;
+    border: 1px solid var(--ir-control-border);
     border-radius: var(--ir-radius);
     padding: 4px 8px;
 }
@@ -117,7 +359,9 @@
 .ir-search-input {
     font: inherit;
     font-size: var(--ir-font-size);
-    border: 1px solid #c3cbd3;
+    color: var(--ir-text);
+    background: var(--ir-bg);
+    border: 1px solid var(--ir-control-border);
     padding: 4px 8px;
     width: clamp(140px, 26vw, 260px); /* Pre-container-query hosts. */
     width: clamp(140px, 26cqi, 260px);
@@ -178,9 +422,9 @@
 }
 .ir-banner-text { flex: 1; white-space: pre-wrap; }
 .ir-banner-x { background: none; border: none; cursor: pointer; color: inherit; padding: 2px; }
-.ir-banner-error { background: #fdecea; border-color: #f2c4bd; color: #8c1d18; }
-.ir-banner-warn { background: #fff8e1; border-color: #ecdba4; color: #6d4f00; }
-.ir-banner-ok { background: #e9f5ea; border-color: #c0e0c3; color: #1e5b24; }
+.ir-banner-error { background: var(--ir-banner-error-bg); border-color: var(--ir-banner-error-border); color: var(--ir-banner-error-text); }
+.ir-banner-warn { background: var(--ir-banner-warn-bg); border-color: var(--ir-banner-warn-border); color: var(--ir-banner-warn-text); }
+.ir-banner-ok { background: var(--ir-banner-ok-bg); border-color: var(--ir-banner-ok-border); color: var(--ir-banner-ok-text); }
 
 /* Removable chips summarizing active filters, sorting, formatting, and other report state. */
 
@@ -190,7 +434,7 @@
     align-items: center;
     gap: 6px;
     padding: 7px 10px;
-    background: #fbfcfd;
+    background: var(--ir-chips-bg);
     border-bottom: 1px solid var(--ir-border-light);
 }
 .ir-chip {
@@ -198,14 +442,14 @@
     align-items: center;
     gap: 6px;
     background: var(--ir-bg);
-    border: 1px solid #c8d3dd;
+    border: 1px solid var(--ir-chip-border);
     border-radius: var(--ir-radius);
     padding: 2px 4px 2px 6px;
     font-size: 12px;
 }
 .ir-chip-off .ir-chip-label { opacity: .5; }
 .ir-chip-check { margin: 0; }
-.ir-chip-swatch { width: 11px; height: 11px; border-radius: 2px; border: 1px solid rgba(0,0,0,.2); }
+.ir-chip-swatch { width: 11px; height: 11px; border-radius: 2px; border: 1px solid var(--ir-border); }
 .ir-chip-label {
     background: none;
     border: none;
@@ -232,7 +476,7 @@
 }
 .ir-table th {
     background: var(--ir-bg-header);
-    color: #3d4854;
+    color: var(--ir-table-th-color);
     font-weight: 600;
     font-size: 12px;
     text-align: left;
@@ -256,7 +500,7 @@
     white-space: inherit;
     cursor: pointer;
 }
-.ir-th-button:hover { background: #e8edf2; color: var(--ir-accent); }
+.ir-th-button:hover { background: var(--ir-th-hover); color: var(--ir-accent); }
 .ir-th-button:focus-visible { outline: 2px solid var(--ir-accent); outline-offset: -2px; }
 .ir-th-inner { display: inline-flex; align-items: center; gap: 4px; }
 .ir-table th.ir-num, .ir-table td.ir-num { text-align: right; }
@@ -267,12 +511,12 @@
 
 .ir-table td {
     padding: 5px 12px;
-    border-bottom: 1px solid #eef1f3;
+    border-bottom: 1px solid var(--ir-row-border);
     white-space: nowrap;
 }
 .ir-table td.ir-num { font-variant-numeric: tabular-nums; }
 .ir-table td.ir-date { font-variant-numeric: tabular-nums; }
-.ir-table tr.ir-row:hover td { background-color: #f5f9fd; }
+.ir-table tr.ir-row:hover td { background-color: var(--ir-row-hover); }
 .ir-cell-link { color: var(--ir-accent); text-decoration: underline; text-underline-offset: 2px; }
 .ir-cell-image { display: block; max-width: 100%; max-height: 8rem; width: auto; height: auto; }
 .ir-cell-action { padding: 1px 8px; font-size: 12px; }
@@ -297,17 +541,17 @@
 .ir-cell-edit:focus-visible { outline: 2px solid var(--ir-accent); outline-offset: 0; }
 
 .ir-table tr.ir-break-header td {
-    background: #e9eef4;
-    border-top: 1px solid #c9d4de;
+    background: var(--ir-break-bg);
+    border-top: 1px solid var(--ir-break-border);
     font-weight: 600;
-    color: #33404d;
+    color: var(--ir-break-text);
 }
 .ir-break-count { float: right; font-weight: 400; color: var(--ir-text-muted); font-size: 12px; }
 
-.ir-table tr.ir-break-total td { background: #f7f9fb; color: #3e4a56; font-style: italic; }
+.ir-table tr.ir-break-total td { background: var(--ir-break-total-bg); color: var(--ir-break-total-text); font-style: italic; }
 .ir-table tr.ir-grand-total td {
-    background: #f0f5fa;
-    border-top: 2px solid #a9bccc;
+    background: var(--ir-grand-total-bg);
+    border-top: 2px solid var(--ir-grand-total-border);
     font-weight: 600;
 }
 .ir-agg-fn { font-style: normal; font-weight: 600; font-size: 12px; color: var(--ir-text-muted); }
@@ -359,9 +603,9 @@
     overflow-y: auto;
     overscroll-behavior: contain;
     background: var(--ir-bg);
-    border: 1px solid #ccd4dc;
+    border: 1px solid var(--ir-popup-border);
     border-radius: 4px;
-    box-shadow: 0 6px 18px rgba(31, 39, 51, .18);
+    box-shadow: var(--ir-popup-shadow);
     padding: 4px 0;
     font-size: var(--ir-font-size);
     color: var(--ir-text);
@@ -399,7 +643,7 @@
     cursor: pointer;
 }
 .ir-menu-item:hover:not(:disabled), .ir-menu-item:focus-visible { background: var(--ir-accent-soft); outline: none; }
-.ir-menu-item:disabled { color: #a6adb5; cursor: default; }
+.ir-menu-item:disabled { color: var(--ir-menu-item-disabled); cursor: default; }
 .ir-menu-check { width: 13px; font-size: 11px; color: var(--ir-accent); flex: none; }
 .ir-menu-label { flex: 1; }
 .ir-menu-hint { color: var(--ir-text-muted); font-size: 11px; }
@@ -431,11 +675,11 @@
     transform: var(--ir-win-transform, translateX(-50%));
     margin: 0;
     padding: 0;
-    border: 0;
+    border: 1px solid var(--ir-dialog-border);
     background: var(--ir-bg);
     color: var(--ir-text);
     border-radius: 6px;
-    box-shadow: 0 14px 40px rgba(15, 23, 33, .35);
+    box-shadow: var(--ir-dialog-shadow);
     width: var(--ir-dialog-width, 30rem);
     max-width: calc(100vw - 32px);
     max-height: 86vh;
@@ -448,7 +692,7 @@
 .ir-dialog[data-ir-popover-open],
 dialog.ir-dialog[open] { display: flex; }
 dialog.ir-dialog::backdrop {
-    background: rgba(23, 32, 44, .45);
+    background: var(--ir-dialog-backdrop);
 }
 .ir-dialog-title {
     display: flex;
@@ -574,7 +818,7 @@ dialog.ir-dialog::backdrop {
 .ir-shuttle { display: flex; align-items: center; gap: 10px; }
 .ir-shuttle-col { display: flex; flex-direction: column; gap: 5px; flex: 1; min-width: 0; }
 .ir-shuttle-head { font-size: 11.5px; font-weight: 600; color: var(--ir-text-muted); }
-.ir-shuttle-list { width: 100%; min-height: 15rem; font: inherit; font-size: 12.5px; border: 1px solid #c3cbd3; border-radius: var(--ir-radius); }
+.ir-shuttle-list { width: 100%; min-height: 15rem; font: inherit; font-size: 12.5px; color: var(--ir-text); background: var(--ir-bg); border: 1px solid var(--ir-control-border); border-radius: var(--ir-radius); }
 .ir-shuttle-btns { display: flex; flex-direction: column; gap: 5px; }
 .ir-shuttle-btns .ir-btn { padding: 3px 9px; justify-content: center; }
 
@@ -583,14 +827,14 @@ dialog.ir-dialog::backdrop {
 .ir-token {
     font: inherit;
     font-size: 11px;
-    background: #eef3f8;
-    border: 1px solid #cddcea;
+    background: var(--ir-token-bg);
+    border: 1px solid var(--ir-token-border);
     border-radius: 10px;
     padding: 2px 9px;
     cursor: pointer;
-    color: #2c4a63;
+    color: var(--ir-token-text);
 }
-.ir-token:hover { background: #dcebf7; }
+.ir-token:hover { background: var(--ir-token-hover); }
 
 .ir-colors { display: flex; gap: 18px; margin-top: 6px; }
 .ir-color-pick { display: flex; align-items: center; gap: 7px; font-size: 12.5px; }
@@ -609,7 +853,7 @@ dialog.ir-dialog::backdrop {
     font-size: 13px;
     min-height: 1.4em;
 }
-.ir-color { width: 36px; height: 24px; padding: 1px; border: 1px solid #c3cbd3; border-radius: var(--ir-radius); background: var(--ir-bg); }
+.ir-color { width: 36px; height: 24px; padding: 1px; border: 1px solid var(--ir-control-border); border-radius: var(--ir-radius); background: var(--ir-bg); }
 
 .ir-dialog:has(.ir-display-as option[value=""]:checked) .ir-url-only,
 .ir-dialog:has(.ir-display-as option:not([value="link"]):checked) .ir-text-only,

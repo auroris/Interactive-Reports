@@ -239,6 +239,28 @@ structural parts are `surface`, `toolbar`, `notices`, `chips`,
 and `dialog`. Editor dialogs are movable, modeless windows, so the report remains
 available while they are open. Short destructive confirmations remain modal.
 
+### Dark mode
+
+Interactive Reports includes built-in dark mode support with an accessible, high-contrast palette aligned with the APEX Universal Theme dark style.
+
+1. **Automatic (System Preference)**: By default, the component detects and honors `prefers-color-scheme: dark`.
+2. **Framework / Document Inheritance**: The component automatically activates dark mode when nested in an ancestor element with `data-theme="dark"`, `data-bs-theme="dark"` (Bootstrap 5.3+), `theme="dark"`, or the `.dark` class (Tailwind).
+3. **Explicit Control**: You can force a specific theme using the `theme` attribute or property on `<interactive-report>`:
+   ```html
+   <!-- Explicit dark mode -->
+   <interactive-report report="orders" theme="dark"></interactive-report>
+
+   <!-- Explicit light mode, even if OS or parent page is in dark mode -->
+   <interactive-report report="orders" theme="light"></interactive-report>
+   ```
+   Or programmatically:
+   ```js
+   const report = document.querySelector("interactive-report");
+   report.theme = "dark"; // "dark", "light", or null/undefined to follow system/context
+   ```
+
+All chart colors, dialog backdrops, action popups, chips, control break headers, and inputs automatically adjust to match the active theme.
+
 ## Host stylesheets and CSS classes
 
 An application integrator can set the element's `stylesheet` attribute or reflected

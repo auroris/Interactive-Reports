@@ -173,6 +173,17 @@ export class WidgetElement extends HTMLElement {
      */
     get base() { return this.apiBase.replace(/\/+$/, ""); }
     /**
+     * The explicit theme override on this widget ('dark', 'light', or null for auto).
+     *
+     * @returns {string|null} The theme attribute value.
+     */
+    get theme() { return this.getAttribute("theme"); }
+    /** @param {string|null|undefined} value - The theme override; nullish removes the attribute. */
+    set theme(value) {
+        if (value === null || value === undefined) this.removeAttribute("theme");
+        else this.setAttribute("theme", String(value));
+    }
+    /**
      * Returns the locale resolved from the widget and its DOM ancestry.
      *
      * @returns {'en'|'fr-CA'} The supported locale resolved from this element and its page.

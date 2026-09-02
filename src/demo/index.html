@@ -122,6 +122,68 @@
             border: 1px solid var(--border-color);
             overflow: hidden;
         }
+
+        @media (prefers-color-scheme: dark) {
+            :root:not([data-theme="light"]) {
+                --bg-color: #0f172a;
+                --header-bg: #1e293b;
+                --border-color: #334155;
+                --text-color: #f8fafc;
+                --accent-color: #3b82f6;
+            }
+            :root:not([data-theme="light"]) select,
+            :root:not([data-theme="light"]) .github-link {
+                background-color: #1e293b;
+                color: var(--text-color);
+                border-color: var(--border-color);
+            }
+            :root:not([data-theme="light"]) .github-link:hover {
+                background-color: #334155;
+            }
+            :root:not([data-theme="light"]) #report-container {
+                background: #1e2227;
+            }
+            :root:not([data-theme="light"]) .loading-banner {
+                background: #1e293b;
+                border-color: #334155;
+                color: #94a3b8;
+            }
+            :root:not([data-theme="light"]) .badge {
+                background-color: #1e3a8a;
+                color: #93c5fd;
+                border-color: #2563eb;
+            }
+        }
+
+        :root[data-theme="dark"] {
+            --bg-color: #0f172a;
+            --header-bg: #1e293b;
+            --border-color: #334155;
+            --text-color: #f8fafc;
+            --accent-color: #3b82f6;
+        }
+        :root[data-theme="dark"] select,
+        :root[data-theme="dark"] .github-link {
+            background-color: #1e293b;
+            color: var(--text-color);
+            border-color: var(--border-color);
+        }
+        :root[data-theme="dark"] .github-link:hover {
+            background-color: #334155;
+        }
+        :root[data-theme="dark"] #report-container {
+            background: #1e2227;
+        }
+        :root[data-theme="dark"] .loading-banner {
+            background: #1e293b;
+            border-color: #334155;
+            color: #94a3b8;
+        }
+        :root[data-theme="dark"] .badge {
+            background-color: #1e3a8a;
+            color: #93c5fd;
+            border-color: #2563eb;
+        }
     </style>
 
     <!-- Load local SQLite WASM -->
@@ -141,6 +203,12 @@
                 <option value="orders" selected>Orders (Full Feature Set)</option>
                 <option value="big-orders">Big Orders (Control Break & Aggregates)</option>
                 <option value="orders-kiosk">Orders Kiosk (Whitelisted Features)</option>
+            </select>
+            <label for="theme-select"><strong>Theme:</strong></label>
+            <select id="theme-select">
+                <option value="auto" selected>Auto</option>
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
             </select>
             <a href="https://github.com/auroris/Interactive-Reports" target="_blank" rel="noopener noreferrer" class="github-link" title="View Interactive Reports on GitHub">
                 <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
@@ -167,6 +235,7 @@
             const loadingEl = document.getElementById("loading");
             const containerEl = document.getElementById("report-container");
             const selectEl = document.getElementById("report-select");
+            const themeSelect = document.getElementById("theme-select");
 
             try {
                 // 1. Initialize in-memory SQLite database
@@ -248,11 +317,25 @@
                     const ir = document.createElement("interactive-report");
                     ir.setAttribute("report", name);
                     ir.setAttribute("api-base", "/api/reports");
+                    const currentTheme = themeSelect.value;
+                    if (currentTheme !== "auto") ir.setAttribute("theme", currentTheme);
                     containerEl.appendChild(ir);
                 }
 
                 selectEl.addEventListener("change", e => {
                     renderReport(e.target.value);
+                });
+
+                themeSelect.addEventListener("change", e => {
+                    const theme = e.target.value;
+                    if (theme === "auto") {
+                        document.documentElement.removeAttribute("data-theme");
+                        containerEl.querySelector("interactive-report")?.removeAttribute("theme");
+                    } else {
+                        document.documentElement.setAttribute("data-theme", theme);
+                        const ir = containerEl.querySelector("interactive-report");
+                        if (ir) ir.theme = theme;
+                    }
                 });
 
                 renderReport("orders");
