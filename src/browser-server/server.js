@@ -62,6 +62,7 @@ export class InteractiveReportServer {
         const key = def.name.toLowerCase();
         this.definitions.set(key, { ...def });
         this.schemaCache.delete(key);
+        this.savedReports.ensureDefault(def.name, def.defaultState);
     }
 
     /**
@@ -301,7 +302,7 @@ export class InteractiveReportServer {
             if (listMatch && method === "GET") {
                 const name = decodeURIComponent(listMatch[1]);
                 // If name is a registered definition or recognized family:
-                if (this.definitions.has(name.toLowerCase()) || this.savedReports.initializedReports.has(name.toLowerCase())) {
+                if (this.definitions.has(name.toLowerCase()) || this.savedReports.defaultReportIds.has(name.toLowerCase())) {
                     const list = this.savedReports.list(name);
                     return jsonResponse(list);
                 }

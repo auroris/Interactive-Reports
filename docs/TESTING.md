@@ -32,7 +32,7 @@ browser once, then run the browser suite:
 
 ```sh
 npx playwright install chromium
-npm run test:ui
+npm run test:e2e
 ```
 
 The configuration starts `samples/Workbench` on `http://127.0.0.1:5042`, reuses a

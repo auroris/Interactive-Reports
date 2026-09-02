@@ -3,32 +3,36 @@
 
 export class EphemeralSavedReportStore {
     constructor() {
-        this.nextId = 2; // ID 1 reserved for default report
+        this.nextId = 1;
         /** @type {Map<number, object>} */
         this.reports = new Map();
-        /** @type {Set<string>} */
-        this.initializedReports = new Set();
+        /** @type {Map<string, number>} */
+        this.defaultReportIds = new Map();
     }
 
     /**
      * Ensures the default report is present for the given family.
      *
      * @param {string} reportName
+     * @param {object} [defaultState={}]
      */
-    ensureDefault(reportName) {
-        if (this.initializedReports.has(reportName.toLowerCase())) return;
-        this.initializedReports.add(reportName.toLowerCase());
+    ensureDefault(reportName, defaultState = {}) {
+        const key = String(reportName || "").toLowerCase();
+        if (this.defaultReportIds.has(key)) return;
+
+        const id = this.nextId++;
+        this.defaultReportIds.set(key, id);
 
         const defaultReport = {
-            id: 1,
+            id,
             reportName,
             title: "Default",
             isDefault: true,
             isGlobal: true,
             createdBy: "system",
-            state: {},
+            state: defaultState ? JSON.parse(JSON.stringify(defaultState)) : {},
         };
-        this.reports.set(1, defaultReport);
+        this.reports.set(id, defaultReport);
     }
 
     /**

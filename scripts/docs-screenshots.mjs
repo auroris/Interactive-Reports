@@ -1,7 +1,8 @@
 // Renders the labelled figures used by docs/USER-GUIDE.md from the live packaged UI, so the
-// pictures always show the real component with its real stylesheet. Requires a running
-// Workbench (default http://127.0.0.1:5042; override with IR_DOCS_BASE) and the Playwright
-// Chromium that `npm install` already provides:
+// pictures always show the real component with its real stylesheet. `npm run build:screenshots`
+// starts and stops Workbench automatically. Direct invocation requires a running Workbench
+// (default http://127.0.0.1:5042; override with IR_DOCS_BASE) and the Playwright Chromium that
+// `npm install` already provides:
 //
 //   dotnet run --project samples/Workbench --urls http://127.0.0.1:5042
 //   node scripts/docs-screenshots.mjs

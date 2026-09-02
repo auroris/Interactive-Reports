@@ -23,8 +23,22 @@ console.log("Copying demo sources into demo/...");
 fs.copyFileSync(path.join(DEMO_SRC, "index.html"), path.join(DEMO_DIR, "index.html"));
 fs.copyFileSync(path.join(DEMO_SRC, "sample-data.js"), path.join(DEMO_DIR, "sample-data.js"));
 
-// 3. Bundle browser-server into demo/browser-server.js
+// 3. Bundle browser-server into demo/browser-server.js with a browser-safe sql.js shim
 console.log("Bundling browser-server for demo...");
+const sqlJsShimPlugin = {
+    name: "sql-js-shim",
+    setup(b) {
+        b.onResolve({ filter: /^sql\.js$/ }, args => ({
+            path: args.path,
+            namespace: "sql-js-shim",
+        }));
+        b.onLoad({ filter: /.*/, namespace: "sql-js-shim" }, () => ({
+            contents: `export default (typeof globalThis !== "undefined" && globalThis.initSqlJs) || undefined;`,
+            loader: "js",
+        }));
+    },
+};
+
 await build({
     entryPoints: [path.join(ROOT, "src", "browser-server", "index.js")],
     outfile: path.join(DEMO_DIR, "browser-server.js"),
@@ -33,7 +47,7 @@ await build({
     target: "es2022",
     minify: true,
     sourcemap: true,
-    external: ["sql.js"],
+    plugins: [sqlJsShimPlugin],
     logLevel: "info",
 });
 

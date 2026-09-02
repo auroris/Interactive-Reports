@@ -9,7 +9,7 @@
 #   pwsh scripts\release.ps1 -Force             # overwrite an existing releases\<version>\
 #
 # Push later with, for example:
-#   dotnet nuget push releases\0.9.0\*.nupkg --source https://api.nuget.org/v3/index.json --api-key ...
+#   dotnet nuget push releases\0.9.1\*.nupkg --source https://api.nuget.org/v3/index.json --api-key ...
 
 [CmdletBinding()]
 param(

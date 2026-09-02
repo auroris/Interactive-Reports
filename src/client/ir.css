@@ -100,7 +100,13 @@
     border-radius: 4px 4px 0 0;
 }
 
-.ir-search { display: inline-flex; align-items: stretch; }
+.ir-toolbar .ir-btn,
+.ir-toolbar .ir-search-input,
+.ir-toolbar .ir-select {
+    height: max(28px, calc(var(--ir-font-size) * 1.35 + 10px));
+}
+
+.ir-search { display: inline-flex; align-items: stretch; margin: 0; }
 .ir-search .ir-search-scope {
     border-radius: var(--ir-radius) 0 0 var(--ir-radius);
     border-right: none;
@@ -119,14 +125,14 @@
 .ir-search .ir-go { border-radius: 0 var(--ir-radius) var(--ir-radius) 0; border-left: none; }
 
 .ir-viewbtns { display: inline-flex; }
-.ir-viewbtn { border-radius: 0; border-right-width: 0; color: var(--ir-text-muted); padding: 4px 8px; }
+.ir-viewbtn { border-radius: 0; border-right-width: 0; color: var(--ir-text-muted); padding: 4px 8px; justify-content: center; }
 .ir-viewbtn:first-child { border-radius: var(--ir-radius) 0 0 var(--ir-radius); }
 .ir-viewbtn:last-child { border-radius: 0 var(--ir-radius) var(--ir-radius) 0; border-right-width: 1px; }
 .ir-viewbtn[aria-pressed="true"] { background: var(--ir-accent-soft); color: var(--ir-accent); }
 
 .ir-actionsbtn { font-weight: 500; }
 .ir-spacer { flex: 1; }
-.ir-helpbtn { color: var(--ir-text-muted); padding: 4px 7px; }
+.ir-helpbtn { color: var(--ir-text-muted); padding: 4px 7px; justify-content: center; }
 .ir-helpbtn:hover:not(:disabled) { color: var(--ir-accent); }
 
 /* The Help window hosts the generated user guide, which carries its own .ir-help styles. */

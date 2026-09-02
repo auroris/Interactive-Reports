@@ -81,14 +81,16 @@ the portability surface.
 | `tests/InteractiveReport.Core.Tests` | Composer golden tests (state doc → expected SQL, ×4 dialects), expression parser tests, SQLite end-to-end integration tests. |
 | `tests/InteractiveReport.AspNetCore.Tests` | HTTP, saved-report, authorization, configured-document, and GraphQL transport integration tests. |
 
-Target framework: `net8.0` (Umbraco 13 LTS floor; builds under SDK 8/10). Package
-dependencies pin 8.0.x for the same reason. Shared NuGet metadata (MIT, repo URL,
+The five distributable projects target `net8.0`, the Umbraco 13 LTS floor. The
+non-shipping Workbench and test projects target `net10.0`, matching the development
+SDK without raising the deployment requirement. Shared NuGet metadata (MIT, repo URL,
 Source Link, snupkg symbols, version) lives in the root `Directory.Build.props`;
-`scripts/pack.ps1` (`npm run pack`) builds the client bundles, runs the fast test
+`scripts/pack.ps1` (`npm run pack:nuget`) builds the client bundles, runs the fast test
 layers, and packs the five `src/` projects — an MSBuild guard fails Release builds
 and packs when `Ui/dist` is empty, so a UI-less package cannot ship. Publish
-automation is deliberately undecided (owner discussion pending); packing is the
-scripted boundary today.
+automation is deliberately undecided (owner discussion pending); Windows packaging is
+the scripted release boundary today, while ordinary development supports Windows and
+Linux.
 
 ## 4. Report definitions
 
@@ -1507,7 +1509,7 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   `locales/` contains the key-aligned English and Canadian French UI and error catalogs.
   Feature modules are free functions over the widget instance `w` — nothing
   imports the element class except its entry, so the graph stays acyclic.
-  `npm run build` uses esbuild to compile the stylesheet and modules into three
+  `npm run build:client` uses esbuild to compile the stylesheet and modules into three
   self-contained entry bundles in `Ui/dist`. The generated assets are ignored;
   `scripts/pack.ps1` builds them before packing, and an MSBuild guard fails
   Release builds and packs when they are missing — package consumers do not
@@ -1850,7 +1852,7 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
 | POST-primary protocol | GET + querystring state | State size; filter values leak into logs via GET; deep links return later as saved-state ids. |
 | Rows as JSON objects | Positional arrays | Page-granularity size difference is negligible; consumption ergonomics win. |
 | Highlight predicates push down as private booleans; Pivot emits portable grouped/conditional SQL | Interpret expressions in C# or use native PIVOT | Filters and highlights share one typed predicate implementation; private markers are removed before the response. A Pivot remains a child-wrappable relation without admitting four incompatible native PIVOT dialects. |
-| `net8.0` | `net10.0` | Umbraco 13 LTS floor; SDK 8 present; bump is cheap later. |
+| Distributable projects target `net8.0`; Workbench and tests target `net10.0` | Target everything uniformly | The package remains compatible with the Umbraco 13 LTS floor while development requires only the current SDK and runtime. |
 | whoami off by default | always on | It's an information endpoint; enabling is a deliberate operator act (samples enable it). |
 | Identity and owner matching is ordinal and case-sensitive | case-fold identity values | Identity-provider subjects are opaque; folding can merge distinct principals. |
 | Report-document ids are database-generated numeric identities | client-generated text ids | Numeric ids give database and configured-file rows one stable endpoint identity. Client-created transient documents may omit an id because processing routes use the configured definition key and submitted document. |

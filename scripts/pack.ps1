@@ -38,7 +38,7 @@ function Invoke-Step([string]$description, [scriptblock]$step) {
 if (-not $SkipInstall) { Invoke-Step "npm ci" { npm ci } }
 Invoke-Step "Build browser bundles and help page" { npm run build }
 if (-not $SkipTests) {
-    Invoke-Step "Client unit tests" { npm run unit }
+    Invoke-Step "Client unit tests" { npm run test:unit:run }
     Invoke-Step "dotnet test (Core)" { dotnet test tests\InteractiveReport.Core.Tests -c Release --nologo -v q }
     Invoke-Step "dotnet test (AspNetCore)" { dotnet test tests\InteractiveReport.AspNetCore.Tests -c Release --nologo -v q }
 }

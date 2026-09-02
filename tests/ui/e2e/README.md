@@ -23,5 +23,5 @@ states so adversarial and deep table graphs still load through the public persis
 each scenario deletes its state in `finally` and remains safe under parallel execution.
 
 ```sh
-npm run test:ui
+npm run test:e2e
 ```

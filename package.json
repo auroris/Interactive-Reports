@@ -1,27 +1,31 @@
 {
   "name": "interactive-reports-client",
-  "version": "0.0.0",
+  "version": "0.9.1",
   "private": true,
   "type": "module",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "build": "npm run build:client && npm run build:help",
+    "build": "npm run build:client && npm run build:help && npm run build:dotnet",
     "build:client": "node scripts/build-client.mjs",
-    "build:help": "node scripts/build-help.mjs",
+    "build:dotnet": "dotnet build InteractiveReport.slnx",
+    "build:help": "npm run build:screenshots && node scripts/build-help.mjs",
     "build:demo": "npm run build && node scripts/build-demo.mjs",
-    "docs:screenshots": "node scripts/docs-screenshots.mjs",
-    "dev": "node scripts/build-client.mjs --watch",
+    "build:watch": "node scripts/build-client.mjs --watch",
+    "build:screenshots": "node scripts/build-screenshots.mjs",
+    "start": "dotnet run --project samples/Workbench --no-build --launch-profile http",
+    "start:demo": "npx serve demo",
+    "start:dev": "npm run build:watch",
     "test": "npm run test:unit && npm run test:server",
-    "test:unit": "npm run build:client && npm run unit",
+    "test:unit": "npm run build:client && npm run test:unit:run",
+    "test:unit:run": "node --test tests/ui/*.test.js",
     "test:server": "node --test tests/browser-server/*.test.js",
-    "unit": "node --test tests/ui/*.test.js",
-    "test:ui": "npm run build:client && npm run e2e",
-    "e2e": "playwright test",
-    "verify": "npm run build:client && npm run unit && npm run e2e",
-    "pack": "pwsh scripts/pack.ps1",
-    "release": "pwsh scripts/release.ps1"
+    "test:e2e": "npm run build:client && npm run test:e2e:run",
+    "test:e2e:run": "playwright test",
+    "test:all": "npm run test && npm run test:e2e",
+    "pack:nuget": "pwsh scripts/pack.ps1",
+    "release:nuget": "pwsh scripts/release.ps1"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",

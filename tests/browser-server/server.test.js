@@ -355,3 +355,25 @@ test("installFetchInterceptor routes /api/reports calls in-process", async () =>
         interceptor.uninstall();
     }
 });
+
+test("switching between multiple reports preserves default document for each", async () => {
+    const { server } = await setupServer();
+    server.registerReport({
+        name: "big-orders",
+        title: "Big Orders",
+        sql: "SELECT ORDER_ID, AMOUNT FROM ORDERS",
+    });
+
+    // 1. Initial list for orders has default
+    const ordersList1 = await server.handleRequest("/api/reports/orders").then(r => r.json());
+    assert.ok(ordersList1.some(r => r.isDefault && r.reportName === "orders"));
+
+    // 2. Switch to big-orders: has its own default
+    const bigList = await server.handleRequest("/api/reports/big-orders").then(r => r.json());
+    assert.ok(bigList.some(r => r.isDefault && r.reportName === "big-orders"));
+
+    // 3. Switch back to orders: must still have its default report!
+    const ordersList2 = await server.handleRequest("/api/reports/orders").then(r => r.json());
+    assert.ok(ordersList2.some(r => r.isDefault && r.reportName === "orders"));
+    assert.notEqual(ordersList1[0].id, bigList[0].id);
+});

@@ -9,6 +9,8 @@
   <a href="LICENSE"><img alt="MIT license" src="docs/images/badge-license.svg"></a>
   <img alt=".NET 8" src="docs/images/badge-dotnet.svg">
   <img alt=".NET 10" src="docs/images/badge-dotnet-10.svg">
+  <img alt="Windows supported" src="docs/images/badge-windows.svg">
+  <img alt="Linux supported" src="docs/images/badge-linux.svg">
   <img alt="Databases" src="docs/images/badge-databases.svg">
   <a href="https://interactive-report.pages.dev/"><img alt="Live Demo" src="docs/images/badge-demo.svg"></a>
 </p>
@@ -109,14 +111,19 @@ saved-report storage, the administration page, authorization, and the rest.
 ## Developing
 
 ```sh
-npm ci && npm run build      # browser bundles and the packaged help page
+npm ci
+npx playwright install chromium  # on Linux, use: npx playwright install --with-deps chromium
+npm run build && npm run start  # build everything, then launch Workbench
 npm run build:demo           # standalone in-browser demo for Cloudflare Pages
-dotnet run --project samples/Workbench
+npm run start:demo           # launch local web server for the in-browser demo
 ```
 
-The Workbench at `http://localhost:5042` hosts every packaged page against a seeded
-SQLite database. `npm test` runs the client unit tests and `npm run verify` adds the
-Playwright suite; `dotnet test` covers the server. See [Developing](docs/DEVELOPING.md).
+The developer prerequisites are Node.js 20 or later, the .NET 10 SDK, and Playwright's
+Chromium browser. Normal development is supported on Windows and Linux; creating NuGet
+and release artifacts is a Windows workflow. The Workbench at `http://localhost:5042`
+hosts every packaged page against a seeded SQLite database. `npm test` runs the unit and
+SQLite server tests and `npm run test:all` adds the Playwright suite; `dotnet test`
+covers the server. See [Developing](docs/DEVELOPING.md).
 
 ## License
 
