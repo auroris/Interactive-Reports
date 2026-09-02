@@ -8,6 +8,7 @@
 <p align="center">
   <a href="LICENSE"><img alt="MIT license" src="docs/images/badge-license.svg"></a>
   <img alt=".NET 8" src="docs/images/badge-dotnet.svg">
+  <img alt=".NET 10" src="docs/images/badge-dotnet-10.svg">
   <img alt="Databases" src="docs/images/badge-databases.svg">
   <a href="https://interactive-report.pages.dev/"><img alt="Live Demo" src="docs/images/badge-demo.svg"></a>
 </p>
