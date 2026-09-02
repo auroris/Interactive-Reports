@@ -22,7 +22,7 @@
 
 A report is a piece of configuration: a name, a data source, and a `SELECT`. From
 that one statement the server discovers the columns and the browser element gives
-users an APEX-style workspace over the result. Everything a user does becomes a
+users a workspace over the result. Everything a user does becomes a
 JSON **report state document** that the server validates and compiles into
 parameterized SQL, pushed down to the database. Nothing the user types ever reaches
 the database as SQL text.
@@ -35,32 +35,23 @@ the database as SQL text.
   source-controlled JSON files beside the application.
 - **Download** the current view as CSV, with every row and the user's formatting.
 - **Secure by construction**: the developer owns the SQL and the trusted context
-  parameters; users own state, and state is data, never code. Report and saved-report
+  parameters; users own state, and state is always data. Report and saved-report
   access run through the host's own ASP.NET Core identity and authorization.
 - **No front-end build.** The UI is a self-contained custom element embedded in the
   NuGet package, with ready-made viewer and administration pages, English and Canadian
   French, and built-in help.
-- **SQL Server, PostgreSQL, Oracle, and SQLite**, with the dialect derived from the
-  connection rather than configured.
-
-## Inspired by Oracle APEX
-
-If you have used the Interactive Report region in
-[Oracle APEX](https://apex.oracle.com/), the workspace will feel familiar on purpose:
-the Actions menu, the search bar with a column scope, the header menus, the settings
-chips, control breaks, highlights, computed columns, saved and public reports, and
-the division of labour where the developer writes the region's SQL and users own
-everything in the Actions menu. This project brings that model to ASP.NET Core
-applications, including Umbraco sites, with a portable expression language in place
-of database-specific SQL and a JSON protocol that other clients (REST, GraphQL, file
-export) share with the browser.
+- **SQL Server, PostgreSQL, Oracle, and SQLite** all enjoy first class support.
 
 ## Quick start
+
+Install packages via the command line:
 
 ```sh
 dotnet add package InteractiveReport.AspNetCore
 dotnet add package InteractiveReport.Client.Json
 ```
+
+Configure a report in `appsettings.json`:
 
 ```json
 "InteractiveReport": {
@@ -73,6 +64,8 @@ dotnet add package InteractiveReport.Client.Json
   }
 }
 ```
+
+Register services and map endpoints in `Program.cs`:
 
 ```csharp
 builder.Services.AddInteractiveReports(builder.Configuration);
