@@ -798,7 +798,8 @@ test("column settings restyle a column from the header menu", async ({ page }) =
 
     await expect(dialog.getByLabel("Column", { exact: true })).toHaveValue("AMOUNT");
     await dialog.getByLabel("Alignment", { exact: true }).selectOption("center");
-    await dialog.getByLabel("Format Mask", { exact: true }).selectOption("integer");
+    await dialog.getByLabel("Preset", { exact: true }).selectOption("#,##0");
+    await expect(dialog.getByLabel("Format Mask", { exact: true })).toHaveValue("#,##0");
     await dialog.getByRole("checkbox", { name: "Bold" }).check();
 
     await runAndWaitForQuery(page, () =>
@@ -825,6 +826,9 @@ test("a definition edit link and per-column overrides shape the managed report",
     const editHeader = page.getByRole("columnheader", { name: "Edit order", exact: true });
     await expect(editHeader).toHaveText("");
     const pencil = page.getByRole("table").locator("tbody a.ir-cell-edit").first();
+    const editCell = pencil.locator("xpath=..");
+    await expect(editHeader).toHaveCSS("width", "32px");
+    await expect(editCell).toHaveCSS("width", "32px");
     await expect(pencil).toHaveAttribute("href", /^\/orders\/\d+\/edit$/);
     await expect(pencil).toHaveAttribute("aria-label", "Edit order");
     expect(await pencil.getAttribute("target")).toBeNull();

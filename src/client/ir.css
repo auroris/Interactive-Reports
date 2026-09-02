@@ -278,7 +278,13 @@
 .ir-cell-action { padding: 1px 8px; font-size: 12px; }
 
 /* The definition's edit link occupies a narrow leading column and uses an icon-only anchor. */
-.ir-table th.ir-th-edit { width: 1%; }
+.ir-table th.ir-th-edit,
+.ir-table td.ir-td-edit {
+    box-sizing: border-box;
+    width: 32px;
+    min-width: 32px;
+    max-width: 32px;
+}
 .ir-table td.ir-td-edit { text-align: center; padding: 5px 6px; }
 .ir-cell-edit {
     display: inline-flex;
@@ -591,6 +597,10 @@ dialog.ir-dialog::backdrop {
 .ir-color-pick .ir-checkline { margin: 0; }
 .ir-checklines { display: flex; gap: 18px; margin-bottom: 12px; }
 .ir-checklines .ir-checkline { margin-bottom: 0; }
+.ir-mask-input { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.ir-mask-preset { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.ir-mask-hint { margin: -6px 0 12px; }
+.ir-mask-hint.ir-mask-invalid { color: var(--ir-danger); }
 .ir-format-preview {
     border: 1px solid var(--ir-border-light);
     border-radius: var(--ir-radius);
