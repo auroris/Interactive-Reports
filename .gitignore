@@ -64,6 +64,8 @@ BenchmarkDotNet.Artifacts/
 project.lock.json
 project.fragment.lock.json
 artifacts/
+# Local package drops from scripts/release.ps1 (releases/<version>/*.nupkg + SHA256SUMS.txt).
+releases/
 
 # Tye
 .tye/

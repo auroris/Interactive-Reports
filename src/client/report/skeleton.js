@@ -8,6 +8,7 @@ import { featureEnabled } from "./schema.js";
 import { doSearch, openSearchScopeMenu } from "./search.js";
 import { actionsMenuItems, openActionsMenu } from "./menus.js";
 import { loadSavedById, refreshSavedSelect, resetToDefault } from "./saved.js";
+import { openHelpDialog } from "./help.js";
 
 /**
  * Creates the report widget's persistent toolbar, banner, content, and paging regions.
@@ -54,12 +55,19 @@ export function buildSkeleton(w) {
     });
     const savedWrap = el("label", { class: "ir-saved", hidden: true },
         el("span", { class: "ir-saved-label" }, w.t("toolbar.savedReport")), savedSel);
+    // Help is not a report feature: it stays reachable even when the control policy empties
+    // the Actions menu or hides every other toolbar control.
+    const helpBtn = el("button", {
+        type: "button", class: "ir-btn ir-helpbtn",
+        title: w.t("toolbar.help"), "aria-label": w.t("toolbar.help"),
+        onclick: () => openHelpDialog(w),
+    }, icon("help"));
     const searchWrap = el("form", {
         class: "ir-search", role: "search",
         onsubmit: event => { event.preventDefault(); doSearch(w); },
     }, scopeBtn, search, go);
     w.els = {
-        search, searchWrap, views, actionsBtn, savedSel, savedWrap,
+        search, searchWrap, views, actionsBtn, savedSel, savedWrap, helpBtn,
         errorSlot: el("div", { role: "alert", "aria-atomic": "true" }),
         transientSlot: el("div", { role: "status", "aria-live": "polite", "aria-atomic": "true" }),
         ignoredSlot: el("div", { role: "status", "aria-live": "polite", "aria-atomic": "true" }),
@@ -74,7 +82,8 @@ export function buildSkeleton(w) {
         el("div", { class: "ir-toolbar", part: "toolbar" },
             searchWrap, views, actionsBtn,
             el("span", { class: "ir-spacer" }),
-            savedWrap),
+            savedWrap,
+            helpBtn),
         el("div", { class: "ir-busybar" }),
         el("div", { class: "ir-notices", part: "notices" }, w.els.errorSlot, w.els.transientSlot, w.els.ignoredSlot),
         w.els.chips,

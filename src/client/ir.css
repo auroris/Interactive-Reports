@@ -126,6 +126,12 @@
 
 .ir-actionsbtn { font-weight: 500; }
 .ir-spacer { flex: 1; }
+.ir-helpbtn { color: var(--ir-text-muted); padding: 4px 7px; }
+.ir-helpbtn:hover:not(:disabled) { color: var(--ir-accent); }
+
+/* The Help window hosts the generated user guide, which carries its own .ir-help styles. */
+.ir-help-window .ir-dialog-body { padding: 14px 22px 22px; }
+.ir-help-content { outline: none; }
 
 .ir-saved { display: inline-flex; align-items: center; gap: 6px; }
 .ir-saved-label { font-size: 12px; color: var(--ir-text-muted); }

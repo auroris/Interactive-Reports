@@ -1568,6 +1568,17 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   locked — visible state, no toggle/edit/remove (except leaving a locked view for the
   grid, which stays possible). Reset remains as long as any doc-mutating feature
   exists; a missing `features` field (older server) means everything is on.
+- **Help window**: the toolbar's `?` button opens the end-user guide
+  (`docs/USER-GUIDE.md`) in a modeless dialog. `scripts/build-help.mjs` renders the
+  Markdown into one self-contained page per locale (`help.<locale>.html`, screenshots
+  re-encoded as lossless WebP and inlined as data URIs) into `Ui/dist`, where it ships
+  as an ordinary packaged asset and is also viewable standalone at
+  `{prefix}/ui/help.<locale>.html`. The client fetches the widget locale's page, falls
+  back to English, caches it per locale, and imports the page's `.ir-help`-scoped
+  stylesheet and article into the dialog; table-of-contents links scroll within the
+  window because fragment navigation cannot reach a shadow tree. Help is deliberately
+  not a report feature: it survives an empty control policy. The figures come from
+  `scripts/docs-screenshots.mjs`, which drives the packaged viewer with Playwright.
 - **Host document and control API**: after the initial query,
   `getReportDocument()` returns a detached canonical document and
   `submitReportDocument(document)` atomically replaces, queries, adopts, and renders a

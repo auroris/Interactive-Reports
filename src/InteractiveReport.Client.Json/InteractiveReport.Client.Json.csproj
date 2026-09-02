@@ -9,7 +9,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="Ui\dist\*" LogicalName="InteractiveReport.Client.Json.Ui.%(Filename)%(Extension)" />
+    <!-- WithCulture=false: help.<locale>.html must stay in the main assembly. Without it,
+         AssignCulture reads the locale infix as a resource culture and moves the file into a
+         satellite assembly the asset endpoint never sees. -->
+    <EmbeddedResource Include="Ui\dist\*" WithCulture="false" LogicalName="InteractiveReport.Client.Json.Ui.%(Filename)%(Extension)" />
     <None Include="..\..\README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 

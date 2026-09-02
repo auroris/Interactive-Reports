@@ -7,8 +7,10 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "npm run build:client",
+    "build": "npm run build:client && npm run build:help",
     "build:client": "node scripts/build-client.mjs",
+    "build:help": "node scripts/build-help.mjs",
+    "docs:screenshots": "node scripts/docs-screenshots.mjs",
     "dev": "node scripts/build-client.mjs --watch",
     "test": "npm run test:unit",
     "test:unit": "npm run build:client && npm run unit",
@@ -16,13 +18,16 @@
     "test:ui": "npm run build:client && npm run e2e",
     "e2e": "playwright test",
     "verify": "npm run build:client && npm run unit && npm run e2e",
-    "pack": "pwsh scripts/pack.ps1"
+    "pack": "pwsh scripts/pack.ps1",
+    "release": "pwsh scripts/release.ps1"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
     "chart.js": "^4.5.1",
     "esbuild": "^0.28.1",
-    "happy-dom": "^20.11.1"
+    "happy-dom": "^20.11.1",
+    "marked": "^18.0.11",
+    "sharp": "^0.35.4"
   },
   "dependencies": {
     "big.js": "7.0.1",
