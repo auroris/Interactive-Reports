@@ -26,15 +26,39 @@ function errorResponse(status, code, title, description, details = null) {
     }, status);
 }
 
+function pathWithinPrefix(pathname, prefix) {
+    if (pathname === prefix) return "";
+    return pathname.startsWith(`${prefix}/`) ? pathname.slice(prefix.length) : null;
+}
+
+function csvResponse(name, content, truncated) {
+    const filename = `${String(name).replace(/[\\/\r\n"]/g, "_")}.csv`;
+    return new Response(content, {
+        status: 200,
+        headers: {
+            "Content-Type": "text/csv; charset=utf-8",
+            "Content-Disposition": `attachment; filename="${filename}"`,
+            "Cache-Control": "no-store",
+            "X-IR-Truncated": String(truncated),
+        },
+    });
+}
+
 export class InteractiveReportServer {
     /**
      * @param {import("./db.js").SqliteDatabase} db
      * @param {object} [options={}]
      * @param {string} [options.apiPrefix="/api/reports"]
+     * @param {string} [options.downloadPrefix] - Defaults beside an apiPrefix ending in /reports.
      */
     constructor(db, options = {}) {
         this.db = db;
         this.apiPrefix = (options.apiPrefix || "/api/reports").replace(/\/+$/, "");
+        this.downloadPrefix = (options.downloadPrefix
+            || (/\/reports$/i.test(this.apiPrefix)
+                ? this.apiPrefix.replace(/reports$/i, "download")
+                : "/api/download"))
+            .replace(/\/+$/, "");
         /** @type {Map<string, object>} */
         this.definitions = new Map();
         /** @type {Map<string, object>} */
@@ -131,12 +155,26 @@ export class InteractiveReportServer {
      * @returns {Promise<string>} CSV string with UTF-8 BOM
      */
     async export(reportName, reportState = {}) {
+        return (await this.createCsvExport(reportName, reportState)).content;
+    }
+
+    /**
+     * Creates CSV content and the truncation metadata expected by the file-download client.
+     *
+     * @param {string} reportName
+     * @param {object} reportState
+     * @returns {Promise<{content: string, truncated: boolean}>}
+     */
+    async createCsvExport(reportName, reportState = {}) {
         const unpagedState = {
             ...reportState,
             page: { index: 1, size: 0 },
         };
         const result = await this.query(reportName, unpagedState);
-        return exportCsv(result.rows, result.columns);
+        return {
+            content: exportCsv(result.rows, result.columns),
+            truncated: result.rows.length < result.totalRows,
+        };
     }
 
     /**
@@ -159,10 +197,13 @@ export class InteractiveReportServer {
             pathname = urlStr.split("?")[0];
         }
 
-        // Normalize prefix
-        if (pathname.startsWith(this.apiPrefix)) {
-            pathname = pathname.slice(this.apiPrefix.length);
-        }
+        // Normalize the JSON and file-download endpoint prefixes. Keep track of the
+        // namespace so report JSON routes cannot accidentally appear below /api/download.
+        const downloadPath = pathWithinPrefix(pathname, this.downloadPrefix);
+        const apiPath = pathWithinPrefix(pathname, this.apiPrefix);
+        const isDownloadRequest = downloadPath !== null;
+        if (isDownloadRequest) pathname = downloadPath;
+        else if (apiPath !== null) pathname = apiPath;
         if (!pathname.startsWith("/")) {
             pathname = "/" + pathname;
         }
@@ -180,6 +221,24 @@ export class InteractiveReportServer {
         };
 
         try {
+            // The production client posts to /api/download/{name}/{format}.
+            if (isDownloadRequest) {
+                const downloadMatch = /^\/([^/?#]+)\/([^/?#]+)\/?$/.exec(pathname);
+                if (!downloadMatch || method !== "POST") {
+                    return errorResponse(404, "IR-1404", "Not Found", `No download endpoint matches '${pathname}' with method ${method}.`);
+                }
+
+                const name = decodeURIComponent(downloadMatch[1]);
+                const format = decodeURIComponent(downloadMatch[2]).toLowerCase();
+                if (format !== "csv") {
+                    return errorResponse(400, "IR-1101", "Unsupported export format", `Export format '${format}' is not supported.`);
+                }
+
+                const state = await readBody();
+                const exported = await this.createCsvExport(name, state);
+                return csvResponse(name, exported.content, exported.truncated);
+            }
+
             // 1. /whoami
             if (pathname === "/whoami" && method === "GET") {
                 return jsonResponse({
@@ -239,14 +298,8 @@ export class InteractiveReportServer {
             if (exportMatch && (method === "POST" || method === "GET")) {
                 const name = decodeURIComponent(exportMatch[1]);
                 const state = method === "POST" ? await readBody() : {};
-                const csv = await this.export(name, state);
-                return new Response(csv, {
-                    status: 200,
-                    headers: {
-                        "Content-Type": "text/csv; charset=utf-8",
-                        "Content-Disposition": `attachment; filename="${name}.csv"`,
-                    },
-                });
+                const exported = await this.createCsvExport(name, state);
+                return csvResponse(name, exported.content, exported.truncated);
             }
 
             // Match saved reports:

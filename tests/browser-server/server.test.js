@@ -259,6 +259,53 @@ test("server exports data to CSV format with UTF-8 BOM", async () => {
     assert.ok(csv.includes("Order #"));
 });
 
+test("file-download endpoint returns the current report as CSV", async () => {
+    const { server } = await setupServer();
+    const response = await server.handleRequest("/api/download/orders/csv", {
+        method: "POST",
+        body: JSON.stringify({
+            search: "Acme",
+            page: { index: 1, size: 1 },
+        }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("Content-Type"), "text/csv; charset=utf-8");
+    assert.equal(response.headers.get("Content-Disposition"), 'attachment; filename="orders.csv"');
+    assert.equal(response.headers.get("X-IR-Truncated"), "false");
+
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    assert.deepEqual([...bytes.slice(0, 3)], [0xEF, 0xBB, 0xBF]);
+    const csv = new TextDecoder().decode(bytes);
+    assert.ok(csv.includes("Customer Name"));
+    assert.ok(csv.includes("Acme"));
+    assert.ok(csv.trim().split(/\r?\n/).length > 2, "download should ignore the submitted page size");
+});
+
+test("file-download endpoint reports truncation and rejects unsupported formats", async () => {
+    const { server } = await setupServer();
+    server.registerReport({
+        name: "limited-orders",
+        sql: "SELECT ORDER_ID FROM ORDERS",
+        maxRows: 3,
+    });
+
+    const response = await server.handleRequest("/api/download/limited-orders/csv", {
+        method: "POST",
+        body: JSON.stringify({}),
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("X-IR-Truncated"), "true");
+    assert.equal((await response.text()).trim().split(/\r?\n/).length, 4);
+
+    const unsupported = await server.handleRequest("/api/download/orders/xlsx", {
+        method: "POST",
+        body: JSON.stringify({}),
+    });
+    assert.equal(unsupported.status, 400);
+    assert.equal((await unsupported.json()).code, "IR-1101");
+});
+
 test("ephemeral saved report store CRUD operations", async () => {
     const { server } = await setupServer();
 
@@ -351,6 +398,16 @@ test("installFetchInterceptor routes /api/reports calls in-process", async () =>
         assert.equal(res.status, 200);
         const data = await res.json();
         assert.equal(data.name, "orders");
+
+        const download = await fetch("/api/download/orders/csv", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ page: { index: 1, size: 5 } }),
+        });
+        assert.equal(download.status, 200);
+        assert.equal(download.headers.get("Content-Disposition"), 'attachment; filename="orders.csv"');
+        const bytes = new Uint8Array(await download.arrayBuffer());
+        assert.deepEqual([...bytes.slice(0, 3)], [0xEF, 0xBB, 0xBF]);
     } finally {
         interceptor.uninstall();
     }
