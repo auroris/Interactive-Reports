@@ -104,7 +104,7 @@ saved-report storage, the administration page, authorization, and the rest.
 | [Integration API](docs/API.md) | Server registration, authorization hooks, trusted context, in-process execution and export, REST routes, and element reference tables. |
 | [Authorization](docs/AUTHORIZATION.md) | The action and resource model, the three integration styles, administrator resolution, and denial behaviour. |
 | [GraphQL adapter](docs/GRAPHQL.md) | The optional query-only transport for saved reports. |
-| [Architecture](docs/ARCHITECTURE.md) | The trust boundary, the report state document, composition, the expression language, dialects, and the decision log. |
+| [Architecture](docs/ARCHITECTURE.md) | System boundaries, package structure, report planning and execution, database integration, authorization, persistence, and browser responsibilities. |
 | [Developing](docs/DEVELOPING.md) | Building the client, running the test layers, packing, and regenerating documentation screenshots. |
 | [Testing](docs/TESTING.md) | The everyday suite, browser automation, and live-dialect verification. |
 
