@@ -420,9 +420,14 @@ export class ComposableCompiler {
                 const labelAlias = this.nextCol();
                 const metricAlias = this.nextCol();
 
+                const metricBaseName = !valueCol ? "__count" : fn ? "v0" : valueCol;
+                const metricCol = String(labelCol).toUpperCase() === String(metricBaseName).toUpperCase()
+                    ? `${metricBaseName}_metric`
+                    : metricBaseName;
+
                 const newPhysical = {
                     [labelCol.toUpperCase()]: labelAlias,
-                    "__METRIC": metricAlias,
+                    [metricCol.toUpperCase()]: metricAlias,
                 };
 
                 let querySql;
@@ -440,11 +445,56 @@ export class ComposableCompiler {
 
                 rel.querySql = querySql;
                 rel.physicalColumns = newPhysical;
+
+                const origLabelCol = rel.schema.find(c => c.name.toUpperCase() === labelCol.toUpperCase());
+                const valOrigCol = valueCol ? rel.schema.find(c => c.name.toUpperCase() === valueCol.toUpperCase()) : null;
+                const fnLower = fn ? String(fn).toLowerCase() : null;
+                const isCount = !valueCol || fnLower === "count" || fnLower === "countdistinct";
+                const isMinMax = fnLower === "min" || fnLower === "max";
+                const metricLabel = !valueCol
+                    ? "Count"
+                    : fn
+                        ? `${prettify(fn)}(${valOrigCol?.label || prettify(valueCol)})`
+                        : (valOrigCol?.label || prettify(valueCol));
+                const metricType = isCount
+                    ? "number"
+                    : isMinMax
+                        ? (valOrigCol?.type || "number")
+                        : "number";
+
                 rel.schema = [
-                    { name: labelCol, label: prettify(labelCol), type: "text", computed: false, formatSource: null, pivotMetricId: null },
-                    { name: "__metric", label: valueCol ? `${prettify(valueCol)} (${fn})` : "Count", type: "number", computed: false, formatSource: valueCol, pivotMetricId: null },
+                    {
+                        name: labelCol,
+                        label: origLabelCol?.label || prettify(labelCol),
+                        type: origLabelCol?.type || "text",
+                        computed: Boolean(origLabelCol?.computed),
+                        formatSource: origLabelCol?.formatSource || labelCol,
+                        pivotMetricId: null,
+                    },
+                    {
+                        name: metricCol,
+                        label: metricLabel,
+                        type: metricType,
+                        computed: false,
+                        formatSource: isCount ? null : (valOrigCol?.formatSource || valueCol),
+                        pivotMetricId: null,
+                    },
                 ];
                 rel.visibleColumns = null;
+
+                if (comp.sort && (!rel.sorts || rel.sorts.length === 0)) {
+                    const sortDir = String(comp.sort.dir || "asc").toLowerCase();
+                    if (comp.sort.by === "value") {
+                        rel.sorts = [
+                            { col: metricCol, dir: sortDir },
+                            { col: labelCol, dir: "asc" },
+                        ];
+                    } else {
+                        rel.sorts = [
+                            { col: labelCol, dir: sortDir },
+                        ];
+                    }
+                }
                 break;
             }
 

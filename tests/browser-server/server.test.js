@@ -633,3 +633,164 @@ test("CSV export inherits a scalar mask through a Group By table", async () => {
     for (const line of lines.slice(1))
         assert.match(line, /"\$\d{1,3}(,\d{3})*\.\d{2}"$/, `the summed amount carries the inherited mask: ${line}`);
 });
+
+test("server supports Chart composables with row count and client contract", async () => {
+    const { server } = await setupServer();
+    const { canRenderChart } = await import("../../src/client/report/render/chart-view.js");
+
+    const state = {
+        activeTable: "chart",
+        tables: {
+            base: { from: "definition", composables: [] },
+            chart: {
+                from: "base",
+                composables: [
+                    { kind: "chart", type: "pie", label: "STATUS", fn: "count", sort: { by: "label", dir: "asc" } },
+                ],
+            },
+        },
+    };
+
+    const result = await server.query("orders", state);
+
+    assert.equal(result.columns.length, 2);
+    assert.equal(result.columns[0].name, "STATUS");
+    assert.equal(result.columns[1].name, "__count");
+    assert.equal(result.columns[1].label, "Count");
+    assert.equal(result.columns[1].type, "number");
+
+    // Client chart viewer contract validation
+    const widget = { doc: state, lastResult: result };
+    assert.equal(canRenderChart(widget), true);
+
+    // Terminal page semantics
+    assert.equal(result.page.index, 1);
+    assert.equal(result.page.size, result.rows.length);
+    assert.equal(result.totalRows, result.rows.length);
+    assert.ok(result.rows.length > 0);
+
+    // Sorted by label ascending
+    const labels = result.rows.map(r => r.STATUS);
+    assert.deepEqual(labels, [...labels].sort());
+    for (const row of result.rows) {
+        assert.equal(typeof row.__count, "number");
+        assert.ok(row.__count > 0);
+    }
+});
+
+test("server supports Chart composables with aggregate metric and sort by value", async () => {
+    const { server } = await setupServer();
+    const { canRenderChart } = await import("../../src/client/report/render/chart-view.js");
+
+    const state = {
+        activeTable: "chart",
+        tables: {
+            base: { from: "definition", composables: [] },
+            chart: {
+                from: "base",
+                composables: [
+                    { kind: "chart", type: "bar", label: "REGION", value: "AMOUNT", fn: "sum", sort: { by: "value", dir: "desc" } },
+                ],
+            },
+        },
+    };
+
+    const result = await server.query("orders", state);
+
+    assert.equal(result.columns.length, 2);
+    assert.equal(result.columns[0].name, "REGION");
+    assert.equal(result.columns[1].name, "v0");
+    assert.equal(result.columns[1].formatSource, "AMOUNT");
+    assert.equal(result.columns[1].type, "number");
+
+    // Client chart viewer contract validation
+    const widget = { doc: state, lastResult: result };
+    assert.equal(canRenderChart(widget), true);
+
+    // Sorted by value descending
+    const values = result.rows.map(r => r.v0);
+    assert.deepEqual(values, [...values].sort((a, b) => b - a));
+});
+
+test("server supports Chart composables with scalar values", async () => {
+    const { server } = await setupServer();
+    const { canRenderChart } = await import("../../src/client/report/render/chart-view.js");
+
+    const state = {
+        activeTable: "chart",
+        tables: {
+            base: { from: "definition", composables: [] },
+            chart: {
+                from: "base",
+                composables: [
+                    { kind: "chart", type: "line", label: "ORDER_DATE", value: "AMOUNT", sort: { by: "label", dir: "asc" } },
+                ],
+            },
+        },
+    };
+
+    const result = await server.query("orders", state);
+
+    assert.equal(result.columns.length, 2);
+    assert.equal(result.columns[0].name, "ORDER_DATE");
+    assert.equal(result.columns[1].name, "AMOUNT");
+
+    const widget = { doc: state, lastResult: result };
+    assert.equal(canRenderChart(widget), true);
+});
+
+test("server validates chart point limits and pie chart non-negative values", async () => {
+    const { db, server } = await setupServer();
+
+    // 1. Max chart points check
+    server.registerReport({
+        name: "small-chart-limit",
+        sql: "SELECT STATUS, AMOUNT FROM ORDERS",
+        limits: { maxChartPoints: 2 },
+    });
+
+    await assert.rejects(
+        async () => {
+            await server.query("small-chart-limit", {
+                activeTable: "chart",
+                tables: {
+                    base: { from: "definition", composables: [] },
+                    chart: {
+                        from: "base",
+                        composables: [
+                            { kind: "chart", type: "bar", label: "STATUS", fn: "count" },
+                        ],
+                    },
+                },
+            });
+        },
+        /chart would draw more than 2 points/
+    );
+
+    // 2. Pie charts reject negative values
+    db.run("CREATE TABLE NEG_TEST (CAT TEXT, VAL REAL)");
+    db.run("INSERT INTO NEG_TEST VALUES ('A', -10), ('B', 20)");
+    server.registerReport({
+        name: "neg-pie-report",
+        sql: "SELECT CAT, VAL FROM NEG_TEST",
+    });
+
+    await assert.rejects(
+        async () => {
+            await server.query("neg-pie-report", {
+                activeTable: "chart",
+                tables: {
+                    base: { from: "definition", composables: [] },
+                    chart: {
+                        from: "base",
+                        composables: [
+                            { kind: "chart", type: "pie", label: "CAT", value: "VAL" },
+                        ],
+                    },
+                },
+            });
+        },
+        /pie charts require non-negative values/
+    );
+});
+

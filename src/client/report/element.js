@@ -904,6 +904,7 @@ class ReportController {
             const module = await loadChartModule();
             // The module load is async: bail if the widget moved on meanwhile.
             if (this.lastResult !== result || modeOf(this.doc) !== "chart" || !this.isConnected) return;
+            this._chartModule = module;
             this._chart = renderChartView(this, this.els.chartWrap, module);
         } catch {
             // A failed chunk load may settle after the user has already switched views,

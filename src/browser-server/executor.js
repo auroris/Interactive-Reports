@@ -76,6 +76,10 @@ export async function executeReport(db, definition, requestedState, discoveredSc
     }
 
     // 5. Paging
+    const activeTableObj = document.tables?.[activeTable];
+    const chartComposable = activeTableObj?.composables?.find(c => String(c.kind).toLowerCase() === "chart");
+    const isChartTerminal = Boolean(chartComposable);
+
     const pageIndex = Math.max(1, document.page?.index || 1);
     const pageSize = document.page?.size !== undefined ? document.page.size : 50;
     const pageAll = pageSize === 0;
@@ -83,8 +87,11 @@ export async function executeReport(db, definition, requestedState, discoveredSc
     let limitClause = "";
     const hasBreaks = relation.breaks && relation.breaks.length > 0;
     const fetchLimit = !pageAll && hasBreaks ? pageSize + 1 : pageSize;
+    const maxChartPoints = definition.limits?.maxChartPoints || definition.maxChartPoints || 1000;
 
-    if (pageAll) {
+    if (isChartTerminal) {
+        limitClause = ` LIMIT ${maxChartPoints + 1}`;
+    } else if (pageAll) {
         const maxRows = definition.maxRows || 10000;
         limitClause = ` LIMIT ${maxRows}`;
     } else {
@@ -129,6 +136,18 @@ export async function executeReport(db, definition, requestedState, discoveredSc
     const countSql = `SELECT COUNT(*) AS total_count FROM (${searchableSql}) AS ir_count`;
     const countResult = db.query(countSql, currentBindings);
     const totalRows = Number(countResult.rows[0]?.total_count ?? rows.length);
+
+    if (isChartTerminal) {
+        if (totalRows > maxChartPoints) {
+            throw new Error(`chart would draw more than ${maxChartPoints} points — filter further or aggregate to fewer categories`);
+        }
+        if (chartComposable.type === "pie") {
+            const metricColName = relation.schema[1]?.name;
+            if (metricColName && rows.some(row => Number(row[metricColName]) < 0)) {
+                throw new Error("pie charts require non-negative values");
+            }
+        }
+    }
 
     // 8. Footer Aggregates
     const aggregates = {};
@@ -247,7 +266,9 @@ export async function executeReport(db, definition, requestedState, discoveredSc
         availableColumns,
         configuredLabels: definition.columnLabels || {},
         rows,
-        page: { index: pageIndex, size: pageSize },
+        page: isChartTerminal
+            ? { index: 1, size: Math.max(1, rows.length) }
+            : { index: pageIndex, size: pageSize },
         totalRows,
         aggregates,
         breakTotals,
