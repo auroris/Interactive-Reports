@@ -258,8 +258,10 @@ test("overlapping submissions roll back to the last validated state, not an abor
     report.remove();
 });
 
-test("rapid filter-chip removals coalesce into one query with the final document", async () => {
-    requests.length = 0;
+const filtersOf = document =>
+    document.tables.base.composables.find(composable => composable.kind === "filter").filters;
+
+async function mountWithFilters() {
     const report = await mount();
     const document = report.getReportDocument();
     document.tables.base.composables.push({
@@ -271,31 +273,109 @@ test("rapid filter-chip removals coalesce into one query with the final document
         ],
     });
     await report.submitReportDocument(document);
-
-    const before = requests.filter(request => request.url.endsWith("/query")).length;
     const removeButtons = [...report.shadowRoot.querySelectorAll(
         '.ir-chip[data-kind="filter"] .ir-chip-x')];
     assert.equal(removeButtons.length, 3);
+    return { report, removeButtons };
+}
 
-    removeButtons.forEach(button => button.click());
-    assert.equal(requests.filter(request => request.url.endsWith("/query")).length, before,
-        "the burst must remain client-side until the trailing edge");
+const queryCount = () => requests.filter(request => request.url.endsWith("/query")).length;
 
-    await settle(() => report.shadowRoot.querySelectorAll('.ir-chip[data-kind="filter"]').length === 0);
-    const queries = requests.filter(request => request.url.endsWith("/query"));
-    assert.equal(queries.length, before + 1, "all removals produce one server query");
-    const submitted = JSON.parse(queries.at(-1).body);
-    assert.deepEqual(
-        submitted.tables.base.composables.find(composable => composable.kind === "filter").filters,
-        [],
-        "the single request carries every deletion");
+test("an idle edit queries immediately and edits during flight coalesce into one follow-up", async () => {
+    requests.length = 0;
+    const { report, removeButtons } = await mountWithFilters();
+    const before = queryCount();
+    const completed = [];
+    report.addEventListener("ir-query-complete", event => completed.push(event.detail));
+
+    holdQueries = true;
+    removeButtons[0].click();
+    assert.equal(queryCount(), before + 1, "an edit on an idle widget is sent without waiting");
+    await settle(() => heldQueries.length === 1);
+
+    removeButtons[1].click();
+    removeButtons[2].click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(queryCount(), before + 1,
+        "edits during flight join the in-flight request instead of aborting or racing it");
+    assert.equal(heldQueries.length, 1);
+    assert.deepEqual(filtersOf(report.getReportDocument()), [],
+        "the working document accumulates every edit");
+
+    heldQueries[0].succeed();
+    await settle(() => heldQueries.length === 2);
+    assert.equal(queryCount(), before + 2, "one follow-up carries the accumulated edits");
+    assert.deepEqual(filtersOf(JSON.parse(heldQueries[1].body)), [],
+        "the follow-up posts the final document");
+    assert.deepEqual(filtersOf(report.getReportDocument()), [],
+        "the in-flight response must not overwrite the newer edits");
+    assert.equal(completed.length, 1, "the in-flight result is rendered as it lands");
+    assert.equal(filtersOf(completed[0].document).length, 2,
+        "the rendered intermediate is the state that request validated");
+    assert.equal(report.shadowRoot.querySelectorAll('.ir-chip[data-kind="filter"]').length, 0,
+        "controls derived from the working document keep showing the newer edits");
+
+    heldQueries[1].succeed();
+    holdQueries = false;
+    heldQueries.length = 0;
+    await settle(() => completed.length === 2);
+    assert.deepEqual(filtersOf(completed[1].document), []);
+    assert.equal(queryCount(), before + 2, "a clean landing sends nothing further");
 
     const hostDocument = report.getReportDocument();
     hostDocument.search = "host refresh";
     const hostSubmission = report.submitReportDocument(hostDocument);
-    assert.equal(requests.filter(request => request.url.endsWith("/query")).length, before + 2,
-        "an explicit host submission bypasses the user debounce");
+    assert.equal(queryCount(), before + 3, "an explicit host submission is sent immediately");
     await hostSubmission;
+
+    report.remove();
+});
+
+test("a failed coalesced follow-up rolls back to the rendered intermediate, not past it", async () => {
+    requests.length = 0;
+    const { report, removeButtons } = await mountWithFilters();
+
+    holdQueries = true;
+    removeButtons[0].click();
+    await settle(() => heldQueries.length === 1);
+    removeButtons[1].click();
+    heldQueries[0].succeed();
+    await settle(() => heldQueries.length === 2);
+    assert.equal(filtersOf(JSON.parse(heldQueries[1].body)).length, 1);
+
+    heldQueries[1].fail({ title: "Report state failed validation" }, 400);
+    await settle(() => errorText(report).length > 0);
+    holdQueries = false;
+    heldQueries.length = 0;
+
+    assert.equal(filtersOf(report.getReportDocument()).length, 2,
+        "the rollback lands on the validated, rendered intermediate so document and grid agree");
+    assert.equal(report.shadowRoot.querySelectorAll('.ir-chip[data-kind="filter"]').length, 2);
+
+    report.remove();
+});
+
+test("a host submission during a user flight aborts it and cancels coalesced edits", async () => {
+    requests.length = 0;
+    const { report, removeButtons } = await mountWithFilters();
+
+    holdQueries = true;
+    removeButtons[0].click();
+    await settle(() => heldQueries.length === 1);
+    removeButtons[1].click();
+
+    const hostDocument = report.getReportDocument();
+    hostDocument.search = "host wins";
+    const hostSubmission = report.submitReportDocument(hostDocument);
+    await settle(() => heldQueries.length === 2);
+    heldQueries[1].succeed();
+    await hostSubmission;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(heldQueries.length, 2, "no user follow-up is sent after the host replaced the state");
+    holdQueries = false;
+    heldQueries.length = 0;
+
+    assert.equal(report.getReportDocument().search, "host wins");
 
     report.remove();
 });

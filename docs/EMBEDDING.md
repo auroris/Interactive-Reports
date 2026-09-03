@@ -97,13 +97,17 @@ the request. Its `detail` is `{ document, source, requestId, signal }`. The deta
 and sent. Calling `preventDefault()` cancels that query. `source` is one of `initial`,
 `user`, `saved-report`, `host`, or `refresh`.
 
-Ordinary UI edits use a 200 ms trailing-edge debounce. Rapid chip removals, toggles,
-paging commands, or other packaged-control mutations accumulate in the working document
-and send only the final state. If a request is already in flight, the next edit aborts it
-immediately before starting the debounce window. Initial and saved-report loads, explicit
-`submitReportDocument()` calls, exports, and administration refreshes are not delayed.
+Ordinary UI edits are single-flight. An edit on an idle widget is sent immediately. While
+a query is in flight, further chip removals, toggles, paging commands, or other
+packaged-control mutations accumulate in the working document instead of aborting it.
+When that query lands, its result is rendered and `ir-query-complete` fires for it, so a
+burst of page moves shows each page as it arrives, but its document does not replace the
+working document; one follow-up query then carries the accumulated state. At most one
+query is outstanding per widget. Initial and saved-report loads, explicit
+`submitReportDocument()` calls, exports, and administration refreshes abort any in-flight
+query and cancel accumulated edits.
 
-After a current successful query has been adopted and rendered, `ir-query-complete`
+After a successful query has been rendered, `ir-query-complete`
 dispatches with detached `{ document, result, submitted, source, requestId }` snapshots.
 It is observational: changing its detail cannot mutate the report. Submit a changed copy
 with `submitReportDocument` when a returned document needs another query.

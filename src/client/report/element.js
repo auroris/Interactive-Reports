@@ -41,7 +41,11 @@ const loadChartModule = () =>
     chartModulePromise ??= import(new URL("./ir-chart.js", import.meta.url).href)
         .catch(err => { chartModulePromise = undefined; throw err; });
 
-const USER_QUERY_DEBOUNCE_MS = 200;
+// Returned by performQuery when edits arrived while its request was in flight. A successful
+// response is still rendered (so a burst of page moves shows progress rather than lag) but its
+// document is not adopted, because that would overwrite the newer edits; the caller then sends
+// one follow-up query carrying them.
+const COALESCED = Symbol("coalesced query");
 
 const invalidState = message => {
     const error = new Error(message);
@@ -96,7 +100,7 @@ class ReportController {
         this._controlOverrides = new Map();
         this._savedListLoaded = false;
         this._savedListPromise = null;
-        this._scheduledUserQuery = null;
+        this._coalesced = null;
     }
 
     get shadowRoot() { return this.host.shadowRoot; }
@@ -183,7 +187,7 @@ class ReportController {
     disconnectedCallback() {
         ++this._seq;
         this.disposeTransients();
-        this.cancelScheduledUserQuery();
+        this.cancelCoalescedQueries();
         this._abort?.abort();
         this._abort = null;
         this.destroyChart();
@@ -233,33 +237,29 @@ class ReportController {
     // Lifecycle sequencing makes every asynchronous activation conditional on the latest element
     // generation. Busy tokens are independent so overlapping operations cannot clear aria-busy early.
 
+    // Single-flight policy: at most one query is in flight per widget. A user edit made while a
+    // request is outstanding stays in the working document and joins the coalesced set; when the
+    // outstanding request lands, its result is rendered as validated ground but its document is
+    // not adopted, and one follow-up carries every edit.
+    // This keeps a slow server from being starved by a fast clicker and bounds server load to
+    // one query per widget, while an edit on an idle widget is sent immediately.
+
     /**
-     * Replaces any pending user query with one trailing-edge timer.
+     * Queues a user query behind the in-flight request.
      *
-     * @returns {Promise<boolean>} True when this call owns the elapsed timer; false when superseded.
+     * @returns {Promise<object|undefined>} Settles with the follow-up query's outcome, or undefined when superseded.
      */
-    scheduleUserQuery() {
-        this.cancelScheduledUserQuery();
-        return new Promise(resolve => {
-            const scheduled = {
-                resolve,
-                timer: setTimeout(() => {
-                    if (this._scheduledUserQuery !== scheduled) return;
-                    this._scheduledUserQuery = null;
-                    resolve(true);
-                }, USER_QUERY_DEBOUNCE_MS),
-            };
-            this._scheduledUserQuery = scheduled;
-        });
+    joinInFlightQuery() {
+        this._coalesced ??= { waiters: [] };
+        return new Promise((resolve, reject) => this._coalesced.waiters.push({ resolve, reject }));
     }
 
-    /** Resolves and removes a superseded user query before it reaches the transport. */
-    cancelScheduledUserQuery() {
-        const scheduled = this._scheduledUserQuery;
-        if (!scheduled) return;
-        this._scheduledUserQuery = null;
-        clearTimeout(scheduled.timer);
-        scheduled.resolve(false);
+    /** Resolves every coalesced user query as superseded before it reaches the transport. */
+    cancelCoalescedQueries() {
+        const coalesced = this._coalesced;
+        if (!coalesced) return;
+        this._coalesced = null;
+        coalesced.waiters.forEach(waiter => waiter.resolve(undefined));
     }
 
     /**
@@ -287,7 +287,7 @@ class ReportController {
      * Side effects: invalidates state transitions and clears report data and saved/search selections.
      */
     resetReportContext() {
-        this.cancelScheduledUserQuery();
+        this.cancelCoalescedQueries();
         this._stateRevision++;
         this.schema = null;
         this.doc = null;
@@ -737,18 +737,57 @@ class ReportController {
      * @param {{quiet?: boolean, source?: string}} [opts={}] - Controls banner rendering and identifies the query initiator to lifecycle events.
      * @returns {Promise<object|undefined>} The accepted query response, or undefined when superseded or aborted.
      *
-     * Side effects: aborts the previous query, posts serialized state, adopts the validated document, commits rollback state, and rerenders results, controls, and notices.
+     * Side effects: a user query joins the in-flight request when one exists; any other source aborts it. Posts serialized state, adopts the validated document, commits rollback state, and rerenders results, controls, and notices.
      */
     async runQuery(opts = {}) {
-        this._abort?.abort();
-        this._abort = null;
         const source = opts.source ?? "refresh";
-        if (source === "user") {
-            if (!await this.scheduleUserQuery()) return;
-        } else {
-            this.cancelScheduledUserQuery();
+        if (source === "user" && this._abort) return this.joinInFlightQuery();
+        if (source !== "user") {
+            this._abort?.abort();
+            this._abort = null;
+            this.cancelCoalescedQueries();
         }
+        const waiters = [];
+        let outcome;
+        for (;;) {
+            try {
+                const result = await this.performQuery(opts);
+                if (result === COALESCED) {
+                    // Edits joined during that flight; claim them so later edits wait for the
+                    // next one, and send the current working document once.
+                    waiters.push(...this._coalesced.waiters);
+                    this._coalesced = null;
+                    opts = { quiet: true, source: "user" };
+                    continue;
+                }
+                outcome = { result };
+            } catch (error) {
+                outcome = { error };
+            }
+            break;
+        }
+        for (const waiter of waiters) {
+            if ("error" in outcome) waiter.reject(outcome.error);
+            else waiter.resolve(outcome.result);
+        }
+        if ("error" in outcome) throw outcome.error;
+        return outcome.result;
+    }
+
+    /**
+     * Sends one query for the current working document and adopts its response.
+     *
+     * @param {{quiet?: boolean, source?: string}} [opts={}] - Controls banner rendering and identifies the query initiator to lifecycle events.
+     * @returns {Promise<object|symbol|undefined>} The accepted response; `COALESCED` when edits arrived while the request was in flight; undefined when superseded, cancelled, or aborted.
+     *
+     * Side effects: posts serialized state, commits rollback state, and rerenders results, chips, and notices. Adopts the validated document unless newer edits are waiting.
+     */
+    async performQuery(opts = {}) {
+        const source = opts.source ?? "refresh";
         const ctrl = this._abort = new AbortController();
+        // The response validates the working copy of THIS revision. Edits that join during the
+        // flight advance the revision, so the rollback snapshot must not claim them.
+        const revision = this._stateRevision;
         const requestId = ++this._requestId;
         const finishBusy = this.beginBusy();
         try {
@@ -778,19 +817,26 @@ class ReportController {
                 method: "POST", body: submitted, signal: ctrl.signal,
             });
             if (ctrl !== this._abort) return;
+            // Edits that arrived during the flight live in the working document. Render this
+            // validated result so the user sees progress, but do not adopt its document; the
+            // follow-up query will replace the result.
+            const coalesced = Boolean(this._coalesced);
             const accepted = copyReportDocument(result.document ?? submitted);
             const completedResult = {
                 ...result,
                 document: structuredClone(accepted),
             };
-            this.doc = structuredClone(accepted);
-            this.els.search.value = this.doc.search ?? "";
+            if (!coalesced) {
+                // Protocol contract: the returned document is the submitted working copy with
+                // null schema caches replaced by the server. A superseding operation aborts this
+                // request before this point, so it cannot overwrite newer edits.
+                this.doc = structuredClone(accepted);
+                this.els.search.value = this.doc.search ?? "";
+            }
             this.lastResult = completedResult;
-            // Protocol contract: the returned document is the submitted working copy with null
-            // schema caches replaced by the server. A superseding operation aborts this request
-            // before this point, so it cannot overwrite newer edits.
-            this.commitLastGood(accepted);
+            this.commitLastGood(accepted, revision);
             this.clearError();
+            // Chips always reflect the working document, which already holds any newer edits.
             renderChips(this, this.els.chips);
             this.renderView();
             renderPager(this, this.els.pager);
@@ -807,13 +853,15 @@ class ReportController {
                     requestId,
                 },
             }));
-            return completedResult;
+            return coalesced ? COALESCED : completedResult;
         } catch (err) {
             if (ctrl !== this._abort || err.name === "AbortError") return;
+            if (this._coalesced) return COALESCED;
             renderChips(this, this.els.chips);
             if (!opts.quiet) this.showError(err);
             throw err;
         } finally {
+            if (ctrl === this._abort) this._abort = null;
             finishBusy();
         }
     }
@@ -889,7 +937,7 @@ class ReportController {
      * @param {{resetPage?: boolean, source?: string}} [options={}] - Controls paging and identifies the query initiator.
      * @returns {Promise<void>} Resolves after the edited document is validated and rendered; rejects after restoring validated state when the current query fails.
      *
-     * Side effects: installs the edited state, invalidates affected schema caches, performs a query, and restores validated state if the current transition fails.
+     * Side effects: installs the edited state, invalidates affected schema caches, performs a query, and restores validated state if the current transition fails. A user edit joins any in-flight query instead of aborting it.
      */
     async apply(mutate, { resetPage = true, source = "user" } = {}) {
         const prev = this.doc;
@@ -897,7 +945,7 @@ class ReportController {
         mutate(next);
         invalidateChangedSchemas(prev, next);
         if (resetPage && next.page) next.page.index = 1;
-        const transition = this.beginStateTransition();
+        const transition = this.beginStateTransition({ abortInFlight: source !== "user" });
         this.doc = next;
         try {
             const result = await this.runQuery({ quiet: true, source });
@@ -924,15 +972,18 @@ class ReportController {
     /**
      * Begins a state-replacing operation, invalidating older loads and queries.
      *
+     * @param {{abortInFlight?: boolean}} [options] - When false, the active query and coalesced user edits survive so the new edit can join them.
      * @returns {number} The newly allocated state revision.
      *
-     * Side effects: increments the state revision and aborts the active query.
+     * Side effects: increments the state revision and, by default, aborts the active query and cancels coalesced user queries.
      */
-    beginStateTransition() {
+    beginStateTransition({ abortInFlight = true } = {}) {
         const revision = ++this._stateRevision;
-        this.cancelScheduledUserQuery();
-        this._abort?.abort();
-        this._abort = null;
+        if (abortInFlight) {
+            this.cancelCoalescedQueries();
+            this._abort?.abort();
+            this._abort = null;
+        }
         return revision;
     }
 
@@ -961,15 +1012,16 @@ class ReportController {
      * Records the last server-validated report document as the rollback target.
      *
      * @param {object} [doc=this.doc] - The validated document to snapshot.
+     * @param {number} [revision=this._stateRevision] - The state revision whose working copy the document validated.
      * @returns {void} No value.
      *
-     * Side effects: replaces the rollback snapshot with a deep copy and the current saved-report association and revision.
+     * Side effects: replaces the rollback snapshot with a deep copy, the current saved-report association, and the validated revision.
      */
-    commitLastGood(doc = this.doc) {
+    commitLastGood(doc = this.doc, revision = this._stateRevision) {
         this._lastGood = {
             doc: structuredClone(doc),
             currentSaved: this.currentSaved,
-            revision: this._stateRevision,
+            revision,
         };
     }
 

@@ -1613,10 +1613,17 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   snapshots. Client control overrides are tri-state per canonical feature (`true`,
   `false`, or inherit): an explicit override wins over the server suggestion and is
   retained across report changes. Runtime `savedReports` enablement lazily loads the
-  selector data. Packaged `user` mutations pass through a 200 ms trailing-edge debounce:
-  rapid chip removals and other UI edits accumulate in the working document and only its
-  final state is posted. A new edit aborts an in-flight query immediately; initial,
-  saved-report, host-document, export, and administration operations remain immediate.
+  selector data. Packaged `user` mutations are single-flight: an edit on an idle widget
+  is posted immediately, and edits made while a query is in flight accumulate in the
+  working document without aborting it. When that query lands its result is rendered and
+  becomes the rollback target, so a burst of page moves shows progress instead of lag,
+  but its document is not adopted because that would overwrite the newer edits; one
+  follow-up then posts the final state. The rollback snapshot records the revision the
+  request was launched at, so a save started against the newer working copy cannot
+  attach itself to the older validated document. At most one query is outstanding per
+  widget, so a fast clicker cannot starve a slow server or fan out concurrent queries.
+  Initial, saved-report, host-document, export, and administration operations abort an
+  in-flight query and cancel accumulated edits.
   The standard `disabled` property makes the complete shadow surface
   inert and closes transient UI without changing overrides. `styleSheet` reflects the
   `stylesheet` attribute and is the sole foreign-stylesheet entry point; it belongs to
@@ -1858,8 +1865,8 @@ packaged elements used by real applications, styled after APEX's Interactive Rep
   client state behind a documented custom-element API for detached document retrieval,
   whole-document replacement/query, before-query mutation/cancellation, completion
   observation, direct export, and client-authoritative control overrides over server
-  suggestions. Ordinary UI edits use a 200 ms trailing-edge debounce and abort stale
-  requests. Host CSS has one `stylesheet` attribute / `styleSheet` property and the old
+  suggestions. Ordinary UI edits are single-flight: immediate when idle, coalesced into
+  one follow-up query while a request is outstanding. Host CSS has one `stylesheet` attribute / `styleSheet` property and the old
   foreign-CSS paths are retired. Filter headers, filter creation, and highlight creation
   share a debounced current-table/one-column LOV backed by the submitted complete,
   possibly unsaved report document and ordinary Query authorization. Search is a

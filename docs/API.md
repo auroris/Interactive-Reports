@@ -699,10 +699,12 @@ report.addEventListener("ir-query-complete", event => {
 });
 ```
 
-Ordinary package-control edits use a 200 ms trailing-edge debounce. Rapid changes
-accumulate in the working document and issue only the final query; an in-flight query
-is aborted when a newer user edit arrives. Initial loads, saved-report loads, explicit
-`submitReportDocument` calls, exports, and administration refreshes are immediate.
+Ordinary package-control edits are single-flight. An edit on an idle widget queries
+immediately. Edits made while a query is in flight accumulate in the working document;
+the in-flight result is rendered when it lands, without replacing the working document,
+and one follow-up query carries the final state. Initial loads, saved-report loads,
+explicit `submitReportDocument` calls, exports, and administration refreshes abort an
+in-flight query instead.
 
 ### Client controls
 
