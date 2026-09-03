@@ -123,9 +123,9 @@ Query and export authorization receives the report name and action, not the subm
 query state. Data partitioning belongs in trusted server-side context parameters rather
 than in client-authored filters.
 
-## Typed definition inspection and mutation
+## Typed candidate inspection and mutation
 
-The definition supplied to authorization is the same mutable object the endpoint later
+The candidate supplied to authorization is the same mutable object the endpoint later
 validates and persists. An application can therefore inspect the full typed shape and
 narrow a client request before granting it:
 
@@ -148,7 +148,7 @@ reports.UseAuthorization((request, cancellationToken) =>
         // required.
         // This policy deliberately counts filters in every declared table,
         // including inactive alternatives, rather than only activeTable ancestry.
-        var allDeclaredFilters = definition.State?.Tables?.Values
+        var allDeclaredFilters = candidate.State?.Tables?.Values
             .SelectMany(table => table.Composables ?? [])
             .Where(composable => string.Equals(
                 composable.Kind,
@@ -170,8 +170,8 @@ reports.UseAuthorization((request, cancellationToken) =>
 Mutation follows these rules:
 
 - The base `CreateSavedReport`, `UpdateSavedReport`, or `UploadReportDocument` action is
-  evaluated first. All registered authorizers see the same definition instance.
-- Publication and owner actions are derived from the effective definition after the
+  evaluated first. All registered authorizers see the same candidate instance.
+- Publication and owner actions are derived from the effective candidate after the
   base action passes. Setting `Public = false` during create therefore removes an
   unwanted publication request before the administrator boundary is evaluated.
 - If an authorizer later adds a public, default-selection, or owner change, the server detects it
@@ -191,18 +191,10 @@ This mutation surface is available through all three authorization integrations.
 direct callback is usually the clearest place for request normalization. Native
 resource handlers and resource-aware named policies receive the same mutable resource.
 
-Non-default user-document reads bind stored JSON to the current `ReportState` model and
-re-serialize it, so a document is served as this version of the engine understands it;
-members outside that model are not echoed back. Configured documents read their state
-from the configured file. If that file is missing,
-the stale database identity is deleted and the original request returns 404. When the
-missing document was the default, the server also creates a new synthetic default for
-subsequent requests. Any database-backed default is repairable: invalid stored state is
-regenerated from current appsettings without changing the database id. Configured file
-bodies are never rewritten this way. If a present configured body fails processing, its
-exception and identity are logged, its optimistic row is deleted, and the request returns
-404. Its configuration remains authoritative, so the next report listing recreates an
-identity and retries it rather than substituting a synthetic default.
+Saved documents are bound to the current `ReportState` model before they are returned or
+executed. Configured files remain read-only and are reconciled through their database
+catalogue identities. The complete persistence and recovery behavior is documented in
+[Saved reports](SAVED-REPORTS.md#reconciliation).
 
 Query, LOV, and export are addressed by configured definition key. They authorize that
 definition and execute the client-submitted document without reading the saved-report
@@ -227,8 +219,8 @@ receives the operation facts so it can add restrictions or supply administrator
 authority only when both built-in administrator sources are empty.
 
 Authorization decisions are centralized in the server's transport-neutral
-`IReportAuthorizationService`. The JSON client's `IReportAccessService` is its HTTP
-response adapter over that boundary. Configuration stores expose a lightweight name/authorization envelope, allowing authentication,
+`IReportAuthorizationService` and `IInteractiveReportServer`. Transport adapters call
+those boundaries and translate their results. Configuration stores expose a lightweight name/authorization envelope, allowing authentication,
 policy, administrator, and named-user gates to run before connection resolution and
 saved-default hydration. Saved-report listing and normalized title-collision queries
 occur only after that report-level gate succeeds. Definition-free security endpoints
@@ -243,7 +235,7 @@ use the same service before invoking their authorization store or user provider.
 | `Export` | File-client download | The report's `download` feature must also be enabled. Admin-list download emits `ListAllSavedReports` as well. |
 | `ListSavedReports` | List visible saved reports for one report definition | The server reconciles the complete family in one store query, then filters in memory. Administrators see all rows; other callers see public and exactly owned rows. |
 | `ReadSavedReport` | Load one saved report, or execute it through GraphQL | Public, owner, and administrator access are distinguished from `SavedReport` metadata and the principal. |
-| `CreateSavedReport` | Create a saved report | Requires an authenticated canonical owner and the `savedReports` feature. Receives the typed definition before publication actions are derived. |
+| `CreateSavedReport` | Create a saved report | Requires an authenticated canonical owner and the `savedReports` feature. Receives the typed candidate before publication actions are derived. |
 | `UpdateSavedReport` | Update a saved report | Owner or administrator. Receives effective metadata and only client-authored replacement state. Global publication and default selection remain unchanged unless their separate actions also pass. Configured content remains read-only. |
 | `DeleteSavedReport` | Delete a saved report | Owner or administrator. Configured rows remain undeletable even when authorized. |
 | `PublishGlobalReport` | Effective definition changes public status | Emitted for both publishing and unpublishing after base-action mutation. Administrator action. |
@@ -256,7 +248,7 @@ use the same service before invoking their authorization store or user provider.
 | `UploadReportDocument` | Validate and import an admin JSON envelope | Administrator action. Upload always creates a private user document; file publication metadata is ignored. |
 
 One HTTP request can emit several actions. These examples assume authorization does
-not first narrow the typed definition:
+not first narrow the typed candidate:
 
 - Creating a private report emits `CreateSavedReport`.
 - Creating a global report emits `CreateSavedReport` and `PublishGlobalReport`; both must pass.

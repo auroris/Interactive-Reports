@@ -5,9 +5,10 @@ starts with the ASP.NET Core surface because the server owns report definitions,
 authorization, trusted context parameters, database access, and validation. The
 browser element owns presentation and user-authored report state.
 
-For report-state semantics and the full trust model, see
-[Architecture](ARCHITECTURE.md). For the optional saved-report GraphQL transport,
-see [GraphQL adapter](GRAPHQL.md).
+For report-state semantics, see the [User Guide](USER-GUIDE.md); for persistence and
+configured documents, see [Saved reports](SAVED-REPORTS.md). The full trust and
+component model is in [Architecture](ARCHITECTURE.md), and the optional saved-report
+transport is covered by the [GraphQL adapter](GRAPHQL.md).
 
 ## Packages and namespaces
 
@@ -144,25 +145,10 @@ The server still independently enforces authorization, report-state validation,
 trusted context, and the `download` and saved-report-creation feature checks.
 
 Each `documentFiles` entry is a `{ "title", "default", "state" }` JSON envelope;
-`title` is the file-backed report's required configured name.
-The server creates a database identity row containing its family key and source filename,
-while the state remains on disk and can be deployed or versioned in Git. The row is the
-optimistic catalogue authority for title and default metadata. Configured titles may
-collide with any database or configured title. At most one file per family may set
-`default: true`; it supersedes the synthetic appsettings default. A family-listing endpoint
-first authorizes its appsettings definition, then loads the complete, unfiltered database
-family in one query, reconciles that snapshot with configured file references in memory,
-and only afterward filters the response by administrator/public/exact-owner visibility.
-The root configuration catalogue does not reconcile report documents. When no file default
-exists, the synthetic document is created lazily. Any database-backed default is repaired
-in place from current configuration if its stored state can no longer be processed. A
-missing file is detected when its numeric id is loaded; the server deletes the stale row,
-restores a synthetic default when necessary, and returns 404 for that id. If a present
-configured file throws while its state is processed, the server logs the exception, deletes
-the optimistic identity, and returns 404 without creating a synthetic fallback. The next
-report listing recreates the configured identity and retries the file.
-A bootstrap insert that leaves the family without a configured or synthetic default is
-logged and returns 404; the next family-list request retries from the current database truth.
+`title` is the file-backed report's required configured name. The state remains on disk;
+the saved-report store supplies its runtime identity and catalogue metadata. At most one
+file per family may set `default: true`. Reconciliation, failure handling, deployment,
+and import/export are described in [Saved reports](SAVED-REPORTS.md#source-controlled-documents).
 
 ## Server API index
 
@@ -312,43 +298,36 @@ to grant.
 
 ## Build a host-owned HTTP endpoint
 
-Use `IReportAccessService` when a custom endpoint should preserve the same report
-authorization and context-parameter boundary as the packaged endpoints:
+Use `IInteractiveReportServer` when a custom endpoint should preserve the same definition,
+authorization, saved-document, and trusted-context boundary as the packaged endpoints:
 
 ```csharp
 using InteractiveReport.AspNetCore;
 using InteractiveReport.Client.Json;
-using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Model;
 
 app.MapPost("/internal/orders/query", async (
     ReportState state,
     HttpContext http,
-    IReportAccessService access,
-    ReportExecutor executor,
+    IInteractiveReportServer reports,
     CancellationToken ct) =>
 {
-    var decision = await access.Authorize(
-        new ReportAccessRequest
-        {
-            ReportName = "orders",
-            Actions = [InteractiveReportAction.Query]
-        },
-        http,
+    var result = await reports.Query(
+        "orders",
+        state,
+        InteractiveReportHttpRequest.Context(http),
         ct);
 
-    if (decision.Error is not null)
-        return decision.Error;
-
-    var definition = decision.Definition!;
-    var contextParams = await access.ResolveContextParameters(definition, http, ct);
-    var result = await executor.Query(definition, state, contextParams, ct);
-    return Results.Json(result, IrJson.Options);
-}).RequireAuthorization();
+    return result.Failure is null
+        ? Results.Json(result.Value!, IrJson.Options)
+        : InteractiveReportHttpResult.Failure(result.Failure, http);
+});
 ```
 
-`Authorize` returns an `IResult` for denials and failures. Return it unchanged. This
-preserves the package's non-disclosure and coded-error behavior.
+Return `InteractiveReportHttpResult.Failure` unchanged for a failed server result. This
+preserves the package's status mapping, non-disclosure behavior, and coded error shape.
+Add an ASP.NET Core endpoint policy separately when the host needs one in addition to the
+report's own authentication and authorization rules.
 
 ## Execute and export in process
 
@@ -384,9 +363,9 @@ var values = await executor.Lov(definition, new ReportLovRequest
 
 `values.Items` contains no more than `ReportExecutor.MaxLovItems` (50) entries.
 
-This path does not perform HTTP authorization or infer context from a principal. In
-an HTTP request, use `IReportAccessService` as shown above. In a background process,
-the application itself is the trust and authorization boundary.
+This lower-level path does not perform application authorization or infer context from a
+principal. Prefer `IInteractiveReportServer` in an HTTP request. A background process that
+uses `ReportExecutor` directly becomes the trust and authorization boundary itself.
 
 For browser-facing files, register and map the file client:
 
@@ -480,7 +459,15 @@ With the default prefix, the principal routes are:
 | `PUT /api/reports/{id}` | Applies `UpdateSavedReportRequest`; `isDefault: true` atomically selects a new default. |
 | `DELETE /api/reports/{id}` | Deletes an editable saved report. |
 | `GET /api/reports/whoami` | Optional identity diagnostic; disabled unless `WhoamiEnabled` is true. |
-| `/api/reports/admin/*` | Administrator user, authorization, and report-document operations. |
+| `GET /api/reports/admin/users` | Lists application-supplied identity choices after the administration gate. |
+| `GET /api/reports/admin/authorization` | Returns configured and database-backed administrator, restriction, and user grants. |
+| `POST /api/reports/admin/authorization/administrators` | Adds a database-backed administrator grant. |
+| `DELETE /api/reports/admin/authorization/administrators` | Removes a database-backed administrator grant. |
+| `PUT /api/reports/admin/authorization/reports/{name}` | Sets the database-backed restriction marker for a report. |
+| `POST /api/reports/admin/authorization/reports/{name}/users` | Adds a database-backed user grant for a report. |
+| `DELETE /api/reports/admin/authorization/reports/{name}/users` | Removes a database-backed user grant for a report. |
+| `GET /api/reports/admin/saved/{id}/document` | Downloads a saved report as a configured-document envelope. |
+| `POST /api/reports/admin/{id}/documents` | Validates and imports an envelope as a private document in the selected family. |
 | `GET /api/reports/ui/{file}` | Packaged browser assets. |
 | `GET /api/reports/{name}/view` | Optional packaged viewer page. |
 | `GET /api/reports/admin` | Optional packaged administration page. |
@@ -505,8 +492,8 @@ as default also publishes it globally and retains the previous default as a glob
 The default cannot be unset directly. When a configured file declares `default: true`,
 configuration owns the selection and API attempts to replace it return 409.
 
-All data and management routes enter the central authorization boundary through the
-JSON client's `IReportAccessService`. Packaged assets and page
+All data and management routes enter the central boundary through
+`IInteractiveReportServer`. Packaged assets and page
 shells are intentionally anonymous; the page's API calls are still authorized.
 Every request body must be declared as `Content-Type: application/json`; any other
 declared type is refused by the framework with an empty 415 before a handler runs, on
@@ -539,6 +526,11 @@ Content-Type: application/json
 
 Use the `document` in the successful response as the accepted state. The server may
 populate advisory schema caches or remove stale state into `ignored`.
+
+Query JSON writes CLR `Int64`, `UInt64`, and `Decimal` values as invariant strings so a
+JavaScript client cannot silently round them through IEEE-754. Their column metadata still
+reports `type: "number"`. Ordinary 32-bit integers and floating-point values remain JSON
+numbers.
 
 The LOV endpoint executes against the complete document currently held by the client,
 including unsaved changes. `table` must identify that document's active table, and only
@@ -589,6 +581,41 @@ Content-Type: application/json
 }
 ```
 
+## Diagnostics and error responses
+
+Interactive Reports uses one optional host-owned logger. Supply it during registration
+with `UseLogger`, or when mapping the JSON endpoints:
+
+```csharp
+var reportLogger = app.Services.GetRequiredService<ILoggerFactory>()
+    .CreateLogger("InteractiveReport");
+app.MapInteractiveReportJson("/api/reports", reportLogger);
+```
+
+Without a supplied logger, the package creates no provider or output. `Information`
+records startup validation, mapped requests, report queries and exports, and configured
+document synchronization. `Debug` adds authorization decisions, schema-cache activity,
+and submitted SQL. Request bodies and SQL parameter values are not logged. The host owns
+filtering and destinations.
+
+Every JSON failure uses `InteractiveReportError`. `code` and `description` are required;
+`title`, `details`, and `traceId` appear when applicable:
+
+```json
+{
+  "code": "IR-1201",
+  "description": "One or more report settings are invalid.",
+  "title": "Report state failed validation",
+  "details": "tables.orders.composables[0].filters[0].expr: unknown column 'OLD_NAME'"
+}
+```
+
+The `IR-nnnn` code is the stable, language-independent identity. Request-specific paths
+and rejected values belong in `details`. Unexpected failures remain sanitized and add a
+`traceId` that correlates with the server log. A client with a matching localized catalog
+may replace a known code's title and description; it should retain the server fallback for
+unknown codes.
+
 ## GraphQL transport
 
 The optional adapter executes saved reports by id. It does not accept arbitrary
@@ -634,7 +661,9 @@ only the supported element interface; mutable controller state remains private.
 | `saved-report` | none | Optional numeric document id to load on activation. |
 | `api-base` | `apiBase` | API prefix. It is inferred from the module URL when omitted. |
 | `base` | `apiBase` | Older alias for `api-base`. |
+| `download-base` | `downloadBase` | File-download prefix. It is inferred from the API prefix when omitted. |
 | `lang` | none | Client locale. |
+| `theme` | `theme` | `light`, `dark`, or empty to follow the surrounding page and system preference. |
 | `disabled` | `disabled` | Makes all package-owned controls inert without clearing control overrides. |
 | `stylesheet` | `styleSheet` | Application-owned stylesheet URL inserted into this element's shadow root. Set the property to `null` to remove it. |
 

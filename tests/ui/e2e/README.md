@@ -12,7 +12,7 @@ incompatible developer server nor modify `samples/Workbench/App_Data`.
 `application.spec.js` covers direct report configuration, a configured report document,
 query, search, paging, report-attribute changes, CSV export, saved-report persistence, administration,
 and non-administrator authorization. Saved reports use random names and are removed in
-`finally` blocks, allowing the suite to run against an existing developer Workbench.
+`finally` blocks so failed or interrupted scenarios leave little test data behind.
 
 The `composition-*.spec.js` files exercise the canonical composable planner across the
 complete browser/server boundary: semantic ordering independent of storage position,

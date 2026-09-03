@@ -80,6 +80,7 @@ type Query {
   savedReports(report: String!): [InteractiveReportSavedReport!]!
   report(
     id: ID!
+    report: String
     page: Int
     pageSize: Int
     search: String
@@ -133,18 +134,16 @@ report-document identities are database keys rather than query result values.
 
 `id` is the database-generated report-document id returned by `savedReports`,
 `GET /api/reports/{name}`, and the ordinary creation APIs. It is unique across report
-families and origins.
-Configured file-backed documents receive an identity row keyed by their internal family
-and source filename; execution reads their current state from disk rather than from a
-mirrored database body. The row remains the optimistic authority for catalogue metadata.
-If its source file is absent when GraphQL dereferences it, the adapter deletes the stale
-row, restores a synthetic default when necessary, and returns `NOT_FOUND` for the old id.
-If the file is present but its state fails processing, the adapter logs the exception,
-deletes the optimistic row, and returns `NOT_FOUND` without creating a synthetic fallback.
-The next report listing creates a new identity and retries the configured source. This
-source-validation stage runs before the paging, search, and sort overrides and before
-terminal execution. A later data- or execution-dependent validation failure returns
-`REPORT_VALIDATION_FAILED` and does not delete the configured identity.
+families and origins. Supply the optional `report` argument when the caller learned the
+ID inside a named family. The adapter then verifies that the document still belongs to
+that family before loading it, matching `GET /api/reports/{name}/{id}`. A mismatch is
+reported as `NOT_FOUND`.
+
+Configured file-backed IDs use the same catalogue and load path. Their disk-backed state,
+reconciliation, and recovery behavior are described in
+[Saved reports](SAVED-REPORTS.md#reconciliation). A later data- or execution-dependent
+validation failure returns `REPORT_VALIDATION_FAILED` and does not delete the configured
+identity.
 
 The remaining arguments replace individual parts of the loaded document before it is
 executed. They mutate a detached copy; nothing is written back to the store, so the same
@@ -192,12 +191,13 @@ For example:
 ```graphql
 query ExecuteSavedReport(
   $id: ID!
+  $report: String
   $page: Int
   $pageSize: Int
   $search: String
   $sort: [InteractiveReportSortInput!]
 ) {
-  report(id: $id, page: $page, pageSize: $pageSize, search: $search, sort: $sort) {
+  report(id: $id, report: $report, page: $page, pageSize: $pageSize, search: $search, sort: $sort) {
     columns {
       name
       label
@@ -224,6 +224,7 @@ Variables:
 ```json
 {
   "id": 42,
+  "report": "orders",
   "page": 1,
   "pageSize": 100,
   "search": "acme",

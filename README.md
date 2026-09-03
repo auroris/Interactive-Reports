@@ -85,7 +85,7 @@ Browse to `/api/reports/orders/view`, or drop the element into any page:
 ```
 
 The [Getting started guide](docs/GETTING-STARTED.md) continues from here with
-saved-report storage, the administration page, authorization, and the rest.
+data-source choices, persistence, authorization, and the next integration steps.
 
 > [!WARNING]
 > Internet-facing deployment is technically supported, but it is not the recommended
@@ -98,8 +98,9 @@ saved-report storage, the administration page, authorization, and the rest.
 
 | Guide | Read it for |
 |---|---|
-| [Getting started](docs/GETTING-STARTED.md) | Packages, configuration, data sources, Umbraco, saved-report storage, configured report documents, administration, logging, localization. |
+| [Getting started](docs/GETTING-STARTED.md) | A first working report, data-source choices, persistence setup, and the next integration steps. |
 | [User Guide](docs/USER-GUIDE.md) | The end-user manual for the report UI. It is also the built-in help behind the toolbar's **?** button. |
+| [Saved reports](docs/SAVED-REPORTS.md) | Persistence, document visibility and defaults, source-controlled documents, import/export, and administration. |
 | [Embedding the report](docs/EMBEDDING.md) | The custom element, host JavaScript API, events, client controls, theming, stylesheets, renderers, edit links, and create buttons. |
 | [Integration API](docs/API.md) | Server registration, authorization hooks, trusted context, in-process execution and export, REST routes, and element reference tables. |
 | [Authorization](docs/AUTHORIZATION.md) | The action and resource model, the three integration styles, administrator resolution, and denial behaviour. |
@@ -121,8 +122,8 @@ npm run start:demo           # launch local web server for the in-browser demo
 The developer prerequisites are Node.js 20 or later, the .NET 10 SDK, and Playwright's
 Chromium browser. Normal development is supported on Windows and Linux; creating NuGet
 and release artifacts is a Windows workflow. The Workbench at `http://localhost:5042`
-hosts every packaged page against a seeded SQLite database. `npm test` runs the unit and
-SQLite server tests and `npm run test:all` adds the Playwright suite; `dotnet test`
+hosts every packaged page against a seeded SQLite database. `npm test` runs the unit,
+SQLite browser-server, and documentation tests, and `npm run test:all` adds the Playwright suite; `dotnet test`
 covers the server. See [Developing](docs/DEVELOPING.md).
 
 ## License

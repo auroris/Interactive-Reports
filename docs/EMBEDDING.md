@@ -183,8 +183,9 @@ a non-default prefix.
 ## Behavior notes
 
 Without a client override, the widget follows the definition's `features` suggestion
-([Architecture](ARCHITECTURE.md) §4): menu entries, view buttons, the search bar, and the
-saved-report select render only for listed features. Independently, the server refuses
+described under [client controls](#client-controls): menu entries, view buttons, the
+search bar, and the saved-report select render only for listed features. Independently,
+the server refuses
 CSV export and saved-report creation when their configured `download` / `savedReports`
 policies are absent.
 
@@ -194,22 +195,9 @@ create form is entirely the host application's concern. A host that would rather
 its own editor listens for `ir-edit` / `ir-create` instead (see
 [Edit links, create buttons, and column overrides](#edit-links-create-buttons-and-column-overrides)).
 
-Page size is configured through **Actions → Pagination**. The standard choices are
-10, 25, 50, 100, 500, 1000, and All; numeric choices above a definition's `maxPageSize`
-are omitted. All is stored as `page.size: 0`. A positive definition `maxRows` is a
-hard response cap for All grid rows, All Group By groups, and CSV export regardless of
-the client request. Set `maxRows` to `0` or a negative number for unlimited results.
-CSV export reports a positive-cap truncation through `X-IR-Truncated`.
-
-Each row in **Actions → Sort** also offers Nulls: Default, First, or Last. First
-and Last are stored on that sort instruction as `nulls: "first"` or `"last"` and
-produce the same placement on every supported database. Default omits the field and
-preserves the database dialect's ordinary ordering behavior. Header-menu quick sorts
-continue to use Default.
-
-Control-break columns render in the break heading instead of repeating in each detail
-row. A subtotal appears only with the logical end of its break group, even when that
-group crosses a page boundary, and grand totals appear only on the report's final page.
+Pagination, null placement, control breaks, totals, and the rest of the end-user behavior
+belong to the [User Guide](USER-GUIDE.md). Host code should submit and adopt complete
+report documents rather than reproduce those UI rules.
 
 ## Attributes and theming
 
@@ -247,25 +235,50 @@ available while they are open. Short destructive confirmations remain modal.
 
 ### Dark mode
 
-Interactive Reports includes built-in dark mode support with an accessible, high-contrast palette aligned with the APEX Universal Theme dark style.
+Interactive Reports includes a built-in high-contrast dark palette. Theme selection follows
+this order:
 
-1. **Automatic (System Preference)**: By default, the component detects and honors `prefers-color-scheme: dark`.
-2. **Framework / Document Inheritance**: The component automatically activates dark mode when nested in an ancestor element with `data-theme="dark"`, `data-bs-theme="dark"` (Bootstrap 5.3+), `theme="dark"`, or the `.dark` class (Tailwind).
-3. **Explicit Control**: You can force a specific theme using the `theme` attribute or property on `<interactive-report>`:
-   ```html
-   <!-- Explicit dark mode -->
-   <interactive-report report="orders" theme="dark"></interactive-report>
+1. An explicit `theme="dark"` or `theme="light"` attribute or `theme` property wins.
+2. Otherwise, the component follows an ancestor with `data-theme="dark"`,
+   `data-bs-theme="dark"`, `theme="dark"`, or the `.dark` class.
+3. Without either signal, it follows `prefers-color-scheme`.
 
-   <!-- Explicit light mode, even if OS or parent page is in dark mode -->
-   <interactive-report report="orders" theme="light"></interactive-report>
-   ```
-   Or programmatically:
-   ```js
-   const report = document.querySelector("interactive-report");
-   report.theme = "dark"; // "dark", "light", or null/undefined to follow system/context
-   ```
+For explicit control:
 
-All chart colors, dialog backdrops, action popups, chips, control break headers, and inputs automatically adjust to match the active theme.
+```html
+<interactive-report report="orders" theme="dark"></interactive-report>
+<interactive-report report="orders" theme="light"></interactive-report>
+```
+
+Or set the property:
+
+```js
+const report = document.querySelector("interactive-report");
+report.theme = "dark"; // "dark", "light", or null/undefined to follow system/context
+```
+
+Charts, dialog backdrops, action popups, chips, control-break headers, and inputs follow
+the active theme.
+
+### Localization
+
+The report and administration elements include English (`en`) and Canadian French
+(`fr-CA`). Set `lang` on the element or on an ancestor:
+
+```html
+<interactive-report lang="fr-CA" report="orders"></interactive-report>
+```
+
+The nearest language wins, including across the component's shadow root. The page language
+is next, followed by browser preferences and an English fallback. French variants currently
+use the Canadian French catalog. Static UI, validation, coded errors, accessible labels,
+plural messages, and client-formatted numbers and dates follow the selected locale. Report
+titles, column labels, query data, and server error details remain application data.
+
+The packaged viewer and administration pages take their document language from ASP.NET
+Core request localization when configured, then from `Accept-Language`. Catalogs and their
+ICU message formatter are compiled into the packaged bundle; the host makes no catalog
+request and installs no client dependency.
 
 ## Host stylesheets and CSS classes
 

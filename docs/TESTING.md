@@ -23,7 +23,11 @@ report-only host creates no persistence directory, database, or table and that d
 persistence and administration requests fail cleanly until storage is configured.
 
 `npm test` builds the packaged client and runs the fast DOM-level unit suite with
-Node.js and happy-dom.
+Node.js and happy-dom, the browser-server suite, and the documentation integrity tests.
+Those documentation tests validate local links and anchors, referenced npm scripts,
+and retired API names. The ASP.NET Core suite also contains documentation contract tests
+that compare documented routes, feature tokens, and authorization actions with the public
+code surface.
 
 ## Browser UI automation
 
@@ -35,15 +39,15 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-The configuration starts `samples/Workbench` on `http://127.0.0.1:5042`, reuses a
-compatible local server outside CI, and retains traces and screenshots on failure. The
+The configuration starts a fresh `samples/Workbench` process on
+`http://127.0.0.1:5042` and retains traces and screenshots on failure. The
 full-application suite covers the synthetic default report, live querying, search,
 paging, report-attribute changes, CSV download, aggregate chart rendering, saved-report
 save/reload across a page refresh, the administration lifecycle, and non-administrator
 authorization. Saved-report test data uses random names and is removed even when an
 assertion fails.
 
-## Live-dialect verification (M5)
+## Live-dialect verification
 
 `InteractiveReport.Live.Tests` runs the engine corpus against **real SQL Server, Oracle,
 and PostgreSQL**. Each test skips (never fails) unless the matching environment variable
@@ -166,8 +170,8 @@ CREATE DATABASE irtest OWNER irtest;
 
 ### Note on the read-only-principal guidance
 
-The architecture recommends pointing *report* connections at a read-only principal
-(§11). The **test** user deliberately violates that — it needs DDL to seed
+The [database architecture](ARCHITECTURE.md#database-architecture) recommends pointing
+*report* connections at a read-only principal. The **test** user deliberately violates that; it needs DDL to seed
 `IR_TEST_ORDERS`. Don't reuse it as a production report principal.
 
 ## PowerShell one-liners for the VM session

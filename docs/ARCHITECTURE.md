@@ -11,7 +11,8 @@ This document describes the production architecture and the responsibilities of 
 major components. It intentionally does not serve as a configuration reference, route
 catalog, user manual, or development plan. Those subjects live in:
 
-- [Getting started](GETTING-STARTED.md) for configuration and report documents.
+- [Getting started](GETTING-STARTED.md) for the first application integration.
+- [Saved reports](SAVED-REPORTS.md) for persistence and configured documents.
 - [Integration API](API.md) for registration, extension points, REST routes, and public
   .NET and browser APIs.
 - [Authorization](AUTHORIZATION.md) for the complete action and resource model.
@@ -511,7 +512,7 @@ composition internals:
 | `IReportDefinitionAuthorizationStore` | Resolve a lightweight authorization envelope before hydrating executable definitions. |
 | `IReportConnectionFactory` / `AddConnection` | Create unopened ADO.NET connections controlled by the host. |
 | `IContextParameterResolver` | Resolve trusted values used by configured SQL. |
-| `IInteractiveReportAuthorizer` | Add application-specific operation authorization. |
+| `InteractiveReportBuilder.UseAuthorization(...)` / `.UseAspNetCoreAuthorization()` | Add application-specific operation authorization. |
 | `ISavedReportStore` | Replace report-document persistence. |
 | `IInteractiveReportUserProvider` | Supply account choices to administration UI without granting authority. |
 | `IInteractiveReportServer` | Invoke the application boundary directly or build another transport adapter. |

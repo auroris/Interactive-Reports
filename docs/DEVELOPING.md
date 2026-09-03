@@ -20,9 +20,11 @@ installed as well. Windows and Linux both support the normal build, Workbench, a
 test workflows.
 
 `npm run start:dev` (or `npm run build:watch`) rebuilds on changes. `npm test` builds
-the client and runs the fast DOM unit tests and SQLite server tests. Browser automation
-is configured with Playwright; run `npm run test:e2e` for that layer.
-`npm run test:all` runs all test layers.
+the client and runs the fast DOM unit tests, browser-server tests, and documentation
+integrity tests. Browser automation is configured with Playwright; run
+`npm run test:e2e` for that layer. `npm run test:all` combines those JavaScript and
+browser layers. Run `dotnet test` separately for the Core, ASP.NET Core, and live-test
+projects; live database cases skip unless their connection variables are configured.
 
 The generated `src/InteractiveReport.Client.Json/Ui/dist/ir.js`, `ir-admin.js`, and
 `ir-chart.js` files are embedded in the ASP.NET Core assembly and are deliberately
@@ -30,9 +32,11 @@ not committed. A source checkout must run the client build before a Release buil
 a pack, or a run of the packaged UI — `dotnet pack` and `dotnet build -c Release`
 fail with instructions when the bundles are missing, so a UI-less package cannot
 ship silently. NuGet packaging is a Windows workflow. `scripts/pack.ps1` (also
-`npm run pack:nuget`) chains the client build, the fast test layers, and `dotnet pack`
-for the five distributable projects into `artifacts/packages`; publishing beyond that is currently a manual
-`dotnet nuget push` (release automation is deliberately still open).
+`npm run pack:nuget`) runs the complete build, the client unit tests, the Core and
+ASP.NET Core test projects, and `dotnet pack` for the five distributable projects into
+`artifacts/packages`. It does not run the browser-server, Playwright, or live-database
+suites. Publishing beyond that is a manual
+`dotnet nuget push`.
 Package consumers never need Node.js. `ir-chart.js` (the Chart.js-based chart
 renderer) is fetched on demand the first time a report enters chart view; pages
 that never chart never load it.
@@ -45,8 +49,7 @@ their `.snupkg` symbol packages, and a `SHA256SUMS.txt` manifest. The version co
 from `Directory.Build.props`; pass `-Version 1.0.0-rc.1` to override it for one run,
 `-SkipTests` to pack without the test layers, and `-Force` to replace a folder that
 already holds packages. The `releases/` folder is git-ignored. Nothing is pushed:
-publishing is still a manual `dotnet nuget push releases/<version>/*.nupkg`, and a
-GitHub release job is deliberately still open.
+publishing is a manual `dotnet nuget push releases/<version>/*.nupkg`.
 
 ## Documentation assets
 
