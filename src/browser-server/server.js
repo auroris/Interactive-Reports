@@ -132,11 +132,12 @@ export class InteractiveReportServer {
     }
 
     /**
-     * Queries List of Values (LOV) distinct choices for one column.
+     * Queries List of Values (LOV) distinct choices for one column of the submitted document's
+     * active table, following the production `POST /{name}/lov` contract.
      *
      * @param {string} reportName
      * @param {object} lovRequest - { document, table, column, search }
-     * @returns {Promise<object>} ReportLovResult
+     * @returns {Promise<{table: string, column: string, type: string, items: Array<unknown>, truncated: boolean}>} ReportLovResult
      */
     async lov(reportName, lovRequest) {
         const key = String(reportName || "").toLowerCase();

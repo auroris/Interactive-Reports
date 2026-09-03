@@ -23,23 +23,10 @@ export async function executeReport(db, definition, requestedState, discoveredSc
     const relation = await compiler.compileTable(activeTable, document);
 
     // 1. Toolbar Search
-    const searchBindings = [];
-    let searchableSql = relation.querySql;
-    if (document.search && typeof document.search === "string" && document.search.trim()) {
-        const pattern = `%${escapeLikePattern(document.search.trim()).toLowerCase()}%`;
-        const textCols = relation.schema.filter(c => c.type === "text");
-        if (textCols.length > 0) {
-            const orParts = [];
-            for (const c of textCols) {
-                const phys = relation.physicalColumns[c.name.toUpperCase()] || c.name;
-                orParts.push(`(LOWER("${phys}") LIKE ? ESCAPE '\\')`);
-                searchBindings.push(pattern);
-            }
-            searchableSql = `SELECT * FROM (${searchableSql}) AS ir_search WHERE (${orParts.join(" OR ")})`;
-        }
-    }
-
-    const currentBindings = [...relation.bindings, ...searchBindings];
+    const searched = applyToolbarSearch(relation, document.search);
+    const searchableSql = searched.querySql;
+    const searchBindings = searched.searchBindings;
+    const currentBindings = searched.bindings;
 
     // 2. Visible vs Available Columns
     const availableColumns = relation.schema.map(c => ({
@@ -272,25 +259,79 @@ export async function executeReport(db, definition, requestedState, discoveredSc
 }
 
 /**
+ * Wraps a compiled relation in the toolbar text search, as the .NET compiler does when it
+ * completes the active table for a request. A blank search, or a relation without text
+ * columns, leaves the relation unchanged.
+ *
+ * @param {{querySql: string, bindings: Array<unknown>, schema: Array<object>, physicalColumns: object}} relation
+ * @param {string|null|undefined} search - The document's toolbar search text.
+ * @returns {{querySql: string, bindings: Array<unknown>, searchBindings: Array<unknown>}} The searchable SQL, its complete bindings, and the search-only bindings.
+ */
+export function applyToolbarSearch(relation, search) {
+    const searchBindings = [];
+    let querySql = relation.querySql;
+    if (typeof search === "string" && search.trim()) {
+        const pattern = `%${escapeLikePattern(search.trim()).toLowerCase()}%`;
+        const textCols = relation.schema.filter(c => c.type === "text");
+        if (textCols.length > 0) {
+            const orParts = [];
+            for (const c of textCols) {
+                const phys = relation.physicalColumns[c.name.toUpperCase()] || c.name;
+                orParts.push(`(LOWER("${phys}") LIKE ? ESCAPE '\\')`);
+                searchBindings.push(pattern);
+            }
+            querySql = `SELECT * FROM (${querySql}) AS ir_search WHERE (${orParts.join(" OR ")})`;
+        }
+    }
+    return { querySql, bindings: [...relation.bindings, ...searchBindings], searchBindings };
+}
+
+/** The hard upper bound on distinct values one LOV response carries; mirrors ReportExecutor.MaxLovItems. */
+export const MAX_LOV_ITEMS = 50;
+
+/** The longest LOV search text accepted; mirrors the .NET request validation. */
+const MAX_LOV_SEARCH_LENGTH = 200;
+
+/**
  * Executes a List of Values (LOV) distinct query for one column of the active table.
+ *
+ * Mirrors ReportExecutor.Lov: the complete current document is compiled first so its filters,
+ * computed columns, toolbar search, and table ancestry participate; `table` must name that
+ * document's active table; NULL is an ordinary distinct value; the optional search is a
+ * case-insensitive substring of the value's text form; and at most MAX_LOV_ITEMS values are
+ * returned together with a truncation flag.
  *
  * @param {import("./db.js").SqliteDatabase} db
  * @param {object} definition
  * @param {object} request - { document, table, column, search }
  * @param {object} discoveredSchema
- * @returns {Promise<object>} ReportLovResult
+ * @returns {Promise<{table: string, column: string, type: string, items: Array<unknown>, truncated: boolean}>} ReportLovResult
  */
 export async function executeLov(db, definition, request, discoveredSchema) {
     if (!request || !request.document) {
         throw new Error("The current report document is required for LOV.");
     }
-    const reqCol = (request.column || "").trim();
+
+    const document = resolveReportState(definition.defaultState, request.document);
+    const activeTable = document.activeTable;
+
+    const requestedTable = typeof request.table === "string" ? request.table.trim() : "";
+    if (!requestedTable) {
+        throw new Error("The current active table is required for LOV.");
+    }
+    if (requestedTable.toUpperCase() !== String(activeTable).toUpperCase()) {
+        throw new Error("The LOV table must identify the submitted document's active table.");
+    }
+
+    const reqCol = typeof request.column === "string" ? request.column.trim() : "";
     if (!reqCol) {
         throw new Error("One current-table column is required for LOV.");
     }
 
-    const document = resolveReportState(definition.defaultState, request.document);
-    const activeTable = request.table || document.activeTable || "base";
+    const search = request.search === null || request.search === undefined ? "" : String(request.search);
+    if (search.length > MAX_LOV_SEARCH_LENGTH) {
+        throw new Error(`LOV search cannot exceed ${MAX_LOV_SEARCH_LENGTH} characters.`);
+    }
 
     const compiler = new ComposableCompiler(db, definition, discoveredSchema);
     const relation = await compiler.compileTable(activeTable, document);
@@ -301,30 +342,28 @@ export async function executeLov(db, definition, request, discoveredSchema) {
     }
 
     const phys = relation.physicalColumns[targetCol.name.toUpperCase()] || targetCol.name;
-    const lovBindings = [...relation.bindings];
+    const searched = applyToolbarSearch(relation, document.search);
+    const lovBindings = [...searched.bindings];
 
-    let whereClause = `WHERE "${phys}" IS NOT NULL`;
-    if (request.search && typeof request.search === "string" && request.search.trim()) {
-        const pattern = `%${escapeLikePattern(request.search.trim()).toLowerCase()}%`;
-        whereClause += ` AND (LOWER("${phys}") LIKE ? ESCAPE '\\')`;
-        lovBindings.push(pattern);
+    // NULL is a legitimate distinct value (the client renders it as its own choice), so there is
+    // no IS NOT NULL clause. The search compares the text form, as the .NET dialects do.
+    let whereClause = "";
+    if (search) {
+        whereClause = `WHERE LOWER(CAST("${phys}" AS TEXT)) LIKE ? ESCAPE '\\'`;
+        lovBindings.push(`%${escapeLikePattern(search).toLowerCase()}%`);
     }
 
-    const lovSql = `SELECT DISTINCT "${phys}" AS val FROM (${relation.querySql}) AS ir_lov ${whereClause} ORDER BY "${phys}" LIMIT 51`;
+    const lovSql = `SELECT DISTINCT "${phys}" AS val FROM (${searched.querySql}) AS ir_lov ${whereClause} ORDER BY "${phys}" LIMIT ${MAX_LOV_ITEMS + 1}`;
     const result = db.query(lovSql, lovBindings);
 
-    let values = result.rows.map(r => r.val);
-    let truncated = false;
-    if (values.length > 50) {
-        truncated = true;
-        values = values.slice(0, 50);
-    }
+    const items = result.rows.map(r => r.val === undefined ? null : r.val);
+    const truncated = items.length > MAX_LOV_ITEMS;
 
     return {
         table: activeTable,
         column: targetCol.name,
-        kind: targetCol.type,
-        values,
+        type: targetCol.type,
+        items: truncated ? items.slice(0, MAX_LOV_ITEMS) : items,
         truncated,
     };
 }

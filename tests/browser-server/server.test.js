@@ -251,17 +251,114 @@ test("server supports Pivot composables", async () => {
     assert.ok(firstRow.REGION);
 });
 
-test("server executes LOV distinct query", async () => {
+const baseDocument = () => ({ activeTable: "base", tables: { base: { from: "definition" } } });
+
+test("server executes LOV distinct query with the production result contract", async () => {
     const { server } = await setupServer();
     const lovRes = await server.lov("orders", {
-        document: { activeTable: "base", tables: { base: { from: "definition" } } },
+        document: baseDocument(),
         table: "base",
         column: "STATUS",
     });
 
-    assert.equal(lovRes.column, "STATUS");
-    assert.deepEqual(lovRes.values.sort(), ["CANCELLED", "NEW", "PENDING", "SHIPPED"]);
-    assert.equal(lovRes.truncated, false);
+    assert.deepEqual(lovRes, {
+        table: "base",
+        column: "STATUS",
+        type: "text",
+        items: ["CANCELLED", "NEW", "PENDING", "SHIPPED"],
+        truncated: false,
+    });
+});
+
+test("LOV search is a case-insensitive substring of the value text", async () => {
+    const { server } = await setupServer();
+
+    const searched = await server.lov("orders", {
+        document: baseDocument(), table: "base", column: "STATUS", search: "Pend",
+    });
+    assert.deepEqual(searched.items, ["PENDING"]);
+
+    const numeric = await server.lov("orders", {
+        document: baseDocument(), table: "base", column: "AMOUNT", search: "9",
+    });
+    assert.equal(numeric.type, "number");
+    assert.ok(numeric.items.length > 0);
+    assert.ok(numeric.items.every(value => String(value).includes("9")));
+
+    const literal = await server.lov("orders", {
+        document: baseDocument(), table: "base", column: "STATUS", search: "%",
+    });
+    assert.deepEqual(literal.items, []);
+});
+
+test("LOV reads through the submitted document's filters and toolbar search", async () => {
+    const { server } = await setupServer();
+
+    const filtered = await server.lov("orders", {
+        document: {
+            activeTable: "base",
+            tables: {
+                base: {
+                    from: "definition",
+                    composables: [{ kind: "filter", filters: [{ expr: "STATUS = 'NEW'" }] }],
+                },
+            },
+        },
+        table: "base",
+        column: "STATUS",
+    });
+    assert.deepEqual(filtered.items, ["NEW"]);
+
+    const all = await server.lov("orders", { document: baseDocument(), table: "base", column: "CUSTOMER" });
+    const toolbar = await server.lov("orders", {
+        document: { ...baseDocument(), search: "Acme" },
+        table: "base",
+        column: "CUSTOMER",
+    });
+    assert.ok(toolbar.items.length > 0);
+    assert.ok(toolbar.items.length < all.items.length);
+    assert.ok(toolbar.items.some(value => value.includes("Acme")));
+});
+
+test("LOV keeps NULL as a distinct value and reports truncation past 50 items", async () => {
+    const { server } = await setupServer();
+
+    server.registerReport({
+        name: "lov-nulls",
+        sql: "SELECT CASE WHEN STATUS = 'NEW' THEN NULL ELSE STATUS END AS STATUS FROM ORDERS",
+    });
+    const nulls = await server.lov("lov-nulls", { document: baseDocument(), table: "base", column: "STATUS" });
+    assert.deepEqual(nulls.items, [null, "CANCELLED", "PENDING", "SHIPPED"]);
+
+    server.registerReport({
+        name: "lov-many",
+        sql: "WITH RECURSIVE seq(N) AS (SELECT 1 UNION ALL SELECT N + 1 FROM seq WHERE N < 60) SELECT N FROM seq",
+    });
+    const many = await server.lov("lov-many", { document: baseDocument(), table: "base", column: "N" });
+    assert.equal(many.items.length, 50);
+    assert.equal(many.truncated, true);
+    assert.deepEqual(many.items.slice(0, 3), [1, 2, 3]);
+});
+
+test("LOV validates the request like the production endpoint", async () => {
+    const { server } = await setupServer();
+    const document = baseDocument();
+
+    await assert.rejects(() => server.lov("orders", { table: "base", column: "STATUS" }), /document is required/);
+    await assert.rejects(() => server.lov("orders", { document, column: "STATUS" }), /active table is required/);
+    await assert.rejects(() => server.lov("orders", { document, table: "other", column: "STATUS" }), /active table/);
+    await assert.rejects(() => server.lov("orders", { document, table: "base" }), /column is required/);
+    await assert.rejects(() => server.lov("orders", { document, table: "base", column: "NOPE" }), /Unknown active-table column/);
+    await assert.rejects(
+        () => server.lov("orders", { document, table: "base", column: "STATUS", search: "x".repeat(201) }),
+        /200 characters/);
+
+    const response = await server.handleRequest("/api/reports/orders/lov", {
+        method: "POST",
+        body: JSON.stringify({ document, table: "other", column: "STATUS" }),
+    });
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).description, /active table/);
 });
 
 test("server exports data to CSV format with UTF-8 BOM", async () => {
