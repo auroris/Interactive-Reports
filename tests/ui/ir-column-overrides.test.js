@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
-import { reportState } from "./report-state-fixture.js";
+import { hydratedResult, reportState } from "./report-state-fixture.js";
 import { reportControlNames } from "../../src/client/report/schema.js";
 
 const window = new Window({ url: "https://host.example/dashboard" });
@@ -32,14 +32,34 @@ const json = value => new Response(JSON.stringify(value), {
     headers: { "Content-Type": "application/json" },
 });
 
+const defaultDocument = {
+    page: { index: 1, size: 25 },
+    ...reportState({ columns: ["LABEL", "NOTES"], sorts: [{ col: "NOTES" }] }),
+};
+const resultFor = state => ({
+    document: state,
+    columns: [
+        { name: "LABEL", label: "Label", type: "text" },
+        { name: "NOTES", label: "Notes", type: "text" },
+    ],
+    // The hidden edit-link projection: ID rides the rows without column
+    // metadata. The second row withholds its pencil through a NULL key.
+    rows: [
+        { LABEL: "first", NOTES: "keep", ID: 41 },
+        { LABEL: "second", NOTES: null, ID: null },
+    ],
+    page: { index: 1, size: 25 },
+    totalRows: 2,
+    aggregates: { LABEL: { count: "2" } },
+    highlights: [],
+    ignored: [{ kind: "sort", detail: "column 'NOTES' is not sortable" }],
+});
+
 globalThis.fetch = async (url, options = {}) => {
     const path = String(url);
     if (path.endsWith("/schema")) {
         return json({
-            defaultState: {
-                page: { index: 1, size: 25 },
-                ...reportState({ columns: ["LABEL", "NOTES"], sorts: [{ col: "NOTES" }] }),
-            },
+            defaultState: defaultDocument,
             limits: { defaultPageSize: 25, maxPageSize: 100 },
             columns: [
                 { name: "ID", label: "ID", type: "number" },
@@ -59,33 +79,14 @@ globalThis.fetch = async (url, options = {}) => {
     const family = /^\/column-api\/([^/?]+)$/.exec(path)?.[1];
     if (family)
         return json([{ id: 1, reportName: family, title: "Default", isDefault: true, isGlobal: true }]);
-    const document = /^\/column-api\/([^/?]+)\/(\d+)$/.exec(path);
+    const document = /^\/column-api\/([^/?]+)\/(\d+|default)$/.exec(path);
     if (document) {
         return json({
-            summary: { id: Number(document[2]), reportName: document[1], title: "Default", isDefault: true, isGlobal: true },
-            state: {},
+            summary: { id: document[2] === "default" ? 1 : Number(document[2]), reportName: document[1], title: "Default", isDefault: true, isGlobal: true },
+            result: resultFor(hydratedResult(defaultDocument).document),
         });
     }
-    if (path.endsWith("/query")) {
-        return json({
-            document: JSON.parse(options.body),
-            columns: [
-                { name: "LABEL", label: "Label", type: "text" },
-                { name: "NOTES", label: "Notes", type: "text" },
-            ],
-            // The hidden edit-link projection: ID rides the rows without column
-            // metadata. The second row withholds its pencil through a NULL key.
-            rows: [
-                { LABEL: "first", NOTES: "keep", ID: 41 },
-                { LABEL: "second", NOTES: null, ID: null },
-            ],
-            page: { index: 1, size: 25 },
-            totalRows: 2,
-            aggregates: { LABEL: { count: "2" } },
-            highlights: [],
-            ignored: [{ kind: "sort", detail: "column 'NOTES' is not sortable" }],
-        });
-    }
+    if (path.endsWith("/query")) return json(resultFor(JSON.parse(options.body)));
     return new Response(null, { status: 404 });
 };
 

@@ -306,7 +306,7 @@ public sealed class RowRestrictionHttpTests : IAsyncLifetime
         var id = await ReportDocumentTestIds.Default(_app.Services, "products");
         var state = BaseState();
         state.Tables!["pivot"] = PivotTable();
-        using var save = await Send($"/reports/{id}/saved", new { title = "Shared pivot", isGlobal = true, state }, "admin");
+        using var save = await Send($"/reports/products/saved", new { title = "Shared pivot", isGlobal = true, state }, "admin");
         Assert.Equal(HttpStatusCode.Created, save.StatusCode);
         var savedId = (await Json(save)).GetProperty("id").Deserialize<long>(IrJson.Options);
         var stored = await _app.Services.GetRequiredService<ISavedReportStore>().Get(savedId);
@@ -332,7 +332,7 @@ public sealed class RowRestrictionHttpTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_scope_dependent_validation_failure_does_not_repair_the_shared_default()
+    public async Task A_scope_dependent_validation_failure_uses_transient_fallback_without_changing_the_shared_default()
     {
         var state = new ReportState { ActiveTable = "pivot", Tables = new() { ["pivot"] = PivotTable() } };
         using var discover = await Send("/reports/products/query", state, "admin");
@@ -353,7 +353,10 @@ public sealed class RowRestrictionHttpTests : IAsyncLifetime
         var configured = original with { StateJson = JsonSerializer.Serialize(state, IrJson.Options) };
         Assert.True(await store.Update(configured, original));
         using var restricted = await Send($"/reports/products/{id}", body: null, method: HttpMethod.Get);
-        Assert.Equal(HttpStatusCode.BadRequest, restricted.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, restricted.StatusCode);
+        var fallback = await Success(restricted);
+        Assert.Equal(JsonValueKind.Null, fallback.GetProperty("summary").ValueKind);
+        Assert.DoesNotContain("secret-cg", fallback.GetRawText());
         Assert.Equal(configured.StateJson, (await store.Get(id))!.StateJson);
     }
 

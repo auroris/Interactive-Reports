@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
-import { reportState } from "./report-state-fixture.js";
+import { hydratedResult, reportState } from "./report-state-fixture.js";
 
 const window = new Window({ url: "https://host.example/dashboard" });
 function Option(text = "", value = "", defaultSelected = false, selected = false) {
@@ -26,6 +26,7 @@ Object.assign(globalThis, {
 
 const requests = [];
 let failNextQuery = null;
+let syntheticDefault = false;
 const json = (value, status = 200) => new Response(JSON.stringify(value), {
     status,
     headers: { "Content-Type": "application/json" },
@@ -50,12 +51,12 @@ globalThis.fetch = async (url, options = {}) => {
     if (request.url.endsWith("/whoami")) return json({ identity: "test-user" });
     const family = /^\/programmatic-api\/([^/?]+)$/.exec(request.url)?.[1];
     if (request.method === "GET" && family)
-        return json([{ id: 1, reportName: family, title: "Default", isDefault: true, isGlobal: true }]);
-    const document = /^\/programmatic-api\/([^/?]+)\/(\d+)$/.exec(request.url);
+        return json(syntheticDefault ? [] : [{ id: 1, reportName: family, title: "Default", isDefault: true, isGlobal: true }]);
+    const document = /^\/programmatic-api\/([^/?]+)\/(\d+|default)$/.exec(request.url);
     if (request.method === "GET" && document) {
         return json({
-            summary: { id: Number(document[2]), reportName: document[1], title: "Default", isDefault: true, isGlobal: true },
-            state: {},
+            summary: syntheticDefault ? null : { id: document[2] === "default" ? 1 : Number(document[2]), reportName: document[1], title: "Default", isDefault: true, isGlobal: true },
+            result: hydratedResult(),
         });
     }
     if (request.url.endsWith("/lov")) {
@@ -68,6 +69,8 @@ globalThis.fetch = async (url, options = {}) => {
             truncated: false,
         });
     }
+    if (request.url.endsWith("/orders/csv"))
+        return new Response("ID\r\n1\r\n", { headers: { "Content-Type": "text/csv" } });
     if (request.url.endsWith("/query")) {
         if (failNextQuery) {
             const failure = failNextQuery;
@@ -117,7 +120,6 @@ test("the public document API is detached, transactional, and emits query lifecy
     const report = await mount(element => {
         element.addEventListener("ir-before-query", event => {
             before.push({ source: event.detail.source, requestId: event.detail.requestId });
-            if (event.detail.source === "initial") event.detail.document.search = "initial hook";
             if (event.detail.source === "host") event.detail.document.search = "host hook";
         });
         element.addEventListener("ir-query-complete", event => {
@@ -136,10 +138,12 @@ test("the public document API is detached, transactional, and emits query lifecy
     for (const internal of ["doc", "schema", "els", "apply", "runQuery", "_lastGood"])
         assert.equal(internal in report, false, `${internal} must remain behind the public facade`);
 
-    assert.equal(before[0].source, "initial");
+    assert.equal(before.length, 0, "loading a hydrated document does not invoke the submission hook");
     assert.equal(complete[0].source, "initial");
-    assert.equal(report.getReportDocument().search, "initial hook");
-    assert.equal(JSON.parse(requests.find(request => request.url.endsWith("/query")).body).search, "initial hook");
+    assert.equal(complete[0].submitted, null);
+    assert.equal(report.getReportDocument().search ?? "", "");
+    assert.equal(requests.some(request => request.url.endsWith("/query")), false,
+        "the loaded result renders without a second hydration request");
 
     const lovDocument = report.getReportDocument();
     lovDocument.search = "unpersisted LOV state";
@@ -158,7 +162,7 @@ test("the public document API is detached, transactional, and emits query lifecy
 
     const snapshot = report.getReportDocument();
     snapshot.search = "local only";
-    assert.equal(report.getReportDocument().search, "initial hook", "the getter must not leak the working object");
+    assert.equal(report.getReportDocument().search ?? "", "", "the getter must not leak the working object");
 
     snapshot.page.index = 3;
     snapshot.extension = { retained: true };
@@ -201,6 +205,24 @@ test("the public document API is detached, transactional, and emits query lifecy
     assert.equal(new Set(before.map(event => event.requestId)).size, before.length,
         "each attempted query receives a stable unique request id");
     report.remove();
+});
+
+test("a synthetic default supports public document, query, LOV, and export APIs without a saved id", async () => {
+    syntheticDefault = true;
+    requests.length = 0;
+    const report = await mount();
+    assert.equal(report.reportId, null);
+    assert.equal(report.definitionName, "orders");
+    assert.equal(report.shadowRoot.querySelector(".ir-saved-select").options.length, 0);
+    const document = report.getReportDocument();
+    document.search = "working copy";
+    await report.submitReportDocument(document);
+    assert.equal(report.getReportDocument().search, "working copy");
+    assert.deepEqual((await report.getListOfValues({ column: "ID" })).items, [1, 2]);
+    assert.equal(await (await report.getExport()).blob.text(), "ID\r\n1\r\n");
+    assert.equal(report.reportId, null);
+    report.remove();
+    syntheticDefault = false;
 });
 
 test("client control overrides win over server suggestions and global disabled is reversible", async () => {

@@ -82,14 +82,15 @@ test("semantic phases make shuffled composables equivalent without rewriting the
         await openWorkbench(page);
 
         const canonicalResponse = await loadSavedState(page, canonical);
-        const canonicalResult = await canonicalResponse.json();
+        const { result: canonicalResult } = await canonicalResponse.json();
         expect(canonicalResult.rows.length).toBeGreaterThan(0);
         const canonicalGrid = await gridSnapshot(page);
         const canonicalCsv = await downloadCsv(page);
 
         const shuffledResponse = await loadSavedState(page, shuffled);
-        const submitted = shuffledResponse.request().postDataJSON();
-        const shuffledResult = await shuffledResponse.json();
+        const { result: shuffledResult } = await shuffledResponse.json();
+        const stored = await request.get(`/api/reports/admin/saved/${shuffled.id}/document`);
+        const submitted = (await stored.json()).state;
         const shuffledGrid = await gridSnapshot(page);
         const shuffledCsv = await downloadCsv(page);
 
@@ -182,7 +183,7 @@ test("a child consumes exported relation and mask state while parent result pres
     try {
         await openWorkbench(page);
         const response = await loadSavedState(page, saved);
-        const result = await response.json();
+        const { result } = await response.json();
 
         expect(result.ignored).toEqual([]);
         expect(result.columns.map(column => column.name)).toEqual(["REGION", "STATUS", "__count", "ir2"]);
@@ -205,7 +206,7 @@ test("a child consumes exported relation and mask state while parent result pres
         expect(await rows.locator("td:nth-child(2)").allTextContents()).toEqual(statuses);
         const metricCells = rows.locator("td:nth-child(4)");
         expect((await metricCells.allTextContents())
-            .every(value => /^CA\$/.test(value))).toBe(true);
+            .every(value => /^\$[\d,]+\.\d{2}$/.test(value))).toBe(true);
 
         await expect(page.locator("table a.ir-cell-link")).toHaveCount(0);
         await expect(page.locator("table .amount-column")).toHaveCount(0);

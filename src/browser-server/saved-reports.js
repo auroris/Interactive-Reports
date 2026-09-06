@@ -11,7 +11,7 @@ export class EphemeralSavedReportStore {
     }
 
     /**
-     * Ensures the default report is present for the given family.
+     * Explicitly seeds a persisted default for a demo or administration setup.
      *
      * @param {string} reportName
      * @param {object} [defaultState={}]
@@ -42,7 +42,6 @@ export class EphemeralSavedReportStore {
      * @returns {Array<object>} Array of saved report summaries
      */
     list(reportName) {
-        this.ensureDefault(reportName);
         const summaries = [];
         for (const report of this.reports.values()) {
             if (report.reportName.toLowerCase() === reportName.toLowerCase()) {
@@ -73,7 +72,6 @@ export class EphemeralSavedReportStore {
      * @returns {object} The created summary
      */
     save(reportName, { title, state, isGlobal = false }) {
-        this.ensureDefault(reportName);
         const id = this.nextId++;
         const record = {
             id,
@@ -104,7 +102,6 @@ export class EphemeralSavedReportStore {
      * @returns {{ summary: object, state: object }|null}
      */
     load(reportName, id) {
-        this.ensureDefault(reportName);
         const numId = Number(id);
         const report = this.reports.get(numId);
         if (!report || report.reportName.toLowerCase() !== reportName.toLowerCase()) {

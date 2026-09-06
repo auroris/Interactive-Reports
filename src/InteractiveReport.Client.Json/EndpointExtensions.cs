@@ -158,7 +158,7 @@ public static class EndpointExtensions
                 "Lists visible documents for one appsettings report configuration; administrators receive the complete family.")
             .Produces<SavedReportSummary[]>();
         ProtectedApi(
-                WithStorageErrors(group.MapPost("/{id:long}/saved", SavedReportEndpoints.Save)),
+                WithStorageErrors(group.MapPost("/{name}/saved", SavedReportEndpoints.Save)),
                 SavedReportsTag,
                 "Create a saved report",
                 "Creates a private or global saved report after validating the submitted state.")
@@ -170,7 +170,13 @@ public static class EndpointExtensions
                 WithStorageErrors(group.MapGet("/{name}/{id:long}", SavedReportEndpoints.Load)),
                 SavedReportsTag,
                 "Load a saved report",
-                "Returns a visible saved-report document after verifying its configured family name.")
+                "Hydrates a visible saved report or a valid default, returning its effective document and data.")
+            .Produces<SavedReportDocument>();
+        ProtectedApi(
+                WithStorageErrors(group.MapGet("/{name}/default", SavedReportEndpoints.LoadDefault)),
+                SavedReportsTag,
+                "Load the default report",
+                "Hydrates the stored default when available, otherwise a transient synthetic default, without changing storage.")
             .Produces<SavedReportDocument>();
         ProtectedApi(
                 WithStorageErrors(group.MapPut("/{id:long}", SavedReportEndpoints.Update)),
@@ -222,7 +228,7 @@ public static class EndpointExtensions
             .Produces<ReportDocumentFile>(contentType: "application/json");
         ProtectedApi(
                 WithStorageErrors(group.MapPost(
-                    "/admin/{id:long}/documents", SavedReportEndpoints.AdminUploadDocument)),
+                    "/admin/{name}/documents", SavedReportEndpoints.AdminUploadDocument)),
                 AdministrationTag,
                 "Upload a report document",
                 "Validates and imports a report-document envelope as a saved report.")

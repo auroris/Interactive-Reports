@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
-import { reportState } from "./report-state-fixture.js";
+import { hydratedResult, reportState } from "./report-state-fixture.js";
 
 const window = new Window({ url: "https://host.example/dashboard" });
 function Option(text = "", value = "", defaultSelected = false, selected = false) {
@@ -54,17 +54,18 @@ globalThis.fetch = async (url, options = {}) => {
             limits: { defaultPageSize: 25, maxPageSize: 100 },
             columns: [{ name: "ID", label: "ID", type: "number" }],
             capabilities: { aggregateFunctions: {}, expressionFunctions: [] },
+            features: [],
         });
     }
     if (target.endsWith("/whoami")) return json({ identity: "test-user" });
     const family = /^\/help-api\/([^/?]+)$/.exec(target)?.[1];
     if ((options.method ?? "GET") === "GET" && family)
         return json([{ id: 1, reportName: family, title: "Default", isDefault: true, isGlobal: true }]);
-    const document = /^\/help-api\/([^/?]+)\/(\d+)$/.exec(target);
+    const document = /^\/help-api\/([^/?]+)\/(\d+|default)$/.exec(target);
     if ((options.method ?? "GET") === "GET" && document) {
         return json({
-            summary: { id: Number(document[2]), reportName: document[1], title: "Default", isDefault: true, isGlobal: true },
-            state: {},
+            summary: { id: document[2] === "default" ? 1 : Number(document[2]), reportName: document[1], title: "Default", isDefault: true, isGlobal: true },
+            result: hydratedResult(),
         });
     }
     if (target.endsWith("/query")) {

@@ -150,6 +150,7 @@ export function discoverSchema(db, definition) {
             });
         }
         defaultState = {
+            ...defaultState,
             activeTable: "base",
             tables: {
                 base: {
@@ -160,6 +161,7 @@ export function discoverSchema(db, definition) {
             },
         };
     }
+    defaultState.page ??= { index: 1, size: definition.defaultPageSize ?? 50 };
 
     return {
         name: definition.name,

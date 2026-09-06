@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
-import { reportState } from "./report-state-fixture.js";
+import { hydratedResult, reportState } from "./report-state-fixture.js";
 import { reportControlNames } from "../../src/client/report/schema.js";
 
 const window = new Window({ url: "https://host.example/dashboard" });
@@ -35,15 +35,51 @@ const chartStageOf = state =>
         .flatMap(table => table.composables ?? [])
         .find(composable => composable.kind === "chart") ?? null;
 
+const defaultDocument = {
+    page: { index: 1, size: 25 },
+    ...reportState(),
+};
+const resultFor = state => {
+    if (chartStageOf(state)) {
+        return {
+            document: state,
+            columns: [
+                { name: "STATUS", label: "Status", type: "text" },
+                { name: "__count", label: "Count", type: "number" },
+            ],
+            rows: [
+                { STATUS: "PENDING", __count: 3 },
+                { STATUS: "SHIPPED", __count: 5 },
+                { STATUS: null, __count: 2 },
+            ],
+            page: { index: 1, size: 3 },
+            totalRows: 3,
+            aggregates: {},
+            highlights: [],
+            ignored: [],
+        };
+    }
+    return {
+        document: state,
+        columns: [
+            { name: "STATUS", label: "Status", type: "text" },
+            { name: "AMOUNT", label: "Amount", type: "number" },
+        ],
+        rows: [{ STATUS: "PENDING", AMOUNT: 100 }],
+        page: { index: 1, size: 25 },
+        totalRows: 1,
+        aggregates: {},
+        highlights: [],
+        ignored: [],
+    };
+};
+
 globalThis.fetch = async (url, options = {}) => {
     const request = { url: String(url), method: options.method ?? "GET", body: options.body ?? null };
     requests.push(request);
     if (request.url.endsWith("/schema")) {
         return json({
-            defaultState: {
-                page: { index: 1, size: 25 },
-                ...reportState(),
-            },
+            defaultState: defaultDocument,
             limits: { defaultPageSize: 25, maxPageSize: 100, maxRows: 1000, maxChartPoints: 1000 },
             columns: [
                 { name: "STATUS", label: "Status", type: "text" },
@@ -65,48 +101,14 @@ globalThis.fetch = async (url, options = {}) => {
     if (request.method === "GET" && family) {
         return json([{ id: 1, reportName: family, title: "Default", isDefault: true, isGlobal: true }]);
     }
-    const document = /^\/api\/([^/?]+)\/(\d+)$/.exec(request.url);
+    const document = /^\/api\/([^/?]+)\/(\d+|default)$/.exec(request.url);
     if (request.method === "GET" && document) {
         return json({
-            summary: { id: Number(document[2]), reportName: document[1], title: "Default", isDefault: true, isGlobal: true },
-            state: {},
+            summary: { id: document[2] === "default" ? 1 : Number(document[2]), reportName: document[1], title: "Default", isDefault: true, isGlobal: true },
+            result: resultFor(hydratedResult(defaultDocument).document),
         });
     }
-    if (request.url.endsWith("/query")) {
-        const state = JSON.parse(request.body);
-        if (chartStageOf(state)) {
-            return json({
-                document: state,
-                columns: [
-                    { name: "STATUS", label: "Status", type: "text" },
-                    { name: "__count", label: "Count", type: "number" },
-                ],
-                rows: [
-                    { STATUS: "PENDING", __count: 3 },
-                    { STATUS: "SHIPPED", __count: 5 },
-                    { STATUS: null, __count: 2 },
-                ],
-                page: { index: 1, size: 3 },
-                totalRows: 3,
-                aggregates: {},
-                highlights: [],
-                ignored: [],
-            });
-        }
-        return json({
-            document: state,
-            columns: [
-                { name: "STATUS", label: "Status", type: "text" },
-                { name: "AMOUNT", label: "Amount", type: "number" },
-            ],
-            rows: [{ STATUS: "PENDING", AMOUNT: 100 }],
-            page: { index: 1, size: 25 },
-            totalRows: 1,
-            aggregates: {},
-            highlights: [],
-            ignored: [],
-        });
-    }
+    if (request.url.endsWith("/query")) return json(resultFor(JSON.parse(options.body)));
     return new Response(null, { status: 404 });
 };
 
@@ -123,7 +125,7 @@ test("chart view renders behind the dialog with an accessible data table, and gr
     report.setAttribute("report", "orders");
     report.setAttribute("api-base", "/api");
     document.body.append(report);
-    await until(() => requests.some(r => r.url.endsWith("/query")), "the initial grid query");
+    await until(() => report.shadowRoot.querySelector("tbody tr"), "the hydrated initial grid");
 
     const root = report.shadowRoot;
     assert.ok(root.querySelector('.ir-viewbtn[data-mode="chart"]'), "the toolbar should offer a Chart view");

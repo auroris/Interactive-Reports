@@ -8,15 +8,15 @@ and the packaged administration page. For end-user Save and Save As steps, see t
 ## Concepts
 
 A configured report name identifies a report family. The family combines one trusted
-appsettings definition with one or more report documents:
+appsettings definition with zero or more stored report documents:
 
 - The default document is public and is the document selected for a first-time viewer.
 - A private document is visible to its exact owner and administrators.
 - A global document is visible to every caller who may view the report family.
 - A configured document stores its state in a source-controlled JSON file and is read-only
   at runtime.
-- A synthetic default is generated from the report definition when no configured document
-  owns the default role.
+- A synthetic default is generated from the report definition when no usable stored
+  default exists. It is returned to the client without being persisted.
 
 Database-generated integer IDs identify documents. They do not identify report definitions,
 and a report-state document itself carries no trusted database or SQL provenance.
@@ -50,7 +50,7 @@ and administration operations return a sanitized error until their target is ava
 
 ## Document ownership and visibility
 
-Every family has exactly one default document, and the default is public. Selecting a
+Every family can have one stored default document, and that default is public. Selecting a
 database-backed document as the new default publishes it and retains the former default as
 an ordinary global document. The default cannot be unset without selecting another one.
 
@@ -59,7 +59,7 @@ Private ownership uses the canonical identity resolved from
 [Authorization](AUTHORIZATION.md#administrators).
 Identity comparison is ordinal and case-sensitive.
 
-The family-list endpoint reconciles configured files, then returns:
+The family-list endpoint reads the catalogue and returns:
 
 - all documents to an administrator;
 - global and default documents to an authorized non-administrator; and
@@ -68,6 +68,29 @@ The family-list endpoint reconciles configured files, then returns:
 Loading through `GET /api/reports/{name}/{id}` also verifies that the document belongs to
 the named family. A missing document, a document from another family, and a hidden document
 all return the same not-found response.
+
+## Loading and hydration
+
+`GET /api/reports/{name}/{id}` loads the requested document and hydrates its `activeTable`
+through the same validation and execution routine as `POST /api/reports/{name}/query`.
+If the stored document cannot be parsed or hydrated, the load tries the family's stored
+default, then a synthetic default. Each candidate is tried at most once. If the synthetic
+document also fails, the server returns an error. Authorization denials and cancellation
+stop the operation immediately.
+
+`GET /api/reports/{name}/default` starts with the stored default when one exists and
+otherwise hydrates the synthetic default. Both load routes return `{ summary, result }`.
+`result.document` and the returned data describe the same successful candidate. `summary`
+contains that candidate's saved metadata, or `null` for a synthetic document.
+
+A client-supplied document is hydrated once. Failure returns an error without fallback.
+The client owns its working document and may submit one it created itself; hydration
+requires no saved-report identity. Save As uses `POST /api/reports/{name}/saved`, and
+`PUT /api/reports/{id}` explicitly chooses the document to update.
+
+Listing, loading, hydration, and document downloads do not insert, update, or delete saved
+reports. Returning a fallback never repairs the stored original. Persistence changes occur
+only through explicit save, update, or administration operations.
 
 ## Source-controlled documents
 
@@ -132,15 +155,21 @@ Configured files retain their state on disk. The database contains their generat
 family, filename, title, and default metadata so they can participate in the ordinary
 saved-report catalogue.
 
-Reconciliation occurs when a family is listed. The server reads the complete family once,
-compares it with the current `documentFiles` declarations, and repairs configured identities
-before applying caller visibility. The root configuration catalogue does not reconcile files.
+Reconciliation is an explicit host or administration operation. For example, after building
+the application and before serving requests, a host with configured document files can run:
 
-If a referenced file disappears, loading its former ID removes the stale catalogue row and
-returns not found. A synthetic default is restored when the missing file owned the default
-role. If a present file contains a state that cannot be processed, the failed identity is
-removed and the load returns not found; the next family listing creates a fresh identity and
-retries the declaration. Failures are logged with the family, ID, filename, and exception.
+```csharp
+await app.Services.GetRequiredService<ConfiguredReportDocumentSynchronizer>()
+    .EnsureSynced();
+```
+
+The synchronizer compares the database catalogue with `documentFiles` and creates or removes
+configured identities as needed. The Workbench performs this call at startup. Neither the
+root configuration catalogue nor family listing performs synchronization.
+
+If a configured file disappears or cannot be processed, loading its existing ID follows the
+same default fallback as any other failed stored document. The load leaves its catalogue row
+unchanged. Explicit synchronization reconciles changes to configured file declarations.
 
 The state returned by the server may contain refreshed schema caches. Those caches are
 advisory and are rebuilt from the live trusted definition when required. See
@@ -217,7 +246,7 @@ by `documentFiles`. This supports a deliberate workflow:
 1. Build and test a private saved report against the live definition.
 2. Download its envelope from administration.
 3. Commit the JSON file and add its path to `documentFiles`.
-4. Deploy the application and verify that the configured identity reconciles.
+4. Deploy the application, explicitly synchronize configured documents, and verify the catalogue.
 
 Uploading an envelope validates its state against the selected report family's current
 schema and creates a private document owned by the importing administrator. File publication

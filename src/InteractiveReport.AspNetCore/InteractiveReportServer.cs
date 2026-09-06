@@ -56,19 +56,14 @@ public sealed record InteractiveReportServerResult<T>(
 /// <param name="Document">The envelope exactly as it should be written to a file.</param>
 public sealed record InteractiveReportDocumentExport(string ReportName, ReportDocumentFile Document);
 
-/// <summary>A loaded, authorized report document ready for a client to echo, mutate, and query.</summary>
-/// <param name="ReportName">The canonical configured report the document belongs to.</param>
-/// <param name="Metadata">The stored snapshot authorized for this request.</param>
-/// <param name="State">
-/// The document bound to the current state model, with schema caches refreshed for the origins that
-/// require it. Every document is served through this one model, so what a client reads is what this
-/// version of the engine can execute.
-/// </param>
+/// <summary>An authorized document hydrated with its active table's data.</summary>
+/// <param name="ReportName">The canonical configured report.</param>
+/// <param name="Metadata">The effective stored document, or null for a transient synthetic default.</param>
+/// <param name="Result">The effective document and data produced together by the query engine.</param>
 public sealed record InteractiveReportLoadedDocument(
     string ReportName,
-    SavedReportMetadata Metadata,
-    ReportState State);
-
+    SavedReportMetadata? Metadata,
+    ReportResult Result);
 /// <summary>
 /// Application boundary used by JSON, GraphQL, and file clients. It resolves definitions,
 /// authorization, saved documents, trusted context, and execution without exposing transport types.
@@ -84,46 +79,33 @@ public interface IInteractiveReportServer
         InteractiveReportRequestContext context,
         CancellationToken ct = default);
 
+    /// <summary>Loads a stored document by id, hydrating it or a valid default without writing storage.</summary>
     Task<InteractiveReportServerResult<InteractiveReportLoadedDocument>> LoadDocument(
         long id,
         InteractiveReportRequestContext context,
-        CancellationToken ct = default);
+        CancellationToken ct = default,
+        Action<ReportState>? configure = null);
 
-    /// <summary>
-    /// Loads a document that must belong to <paramref name="reportName"/>. The report-level gate runs
-    /// before the row is read, and a document from another family is hidden as not-found, so a
-    /// caller cannot reach a document through a report route it does not belong to. Clients holding
-    /// a report name should prefer this overload; the id-only form is for callers that address a
-    /// document by identifier alone and must infer its report from the row.
-    /// </summary>
+    /// <summary>Loads a stored document after verifying its configured family.</summary>
     Task<InteractiveReportServerResult<InteractiveReportLoadedDocument>> LoadDocument(
         string reportName,
         long id,
         InteractiveReportRequestContext context,
+        CancellationToken ct = default,
+        Action<ReportState>? configure = null);
+
+    /// <summary>Hydrates the stored default when available, otherwise a transient synthetic default.</summary>
+    Task<InteractiveReportServerResult<InteractiveReportLoadedDocument>> LoadDefaultDocument(
+        string reportName,
+        InteractiveReportRequestContext context,
         CancellationToken ct = default);
 
+    /// <summary>Hydrates the submitted document directly, without saved-document lookup or fallback.</summary>
     Task<InteractiveReportServerResult<ReportResult>> Query(
         string reportName,
         ReportState state,
         InteractiveReportRequestContext context,
         CancellationToken ct = default);
-
-    Task<InteractiveReportServerResult<ReportResult>> Query(
-        InteractiveReportLoadedDocument document,
-        InteractiveReportRequestContext context,
-        CancellationToken ct = default);
-
-    /// <summary>
-    /// Queries a loaded document using a state the client has adjusted — paging, search, or sort
-    /// applied on top of what was loaded. Authorization still uses the document's own metadata, so a
-    /// client cannot widen its access by rewriting the state it submits.
-    /// </summary>
-    Task<InteractiveReportServerResult<ReportResult>> Query(
-        InteractiveReportLoadedDocument document,
-        ReportState state,
-        InteractiveReportRequestContext context,
-        CancellationToken ct = default);
-
     Task<InteractiveReportServerResult<ReportResult>> QueryForDownload(
         string reportName,
         ReportState state,
@@ -150,12 +132,12 @@ public interface IInteractiveReportServer
         CancellationToken ct = default);
 
     /// <summary>
-    /// Creates a document in the family named by an existing document's id. The request body is read
+    /// Creates a document in the named configured family. The request body is read
     /// through <paramref name="readRequest"/> only after the report-level gate has passed, so an
     /// unauthorized caller never reaches the parse.
     /// </summary>
     Task<InteractiveReportServerResult<SavedReportSummary>> SaveDocument(
-        long anchorId,
+        string reportName,
         Func<CancellationToken, Task<SaveReportRequest?>> readRequest,
         InteractiveReportRequestContext context,
         CancellationToken ct = default);
@@ -180,11 +162,11 @@ public interface IInteractiveReportServer
         CancellationToken ct = default);
 
     /// <summary>
-    /// Imports a source-controlled envelope into the family named by an existing document's id, as a
+    /// Imports a source-controlled envelope into the named configured family, as a
     /// private document owned by the importing administrator.
     /// </summary>
     Task<InteractiveReportServerResult<SavedReportSummary>> ImportDocument(
-        long anchorId,
+        string reportName,
         Func<CancellationToken, Task<ReportDocumentFile?>> readRequest,
         InteractiveReportRequestContext context,
         CancellationToken ct = default);
@@ -239,9 +221,7 @@ internal sealed class InteractiveReportServer(
     IReportAuthorizationService authorization,
     IAdministratorStore administrators,
     ISavedReportStore savedReports,
-    ConfiguredReportDocumentSynchronizer synchronizer,
     ConfiguredReportDocumentStore configuredDocuments,
-    DefaultReportDocumentService defaultDocuments,
     ReportExecutor executor,
     IOptionsMonitor<InteractiveReportOptions> options,
     UserDirectoryCache directoryCache,
@@ -340,26 +320,16 @@ internal sealed class InteractiveReportServer(
         if (denied is not null)
             return InteractiveReportServerResult<IReadOnlyList<SavedReportSummary>>.Failed(Failure(denied));
 
-        // The store returns every public and private document for the configured family in one
-        // query. Reconciliation consumes that complete truth before caller visibility is applied.
+        // Listing is a read of the persisted catalogue. Hosts synchronize configured documents
+        // explicitly when they want source-controlled declarations applied to storage.
         List<SavedReport> family;
         try
         {
-            family = (await synchronizer.ReconcileFamily(definition.Name, ct)).ToList();
-            if (!family.Any(report => report.IsDefault))
-            {
-                var created = await defaultDocuments.CreateMissing(definition, family, ct);
-                family.RemoveAll(report => report.Id == created.Id);
-                family.Add(created);
-            }
+            family = (await savedReports.ListFamily(definition.Name, ct)).ToList();
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             throw;
-        }
-        catch (ReportDocumentBootstrapException)
-        {
-            return NotFoundDocument<IReadOnlyList<SavedReportSummary>>();
         }
         catch (Exception ex)
         {
@@ -382,7 +352,7 @@ internal sealed class InteractiveReportServer(
         var administrator = administratorDenial is null;
 
         // Listing visibility is the same read decision the single-document paths make, applied to
-        // the complete unfiltered family that configured reconciliation just produced. It is
+        // the complete unfiltered family returned by storage. It is
         // deliberately the policy call rather than a local predicate: a second copy of an
         // authorization rule is a copy that can drift out of step with the first.
         var visible = family
@@ -399,163 +369,154 @@ internal sealed class InteractiveReportServer(
     public Task<InteractiveReportServerResult<InteractiveReportLoadedDocument>> LoadDocument(
         long id,
         InteractiveReportRequestContext context,
-        CancellationToken ct = default)
-        => LoadDocumentCore(reportName: null, id, context, ct);
+        CancellationToken ct = default,
+        Action<ReportState>? configure = null)
+        => LoadDocumentCore(null, id, context, ct, configure);
 
     public Task<InteractiveReportServerResult<InteractiveReportLoadedDocument>> LoadDocument(
         string reportName,
         long id,
         InteractiveReportRequestContext context,
+        CancellationToken ct = default,
+        Action<ReportState>? configure = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(reportName);
+        return LoadDocumentCore(reportName, id, context, ct, configure);
+    }
+
+    public Task<InteractiveReportServerResult<InteractiveReportLoadedDocument>> LoadDefaultDocument(
+        string reportName,
+        InteractiveReportRequestContext context,
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(reportName);
-        return LoadDocumentCore(reportName, id, context, ct);
+        return LoadDocumentCore(reportName, null, context, ct);
     }
 
     private async Task<InteractiveReportServerResult<InteractiveReportLoadedDocument>> LoadDocumentCore(
         string? reportName,
-        long id,
+        long? id,
         InteractiveReportRequestContext context,
-        CancellationToken ct)
+        CancellationToken ct,
+        Action<ReportState>? configure = null)
     {
-        // A named caller clears the report-level gate before the row is read. An id-only caller
-        // cannot: the row is the only thing that names its report, so it is read first and the
-        // gate runs against whatever family it turns out to belong to.
+        ArgumentNullException.ThrowIfNull(context);
         ReportDefinition? definition = null;
         if (reportName is not null)
         {
-            var named = await authorization.ResolveDefinition(reportName, context, ct);
-            if (named.Failure is not null)
-                return InteractiveReportServerResult<InteractiveReportLoadedDocument>.Failed(
-                    Failure(named.Failure));
-            if (named.Definition is null) return NotFoundReport<InteractiveReportLoadedDocument>();
-            definition = named.Definition;
+            var resolved = await authorization.ResolveDefinition(reportName, context, ct);
+            if (resolved.Failure is not null)
+                return InteractiveReportServerResult<InteractiveReportLoadedDocument>.Failed(Failure(resolved.Failure));
+            if (resolved.Definition is null) return NotFoundReport<InteractiveReportLoadedDocument>();
+            definition = resolved.Definition;
         }
 
         SavedReport? saved;
         try
         {
-            saved = await savedReports.Get(id, ct);
+            saved = id.HasValue
+                ? await savedReports.Get(id.Value, ct)
+                : ReportConnectionRegistry.IsStoreConfigured(options.CurrentValue.SavedReports)
+                    ? await savedReports.FindDefault(definition!.Name, ct)
+                    : null;
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
             return InteractiveReportServerResult<InteractiveReportLoadedDocument>.Failed(
-                Internal(id.ToString(), "saved-report retrieval", context, ex));
+                Internal(reportName ?? id!.Value.ToString(), "saved-report retrieval", context, ex));
         }
-        if (saved is null) return NotFoundDocument<InteractiveReportLoadedDocument>();
-
+        if (id.HasValue && saved is null) return NotFoundDocument<InteractiveReportLoadedDocument>();
         if (definition is null)
         {
-            var (family, hidden) = await ResolveRowFamily(saved.ReportName, context, ct);
+            var (family, hidden) = await ResolveRowFamily(saved!.ReportName, context, ct);
             if (hidden is not null)
                 return InteractiveReportServerResult<InteractiveReportLoadedDocument>.Failed(hidden);
             definition = family!;
         }
-        else if (!string.Equals(saved.ReportName, definition.Name, StringComparison.Ordinal))
-        {
-            // The document exists but belongs to another family. Hiding it as not-found keeps a
-            // report route from being a probe for documents outside it.
+        if (saved is not null && !string.Equals(saved.ReportName, definition.Name, StringComparison.Ordinal))
             return NotFoundDocument<InteractiveReportLoadedDocument>();
-        }
 
-        var metadata = saved.Metadata();
+        // Each stored identity is tried once. A synthetic document is the final attempt and has
+        // no persisted identity. Failed candidates are never repaired or removed from storage.
+        var defaultTried = !id.HasValue;
         var identity = ReportIdentity.Resolve(context.User, options.CurrentValue.IdentityClaim);
-        var builtIn = SavedReportAccessPolicy.Read(metadata, identity, administrator: false);
-        var denied = await AuthorizeActions(
-            definition,
-            [InteractiveReportAction.ReadSavedReport],
-            new InteractiveReportAuthorizationResource
-            {
-                ReportName = definition.Name,
-                SavedReport = metadata,
-            },
-            administratorRequired: builtIn != SavedReportAccess.Allowed,
-            hideDenied: true,
-            denialDetail: null,
-            context,
-            ct);
-        if (denied is not null)
-            return InteractiveReportServerResult<InteractiveReportLoadedDocument>.Failed(Failure(denied));
-
-        try
+        while (true)
         {
-            var prepared = await PrepareQuery(definition, context, ct);
-            definition = prepared.Definition;
-            var contextParameters = prepared.Parameters;
-            ReportState state;
-            if (saved.Origin == SavedReportOrigin.Configured)
+            ct.ThrowIfCancellationRequested();
+            var metadata = saved?.Metadata();
+            if (metadata is not null)
             {
-                ConfiguredReportDocument? file;
+                var readDenied = await AuthorizeActions(
+                    definition,
+                    [InteractiveReportAction.ReadSavedReport],
+                    new InteractiveReportAuthorizationResource { ReportName = definition.Name, SavedReport = metadata },
+                    administratorRequired: SavedReportAccessPolicy.Read(metadata, identity, administrator: false) != SavedReportAccess.Allowed,
+                    hideDenied: true,
+                    denialDetail: null,
+                    context,
+                    ct);
+                if (readDenied is not null)
+                    return InteractiveReportServerResult<InteractiveReportLoadedDocument>.Failed(Failure(readDenied));
+            }
+            var queryDenied = await AuthorizeQuery(definition, InteractiveReportAction.Query, metadata, context, ct);
+            if (queryDenied is not null)
+                return InteractiveReportServerResult<InteractiveReportLoadedDocument>.Failed(queryDenied);
+
+            InteractiveReportServerResult<ReportResult> hydrated;
+            try
+            {
+                var state = saved is null ? ReportDocumentDefaults.Create(definition) : ReadDocumentState(saved);
+                configure?.Invoke(state);
+                hydrated = await ExecuteQuery(definition, state, InteractiveReportAction.Query, context, ct);
+            }
+            catch (InteractiveReportAuthorizationDeniedException)
+            {
+                return InteractiveReportServerResult<InteractiveReportLoadedDocument>.Failed(RowAccessDenied(context));
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (JsonException)
+            {
+                hydrated = InteractiveReportServerResult<ReportResult>.Failed(Invalid(InteractiveReportErrorCodes.MalformedReportState));
+            }
+            catch (ReportValidationException ex)
+            {
+                hydrated = InteractiveReportServerResult<ReportResult>.Failed(Validation(ex));
+            }
+            catch (Exception ex)
+            {
+                hydrated = InteractiveReportServerResult<ReportResult>.Failed(
+                    Internal(definition.Name, "report document retrieval", context, ex));
+            }
+            if (hydrated.Failure is null)
+                return InteractiveReportServerResult<InteractiveReportLoadedDocument>.Success(
+                    new(definition.Name, metadata, hydrated.Value!));
+            if (saved is null || hydrated.Failure.Code is not (
+                    InteractiveReportErrorCodes.MalformedReportState
+                    or InteractiveReportErrorCodes.ReportStateInvalid
+                    or InteractiveReportErrorCodes.ReportExecutionFailed))
+                return InteractiveReportServerResult<InteractiveReportLoadedDocument>.Failed(hydrated.Failure);
+
+            logging.Logger?.LogWarning(
+                "Report {Report}: document {Id} could not be hydrated ({Code}); trying the next default",
+                definition.Name, saved.Id, hydrated.Failure.Code);
+            var failedId = saved.Id;
+            saved = null;
+            if (!defaultTried)
+            {
+                defaultTried = true;
                 try
                 {
-                    file = saved.SourceFile is null
-                        ? null
-                        : configuredDocuments.Find(saved.ReportName, saved.SourceFile);
+                    var fallback = await savedReports.FindDefault(definition.Name, ct);
+                    if (fallback?.Id != failedId) saved = fallback;
                 }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested)
-                {
-                    throw;
-                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception ex)
                 {
-                    logging.Logger?.LogWarning(ex,
-                        "Report {Report}: configured document {SourceFile} could not be loaded",
-                        saved.ReportName, saved.SourceFile);
-                    return NotFoundDocument<InteractiveReportLoadedDocument>();
+                    return InteractiveReportServerResult<InteractiveReportLoadedDocument>.Failed(
+                        Internal(definition.Name, "saved-report retrieval", context, ex));
                 }
-
-                if (file is null)
-                    return NotFoundDocument<InteractiveReportLoadedDocument>();
-                state = await executor.RefreshSchemaCaches(
-                    definition, file.State, contextParameters, ct);
             }
-            else if (saved.IsDefault)
-            {
-                state = await defaultDocuments.LoadState(
-                    saved, definition, executor, contextParameters, ct);
-            }
-            else
-            {
-                state = JsonSerializer.Deserialize<ReportState>(
-                        saved.StateJson ?? throw new JsonException("The report document has no state."),
-                        IrJson.Options)
-                    ?? throw new JsonException("The report document has no state.");
-                if (definition.RowRestrictionApplied)
-                    state = await executor.RefreshSchemaCaches(definition, state, contextParameters, ct);
-            }
-
-            return InteractiveReportServerResult<InteractiveReportLoadedDocument>.Success(
-                new InteractiveReportLoadedDocument(definition.Name, metadata, state));
-        }
-        catch (InteractiveReportAuthorizationDeniedException)
-        {
-            return InteractiveReportServerResult<InteractiveReportLoadedDocument>.Failed(RowAccessDenied(context));
-        }
-        catch (JsonException)
-        {
-            return InteractiveReportServerResult<InteractiveReportLoadedDocument>.Failed(
-                Invalid(InteractiveReportErrorCodes.MalformedReportState));
-        }
-        catch (ReportValidationException ex)
-        {
-            return InteractiveReportServerResult<InteractiveReportLoadedDocument>.Failed(Validation(ex));
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (ReportDocumentBootstrapException)
-        {
-            return NotFoundDocument<InteractiveReportLoadedDocument>();
-        }
-        catch (Exception ex)
-        {
-            return InteractiveReportServerResult<InteractiveReportLoadedDocument>.Failed(
-                Internal(saved.ReportName, "report document retrieval", context, ex));
         }
     }
 
@@ -565,33 +526,6 @@ internal sealed class InteractiveReportServer(
         InteractiveReportRequestContext context,
         CancellationToken ct = default)
         => Query(reportName, state, savedReport: null, InteractiveReportAction.Query, requireDownload: false, context, ct);
-
-    public Task<InteractiveReportServerResult<ReportResult>> Query(
-        InteractiveReportLoadedDocument document,
-        InteractiveReportRequestContext context,
-        CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(document);
-        return Query(document, document.State, context, ct);
-    }
-
-    public Task<InteractiveReportServerResult<ReportResult>> Query(
-        InteractiveReportLoadedDocument document,
-        ReportState state,
-        InteractiveReportRequestContext context,
-        CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(document);
-        return Query(
-            document.ReportName,
-            state,
-            document.Metadata,
-            InteractiveReportAction.Query,
-            requireDownload: false,
-            context,
-            ct);
-    }
-
     public Task<InteractiveReportServerResult<ReportResult>> QueryForDownload(
         string reportName,
         ReportState state,
@@ -1185,42 +1119,25 @@ internal sealed class InteractiveReportServer(
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(context);
-
         if (ReportIdentity.Resolve(context.User, options.CurrentValue.IdentityClaim) is null)
-            return InteractiveReportServerResult<InteractiveReportDocumentExport>.Failed(new(
-                InteractiveReportFailureKind.Unauthenticated,
-                InteractiveReportErrorCodes.AuthenticationRequired));
-
-        SavedReport? report;
-        try
-        {
-            report = await savedReports.Get(id, ct);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
+            return InteractiveReportServerResult<InteractiveReportDocumentExport>.Failed(
+                new(InteractiveReportFailureKind.Unauthenticated, InteractiveReportErrorCodes.AuthenticationRequired));
+        SavedReport? saved;
+        try { saved = await savedReports.Get(id, ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
             return InteractiveReportServerResult<InteractiveReportDocumentExport>.Failed(
                 Internal(id.ToString(), "saved-report retrieval", context, ex));
         }
-        if (report is null) return NotFoundDocument<InteractiveReportDocumentExport>();
-
-        var metadata = report.Metadata();
-        var (family, hidden) = await ResolveRowFamily(metadata.ReportName, context, ct);
+        if (saved is null) return NotFoundDocument<InteractiveReportDocumentExport>();
+        var (definition, hidden) = await ResolveRowFamily(saved.ReportName, context, ct);
         if (hidden is not null)
             return InteractiveReportServerResult<InteractiveReportDocumentExport>.Failed(hidden);
-        var definition = family!;
-
         var denied = await AuthorizeActions(
-            definition,
+            definition!,
             [InteractiveReportAction.DownloadReportDocument],
-            new InteractiveReportAuthorizationResource
-            {
-                ReportName = definition.Name,
-                SavedReport = metadata,
-            },
+            new InteractiveReportAuthorizationResource { ReportName = definition!.Name, SavedReport = saved.Metadata() },
             administratorRequired: true,
             hideDenied: true,
             denialDetail: null,
@@ -1228,121 +1145,51 @@ internal sealed class InteractiveReportServer(
             ct);
         if (denied is not null)
             return InteractiveReportServerResult<InteractiveReportDocumentExport>.Failed(Failure(denied));
-
-        ReportState? state;
         try
         {
-            if (report.Origin == SavedReportOrigin.Configured)
-            {
-                // The export is the source-controlled envelope, so a configured document is taken
-                // from its declaring file as authored — schema caches are deliberately not refreshed.
-                // An absent or invalid file reads as not found, while its database identity remains
-                // unchanged until an explicit synchronization or mutation.
-                try
-                {
-                    state = report.SourceFile is null
-                        ? null
-                        : configuredDocuments.Find(report.ReportName, report.SourceFile)?.State;
-                }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    logging.Logger?.LogWarning(ex,
-                        "Report {Report}: configured document {SourceFile} could not be loaded",
-                        report.ReportName, report.SourceFile);
-                    return NotFoundDocument<InteractiveReportDocumentExport>();
-                }
-                if (state is null)
-                    return NotFoundDocument<InteractiveReportDocumentExport>();
-            }
-            else if (report.IsDefault)
-            {
-                var prepared = await PrepareQuery(definition, context, ct);
-                definition = prepared.Definition;
-                var contextParameters = prepared.Parameters;
-                state = await defaultDocuments.LoadState(
-                    report, definition, executor, contextParameters, ct);
-            }
-            else
-            {
-                state = JsonSerializer.Deserialize<ReportState>(
-                    report.StateJson ?? throw new JsonException("The report document has no state."),
-                    IrJson.Options);
-            }
-            // Documents carry authored state, not another caller's discovered data values.
-            if (state is not null && (definition.RowRestrictionApplied || ReportSqlTemplate.RequiresRowRestriction(definition.Sql)))
-            {
-                state = ReportStateResolver.Resolve(defaults: null, state);
-                ClearSchemaCaches(state);
-            }
+            var state = ReadDocumentState(saved);
+            // Cached schema data may have been produced for a different row restriction. The
+            // source envelope remains useful for inspection without executing the report.
+            if (ReportSqlTemplate.RequiresRowRestriction(definition.Sql)) ClearSchemaCaches(state);
+            logging.Logger?.LogInformation(
+                "Exported saved report {SavedReportId} ({Title}) for report {ReportName}",
+                saved.Id, saved.Title, definition.Name);
+            return InteractiveReportServerResult<InteractiveReportDocumentExport>.Success(new(
+                definition.Name,
+                new ReportDocumentFile { Title = saved.Title, Default = saved.IsDefault, State = state }));
         }
-        catch (InteractiveReportAuthorizationDeniedException)
-        {
-            return InteractiveReportServerResult<InteractiveReportDocumentExport>.Failed(RowAccessDenied(context));
-        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (JsonException)
         {
             return InteractiveReportServerResult<InteractiveReportDocumentExport>.Failed(
                 Invalid(InteractiveReportErrorCodes.MalformedReportState));
         }
-        catch (ReportValidationException ex)
-        {
-            return InteractiveReportServerResult<InteractiveReportDocumentExport>.Failed(Validation(ex));
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (ReportDocumentBootstrapException)
-        {
-            return NotFoundDocument<InteractiveReportDocumentExport>();
-        }
         catch (Exception ex)
         {
             return InteractiveReportServerResult<InteractiveReportDocumentExport>.Failed(
-                Internal(metadata.ReportName, "report document download", context, ex));
+                Internal(definition.Name, "report document retrieval", context, ex));
         }
-
-        if (state is null)
-            return InteractiveReportServerResult<InteractiveReportDocumentExport>.Failed(
-                Internal(
-                    metadata.ReportName,
-                    "report document download",
-                    context,
-                    new InvalidOperationException($"Saved report '{id}' has no state document.")));
-
-        logging.Logger?.LogInformation(
-            "Exported saved report {Id} ('{Title}') for report '{Report}' (traceId {TraceId})",
-            id,
-            report.Title,
-            metadata.ReportName,
-            context.TraceIdentifier);
-
-        return InteractiveReportServerResult<InteractiveReportDocumentExport>.Success(
-            new InteractiveReportDocumentExport(
-                metadata.ReportName,
-                new ReportDocumentFile
-                {
-                    Title = report.Title,
-                    Default = report.IsDefault,
-                    State = state,
-                }));
     }
 
+    private ReportState ReadDocumentState(SavedReport saved)
+        => saved.Origin == SavedReportOrigin.Configured
+            ? (saved.SourceFile is null ? null : configuredDocuments.Find(saved.ReportName, saved.SourceFile)?.State)
+                ?? throw new JsonException("The configured report document is unavailable.")
+            : JsonSerializer.Deserialize<ReportState>(
+                saved.StateJson ?? throw new JsonException("The report document has no state."), IrJson.Options)
+                ?? throw new JsonException("The report document has no state.");
+
     public Task<InteractiveReportServerResult<SavedReportSummary>> SaveDocument(
-        long anchorId,
+        string reportName,
         Func<CancellationToken, Task<SaveReportRequest?>> readRequest,
         InteractiveReportRequestContext context,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(readRequest);
         return CreateDocument(
-            anchorId,
+            reportName,
             new DocumentCreation(
-                [InteractiveReportAction.ReadSavedReport, InteractiveReportAction.CreateSavedReport],
+                [InteractiveReportAction.CreateSavedReport],
                 RequireSavedReportsFeature: true,
                 AlwaysAdministrator: false,
                 DenialDetail: "Publishing a global report requires authorization.",
@@ -1360,7 +1207,7 @@ internal sealed class InteractiveReportServer(
     }
 
     public Task<InteractiveReportServerResult<SavedReportSummary>> ImportDocument(
-        long anchorId,
+        string reportName,
         Func<CancellationToken, Task<ReportDocumentFile?>> readRequest,
         InteractiveReportRequestContext context,
         CancellationToken ct = default)
@@ -1370,9 +1217,9 @@ internal sealed class InteractiveReportServer(
         // authorization or document validation. File publication metadata is ignored: the copy lands
         // private and editable, and may be published later through an ordinary update.
         return CreateDocument(
-            anchorId,
+            reportName,
             new DocumentCreation(
-                [InteractiveReportAction.ReadSavedReport, InteractiveReportAction.UploadReportDocument],
+                [InteractiveReportAction.UploadReportDocument],
                 RequireSavedReportsFeature: false,
                 AlwaysAdministrator: true,
                 DenialDetail: null,
@@ -1401,7 +1248,7 @@ internal sealed class InteractiveReportServer(
         string Operation);
 
     private async Task<InteractiveReportServerResult<SavedReportSummary>> CreateDocument(
-        long anchorId,
+        string reportName,
         DocumentCreation shape,
         Func<CancellationToken, Task<(string? Title, ReportState? State, bool IsGlobal)>> readRequest,
         InteractiveReportRequestContext context,
@@ -1415,28 +1262,11 @@ internal sealed class InteractiveReportServer(
                 InteractiveReportFailureKind.Unauthenticated,
                 InteractiveReportErrorCodes.AuthenticationRequired));
 
-        // The anchor names the family the new document joins. Only its id is a stable handle, so
-        // the family is taken from the row rather than from anything the caller supplies.
-        SavedReportMetadata? anchor;
-        try
-        {
-            anchor = await savedReports.GetMetadata(anchorId, ct);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return InteractiveReportServerResult<SavedReportSummary>.Failed(
-                Internal(anchorId.ToString(), "saved-report retrieval", context, ex));
-        }
-        if (anchor is null) return NotFoundDocument<SavedReportSummary>();
-
-        var (family, hidden) = await ResolveRowFamily(anchor.ReportName, context, ct);
-        if (hidden is not null) return InteractiveReportServerResult<SavedReportSummary>.Failed(hidden);
-        var definition = family!;
-
+        var resolved = await authorization.ResolveDefinition(reportName, context, ct);
+        if (resolved.Failure is not null)
+            return InteractiveReportServerResult<SavedReportSummary>.Failed(Failure(resolved.Failure));
+        if (resolved.Definition is null) return NotFoundReport<SavedReportSummary>();
+        var definition = resolved.Definition;
         // Enforce the saved-reports feature at creation only. Existing rows stay governed by the
         // ownership matrix, so a config change never strands them.
         if (shape.RequireSavedReportsFeature
@@ -1470,7 +1300,6 @@ internal sealed class InteractiveReportServer(
             State = request.State,
         };
 
-        var builtIn = SavedReportAccessPolicy.Read(anchor, identity, administrator: false);
         var denied = await AuthorizeDocumentMutation(
             definition,
             shape.Actions,
@@ -1479,8 +1308,8 @@ internal sealed class InteractiveReportServer(
                 ReportName = definition.Name,
                 Candidate = candidate,
             },
-            administratorRequired: shape.AlwaysAdministrator || builtIn != SavedReportAccess.Allowed,
-            hideDenied: shape.AlwaysAdministrator || builtIn != SavedReportAccess.Allowed,
+            administratorRequired: shape.AlwaysAdministrator,
+            hideDenied: shape.AlwaysAdministrator,
             denialDetail: shape.DenialDetail,
             () => RequiredAdministratorActions(candidate, current: null, identity),
             context,
@@ -1520,14 +1349,14 @@ internal sealed class InteractiveReportServer(
             SavedReport? currentDefault = null;
             if (candidate.Default)
             {
-                currentDefault = await savedReports.FindDefault(definition.Name, ct)
-                    ?? await defaultDocuments.CreateMissing(definition, ct);
-                if (currentDefault.Origin == SavedReportOrigin.Configured)
+                currentDefault = await savedReports.FindDefault(definition.Name, ct);
+                if (currentDefault?.Origin == SavedReportOrigin.Configured)
                     return InteractiveReportServerResult<SavedReportSummary>.Failed(new(
                         InteractiveReportFailureKind.Conflict,
                         InteractiveReportErrorCodes.ConfiguredDefaultControlled));
             }
 
+            report.IsDefault = candidate.Default && currentDefault is null;
             await savedReports.Create(report, ct);
 
             if (currentDefault is not null)
@@ -1708,13 +1537,14 @@ internal sealed class InteractiveReportServer(
             bool updated;
             if (report.IsDefault && !current.IsDefault)
             {
-                var currentDefault = await savedReports.FindDefault(report.ReportName, ct)
-                    ?? await defaultDocuments.CreateMissing(definition, ct);
-                if (currentDefault.Origin == SavedReportOrigin.Configured)
+                var currentDefault = await savedReports.FindDefault(report.ReportName, ct);
+                if (currentDefault?.Origin == SavedReportOrigin.Configured)
                     return InteractiveReportServerResult<SavedReportSummary>.Failed(new(
                         InteractiveReportFailureKind.Conflict,
                         InteractiveReportErrorCodes.ConfiguredDefaultControlled));
-                updated = await savedReports.ReplaceDefault(report, current, currentDefault, ct);
+                updated = currentDefault is null
+                    ? await savedReports.Update(report, current, ct)
+                    : await savedReports.ReplaceDefault(report, current, currentDefault, ct);
             }
             else
             {
@@ -1931,6 +1761,16 @@ internal sealed class InteractiveReportServer(
         if (requireDownload && authorization.CheckFeature(definition, ReportFeatures.Download) is { } disabled)
             return InteractiveReportServerResult<ReportResult>.Failed(Failure(disabled));
 
+        return await ExecuteQuery(definition, state, action, context, ct);
+    }
+
+    private async Task<InteractiveReportServerResult<ReportResult>> ExecuteQuery(
+        ReportDefinition definition,
+        ReportState state,
+        InteractiveReportAction action,
+        InteractiveReportRequestContext context,
+        CancellationToken ct)
+    {
         try
         {
             var prepared = await PrepareQuery(definition, context, ct);
@@ -1994,7 +1834,8 @@ internal sealed class InteractiveReportServer(
     private static void ClearSchemaCaches(ReportState state)
     {
         if (state.Tables is not null)
-            foreach (var table in state.Tables.Values) table.Schema = null;
+            foreach (var table in state.Tables.Values)
+                if (table is not null) table.Schema = null;
     }
 
     /// <summary>
@@ -2017,7 +1858,18 @@ internal sealed class InteractiveReportServer(
                 InteractiveReportErrorCodes.ReportNotFound));
         var definition = resolved.Definition;
 
-        var actions = SavedReportsListingDefinition.Matches(reportName)
+        var denied = await AuthorizeQuery(definition, action, savedReport, context, ct);
+        return denied is null ? (definition, null) : (null, denied);
+    }
+
+    private async Task<InteractiveReportFailure?> AuthorizeQuery(
+        ReportDefinition definition,
+        InteractiveReportAction action,
+        SavedReportMetadata? savedReport,
+        InteractiveReportRequestContext context,
+        CancellationToken ct)
+    {
+        var actions = SavedReportsListingDefinition.Matches(definition.Name)
             ? action == InteractiveReportAction.Export
                 ? new[] { InteractiveReportAction.ListAllSavedReports, InteractiveReportAction.Export }
                 : new[] { InteractiveReportAction.ListAllSavedReports }
@@ -2037,7 +1889,7 @@ internal sealed class InteractiveReportServer(
             denialDetail: null,
             context,
             ct);
-        return denied is null ? (definition, null) : (null, Failure(denied));
+        return denied is null ? null : Failure(denied);
     }
 
     /// <summary>
@@ -2095,7 +1947,7 @@ internal sealed class InteractiveReportServer(
         Exception ex)
     {
         var dialect = options.CurrentValue.Reports.TryGetValue(reportName, out var def) && def is not null
-            ? def.GetEffectiveDialect()
+            ? def.Dialect
             : (ReportDialect?)null;
 
         var dbEx = DbErrorClassifier.UnwrapDbException(ex);

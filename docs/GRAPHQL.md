@@ -54,10 +54,10 @@ if (app.Environment.IsDevelopment())
 does not enable subscriptions in Interactive Reports; it prevents the legacy fetcher
 from opening a WebSocket during ordinary query and schema-introspection operations.
 Unsupported methods and WebSocket upgrades receive HTTP 405 from the adapter.
-Configured document identities are reconciled by report listing rather than application
-startup, so a freshly started Workbench has no ids to paste. Run `{ reports { name } }`
-and then `{ savedReports(report: "...") { id title } }` in GraphiQL to reconcile them
-and pick one.
+The Workbench explicitly synchronizes configured document identities at startup. Run
+`{ reports { name } }` and then `{ savedReports(report: "...") { id title } }` in GraphiQL
+to discover them and pick one. A family without stored documents has no IDs to select;
+REST can load its synthetic default through `/api/reports/{name}/default`.
 
 `MapInteractiveReportGraphQL` returns an `IEndpointConventionBuilder`, so standard
 ASP.NET Core conventions remain available:
@@ -108,9 +108,8 @@ error rather than an empty list, so a hidden catalogue is never mistaken for an 
 
 `savedReports(report:)` is the twin of `GET /api/reports/{name}`: the documents of one
 configuration that the caller may load — public, default, configured, and caller-owned —
-with administrators receiving the complete family. Listing reconciles configured file
-identities and creates the family's default document if it is missing, exactly as the
-REST route does. An unknown or hidden configuration returns `NOT_FOUND`.
+with administrators receiving the complete family. Listing is read-only and may return
+an empty array. An unknown or hidden configuration returns `NOT_FOUND`.
 
 ```graphql
 {
@@ -141,15 +140,16 @@ reported as `NOT_FOUND`.
 
 Configured file-backed IDs use the same catalogue and load path. Their disk-backed state,
 reconciliation, and recovery behavior are described in
-[Saved reports](SAVED-REPORTS.md#reconciliation). A later data- or execution-dependent
-validation failure returns `REPORT_VALIDATION_FAILED` and does not delete the configured
-identity.
+[Saved reports](SAVED-REPORTS.md#reconciliation). Loading and hydration do not delete or
+repair the configured identity.
 
 The remaining arguments replace individual parts of the loaded document before it is
-executed. They mutate a detached copy; nothing is written back to the store, so the same
-id executes identically for the next caller. Omitting an argument — or passing `null` —
-keeps what the document already says, and omitting all of them executes the saved state
-exactly as stored.
+hydrated through the shared server path. They mutate a detached copy; nothing is written
+back to the store. Omitting an argument or passing `null` keeps what the document already
+says. A failed stored document falls back to the stored default, then the synthetic
+default, with the same overrides applied to each candidate before hydration. A successful
+candidate is queried once. If all candidates fail, the adapter returns an error.
+Authorization denials and cancellation stop immediately.
 
 `page` and `pageSize` replace the saved paging request:
 
@@ -177,10 +177,10 @@ input InteractiveReportSortInput {
 `col` is a logical column name resolved against the report's live schema like any other
 report-state input. Saved reports degrade rather than fail, so an unknown or unsortable
 column is dropped and reported in the result's `ignored` list instead of raising an
-error — check `ignored` when an ordering appears not to have been applied. Ordering is a
-document declaration, so it needs a document table to live in: every default, configured,
-and packaged-client document declares one, but a hand-authored state with no `tables`
-returns `BAD_USER_INPUT` rather than being restructured.
+error; check `ignored` when an ordering appears not to have been applied. Ordering needs
+an active document table. If the stored document has no table to order, loading tries
+the stored default and then the synthetic default, applying the same arguments to each
+candidate. If none can be hydrated, the operation returns the final failure.
 
 Report *features* (`InteractiveReport:Reports:{name}:Features`) are a client UI
 whitelist, not a query gate. As with `POST /api/reports/{name}/query`, these arguments
@@ -254,7 +254,7 @@ Every saved report in `ISavedReportStore` is eligible:
 
 The adapter does not read configured files as a separate catalogue. It addresses the
 existing database identity directly and performs the same saved-report lookup used for
-database-backed rows; ordinary catalogue discovery reconciles new configured identities.
+database-backed rows. Explicit host synchronization creates new configured identities.
 
 File-backed reports are strongly recommended when another application will rely on a
 report as a durable API surface. Their state is read-only through ordinary saved-report
@@ -301,7 +301,7 @@ appear in the `errors` array, normally with HTTP 200. Stable adapter error codes
 
 | Code | Meaning |
 |---|---|
-| `BAD_USER_INPUT` | An argument is outside its allowed range or cannot apply to this document. |
+| `BAD_USER_INPUT` | An argument is outside its allowed range, or a sort column name is empty. |
 | `NOT_FOUND` | The saved report or underlying definition is absent, or access is hidden. |
 | `UNAUTHENTICATED` | The operation requires an authenticated principal. |
 | `FORBIDDEN` | The caller is known but the operation is denied without non-disclosure. |

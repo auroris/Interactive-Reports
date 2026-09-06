@@ -4,9 +4,9 @@ import {
     deleteSavedState,
     loadSavedState,
     openWorkbench,
-    reportId,
     visibleGridRows,
     waitForQuery,
+    waitForLoad,
 } from "./support.js";
 
 const staleSchema = [{
@@ -177,18 +177,12 @@ test("a Pivot stored after its same-table transformations still executes first",
     let saved;
     try {
         saved = await createSavedState(request, state, "pivot-natural-order");
-        // Saved-report writes validate and hydrate schema caches before persistence.
-        // Simulate an older external document at the browser ingestion boundary so
-        // this query, rather than the save endpoint, proves advisory caches are ignored.
-        await page.route(`**/api/reports/orders/${saved.id}`, async route => {
-            const upstream = await route.fetch();
-            const document = await upstream.json();
-            document.state.tables.pivotSource.schema = structuredClone(staleSchema);
-            document.state.tables.child.schema = structuredClone(staleSchema);
-            await route.fulfill({ response: upstream, json: document });
-        }, { times: 1 });
         await openWorkbench(page);
-        const response = await loadSavedState(page, saved);
+        await loadSavedState(page, saved);
+        // Submit stale caches through the public client-document path. Loads already
+        // hydrate on the server, so modifying a load response would bypass this check.
+        const response = await waitForQuery(page, () => page.locator("interactive-report").evaluate(
+            (element, document) => element.submitReportDocument(document), state));
         const result = await response.json();
 
         const submitted = response.request().postDataJSON();
@@ -250,7 +244,7 @@ test("multi-metric Pivot provenance and opaque identities survive key removal an
         saved = await createSavedState(request, fullState, "pivot-metric-provenance");
         await openWorkbench(page);
         const baselineResponse = await loadSavedState(page, saved);
-        const baseline = await baselineResponse.json();
+        const { result: baseline } = await baselineResponse.json();
         const baselineCells = pivotCells(baseline);
         const baselineIds = pivotIdentities(baseline);
 
@@ -271,9 +265,9 @@ test("multi-metric Pivot provenance and opaque identities survive key removal an
         });
         await replaceSavedState(request, saved, filteredState);
         const savedSelect = page.getByRole("combobox", { name: "Saved Report" });
-        await waitForQuery(page, () => savedSelect.selectOption({ label: "Default" }));
+        await waitForLoad(page, () => savedSelect.selectOption({ label: "Default" }));
         const filteredResponse = await loadSavedState(page, saved);
-        const filtered = await filteredResponse.json();
+        const { result: filtered } = await filteredResponse.json();
         const filteredIds = pivotIdentities(filtered);
 
         expect(pivotCells(filtered)).toHaveLength(6);
@@ -292,7 +286,7 @@ test("multi-metric Pivot provenance and opaque identities survive key removal an
         await expect(page.getByRole("combobox", { name: "Saved Report" })
             .locator(`option[value="${saved.id}"]`)).toHaveCount(1);
         const restoredResponse = await loadSavedState(page, saved);
-        const restored = await restoredResponse.json();
+        const { result: restored } = await restoredResponse.json();
 
         expect(pivotCells(restored)).toHaveLength(8);
         expect(pivotIdentities(restored)).toEqual(baselineIds);
@@ -361,7 +355,7 @@ test("a scalar mask follows immediate lineage through two Shapes without rendere
         saved = await createSavedState(request, state, "shape-format-lineage");
         await openWorkbench(page);
         const response = await loadSavedState(page, saved);
-        const result = await response.json();
+        const { result } = await response.json();
 
         const firstMetric = result.document.tables.first.schema
             .find(column => column.name === "ir40");
@@ -382,7 +376,7 @@ test("a scalar mask follows immediate lineage through two Shapes without rendere
             fontWeight: cell.style.fontWeight,
             fontStyle: cell.style.fontStyle,
             color: cell.style.color,
-            background: cell.style.background,
+            background: cell.style.backgroundColor,
         }))).toEqual({
             textAlign: "",
             fontWeight: "",

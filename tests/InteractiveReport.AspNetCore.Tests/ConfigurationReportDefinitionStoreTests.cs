@@ -455,8 +455,6 @@ public sealed class ConfigurationReportDefinitionStoreTests
     [InlineData("/orders/{}/edit", "empty placeholder")]
     [InlineData("/orders/{ORDER_ID/edit", "'{' without a matching '}'")]
     [InlineData("/orders/{A{B}}/edit", "nested '{'")]
-    [InlineData("javascript:{ORDER_ID}", "must use http or https")]
-    [InlineData("file:///orders/{ORDER_ID}", "must use http or https")]
     public async Task Invalid_edit_link_templates_fail_fast(string template, string expected)
     {
         var def = OrdersDefinition();
@@ -484,7 +482,6 @@ public sealed class ConfigurationReportDefinitionStoreTests
 
     [Theory]
     [InlineData(" ", null, null, "editLink.label must not be blank")]
-    [InlineData(null, "middle", null, "editLink.target must be '_self' or '_blank'")]
     [InlineData(null, null, "popup", "editLink.mode must be 'navigate' or 'event'")]
     public async Task Invalid_edit_link_label_target_or_mode_fails_fast(
         string? label, string? target, string? mode, string expected)
@@ -506,10 +503,7 @@ public sealed class ConfigurationReportDefinitionStoreTests
     [InlineData(null, null, null, null, "createLink.url is required unless createLink.mode is 'event'")]
     [InlineData(" ", null, null, "navigate", "createLink.url is required unless createLink.mode is 'event'")]
     [InlineData("/orders/{ORDER_ID}/new", null, null, null, "does not take {COLUMN} placeholders")]
-    [InlineData("javascript:alert(1)", null, null, null, "createLink.url absolute URLs must use http or https")]
-    [InlineData("javascript:alert(1)", null, null, "event", "createLink.url absolute URLs must use http or https")]
     [InlineData("/orders/new", " ", null, null, "createLink.label must not be blank")]
-    [InlineData("/orders/new", null, "middle", null, "createLink.target must be '_self' or '_blank'")]
     [InlineData("/orders/new", null, null, "popup", "createLink.mode must be 'navigate' or 'event'")]
     public async Task Invalid_create_links_fail_fast(
         string? url, string? label, string? target, string? mode, string expected)
@@ -542,6 +536,8 @@ public sealed class ConfigurationReportDefinitionStoreTests
     {
         foreach (var link in new ReportCreateLink[]
         {
+            new() { Url = "workbench:new-order", Target = "details-pane" },
+            new() { Url = "host:new-order", Target = "named-window", Mode = "event" },
             new() { Url = "/orders/new" },
             new() { Url = "orders/new?source=report", Label = "New order", Target = "_BLANK" },
             new() { Url = "https://apps.example.com/orders/new", Mode = "NAVIGATE" },

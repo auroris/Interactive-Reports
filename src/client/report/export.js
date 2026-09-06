@@ -31,7 +31,7 @@ function invalidState(message) {
 export async function retrieveExport(w, format = "csv", { signal } = {}) {
     format = String(format ?? "").trim().toLowerCase();
     if (!format) throw new TypeError("Export format must not be empty.");
-    if (!w.reportId || !w.definitionName || !w.schema || !w.doc || !w.lastResult)
+    if (!w.definitionName || !w.schema || !w.doc || !w.lastResult)
         throw invalidState("The report must finish loading before it can be exported.");
 
     const { blob, filename, truncated, response } = await download(

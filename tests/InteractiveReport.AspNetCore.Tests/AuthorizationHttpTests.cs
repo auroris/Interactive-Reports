@@ -149,7 +149,7 @@ public sealed class AuthorizationHttpTests : IAsyncLifetime
         var reportId = await ReportDocumentTestIds.Default(_app!.Services, "policy");
         using var created = await Send(
             HttpMethod.Post,
-            $"/api/reports/{reportId}/saved",
+            $"/api/reports/policy/saved",
             "reader",
             new { title = "Private title", state = new { v = 3 } },
             roles: ["readers"]);
@@ -160,7 +160,7 @@ public sealed class AuthorizationHttpTests : IAsyncLifetime
 
         using var collisionProbe = await Send(
             HttpMethod.Post,
-            $"/api/reports/{reportId}/saved",
+            $"/api/reports/policy/saved",
             "ordinary-user",
             new { title = "PRIVATE TITLE", state = new { v = 3 } });
         Assert.Equal(HttpStatusCode.NotFound, collisionProbe.StatusCode);

@@ -23,25 +23,26 @@ export async function waitForQuery(page, action, predicate = response => respons
     return matched;
 }
 
+export async function waitForLoad(page, action, predicate = response => response.ok()) {
+    const response = page.waitForResponse(candidate =>
+        candidate.request().method() === "GET"
+        && /\/api\/reports\/[^/]+\/(default|\d+)$/.test(new URL(candidate.url()).pathname)
+        && predicate(candidate));
+    await action();
+    const matched = await response;
+    await expect(page.locator('interactive-report [part~="surface"]'))
+        .toHaveAttribute("aria-busy", "false");
+    return matched;
+}
+
 export async function clickAction(page, ...names) {
     await page.getByRole("button", { name: "Actions", exact: true }).click();
     for (const name of names) await page.getByRole("menuitem", { name, exact: true }).click();
 }
 
-export async function reportId(request, reportName = "orders", options = {}) {
-    const response = await request.get(`/api/reports/${encodeURIComponent(reportName)}`, options);
-    if (!response.ok())
-        throw new Error(`Could not list report documents (${response.status()}): ${await response.text()}`);
-    const report = (await response.json()).find(candidate => candidate.isDefault);
-    if (!report)
-        throw new Error(`No visible default document exists for report '${reportName}'.`);
-    return report.id;
-}
-
 export async function createSavedState(request, state, prefix = "composition") {
     const title = `${prefix}-${randomUUID()}`;
-    const anchorId = await reportId(request);
-    const response = await request.post(`/api/reports/${anchorId}/saved`, {
+    const response = await request.post("/api/reports/orders/saved", {
         data: { title, state },
     });
     if (response.status() !== 201)
@@ -57,7 +58,7 @@ export async function deleteSavedState(request, saved) {
 }
 
 export async function loadSavedState(page, saved) {
-    const response = waitForQuery(page, () =>
+    const response = waitForLoad(page, () =>
         page.getByRole("combobox", { name: "Saved Report" }).selectOption(String(saved.id)));
     return response;
 }

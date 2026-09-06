@@ -430,6 +430,16 @@ connection strings, configured SQL, or provider diagnostics.
 A saved report persists a report document, its report family, visibility, ownership,
 revision metadata, and origin. It persists a query description, not query results.
 
+Loading retrieves a document and hydrates its active table through the same validation,
+planning, and execution routine used for client-submitted documents. The loading wrapper
+alone owns fallback: a failed stored document is followed by the stored default and then a
+synthetic default, with no duplicate attempt. Client-submitted hydration returns its first
+result or error. Both paths return the effective document with its corresponding data.
+
+The client owns the working document and may construct it independently of storage.
+Hydration never consults saved identity or changes persistence. Listing and loading also
+perform no saved-report writes; only explicit save and administration operations do so.
+
 `ISavedReportStore` defines the persistence boundary. `SqlSavedReportStore` implements
 it over the configured relational store and handles the supported database dialects.
 The report data source and saved-report store can be the same database, but they have
@@ -437,8 +447,10 @@ separate responsibilities and can use different connections.
 
 Configured report-document files are source-controlled document bodies. The
 `ConfiguredReportDocumentSynchronizer` reconciles their identities and metadata with
-the saved-report store so configured and user-created documents can share listing and
-selection behavior. Configured documents remain read-only through application APIs.
+the saved-report store when the host explicitly calls `EnsureSynced`, such as during
+startup. Configured and user-created documents then share listing and selection behavior.
+Configured documents remain read-only through application APIs. A synthetic default has
+no persistent identity unless an explicit operation saves a document.
 
 Authorization metadata uses a separate store abstraction and participates in the same
 connection and dialect infrastructure. Administration pages call server operations;

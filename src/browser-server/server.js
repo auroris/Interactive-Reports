@@ -88,7 +88,6 @@ export class InteractiveReportServer {
         const key = def.name.toLowerCase();
         this.definitions.set(key, { ...def });
         this.schemaCache.delete(key);
-        this.savedReports.ensureDefault(def.name, def.defaultState);
     }
 
     /**
@@ -129,6 +128,37 @@ export class InteractiveReportServer {
 
         const schema = this.getSchema(reportName);
         return await executeReport(this.db, def, reportState, schema);
+    }
+
+    /**
+     * Loads and hydrates a stored document, falling back to a stored or synthetic default.
+     * All candidates use the same query path as client submissions; nothing is persisted.
+     *
+     * @param {string} reportName
+     * @param {number|null} [id=null] - Omit to load the family's default.
+     * @returns {Promise<{summary: object|null, result: object}|null>} Null for an unknown saved ID.
+     */
+    async loadDocument(reportName, id = null) {
+        const requested = id === null ? null : this.savedReports.load(reportName, id);
+        if (id !== null && !requested) return null;
+        const defaultId = this.savedReports.defaultReportIds.get(reportName.toLowerCase());
+        const fallback = defaultId == null || defaultId === id
+            ? null : this.savedReports.load(reportName, defaultId);
+        for (const candidate of [requested, fallback]) {
+            if (!candidate) continue;
+            try {
+                return {
+                    summary: candidate.summary,
+                    result: await this.query(reportName, candidate.state),
+                };
+            } catch (err) {
+                if (err.name === "AbortError") throw err;
+            }
+        }
+        return {
+            summary: null,
+            result: await this.query(reportName, this.getSchema(reportName).defaultState),
+        };
     }
 
     /**
@@ -306,24 +336,26 @@ export class InteractiveReportServer {
             }
 
             // Match saved reports:
-            // POST /{id}/saved or POST /{name}/saved
+            // POST /{name}/saved
             const saveMatch = /^\/([^/?#]+)\/saved\/?$/.exec(pathname);
             if (saveMatch && method === "POST") {
-                const segment = decodeURIComponent(saveMatch[1]);
+                const name = decodeURIComponent(saveMatch[1]);
+                const definition = this.definitions.get(name.toLowerCase());
+                if (!definition)
+                    return errorResponse(404, "IR-1404", "Report not found", `Report '${name}' was not found.`);
                 const req = await readBody();
-                const reportName = isNaN(Number(segment))
-                    ? segment
-                    : (this.savedReports.reports.get(Number(segment))?.reportName || "orders");
-                const summary = this.savedReports.save(reportName, req);
+                const summary = this.savedReports.save(definition.name, req);
                 return jsonResponse(summary, 201);
             }
 
-            // GET /{name}/{id} (Load saved report document)
-            const loadMatch = /^\/([^/?#]+)\/(\d+)\/?$/.exec(pathname);
+            // GET /{name}/{id} or /{name}/default (Load and hydrate a report document)
+            const loadMatch = /^\/([^/?#]+)\/(\d+|default)\/?$/.exec(pathname);
             if (loadMatch && method === "GET") {
                 const name = decodeURIComponent(loadMatch[1]);
-                const id = Number(loadMatch[2]);
-                const doc = this.savedReports.load(name, id);
+                if (!this.definitions.has(name.toLowerCase()))
+                    return errorResponse(404, "IR-1404", "Report not found", `Report '${name}' was not found.`);
+                const id = loadMatch[2] === "default" ? null : Number(loadMatch[2]);
+                const doc = await this.loadDocument(name, id);
                 if (!doc) {
                     return errorResponse(404, "IR-1404", "Saved report not found", `Saved report #${id} was not found for report '${name}'.`);
                 }
@@ -358,7 +390,7 @@ export class InteractiveReportServer {
             if (listMatch && method === "GET") {
                 const name = decodeURIComponent(listMatch[1]);
                 // If name is a registered definition or recognized family:
-                if (this.definitions.has(name.toLowerCase()) || this.savedReports.defaultReportIds.has(name.toLowerCase())) {
+                if (this.definitions.has(name.toLowerCase())) {
                     const list = this.savedReports.list(name);
                     return jsonResponse(list);
                 }

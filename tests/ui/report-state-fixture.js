@@ -39,3 +39,19 @@ export function composableOf(doc, kind, tableId = doc.activeTable) {
 export function sourceComposableOf(doc, kind) {
     return composableOf(doc, kind, "base");
 }
+
+// A complete server result used by hydrated document loads and query-response mocks.
+export function hydratedResult(state = {}, overrides = {}) {
+    const document = { ...reportState(), page: { index: 1, size: 25 }, ...state };
+    return {
+        document,
+        columns: [{ name: "ID", label: "ID", type: "number" }],
+        rows: [{ ID: 1 }],
+        page: document.page,
+        totalRows: 1,
+        aggregates: {},
+        highlights: [],
+        ignored: [],
+        ...overrides,
+    };
+}

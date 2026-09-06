@@ -438,9 +438,10 @@ validating its definition-level settings. Implement
 `IReportDefinitionAuthorizationStore` as well when the store can return a lightweight
 name and authorization envelope before loading the executable SQL definition.
 
-Replacing the store also replaces configuration-backed report lookup, configured
-document synchronization through that lookup, and its built-in definition behavior.
-Treat this as an advanced application boundary, not as a way to append one report.
+Replacing the store replaces configuration-backed report lookup and its built-in
+definition behavior. Configured-document synchronization remains a separate, explicit
+host operation. A custom definition store is an application boundary responsible for
+every report it exposes.
 
 `ISavedReportStore` is separately replaceable for custom persistence. Its methods are
 storage-only; ownership and authorization policy remain in
@@ -530,13 +531,14 @@ With the default prefix, the principal routes are:
 | Method and route | Contract |
 |---|---|
 | `GET /api/reports` | Lists appsettings report configurations the caller may view as `{ name, title }`. It does not list or reconcile report documents. |
-| `GET /api/reports/{name}` | Reconciles one configured family and lists its visible report documents. Administrators see the complete family; other callers see public and exactly owned documents. IDs are JSON numbers. |
+| `GET /api/reports/{name}` | Lists visible stored report documents without modifying the catalogue. Administrators see the complete family; other callers see public and exactly owned documents. IDs are JSON numbers. The list may be empty. |
 | `GET /api/reports/{name}/schema` | Definition schema, presentation hints, limits, features, and client capabilities for a configured definition key. |
 | `POST /api/reports/{name}/query` | Accepts the client's `ReportState`; returns `ReportResult` with rows and the accepted server-enriched `document`. |
 | `POST /api/reports/{name}/lov` | Accepts a required current `document`, its active `table`, one `column`, and optional `search`; returns at most 50 distinct values. |
 | `POST /api/download/{name}/{format}` | File-client endpoint. Accepts the current `ReportState`; CSV is currently supported. |
-| `POST /api/reports/{id}/saved` | Creates a private or global saved report from `SaveReportRequest` in that family. |
-| `GET /api/reports/{name}/{id}` | Returns `SavedReportDocument` after authorizing the named configuration and confirming that the numeric id belongs to it. |
+| `POST /api/reports/{name}/saved` | Creates a private or global saved report from `SaveReportRequest` in the configured family, without an existing document ID. |
+| `GET /api/reports/{name}/{id}` | Loads and hydrates the numeric document after authorizing the named configuration and confirming family membership. Returns `{ summary, result }`, with default fallback on document failure. |
+| `GET /api/reports/{name}/default` | Loads and hydrates the family's stored default, falling back to a synthetic default. Returns `{ summary, result }`; `summary` is `null` for synthetic state. |
 | `PUT /api/reports/{id}` | Applies `UpdateSavedReportRequest`; `isDefault: true` atomically selects a new default. |
 | `DELETE /api/reports/{id}` | Deletes an editable saved report. |
 | `GET /api/reports/whoami` | Optional identity diagnostic; disabled unless `WhoamiEnabled` is true. |
@@ -544,7 +546,7 @@ With the default prefix, the principal routes are:
 | `GET /api/reports/admin/administrators` | Returns `{ configured, database, managedByApplication }`: the configured and database-backed administrator identities, and whether the application decides administrators itself, which leaves both lists inert. |
 | `PUT /api/reports/admin/administrators` | Replaces the database-backed administrator grants with `{ identities }`, granting the missing ones and revoking the rest; configured administrators are unaffected. |
 | `GET /api/reports/admin/saved/{id}/document` | Downloads a saved report as a configured-document envelope. |
-| `POST /api/reports/admin/{id}/documents` | Validates and imports an envelope as a private document in the selected family. |
+| `POST /api/reports/admin/{name}/documents` | Validates and imports an envelope as a private document in the configured family, without an existing document ID. |
 | `GET /api/reports/ui/{file}` | Packaged browser assets. |
 | `GET /api/reports/{name}/view` | Optional packaged viewer page. |
 | `GET /api/reports/admin` | Optional packaged administration page. |
@@ -555,8 +557,9 @@ over that map when rendering their own representation.
 
 All persisted document IDs are database-generated integers. A missing document, a document
 addressed through the wrong configured family, and a document the caller may not read all
-return 404. The ordinary component starts with the appsettings name: it lists that family,
-selects `isDefault`, then loads `/api/reports/{name}/{id}`. It never calls the root catalogue.
+return 404. The ordinary component starts with the appsettings name: it lists that family
+and loads `/api/reports/{name}/default`, or the explicit `saved-report` ID. The load already
+contains the initial data, so rendering requires no subsequent query. It never calls the root catalogue.
 The administration component uses the root catalogue to enumerate appsettings families,
 then loops over the same family-list route. Schema, query, LOV, and download also use the
 configured definition key. These processing endpoints authorize that definition and do
@@ -564,7 +567,16 @@ not read the saved-report store. A submitted `ReportState` has no required ID or
 provenance; it may be a mutated default, another retrieved document, or a document made
 entirely by the client.
 
-Each report family has exactly one public default. Selecting an ordinary database report
+Stored loads and client-submitted hydration use the same validation, planning, and execution
+routine. A failed stored document is followed by the stored default, then a synthetic default;
+the same document is never retried. If the synthetic default fails, the load returns an error.
+Authorization denials and cancellation stop immediately. A client-submitted document is
+hydrated once, with no fallback. The returned `result.document` and data always describe
+the same successful candidate. Load metadata identifies that candidate when it is persisted.
+No read path inserts, repairs, or deletes saved documents. Configured catalogue synchronization
+is an explicit host or administration operation.
+
+Each report family may have one public stored default. Selecting an ordinary database report
 as default also publishes it globally and retains the previous default as a global report.
 The default cannot be unset directly. When a configured file declares `default: true`,
 configuration owns the selection and API attempts to replace it return 409.
@@ -733,7 +745,7 @@ only the supported element interface; mutable controller state remains private.
 | Attribute | Property | Meaning |
 |---|---|---|
 | `report` | none | Required appsettings report configuration name. Changing the attribute lists and activates that family. |
-| none | `reportId` (read-only) | Numeric id of the active report document; available after activation. |
+| none | `reportId` (read-only) | Current saved-report ID as a string, or `null` when the working document has no saved association. |
 | none | `definitionName` (read-only) | Canonical configured definition key learned during activation. |
 | `saved-report` | none | Optional numeric document id to load on activation. |
 | `api-base` | `apiBase` | API prefix. It is inferred from the module URL when omitted. |
@@ -788,8 +800,8 @@ When the packaged filter or highlight picker accepts a text value, it authors
 
 | Event | Timing and detail |
 |---|---|
-| `ir-before-query` | Cancelable, bubbling, composed. `detail` is `{ document, source, requestId, signal }`. Synchronously mutate the detached document before transport, or call `preventDefault()` to cancel. |
-| `ir-query-complete` | Bubbling and composed after the current response is adopted and rendered. `detail` is detached `{ document, result, submitted, source, requestId }`. It is observational. |
+| `ir-before-query` | Fires for client-submitted hydration, not server-side document loads. Cancelable, bubbling, composed. `detail` is `{ document, source, requestId, signal }`. Synchronously mutate the detached document before transport, or call `preventDefault()` to cancel. |
+| `ir-query-complete` | Bubbling and composed after a load or query response is adopted and rendered. `detail` is detached `{ document, result, submitted, source, requestId }`; `submitted` is `null` for initial and saved-report loads. It is observational. |
 | `ir-action` | Bubbling and composed when an action-format cell is invoked. `detail` is `{ command, row, column }`. |
 
 `source` is `initial`, `user`, `saved-report`, `host`, or `refresh`.

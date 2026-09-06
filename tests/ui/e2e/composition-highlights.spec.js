@@ -122,7 +122,7 @@ test("mixed-scope highlights share canonical precedence across nodes and pages",
         saved = await createSavedState(request, highlightState, "highlight-order");
         await openWorkbench(page);
         const loadResponse = await loadSavedState(page, saved);
-        const loaded = await loadResponse.json();
+        const { result: loaded } = await loadResponse.json();
 
         expect(loaded.highlights.some(hit => hit.id === "h-disabled")).toBe(false);
         for (const id of ["h-row", "h-cell-early", "h-cell-late"])
@@ -164,7 +164,7 @@ test("mixed-scope highlights share canonical precedence across nodes and pages",
         // Rule priority is semantic state, not a transient rendering decision.
         await openWorkbench(page);
         const reloadedResponse = await loadSavedState(page, saved);
-        const reloaded = await reloadedResponse.json();
+        const { result: reloaded } = await reloadedResponse.json();
         expect(reloaded.highlights.some(hit => hit.id === "h-disabled")).toBe(false);
         await expect(chips.locator(".ir-chip-label")).toHaveText([
             "Row red #90 · AMOUNT >= 0 (row)",

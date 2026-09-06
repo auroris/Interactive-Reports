@@ -132,28 +132,24 @@ function removeSavedSummary(w, id) {
 }
 
 /**
- * Loads one saved report and adopts its document as the working state.
+ * Loads and adopts one server-hydrated saved or default report.
  *
  * @param {object} w - The report controller that will adopt, execute, or roll back the loaded state.
- * @param {string} id - The visible saved-report identifier to load.
- * @returns {Promise<void>} Resolves after the state query succeeds, a stale response is ignored, or failure recovery completes.
+ * @param {string} id - The saved-report identifier or `default` route token.
+ * @returns {Promise<void>} Resolves after hydration succeeds, a stale response is ignored, or failure recovery completes.
  *
- * Side effects: performs network requests, changes saved selection and working state, runs a query, and may restore state or display an error.
+ * Side effects: retrieves one hydrated result, changes saved selection and working state, and may restore state or display an error.
  */
 export async function loadSavedById(w, id) {
     const transition = w.beginStateTransition();
+    const requestId = ++w._requestId;
+    const finishBusy = w.beginBusy();
     try {
-        const docResponse = await api(apiUrl(w.base, w.definitionName, id));
+        const loaded = await api(apiUrl(w.base, w.definitionName, id));
         if (!w.isCurrentStateTransition(transition)) return;
-        if (docResponse.summary?.reportName !== w.definitionName)
-            throw new Error("The selected report document belongs to a different report definition.");
-        w.currentSaved = docResponse.summary;
-        // Protocol contract: liberal acceptance: the document is adopted as-is and the server
-        // judges it on query. A rejection lands in the catch and rolls back.
-        w.adoptState(docResponse.state);
+        w.currentSaved = loaded.summary;
         refreshSavedSelect(w);
-        const result = await w.runQuery({ quiet: true, source: "saved-report" });
-        if (!result && w.isCurrentStateTransition(transition)) w.restoreLastGood();
+        w.acceptResult(loaded.result, { source: "saved-report", requestId, revision: transition });
     } catch (err) {
         if (!w.isCurrentStateTransition(transition)) return;
         // Invariant: nothing validated: put doc, selection, and search back on the last
@@ -167,6 +163,8 @@ export async function loadSavedById(w, id) {
         } else {
             w.showError(err);
         }
+    } finally {
+        finishBusy();
     }
 }
 
@@ -176,11 +174,10 @@ export async function loadSavedById(w, id) {
  * @param {object} w - The report controller whose default summary will be adopted.
  * @returns {Promise<void>} Resolves after the default query succeeds or the previous validated state is restored.
  *
- * Side effects: changes saved selection and working state, refreshes the selector, runs a query, and may roll back.
+ * Side effects: loads the default hydration endpoint, even when no default is persisted, and adopts its result.
  */
 export async function resetToDefault(w) {
-    const defaultReport = (w.savedList ?? []).find(report => report.isDefault);
-    if (defaultReport) await loadSavedById(w, defaultReport.id);
+    await loadSavedById(w, "default");
 }
 
 /**
@@ -215,9 +212,10 @@ export async function resetWorkingCopy(w) {
 export async function saveReport(w, { title, isGlobal, asNew, target = null }) {
     const state = w.serialize();
     const revision = w.stateRevision;
+    const sequence = w._seq;
     let savedSummary;
     if (asNew) {
-        savedSummary = await api(w.documentFamilyUrl("saved"), {
+        savedSummary = await api(w.definitionUrl("saved"), {
             method: "POST", body: { title, state, isGlobal },
         });
     } else {
@@ -231,6 +229,9 @@ export async function saveReport(w, { title, isGlobal, asNew, target = null }) {
             method: "PUT", body,
         });
     }
+    // A late save belongs to its initiating family. Its summary must not become a
+    // replacement target for a later Save As in the newly active report.
+    if (sequence !== w._seq) return;
     // Cache policy: keep the known successful mutation in the local cache even if the following
     // list refresh fails. Saving does not validate a rendered query, so it may update the saved
     // association but never the rollback document.

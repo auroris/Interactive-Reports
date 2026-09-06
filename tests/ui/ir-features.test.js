@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
-import { reportState } from "./report-state-fixture.js";
+import { hydratedResult, reportState } from "./report-state-fixture.js";
 import { reportControlNames } from "../../src/client/report/schema.js";
 
 const window = new Window({ url: "https://host.example/dashboard" });
@@ -64,11 +64,11 @@ globalThis.fetch = async (url, options = {}) => {
     const family = /^\/feature-api\/([^/?]+)$/.exec(String(url))?.[1];
     if ((options.method ?? "GET") === "GET" && family)
         return json([{ id: 1, reportName: family, title: "Default", isDefault: true, isGlobal: true }]);
-    const document = /^\/feature-api\/([^/?]+)\/(\d+)$/.exec(String(url));
+    const document = /^\/feature-api\/([^/?]+)\/(\d+|default)$/.exec(String(url));
     if ((options.method ?? "GET") === "GET" && document) {
         return json({
-            summary: { id: Number(document[2]), reportName: document[1], title: "Default", isDefault: true, isGlobal: true },
-            state: DEFAULT_STATES[document[1]] ?? {},
+            summary: { id: document[2] === "default" ? 1 : Number(document[2]), reportName: document[1], title: "Default", isDefault: true, isGlobal: true },
+            result: hydratedResult(DEFAULT_STATES[document[1]]),
         });
     }
     if (String(url).endsWith("/query")) {

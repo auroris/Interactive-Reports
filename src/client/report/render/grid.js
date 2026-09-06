@@ -222,13 +222,13 @@ export function renderGrid(w, table) {
                 // On the cells, not the tr: a column format's inline background would beat a
                 // tr-level style, and highlights deliberately win.
                 for (const cell of tr.children) {
-                    if (style.bg) cell.style.background = style.bg;
+                    if (style.bg) cell.style.backgroundColor = style.bg;
                     if (style.fg) cell.style.color = style.fg;
                 }
             } else {
                 const idx = columns.findIndex(c => sameColumn(c.name, hit.col));
                 if (idx >= 0) {
-                    if (style.bg) tr.children[idx + cellOffset].style.background = style.bg;
+                    if (style.bg) tr.children[idx + cellOffset].style.backgroundColor = style.bg;
                     if (style.fg) tr.children[idx + cellOffset].style.color = style.fg;
                 }
             }

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { test, expect } from "@playwright/test";
-import { reportId } from "./support.js";
+import { waitForLoad } from "./support.js";
 
 const queryPath = /\/api\/reports\/[^/]+\/query$/;
 
@@ -94,7 +94,19 @@ test("GraphiQL does not bind a report identity during application startup", asyn
 });
 
 test("loads the stored default document, queries data, paginates from Actions, and changes reports", async ({ page, request }) => {
+    const hydrationPosts = [];
+    page.on("request", request => {
+        if (request.method() === "POST" && queryPath.test(new URL(request.url()).pathname))
+            hydrationPosts.push(request);
+    });
+    const initialLoad = page.waitForResponse(response =>
+        new URL(response.url()).pathname === "/api/reports/orders/default");
     await openWorkbench(page);
+    const initial = await (await initialLoad).json();
+    expect(initial.summary.isDefault).toBe(true);
+    expect(initial.result.document.activeTable).toBeTruthy();
+    expect(initial.result.rows).toHaveLength(50);
+    expect(hydrationPosts).toHaveLength(0);
 
     const catalogResponse = await page.request.get("/api/reports");
     expect(catalogResponse.ok()).toBe(true);
@@ -174,8 +186,7 @@ test("loads the stored default document, queries data, paginates from Actions, a
     expect(allResult.rows).toHaveLength(Number(allResult.totalRows));
     await expect(page.getByRole("button", { name: "Next page" })).toBeDisabled();
 
-    await reportId(request, "order-feed");
-    await runAndWaitForQuery(page, () =>
+    await waitForLoad(page, () =>
         page.locator("interactive-report").evaluate(
             element => element.setAttribute("report", "order-feed")));
     await expect(page.getByRole("columnheader")).toHaveText(["Order #", "Customer", "Amount"]);
@@ -326,7 +337,8 @@ test("exports the current report state as CSV", async ({ page }) => {
     expect(lines[0]).toContain("Order #,Customer Name,Region,Status,Amount,Ordered On,Notes,With Tax");
     expect(lines.length).toBeGreaterThan(1);
     expect(lines.slice(1).every(line => line.includes("Acme Corp"))).toBe(true);
-    expect(lines.slice(1).every(line => line.includes('<a class=""ir-cell-link"" href=""/orders/'))).toBe(true);
+    expect(lines.slice(1).every(line => /^\d+,Acme Corp,/.test(line))).toBe(true);
+    expect(csv).not.toContain("<a ");
 });
 
 test("sorts with explicit null placement from the Actions dialog", async ({ page }) => {
@@ -537,7 +549,7 @@ test("a saved report retains its configured tables and switches them without reo
         await saveDialog.getByPlaceholder("Saved report name").fill(title);
         const saveResponsePromise = page.waitForResponse(response =>
             response.request().method() === "POST"
-            && /^\/api\/reports\/\d+\/saved$/.test(new URL(response.url()).pathname));
+            && /^\/api\/reports\/[^/]+\/saved$/.test(new URL(response.url()).pathname));
         await saveDialog.getByRole("button", { name: "Save", exact: true }).click();
         const saveResponse = await saveResponsePromise;
         savedId = (await saveResponse.json()).id;
@@ -558,9 +570,9 @@ test("a saved report retains its configured tables and switches them without reo
 
         await page.reload();
         await expect(page.getByRole("table")).toBeVisible();
-        const loadResponse = await runAndWaitForQuery(page, () =>
+        const loadResponse = await waitForLoad(page, () =>
             page.getByRole("combobox", { name: "Saved Report" }).selectOption(String(savedId)));
-        expect(modeOf(loadResponse.request().postDataJSON())).toBe("pivot");
+        expect(modeOf((await loadResponse.json()).result.document)).toBe("pivot");
         await expect(page.getByRole("button", { name: "Pivot", exact: true })).toHaveAttribute("aria-pressed", "true");
 
         const reloadedChart = await runAndWaitForQuery(page, () =>
@@ -597,12 +609,12 @@ test("Save As confirms and replaces an existing report instead of creating a dup
         await dialog.getByPlaceholder("Saved report name").fill(title);
         const createPromise = page.waitForResponse(response =>
             response.request().method() === "POST"
-            && /^\/api\/reports\/\d+\/saved$/.test(new URL(response.url()).pathname));
+            && /^\/api\/reports\/[^/]+\/saved$/.test(new URL(response.url()).pathname));
         await dialog.getByRole("button", { name: "Save", exact: true }).click();
         const created = await createPromise;
         const savedId = (await created.json()).id;
 
-        await runAndWaitForQuery(page, () =>
+        await waitForLoad(page, () =>
             page.getByRole("combobox", { name: "Saved Report" }).selectOption({ label: "Default" }));
         await search(page, "Acme Corp");
 
@@ -650,7 +662,7 @@ test("saves and reloads a report, then administers its complete lifecycle", asyn
 
         const saveResponsePromise = page.waitForResponse(response =>
             response.request().method() === "POST"
-            && /^\/api\/reports\/\d+\/saved$/.test(new URL(response.url()).pathname));
+            && /^\/api\/reports\/[^/]+\/saved$/.test(new URL(response.url()).pathname));
         await saveDialog.getByRole("button", { name: "Save", exact: true }).click();
         const saveResponse = await saveResponsePromise;
         expect(saveResponse.status()).toBe(201);
@@ -661,16 +673,16 @@ test("saves and reloads a report, then administers its complete lifecycle", asyn
         await expect(savedSelect.locator(`option[value="${savedId}"]`)).toHaveText(title);
 
         await search(page, "Globex");
-        await runAndWaitForQuery(page, () => savedSelect.selectOption({ label: "Default" }));
+        await waitForLoad(page, () => savedSelect.selectOption({ label: "Default" }));
         await expect(page.getByRole("searchbox", { name: "Search" })).toHaveValue("");
-        await runAndWaitForQuery(page, () => page.locator("interactive-report").evaluate(
+        await waitForLoad(page, () => page.locator("interactive-report").evaluate(
             (element, savedReport) => element.setAttribute("saved-report", savedReport), String(savedId)));
         await expect(page.getByRole("searchbox", { name: "Search" })).toHaveValue("Acme Corp");
         await expect(savedSelect).toHaveValue(String(savedId));
 
         await page.reload();
         await expect(page.getByRole("table")).toBeVisible();
-        await runAndWaitForQuery(page, () =>
+        await waitForLoad(page, () =>
             page.getByRole("combobox", { name: "Saved Report" }).selectOption(String(savedId)));
         await expect(page.getByRole("searchbox", { name: "Search" })).toHaveValue("Acme Corp");
 
@@ -726,7 +738,7 @@ test("admin uploads a validated report document and downloads its canonical file
 
         const dialog = page.locator("interactive-report-admin").locator(".ir-dialog");
         await expect(dialog).toBeVisible();
-        await dialog.locator("select").selectOption({ label: "Default" });
+        await dialog.locator("select").selectOption("orders");
         await dialog.locator('input[type="file"]').setInputFiles({
             name: "candidate.json",
             mimeType: "application/json",
@@ -749,7 +761,7 @@ test("admin uploads a validated report document and downloads its canonical file
 
         const uploadResponsePromise = page.waitForResponse(response =>
             response.request().method() === "POST"
-            && /^\/api\/reports\/admin\/\d+\/documents$/.test(new URL(response.url()).pathname));
+            && /^\/api\/reports\/admin\/[^/]+\/documents$/.test(new URL(response.url()).pathname));
         await dialog.getByRole("button", { name: "Upload", exact: true }).click();
         const uploadResponse = await uploadResponsePromise;
         expect(uploadResponse.status()).toBe(201);
@@ -834,8 +846,7 @@ test("admin sets the database administrator list as a whole", async ({ page, req
 
 test("a feature-whitelisted report pares the UI down and the server enforces the rest", async ({ page, request }) => {
     await openWorkbench(page);
-    const kioskId = await reportId(request, "orders-kiosk");
-    await runAndWaitForQuery(page, () =>
+    await waitForLoad(page, () =>
         page.locator("interactive-report").evaluate(
             element => element.setAttribute("report", "orders-kiosk")));
 
@@ -858,7 +869,7 @@ test("a feature-whitelisted report pares the UI down and the server enforces the
     await page.keyboard.press("Escape");
 
     // Server enforcement: saved-report creation is refused, download still works.
-    const denied = await request.post(`/api/reports/${kioskId}/saved`, {
+    const denied = await request.post("/api/reports/orders-kiosk/saved", {
         data: { title: "should not exist", state: {} },
     });
     expect(denied.status()).toBe(403);
@@ -895,8 +906,7 @@ test("column settings restyle a column from the header menu", async ({ page }) =
 
 test("a definition edit link and per-column overrides shape the managed report", async ({ page, request }) => {
     await openWorkbench(page);
-    await reportId(request, "orders-managed");
-    await runAndWaitForQuery(page, () =>
+    await waitForLoad(page, () =>
         page.locator("interactive-report").evaluate(
             element => element.setAttribute("report", "orders-managed")));
 
@@ -911,7 +921,7 @@ test("a definition edit link and per-column overrides shape the managed report",
     await expect(editCell).toHaveCSS("width", "32px");
     await expect(pencil).toHaveAttribute("href", /^\/orders\/\d+\/edit$/);
     await expect(pencil).toHaveAttribute("aria-label", "Edit order");
-    expect(await pencil.getAttribute("target")).toBeNull();
+    await expect(pencil).toHaveAttribute("target", "_self");
 
     // The definition's create button joins the toolbar as a real anchor.
     const create = page.locator("interactive-report .ir-createbtn");
@@ -985,10 +995,7 @@ test.describe("non-administrator", () => {
         await openWorkbench(page);
         await expect(page.locator("#identity")).toHaveText("ordinary-user");
         await expect(page.getByRole("combobox", { name: "Report", exact: true })).toHaveCount(0);
-        const protectedId = await reportId(page.request, "regional-summary", {
-            headers: { "X-Workbench-User": "workbench-dev" },
-        });
-        const protectedResponse = await page.request.get(`/api/reports/regional-summary/${protectedId}`);
+        const protectedResponse = await page.request.get("/api/reports/regional-summary/default");
         expect(protectedResponse.status()).toBe(404);
 
         await page.goto("/admin.html");

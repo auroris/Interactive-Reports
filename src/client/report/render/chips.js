@@ -188,7 +188,7 @@ function chip({ w, kind, index, itemKey, text, colLabel, off, toggleable = true,
             onchange: e => chipToggle(w, kind, index, e.target.checked, location),
         }));
     }
-    if (swatch) node.append(el("span", { class: "ir-chip-swatch", style: { background: swatch } }));
+    if (swatch) node.append(el("span", { class: "ir-chip-swatch", style: { backgroundColor: swatch } }));
     const label = editable
         ? el("button", {
             type: "button", class: "ir-chip-label", title: w.t("common.edit"),

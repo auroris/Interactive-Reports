@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
-import { reportState } from "./report-state-fixture.js";
+import { hydratedResult, reportState } from "./report-state-fixture.js";
 import { reportControlNames } from "../../src/client/report/schema.js";
 
 const window = new Window({ url: "https://host.example/dashboard" });
@@ -34,32 +34,47 @@ const json = value => new Response(JSON.stringify(value), {
     headers: { "Content-Type": "application/json" },
 });
 
+const defaultDocument = {
+    page: { index: 1, size: 25 },
+    ...reportState({
+        breaks: ["AMOUNT"],
+        formats: {
+            ID: { bg: "blue" },
+            AMOUNT: { mask: "#,##0" },
+        },
+        highlights: [
+            {
+                id: "h1", name: "Big row", sequence: 10, enabled: true,
+                scope: "row", expr: "AMOUNT > 0",
+                style: { bg: "red", fg: "white" },
+            },
+            {
+                id: "h2", name: "Key cell", sequence: 20, enabled: true,
+                scope: "cell", col: "ID", expr: "ID = 1",
+                style: { bg: "green" },
+            },
+        ],
+    }),
+};
+const resultFor = state => ({
+    document: state,
+    columns: [
+        { name: "ID", label: "ID", type: "number" },
+        { name: "AMOUNT", label: "Amount", type: "number" },
+    ],
+    rows: [{ ID: 1, AMOUNT: "1234.5" }, { ID: 2, AMOUNT: "2000" }],
+    page: { index: 1, size: 25 },
+    totalRows: 2,
+    aggregates: {},
+    highlights: [{ row: 0, id: "h1" }, { row: 0, id: "h2", col: "ID" }],
+    ignored: [],
+});
+
 globalThis.fetch = async (url, options = {}) => {
     const path = String(url);
     if (path.endsWith("/schema")) {
         return json({
-            defaultState: {
-                page: { index: 1, size: 25 },
-                ...reportState({
-                        breaks: ["AMOUNT"],
-                        formats: {
-                            ID: { bg: "blue" },
-                            AMOUNT: { mask: "#,##0" },
-                        },
-                        highlights: [
-                            {
-                                id: "h1", name: "Big row", sequence: 10, enabled: true,
-                                scope: "row", expr: "AMOUNT > 0",
-                                style: { bg: "red", fg: "white" },
-                            },
-                            {
-                                id: "h2", name: "Key cell", sequence: 20, enabled: true,
-                                scope: "cell", col: "ID", expr: "ID = 1",
-                                style: { bg: "green" },
-                            },
-                        ],
-                    }),
-            },
+            defaultState: defaultDocument,
             limits: { defaultPageSize: 25, maxPageSize: 100 },
             columns: [
                 { name: "ID", label: "ID", type: "number" },
@@ -73,28 +88,14 @@ globalThis.fetch = async (url, options = {}) => {
     const family = /^\/grid-api\/([^/?]+)$/.exec(path)?.[1];
     if (family)
         return json([{ id: 1, reportName: family, title: "Default", isDefault: true, isGlobal: true }]);
-    const document = /^\/grid-api\/([^/?]+)\/(\d+)$/.exec(path);
+    const document = /^\/grid-api\/([^/?]+)\/(\d+|default)$/.exec(path);
     if (document) {
         return json({
-            summary: { id: Number(document[2]), reportName: document[1], title: "Default", isDefault: true, isGlobal: true },
-            state: {},
+            summary: { id: document[2] === "default" ? 1 : Number(document[2]), reportName: document[1], title: "Default", isDefault: true, isGlobal: true },
+            result: resultFor(hydratedResult(defaultDocument).document),
         });
     }
-    if (path.endsWith("/query")) {
-        return json({
-            document: JSON.parse(options.body),
-            columns: [
-                { name: "ID", label: "ID", type: "number" },
-                { name: "AMOUNT", label: "Amount", type: "number" },
-            ],
-            rows: [{ ID: 1, AMOUNT: "1234.5" }, { ID: 2, AMOUNT: "2000" }],
-            page: { index: 1, size: 25 },
-            totalRows: 2,
-            aggregates: {},
-            highlights: [{ row: 0, id: "h1" }, { row: 0, id: "h2", col: "ID" }],
-            ignored: [],
-        });
-    }
+    if (path.endsWith("/query")) return json(resultFor(JSON.parse(options.body)));
     return new Response(null, { status: 404 });
 };
 
@@ -122,10 +123,10 @@ test("break headings apply the break column's mask and decimal rule", async () =
     // (beating the ID column's inline background), the cell style lands last.
     const rows = report.shadowRoot.querySelectorAll("tr.ir-row");
     const highlightedCell = rows[0].querySelector("td");
-    assert.equal(highlightedCell.style.background, "green", "the cell-scoped highlight wins last");
+    assert.equal(highlightedCell.style.backgroundColor, "green", "the cell-scoped highlight wins last");
     assert.equal(highlightedCell.style.color, "white", "the row highlight's text color persists");
     const plainCell = rows[1].querySelector("td");
-    assert.equal(plainCell.style.background, "blue", "the column format still styles unhighlighted rows");
+    assert.equal(plainCell.style.backgroundColor, "blue", "the column format still styles unhighlighted rows");
 
     report.remove();
 });

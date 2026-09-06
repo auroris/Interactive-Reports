@@ -18,6 +18,59 @@ namespace InteractiveReport.Core.Tests;
 /// </summary>
 public sealed class OracleCursorBatchTests
 {
+    [Theory]
+    [InlineData("':p0'")]
+    [InlineData("'it''s :p0'")]
+    [InlineData("\"odd\"\":p0\"")]
+    [InlineData("q'[here's :p0]'")]
+    [InlineData("q'{here's :p0}'")]
+    [InlineData("q'(here's :p0)'")]
+    [InlineData("q'<here's :p0>'")]
+    [InlineData("q'!here's :p0!'")]
+    [InlineData("nq'[here's :p0]'")]
+    [InlineData("'line one\n:p0'")]
+    [InlineData("1 /* :p0 */")]
+    [InlineData("1 -- :p0\n")]
+    public void Conflicting_inputs_are_renamed_without_changing_quoted_text_or_comments(string protectedSql)
+    {
+        var compiler = DialectSupport.GetCompiler(ReportDialect.Oracle);
+        var first = compiler.Compile(new Query("dual").SelectRaw(protectedSql).Where("VALUE", 1));
+        var second = compiler.Compile(new Query("dual").SelectRaw(protectedSql).Where("VALUE", 2));
+        // Raw source SQL reaches this layer already compiled. Preserve its dialect quoting
+        // rather than asking SqlKata's identifier-placeholder syntax to interpret it.
+        first.Sql = second.Sql = $"SELECT {protectedSql} FROM dual WHERE \"VALUE\" = :p0";
+        using var connection = new OracleConnection();
+        using var command = Assert.IsType<OracleCommand>(CommandBuilder.BuildOracleCursorBatch(
+            connection, [first, second], new Dictionary<string, object?>(), OrdersDefinition(ReportDialect.Oracle)));
+
+        Assert.Contains(protectedSql, command.CommandText);
+        Assert.Equal(2, command.CommandText.Split(protectedSql, StringSplitOptions.None).Length - 1);
+        Assert.Contains("\"VALUE\" = :p0_r1", command.CommandText);
+        Assert.Equal(1, command.Parameters["p0"].Value);
+        Assert.Equal(2, command.Parameters["p0_r1"].Value);
+    }
+
+    [Fact]
+    public void Renamed_inputs_do_not_capture_existing_statement_or_context_parameters()
+    {
+        var compiler = DialectSupport.GetCompiler(ReportDialect.Oracle);
+        var first = compiler.Compile(new Query("dual").SelectRaw("1").Where("VALUE", 1));
+        var second = compiler.Compile(new Query("dual")
+            .SelectRaw(":p0_r1 AS native, :p0_r1_ AS trusted").Where("VALUE", 2));
+        second.NamedBindings["p0_r1"] = 3;
+        using var connection = new OracleConnection();
+        using var command = Assert.IsType<OracleCommand>(CommandBuilder.BuildOracleCursorBatch(
+            connection, [first, second], new Dictionary<string, object?> { ["p0_r1_"] = 4 },
+            OrdersDefinition(ReportDialect.Oracle)));
+
+        Assert.Contains(":p0_r1 AS native, :p0_r1_ AS trusted", command.CommandText);
+        Assert.Contains("\"VALUE\" = :p0_r1__", command.CommandText);
+        Assert.Equal(1, command.Parameters["p0"].Value);
+        Assert.Equal(2, command.Parameters["p0_r1__"].Value);
+        Assert.Equal(3, command.Parameters["p0_r1"].Value);
+        Assert.Equal(4, command.Parameters["p0_r1_"].Value);
+    }
+
     [Fact]
     public void Standard_command_enables_named_binding_and_adds_every_compiler_parameter()
     {

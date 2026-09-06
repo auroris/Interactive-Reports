@@ -11,9 +11,10 @@ import { prettify } from "./schema.js";
  *
  * @param {object|null} defaults
  * @param {object} requested
+ * @param {number} [defaultPageSize=50]
  * @returns {object} Detached effective report state
  */
-export function resolveReportState(defaults, requested) {
+export function resolveReportState(defaults, requested, defaultPageSize = 50) {
     const copy = obj => obj ? JSON.parse(JSON.stringify(obj)) : null;
 
     const base = copy(defaults) || {};
@@ -21,7 +22,7 @@ export function resolveReportState(defaults, requested) {
 
     const state = {
         search: req.search !== undefined ? req.search : (base.search || null),
-        page: req.page ? copy(req.page) : (base.page ? copy(base.page) : { index: 1, size: 50 }),
+        page: req.page ? copy(req.page) : (base.page ? copy(base.page) : { index: 1, size: defaultPageSize }),
         activeTable: req.activeTable || base.activeTable || "base",
         tables: req.tables && Object.keys(req.tables).length > 0
             ? copy(req.tables)

@@ -127,7 +127,7 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
         const string owner = "Cased-Listing-User";
         using var save = await _client.SendAsync(Request(
             HttpMethod.Post,
-            $"/api/reports/{_ordersId}/saved",
+            $"/api/reports/orders/saved",
             owner,
             new { title = "Owner cased", isGlobal = false, state = new { v = 3 } }));
         Assert.Equal(HttpStatusCode.Created, save.StatusCode);
@@ -231,7 +231,7 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
             column => column.GetProperty("name").GetString() == "ID");
 
         using var save = await _client.SendAsync(Request(
-            HttpMethod.Post, $"/api/reports/{_ordersId}/saved", Admin,
+            HttpMethod.Post, $"/api/reports/orders/saved", Admin,
             new { title = "Mine", isGlobal = true, state = new { v = 3 } }));
         Assert.Equal(HttpStatusCode.Created, save.StatusCode);
         var savedId = (await ReadJson(save)).GetProperty("id").GetInt64();
@@ -282,7 +282,7 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
     public async Task Only_an_administrator_can_replace_the_default_and_the_previous_default_remains_global()
     {
         using var save = await _client.SendAsync(Request(
-            HttpMethod.Post, $"/api/reports/{_ordersId}/saved", Admin,
+            HttpMethod.Post, $"/api/reports/orders/saved", Admin,
             new { title = "Executive", state = new { v = 3 } }));
         Assert.Equal(HttpStatusCode.Created, save.StatusCode);
         var id = (await ReadJson(save)).GetProperty("id").GetInt64();
@@ -324,7 +324,7 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
     public async Task Owner_can_update_and_delete_their_published_report_without_changing_publication()
     {
         using var save = await _client.SendAsync(Request(
-            HttpMethod.Post, $"/api/reports/{_ordersId}/saved", User,
+            HttpMethod.Post, $"/api/reports/orders/saved", User,
             new { title = "Owned", state = new { v = 3 } }));
         Assert.Equal(HttpStatusCode.Created, save.StatusCode);
         var id = (await ReadJson(save)).GetProperty("id").GetInt64();
@@ -348,7 +348,7 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Invalid_synthetic_default_is_rebuilt_in_place_from_current_configuration()
+    public async Task Invalid_stored_default_returns_a_transient_default_without_changing_storage()
     {
         var store = _app!.Services.GetRequiredService<InteractiveReport.Core.SavedReports.ISavedReportStore>();
         var current = await store.Get(_ordersId);
@@ -356,7 +356,7 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
         Assert.True(current.IsDefault);
         Assert.Null(current.SourceFile);
         Assert.Equal(
-            InteractiveReport.Core.SavedReports.SavedReportOrigin.Synthetic,
+            InteractiveReport.Core.SavedReports.SavedReportOrigin.User,
             current.Origin);
 
         var invalid = current with
@@ -369,16 +369,18 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
             HttpMethod.Get, $"/api/reports/orders/{_ordersId}", Admin));
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var loaded = await ReadJson(response);
-        Assert.Equal(_ordersId, loaded.GetProperty("summary").GetProperty("id").GetInt64());
-        var state = loaded.GetProperty("state");
+        Assert.Equal(JsonValueKind.Null, loaded.GetProperty("summary").ValueKind);
+        var state = loaded.GetProperty("result").GetProperty("document");
         var activeTable = state.GetProperty("activeTable").GetString();
         Assert.False(string.IsNullOrWhiteSpace(activeTable));
         Assert.True(state.GetProperty("tables").TryGetProperty(activeTable!, out _));
 
-        var repaired = await store.Get(_ordersId);
-        Assert.NotNull(repaired);
-        Assert.Equal(_ordersId, repaired.Id);
-        Assert.NotEqual(invalid.StateJson, repaired.StateJson);
+        Assert.Equal(invalid, await store.Get(_ordersId));
+        using var export = await _client.SendAsync(Request(
+            HttpMethod.Get, $"/api/reports/admin/saved/{_ordersId}/document", Admin));
+        Assert.Equal(HttpStatusCode.BadRequest, export.StatusCode);
+        Assert.Equal(InteractiveReportErrorCodes.MalformedReportState, (await ReadJson(export)).GetProperty("code").GetString());
+        Assert.Equal(invalid, await store.Get(_ordersId));
     }
 
     [Fact]
@@ -388,18 +390,18 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
         const string title = "Shared Name";
 
         using var firstPrivate = await _client.SendAsync(Request(
-            HttpMethod.Post, $"/api/reports/{_ordersId}/saved", User,
+            HttpMethod.Post, $"/api/reports/orders/saved", User,
             new { title, state = new { v = 3 } }));
         Assert.Equal(HttpStatusCode.Created, firstPrivate.StatusCode);
         var firstId = (await ReadJson(firstPrivate)).GetProperty("id").GetInt64();
 
         using var secondPrivate = await _client.SendAsync(Request(
-            HttpMethod.Post, $"/api/reports/{_ordersId}/saved", otherUser,
+            HttpMethod.Post, $"/api/reports/orders/saved", otherUser,
             new { title = title.ToUpperInvariant(), state = new { v = 3 } }));
         Assert.Equal(HttpStatusCode.Created, secondPrivate.StatusCode);
 
         using var publishLater = await _client.SendAsync(Request(
-            HttpMethod.Post, $"/api/reports/{_ordersId}/saved", Admin,
+            HttpMethod.Post, $"/api/reports/orders/saved", Admin,
             new { title = title.ToLowerInvariant(), isGlobal = true, state = new { v = 3 } }));
         Assert.Equal(HttpStatusCode.Created, publishLater.StatusCode);
         var publicId = (await ReadJson(publishLater)).GetProperty("id").GetInt64();
@@ -410,7 +412,7 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, unchangedPrivateUpdate.StatusCode);
 
         using var duplicatePrivate = await _client.SendAsync(Request(
-            HttpMethod.Post, $"/api/reports/{_ordersId}/saved", User,
+            HttpMethod.Post, $"/api/reports/orders/saved", User,
             new { title, state = new { v = 3 } }));
         Assert.Equal(HttpStatusCode.Conflict, duplicatePrivate.StatusCode);
 
@@ -433,7 +435,7 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
     public async Task Processing_uses_the_client_copy_after_document_access_changes()
     {
         using var save = await _client.SendAsync(Request(
-            HttpMethod.Post, $"/api/reports/{_ordersId}/saved", User,
+            HttpMethod.Post, $"/api/reports/orders/saved", User,
             new { title = "Client copy", state = new { v = 3, search = "first" } }));
         Assert.Equal(HttpStatusCode.Created, save.StatusCode);
         var id = (await ReadJson(save)).GetProperty("id").GetInt64();
@@ -441,7 +443,7 @@ public sealed class SavedReportsListingHttpTests : IAsyncLifetime
         using var retrieve = await _client.SendAsync(Request(
             HttpMethod.Get, $"/api/reports/orders/{id}", User));
         Assert.Equal(HttpStatusCode.OK, retrieve.StatusCode);
-        var clientCopy = (await ReadJson(retrieve)).GetProperty("state").Clone();
+        var clientCopy = (await ReadJson(retrieve)).GetProperty("result").GetProperty("document").Clone();
 
         using var reassign = await _client.SendAsync(Request(
             HttpMethod.Put, $"/api/reports/{id}", Admin,

@@ -335,14 +335,9 @@ public sealed class LoggingHttpTests
                 TraceIdentifier = "test-trace-123",
             };
 
-            // 1. Get initial default document to find anchor
-            var list = await server.ListSavedReports("demo", context);
-            Assert.Null(list.Failure);
-            var anchorId = list.Value!.First().Id;
-
-            // 2. Save document (creates saved report)
+            // Create directly in a configured family with no existing stored document.
             var created = await server.SaveDocument(
-                anchorId,
+                "demo",
                 _ => Task.FromResult<SaveReportRequest?>(new SaveReportRequest { Title = "Custom View", State = new ReportState(), IsGlobal = false }),
                 context);
             Assert.Null(created.Failure);

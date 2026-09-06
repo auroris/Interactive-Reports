@@ -74,6 +74,8 @@ builder.Services.AddSwaggerGen(options =>
 var app = builder.Build();
 
 SampleData.EnsureSeeded(dbPath);
+await app.Services.GetRequiredService<InteractiveReport.AspNetCore.ConfiguredReportDocumentSynchronizer>()
+    .EnsureSynced();
 
 app.UseDefaultFiles();
 app.UseStaticFiles();

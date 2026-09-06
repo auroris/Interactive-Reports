@@ -23,8 +23,11 @@ not reach the host page.
 ```
 
 `report` is the appsettings report configuration name. The component calls
-`GET /api/reports/{name}`, selects the flagged default (or the optional numeric
-`saved-report` id), and retrieves it through `GET /api/reports/{name}/{id}`. It does not
+`GET /api/reports/{name}` for saved choices and loads the initial document through
+`GET /api/reports/{name}/default`, or `GET /api/reports/{name}/{id}` when the numeric
+`saved-report` attribute is set. Loading returns the hydrated document and data together;
+the component renders that result without a follow-up query. A family with no stored
+default can load a synthetic default without creating a database row. The component does not
 use the root configuration catalogue during ordinary bootstrap. Titles are presentation
 only, and duplicate titles remain distinguishable by their Public and Private groups.
 Server authorization still applies when the component requests schema, report documents,
@@ -90,12 +93,13 @@ object; a JSON string should be parsed by the caller first.
 
 ## Query lifecycle events
 
-Every query, including initial load, saved-report loads, ordinary UI edits, and host
-submissions, dispatches a bubbling, composed `ir-before-query` event immediately before
-the request. Its `detail` is `{ document, source, requestId, signal }`. The detached
+Every client-submitted hydration, including ordinary UI edits and host submissions,
+dispatches a bubbling, composed `ir-before-query` event immediately before the request.
+Initial and saved-report loads hydrate on the server and do not dispatch this event.
+Its `detail` is `{ document, source, requestId, signal }`. The detached
 `document` is mutable during synchronous event dispatch; its final value is serialized
-and sent. Calling `preventDefault()` cancels that query. `source` is one of `initial`,
-`user`, `saved-report`, `host`, or `refresh`.
+and sent. Calling `preventDefault()` cancels that query. Its `source` is `user`, `host`,
+or `refresh`.
 
 Ordinary UI edits are single-flight. An edit on an idle widget is sent immediately. While
 a query is in flight, further chip removals, toggles, paging commands, or other
@@ -107,8 +111,10 @@ query is outstanding per widget. Initial and saved-report loads, explicit
 `submitReportDocument()` calls, exports, and administration refreshes abort any in-flight
 query and cancel accumulated edits.
 
-After a successful query has been rendered, `ir-query-complete`
+After a successful hydration has been rendered, including initial and saved-report loads, `ir-query-complete`
 dispatches with detached `{ document, result, submitted, source, requestId }` snapshots.
+For loads, `source` is `initial` or `saved-report` and `submitted` is `null`, because no
+client document was sent. For queries, `submitted` is the document sent to the server.
 It is observational: changing its detail cannot mutate the report. Submit a changed copy
 with `submitReportDocument` when a returned document needs another query.
 
@@ -143,7 +149,7 @@ Control names are `search`, `columns`, `rename`, `columnSettings`, `filter`, `so
 `pagination`, `controlBreak`, `highlight`, `aggregate`, `compute`, `groupBy`, `pivot`,
 `chart`, `savedReports`, and `download`. Names are matched case-insensitively and retained
 in canonical spelling. Overrides stay on the element across report changes. Enabling
-`savedReports` after load lazily requests the list. Client overrides affect only packaged
+`savedReports` after load exposes the saved choices already retrieved. Client overrides affect only packaged
 UI: endpoints still perform authorization, validation, and their configured download or
 saved-report checks.
 

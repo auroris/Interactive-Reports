@@ -31,6 +31,8 @@ let userSearches = [];
 let administrators = null; // { configured, database, managedByApplication }, or null for a 404.
 let administratorCalls = [];
 let savedCalls = [];
+let documentCalls = [];
+const storedDocument = { version: 1, title: "Broken", state: { activeTable: "missing", tables: {} } };
 const json = (value, status = 200) => new Response(JSON.stringify(value), {
     status,
     headers: { "Content-Type": "application/json" },
@@ -44,13 +46,15 @@ globalThis.fetch = async (url, options = {}) => {
         return json([{ name: "orders", title: "Orders" }]);
     }
     if (path === "/admin-api/orders") {
-        return json([{
-            id: 1,
-            reportName: "orders",
-            title: "Default",
-            isDefault: true,
-            isGlobal: true,
-        }]);
+        return json([]);
+    }
+    if (path === "/admin-api/admin/saved/42/document") {
+        documentCalls.push({ path, method });
+        return json(storedDocument);
+    }
+    if (path === "/admin-api/admin/orders/documents" && method === "POST") {
+        documentCalls.push({ path, method, body });
+        return json({ id: 43, title: body.title });
     }
     if (path.endsWith("/whoami")) {
         whoamiCalls++;
@@ -78,9 +82,9 @@ globalThis.fetch = async (url, options = {}) => {
         }
         return new Response(null, { status: 204 });
     }
-    if (path === "/admin-api/saved-1" && method === "PUT") {
+    if (path === "/admin-api/21" && method === "PUT") {
         savedCalls.push(body);
-        return json({ id: "saved-1", title: "Regional" });
+        return json({ id: 21, title: "Regional" });
     }
     return new Response(null, { status: 404 });
 };
@@ -115,6 +119,7 @@ async function mount(language = null) {
     userSearches = [];
     administratorCalls = [];
     savedCalls = [];
+    documentCalls = [];
     const admin = document.createElement("interactive-report-admin");
     admin.setAttribute("api-base", "/admin-api");
     if (language) admin.setAttribute("lang", language);
@@ -137,12 +142,36 @@ test("the administration shell and its embedded report share the selected locale
     assert.equal(admin.shadowRoot.querySelector(".ir-admin-count").textContent,
         "Connecté en tant que administrateur");
     assert.equal(admin.shadowRoot.querySelector("interactive-report").getAttribute("lang"), "fr-CA");
-    assert.deepEqual(admin.availableReports.map(report => [report.reportName, report.id]), [
-        ["orders", 1],
-    ], "the admin shell enumerates the root families and then each family document list");
+    assert.deepEqual(admin.availableReports.map(report => [report.name, report.title]), [
+        ["orders", "Orders"],
+    ], "import destinations come from configured families independently of saved documents");
 
     admin.remove();
     administrators = null;
+});
+
+test("the admin state viewer reads the stored document without ordinary-load fallback", async () => {
+    asAdministrator();
+    const admin = await mount();
+    await admin.viewState(42, { TITLE: "Broken", REPORT_NAME: "orders" });
+    assert.deepEqual(JSON.parse(admin.shadowRoot.querySelector(".ir-state-pre").textContent), storedDocument.state);
+    assert.deepEqual(documentCalls, [{ path: "/admin-api/admin/saved/42/document", method: "GET" }]);
+    admin.remove();
+});
+
+test("admin import addresses a configured family even when it has no saved documents", async () => {
+    asAdministrator();
+    const admin = await mount();
+    admin.uploadDocument();
+    const dialog = admin.shadowRoot.querySelector(".ir-dialog");
+    assert.equal(dialog.querySelector("select").value, "orders");
+    const file = new window.File([JSON.stringify(storedDocument)], "broken.report.json", { type: "application/json" });
+    dialog.querySelector('input[type="file"]').files = [file];
+    dialog.querySelector(".ir-btn-primary").click();
+    await settle(() => documentCalls.length > 0);
+    assert.deepEqual(documentCalls, [{ path: "/admin-api/admin/orders/documents", method: "POST", body: storedDocument }]);
+    await settle(() => !admin.shadowRoot.querySelector(".ir-dialog"));
+    admin.remove();
 });
 
 test("owner reassignment searches the directory and applies the picked value", async () => {
@@ -150,7 +179,7 @@ test("owner reassignment searches the directory and applies the picked value", a
     users = directory;
     const admin = await mount();
 
-    await admin.reassign("saved-1", {
+    await admin.reassign(21, {
         TITLE: "Regional", REPORT_NAME: "orders", OWNER: "grace-id",
     });
 
@@ -187,7 +216,7 @@ test("a failed lookup is reported in the dialog and still allows free-form owner
     users = null;
     const admin = await mount();
 
-    await admin.reassign("saved-1", {
+    await admin.reassign(21, {
         TITLE: "Regional", REPORT_NAME: "orders", OWNER: "existing-id",
     });
 

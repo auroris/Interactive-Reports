@@ -167,6 +167,13 @@ public sealed class ReportExecutor
             : "definition";
         var result = refreshed.Results[target];
         result.Document = refreshed.Document;
+        if (result.Document.Page is null)
+        {
+            // The client can edit paging directly after a stored load. Materialize the
+            // effective default without adopting a chart result's unpaged delivery mode.
+            var paging = BoundRequestOverlay.From(definition, result.Document);
+            result.Document.Page = new PageRequest { Index = paging.PageIndex, Size = paging.PageSize };
+        }
 
         _logger?.LogInformation(
             "Report {Report} query completed in {ElapsedMs} ms with {RowCount} rows ({TotalRows} total)",

@@ -127,6 +127,8 @@ internal static class CommandBuilder
         // binding is renamed for that statement instead of being shared, so every input keeps
         // exactly one meaning.
         var inputs = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        var reservedNames = resultSets.SelectMany(result => result.NamedBindings.Keys)
+            .Concat(contextParams.Keys).Select(Normalize).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var statements = new List<string>(resultSets.Count);
         for (var i = 0; i < resultSets.Count; i++)
         {
@@ -137,8 +139,7 @@ internal static class CommandBuilder
                 if (inputs.TryGetValue(name, out var existing) && !Equals(existing, value))
                 {
                     var renamed = $"{name}_r{i}";
-                    while (inputs.ContainsKey(renamed)
-                        || contextParams.Keys.Contains(renamed, StringComparer.OrdinalIgnoreCase)) renamed += "_";
+                    while (!reservedNames.Add(renamed)) renamed += "_";
                     text = RenameOracleParameter(text, name, renamed);
                     name = renamed;
                 }

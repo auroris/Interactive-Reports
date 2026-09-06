@@ -34,6 +34,45 @@ public sealed class SqliteEndToEndTests : IClassFixture<SqliteE2EFixture>
     };
 
     [Fact]
+    public async Task Hydrated_document_supplies_default_paging_and_can_be_submitted_for_the_next_page()
+    {
+        var definition = Definition;
+        definition.DefaultPageSize = 2;
+        var state = Doc(source: new StageLayer { Sorts = [new SortRule { Col = "ORDER_ID" }] });
+        state.Page = null;
+
+        var first = await _executor.Query(definition, state, NoParams);
+        Assert.Null(state.Page);
+        Assert.Equal((1, 2), (first.Document!.Page!.Index, first.Document.Page.Size));
+        Assert.Equal([1L, 2L], first.Rows.Select(row => Convert.ToInt64(row["ORDER_ID"])));
+
+        first.Document.Page.Index = 2;
+        var next = await _executor.Query(definition, first.Document, NoParams);
+        Assert.Equal((2, 2), (next.Page.Index, next.Page.Size));
+        Assert.Equal([3L, 4L], next.Rows.Select(row => Convert.ToInt64(row["ORDER_ID"])));
+    }
+
+    [Fact]
+    public async Task Hydrating_a_chart_keeps_document_paging_independent_of_its_unpaged_result()
+    {
+        var definition = Definition;
+        definition.DefaultPageSize = 2;
+        var state = Doc(tail: [ChartStage(chart =>
+        {
+            chart.Type = "bar";
+            chart.Label = "CUSTOMER";
+            chart.Value = "AMOUNT";
+        })]);
+        state.Page = null;
+
+        var result = await _executor.Query(definition, state, NoParams);
+        Assert.True(result.Rows.Count > definition.DefaultPageSize);
+        Assert.Equal(result.Rows.Count, result.Page.Size);
+        Assert.Equal((1, 2), (result.Document!.Page!.Index, result.Document.Page.Size));
+        Assert.Null(state.Page);
+    }
+
+    [Fact]
     public async Task Schema_is_discovered_from_the_probe()
     {
         var schema = await _executor.GetSchema(Definition, NoParams);

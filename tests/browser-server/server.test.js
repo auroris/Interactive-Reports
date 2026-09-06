@@ -422,22 +422,21 @@ test("file-download endpoint reports truncation and rejects unsupported formats"
 test("ephemeral saved report store CRUD operations", async () => {
     const { server } = await setupServer();
 
-    // 1. Initial list has Default report
+    // Reading an empty family does not create a persisted default.
     const initialList = server.savedReports.list("orders");
-    assert.equal(initialList.length, 1);
-    assert.equal(initialList[0].isDefault, true);
+    assert.deepEqual(initialList, []);
 
     // 2. Save new report
     const saved = server.savedReports.save("orders", {
         title: "My Custom View",
         state: { search: "Test" },
     });
-    assert.ok(saved.id > 1);
+    assert.ok(saved.id > 0);
     assert.equal(saved.title, "My Custom View");
 
     // 3. List contains newly saved report
     const listAfter = server.savedReports.list("orders");
-    assert.equal(listAfter.length, 2);
+    assert.equal(listAfter.length, 1);
 
     // 4. Load saved report
     const loaded = server.savedReports.load("orders", saved.id);
@@ -451,7 +450,7 @@ test("ephemeral saved report store CRUD operations", async () => {
     // 6. Delete saved report
     const deleted = server.savedReports.delete(saved.id);
     assert.equal(deleted, true);
-    assert.equal(server.savedReports.list("orders").length, 1);
+    assert.equal(server.savedReports.list("orders").length, 0);
 });
 
 test("handleRequest handles REST endpoints as standard Response objects", async () => {
@@ -495,7 +494,14 @@ test("handleRequest handles REST endpoints as standard Response objects", async 
     const savedListRes = await server.handleRequest("/api/reports/orders");
     assert.equal(savedListRes.status, 200);
     const savedListData = await savedListRes.json();
-    assert.equal(savedListData[0].isDefault, true);
+    assert.deepEqual(savedListData, []);
+
+    const loaded = await server.handleRequest("/api/reports/orders/default");
+    assert.equal(loaded.status, 200);
+    const initial = await loaded.json();
+    assert.equal(initial.summary, null);
+    assert.equal(initial.result.rows.length, 50);
+    assert.equal(initial.result.document.activeTable, "base");
 
     // 404 on unknown report
     const notFoundRes = await server.handleRequest("/api/reports/nonexistent/schema");
@@ -526,7 +532,7 @@ test("installFetchInterceptor routes /api/reports calls in-process", async () =>
     }
 });
 
-test("switching between multiple reports preserves default document for each", async () => {
+test("multiple families load synthetic defaults without writing saved reports", async () => {
     const { server } = await setupServer();
     server.registerReport({
         name: "big-orders",
@@ -534,18 +540,78 @@ test("switching between multiple reports preserves default document for each", a
         sql: "SELECT ORDER_ID, AMOUNT FROM ORDERS",
     });
 
-    // 1. Initial list for orders has default
-    const ordersList1 = await server.handleRequest("/api/reports/orders").then(r => r.json());
-    assert.ok(ordersList1.some(r => r.isDefault && r.reportName === "orders"));
+    const orders = await server.handleRequest("/api/reports/orders/default").then(r => r.json());
+    const big = await server.handleRequest("/api/reports/big-orders/default").then(r => r.json());
+    const ordersAgain = await server.handleRequest("/api/reports/orders/default").then(r => r.json());
+    assert.equal(orders.summary, null);
+    assert.equal(big.summary, null);
+    assert.deepEqual(big.result.columns.map(column => column.name), ["ORDER_ID", "AMOUNT"]);
+    assert.deepEqual(ordersAgain.result.document, orders.result.document);
+    assert.deepEqual(ordersAgain.result.rows, orders.result.rows);
+    assert.equal(server.savedReports.reports.size, 0);
+});
 
-    // 2. Switch to big-orders: has its own default
-    const bigList = await server.handleRequest("/api/reports/big-orders").then(r => r.json());
-    assert.ok(bigList.some(r => r.isDefault && r.reportName === "big-orders"));
+test("stored loads fall back while client hydration errors leave saved documents unchanged", async () => {
+    const { server } = await setupServer();
+    server.savedReports.ensureDefault("orders", { search: "Acme" });
+    const invalid = { activeTable: "base", tables: { base: { from: "missing" } } };
+    const saved = server.savedReports.save("orders", { title: "Broken", state: invalid });
+    const before = structuredClone([...server.savedReports.reports]);
 
-    // 3. Switch back to orders: must still have its default report!
-    const ordersList2 = await server.handleRequest("/api/reports/orders").then(r => r.json());
-    assert.ok(ordersList2.some(r => r.isDefault && r.reportName === "orders"));
-    assert.notEqual(ordersList1[0].id, bigList[0].id);
+    const loaded = await server.handleRequest(`/api/reports/orders/${saved.id}`);
+    assert.equal(loaded.status, 200);
+    const effective = await loaded.json();
+    assert.equal(effective.summary.isDefault, true);
+    assert.equal(effective.result.document.search, "Acme");
+    assert.ok(effective.result.rows.every(row => row.CUSTOMER.includes("Acme")));
+
+    const submitted = await server.handleRequest("/api/reports/orders/query", {
+        method: "POST", body: JSON.stringify(invalid),
+    });
+    assert.equal(submitted.status, 400);
+    assert.deepEqual([...server.savedReports.reports], before);
+
+    const defaultId = effective.summary.id;
+    server.savedReports.update(defaultId, { state: invalid });
+    const brokenDefault = structuredClone(server.savedReports.reports.get(defaultId));
+    const synthetic = await server.handleRequest(`/api/reports/orders/${defaultId}`).then(r => r.json());
+    assert.equal(synthetic.summary, null);
+    assert.equal(synthetic.result.totalRows, 500);
+    assert.deepEqual(server.savedReports.reports.get(defaultId), brokenDefault);
+});
+
+test("Save creates a report by configured name without an existing saved identity", async () => {
+    const { server } = await setupServer();
+    const created = await server.handleRequest("/api/reports/ORDERS/saved", {
+        method: "POST", body: JSON.stringify({ title: "First", state: { search: "Acme" } }),
+    });
+    assert.equal(created.status, 201);
+    const summary = await created.json();
+    assert.equal(summary.reportName, "orders");
+    assert.equal(server.savedReports.reports.size, 1);
+    const loaded = await server.handleRequest(`/api/reports/orders/${summary.id}`).then(r => r.json());
+    assert.equal(loaded.summary.id, summary.id);
+    assert.equal(loaded.result.document.search, "Acme");
+});
+
+test("synthetic loads preserve configured search and use the same paging defaults as submitted hydration", async () => {
+    const { server } = await setupServer();
+    server.registerReport({
+        name: "filtered-orders",
+        sql: "SELECT ORDER_ID, CUSTOMER FROM ORDERS",
+        defaultPageSize: 3,
+        defaultState: { search: "Acme" },
+    });
+    const { summary, result } = await server.loadDocument("filtered-orders");
+    const submitted = await server.query("filtered-orders", {});
+    assert.equal(summary, null);
+    assert.equal(result.document.search, "Acme");
+    assert.deepEqual(result.document.page, { index: 1, size: 3 });
+    assert.deepEqual(submitted.document.page, result.document.page);
+    assert.deepEqual(submitted.rows, result.rows);
+    assert.equal(result.rows.length, 3);
+    assert.ok(result.rows.every(row => row.CUSTOMER.includes("Acme")));
+    assert.equal(server.savedReports.reports.size, 0);
 });
 
 test("CSV export applies labels and format masks like the .NET file client", async () => {

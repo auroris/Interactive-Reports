@@ -136,7 +136,7 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
         var reportId = await DefaultId();
         using var save = await Send(
             HttpMethod.Post,
-            $"/api/reports/{reportId}/saved",
+            $"/api/reports/{ReportName}/saved",
             "alice",
             new
             {
@@ -223,7 +223,7 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Invalid_configured_report_is_deleted_and_hidden_as_not_found()
+    public async Task Invalid_configured_report_uses_the_stored_default_without_deleting_its_identity()
     {
         var reportId = await DefaultId();
         using var list = await Send(HttpMethod.Get, $"/api/reports/{ReportName}", identity: null);
@@ -253,9 +253,9 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
 
         using var response = await GraphQL(id, identity: null);
         var body = await ReadJson(response);
-        Assert.Equal("NOT_FOUND", body.GetProperty("errors")[0]
-            .GetProperty("extensions").GetProperty("code").GetString());
-        Assert.Null(await _app!.Services.GetRequiredService<ISavedReportStore>().Get(id));
+        Assert.False(body.TryGetProperty("errors", out _), body.GetRawText());
+        Assert.Equal(3, body.GetProperty("data").GetProperty("report").GetProperty("totalRows").GetInt64());
+        Assert.NotNull(await _app!.Services.GetRequiredService<ISavedReportStore>().Get(id));
     }
 
     [Fact]
@@ -296,8 +296,8 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
         using var response = await GraphQL(id, identity: null);
         var body = await ReadJson(response);
 
-        Assert.Equal("REPORT_VALIDATION_FAILED", body.GetProperty("errors")[0]
-            .GetProperty("extensions").GetProperty("code").GetString());
+        Assert.False(body.TryGetProperty("errors", out _), body.GetRawText());
+        Assert.Equal(3, body.GetProperty("data").GetProperty("report").GetProperty("totalRows").GetInt64());
         Assert.NotNull(await _app!.Services.GetRequiredService<ISavedReportStore>().Get(id));
     }
 
@@ -369,7 +369,7 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
         };
         using var save = await Send(
             HttpMethod.Post,
-            $"/api/reports/{reportId}/saved",
+            $"/api/reports/{ReportName}/saved",
             "alice",
             new { title = "Transport parity", state });
         Assert.Equal(HttpStatusCode.Created, save.StatusCode);
@@ -771,7 +771,7 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
         var reportId = await DefaultId();
         using var response = await Send(
             HttpMethod.Post,
-            $"/api/reports/{reportId}/saved",
+            $"/api/reports/{ReportName}/saved",
             owner,
             new
             {
@@ -805,7 +805,7 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
         var reportId = await DefaultId();
         using var response = await Send(
             HttpMethod.Post,
-            $"/api/reports/{reportId}/saved",
+            $"/api/reports/{ReportName}/saved",
             owner,
             new { title, state = new { v = 3 } });
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
@@ -841,11 +841,8 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
             });
 
     [Fact]
-    public async Task Loading_a_repaired_default_document_reports_the_repaired_row()
+    public async Task Loading_an_invalid_default_returns_a_transient_document_without_changing_the_stored_row()
     {
-        // Clients hand the loaded document's metadata straight back as the authorization
-        // resource for the follow-up query, so it has to describe the row that exists after
-        // auto-repair — not the drifted row that was read before it.
         var id = await DefaultId();
         var store = _app!.Services.GetRequiredService<ISavedReportStore>();
         var stored = (await store.Get(id))!;
@@ -857,12 +854,14 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
         {
             User = new ClaimsPrincipal(new ClaimsIdentity()),
             RequestServices = _app.Services,
-            TraceIdentifier = "repaired-default",
+            TraceIdentifier = "transient-default",
         });
 
         Assert.Null(loaded.Failure);
-        Assert.True(loaded.Value!.Metadata.IsGlobal);
-        Assert.True((await store.Get(id))!.IsGlobal);
+        Assert.Null(loaded.Value!.Metadata);
+        Assert.NotNull(loaded.Value.Result.Document);
+        Assert.NotEmpty(loaded.Value.Result.Rows);
+        Assert.Equal(drifted, await store.Get(id));
     }
 
     [Fact]

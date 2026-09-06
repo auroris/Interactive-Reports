@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using InteractiveReport.Core.Model;
 using InteractiveReport.Core.SavedReports;
 
@@ -269,8 +270,10 @@ public sealed record SavedReportSummary(
         report.ModifiedUtc);
 }
 
-/// <summary>Contains a saved report's metadata and report-state document.</summary>
-public sealed record SavedReportDocument(SavedReportSummary Summary, JsonElement State);
+/// <summary>Contains effective saved metadata, when persisted, and its hydrated document and data.</summary>
+public sealed record SavedReportDocument(
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] SavedReportSummary? Summary,
+    ReportResult Result);
 
 /// <summary>Supplies the complete database-authored administrator identity list.</summary>
 public sealed class AuthorizationIdentitiesRequest

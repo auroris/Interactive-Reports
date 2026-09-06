@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
 import { inputComposableLocation, terminalComposableLocation } from "../../src/client/report/state.js";
-import { reportState } from "./report-state-fixture.js";
+import { hydratedResult, reportState } from "./report-state-fixture.js";
 import { reportControlNames } from "../../src/client/report/schema.js";
 
 const window = new Window({ url: "https://host.example/dashboard" });
@@ -87,17 +87,59 @@ const groupedDocument = () => ({
 const inputNode = (doc, kind) => inputComposableLocation(doc, kind)?.composable;
 const terminalNode = (doc, kind) => terminalComposableLocation(doc, kind)?.composable;
 
+const defaultDocument = report => (report === "grouped-metadata"
+    ? groupedDocument()
+    : {
+        ...reportState({ columns: ["ID", "NAME"] }),
+        page: { index: 1, size: 25 },
+    });
+const resultFor = doc => {
+    // Honor the posted visible-columns list so renders reflect visibility edits.
+    if (doc.activeTable === "grouped") {
+        return {
+            document: doc,
+            availableColumns: GROUPED_COLUMNS,
+            columns: GROUPED_COLUMNS,
+            rows: [{ URL: "https://images.example/sales.png", ir2: 1234.5 }],
+            page: { index: 1, size: 25 },
+            totalRows: 1,
+            aggregates: {},
+            highlights: [],
+            ignored: [],
+        };
+    }
+    const select = inputNode(doc, "select");
+    const formats = inputNode(doc, "formats")?.formats ?? {};
+    const visible = select?.columns?.length
+        ? ALL_COLUMNS.filter(c => select.columns.includes(c.name))
+        : ALL_COLUMNS.filter(c => ["ID", "NAME"].includes(c.name));
+    const projected = [...visible];
+    for (const [name, format] of Object.entries(formats)) {
+        if (!visible.some(c => c.name === name) || !["link", "image"].includes(format.displayAs)) continue;
+        for (const source of [format.urlColumn, format.displayAs === "link" ? format.textColumn : null]) {
+            const column = ALL_COLUMNS.find(c => c.name === source);
+            if (column && !projected.includes(column)) projected.push(column);
+        }
+    }
+    return {
+        document: doc,
+        availableColumns: ALL_COLUMNS,
+        columns: visible,
+        rows: [Object.fromEntries(projected.map(c => [c.name, ROW[c.name]]))],
+        page: { index: 1, size: 25 },
+        totalRows: 1,
+        aggregates: {},
+        highlights: [],
+        ignored: [],
+    };
+};
+
 globalThis.fetch = async (url, options = {}) => {
     requests.push({ url: String(url), method: options.method ?? "GET", body: options.body });
     const report = /\/([^/]+)\/(schema|query|saved)$/.exec(String(url))?.[1];
     if (String(url).endsWith("/schema")) {
         return json({
-            defaultState: report === "grouped-metadata"
-                ? groupedDocument()
-                : {
-                    ...reportState({ columns: ["ID", "NAME"] }),
-                    page: { index: 1, size: 25 },
-                },
+            defaultState: defaultDocument(report),
             limits: { defaultPageSize: 25, maxPageSize: 100 },
             columns: report === "grouped-metadata" ? GROUPED_SOURCE_COLUMNS : ALL_COLUMNS,
             capabilities: { aggregateFunctions: {}, expressionFunctions: [] },
@@ -108,54 +150,14 @@ globalThis.fetch = async (url, options = {}) => {
     const family = /^\/settings-api\/([^/?]+)$/.exec(String(url))?.[1];
     if ((options.method ?? "GET") === "GET" && family)
         return json([{ id: 1, reportName: family, title: "Default", isDefault: true, isGlobal: true }]);
-    const document = /^\/settings-api\/([^/?]+)\/(\d+)$/.exec(String(url));
+    const document = /^\/settings-api\/([^/?]+)\/(\d+|default)$/.exec(String(url));
     if ((options.method ?? "GET") === "GET" && document) {
         return json({
-            summary: { id: Number(document[2]), reportName: document[1], title: "Default", isDefault: true, isGlobal: true },
-            state: {},
+            summary: { id: document[2] === "default" ? 1 : Number(document[2]), reportName: document[1], title: "Default", isDefault: true, isGlobal: true },
+            result: resultFor(hydratedResult(defaultDocument(document[1])).document),
         });
     }
-    if (String(url).endsWith("/query")) {
-        // Honor the posted visible-columns list so renders reflect visibility edits.
-        const doc = options.body ? JSON.parse(options.body) : {};
-        if (doc.activeTable === "grouped") {
-            return json({
-                document: doc,
-                availableColumns: GROUPED_COLUMNS,
-                columns: GROUPED_COLUMNS,
-                rows: [{ URL: "https://images.example/sales.png", ir2: 1234.5 }],
-                page: { index: 1, size: 25 },
-                totalRows: 1,
-                aggregates: {},
-                highlights: [],
-                ignored: [],
-            });
-        }
-        const select = inputNode(doc, "select");
-        const formats = inputNode(doc, "formats")?.formats ?? {};
-        const visible = select?.columns?.length
-            ? ALL_COLUMNS.filter(c => select.columns.includes(c.name))
-            : ALL_COLUMNS.filter(c => ["ID", "NAME"].includes(c.name));
-        const projected = [...visible];
-        for (const [name, format] of Object.entries(formats)) {
-            if (!visible.some(c => c.name === name) || !["link", "image"].includes(format.displayAs)) continue;
-            for (const source of [format.urlColumn, format.displayAs === "link" ? format.textColumn : null]) {
-                const column = ALL_COLUMNS.find(c => c.name === source);
-                if (column && !projected.includes(column)) projected.push(column);
-            }
-        }
-        return json({
-            document: doc,
-            availableColumns: ALL_COLUMNS,
-            columns: visible,
-            rows: [Object.fromEntries(projected.map(c => [c.name, ROW[c.name]]))],
-            page: { index: 1, size: 25 },
-            totalRows: 1,
-            aggregates: {},
-            highlights: [],
-            ignored: [],
-        });
-    }
+    if (String(url).endsWith("/query")) return json(resultFor(JSON.parse(options.body)));
     return new Response(null, { status: 404 });
 };
 

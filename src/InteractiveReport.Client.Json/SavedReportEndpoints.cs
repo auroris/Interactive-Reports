@@ -80,9 +80,8 @@ internal static class SavedReportEndpoints
     /// </summary>
     /// <param name="name">The appsettings report configuration name.</param>
     /// <param name="ctx">The current HTTP request and response context.</param>
-    /// <param name="ct">Cancels authorization, document synchronization, and persistence reads.</param>
+    /// <param name="ct">Cancels authorization and persistence reads.</param>
     /// <returns>A JSON array containing the complete family for administrators, or public and caller-owned documents otherwise.</returns>
-    /// <remarks>Synchronizes configured document identities before listing.</remarks>
     internal static async Task<IResult> ListForReport(string name, HttpContext ctx, CancellationToken ct)
     {
         var listed = await EndpointExtensions.Server(ctx).ListSavedReports(name, EndpointExtensions.Context(ctx), ct);
@@ -94,15 +93,15 @@ internal static class SavedReportEndpoints
     /// <summary>
     /// Validates and creates a private or global saved report owned by the current caller.
     /// </summary>
-    /// <param name="id">The numeric document id used to select its report family.</param>
+    /// <param name="name">The configured report family.</param>
     /// <param name="ctx">The current HTTP request and response context.</param>
     /// <param name="ct">Cancels authorization, request-body reading, state validation, and persistence.</param>
     /// <returns>The created summary with HTTP 201, or an authentication, access, validation, or title-conflict result.</returns>
     /// <remarks>Consumes the JSON request body, may refresh schema caches in the submitted state, and inserts one saved-report row.</remarks>
-    internal static async Task<IResult> Save(long id, HttpContext ctx, CancellationToken ct)
+    internal static async Task<IResult> Save(string name, HttpContext ctx, CancellationToken ct)
     {
         var saved = await EndpointExtensions.Server(ctx).SaveDocument(
-            id,
+            name,
             token => JsonSerializer.DeserializeAsync<SaveReportRequest>(
                 ctx.Request.Body, IrJson.Options, token).AsTask(),
             EndpointExtensions.Context(ctx),
@@ -113,18 +112,13 @@ internal static class SavedReportEndpoints
     }
 
     /// <summary>
-    /// Loads one visible saved report and returns its metadata plus its report-state document.
+    /// Loads and hydrates one visible saved report, returning the effective document and data.
     /// </summary>
     /// <param name="name">The appsettings report configuration name.</param>
     /// <param name="id">The numeric report-document identifier from the route.</param>
     /// <param name="ctx">The current HTTP request and response context.</param>
-    /// <param name="ct">Cancels persistence reads, authorization, and missing-file cleanup.</param>
+    /// <param name="ct">Cancels persistence reads, authorization, and hydration.</param>
     /// <returns>The saved-report document JSON, or a hidden not-found/access result.</returns>
-    /// <remarks>
-    /// A transport adapter over <see cref="IInteractiveReportServer.LoadDocument(string, long, InteractiveReportRequestContext, CancellationToken)"/>:
-    /// family verification, configured-file reconciliation, default-document auto-repair, and schema-cache
-    /// refreshing all live there, so every client adapter loads a document the same way.
-    /// </remarks>
     internal static async Task<IResult> Load(
         string name,
         long id,
@@ -132,14 +126,24 @@ internal static class SavedReportEndpoints
         CancellationToken ct)
     {
         var loaded = await EndpointExtensions.Server(ctx).LoadDocument(name, id, EndpointExtensions.Context(ctx), ct);
-        if (loaded.Failure is not null) return EndpointExtensions.Failure(loaded.Failure, ctx);
-        var document = loaded.Value!;
-        return Results.Json(
-            new SavedReportDocument(
-                Summary(document.Metadata, Identity(ctx)),
-                JsonSerializer.SerializeToElement(document.State, IrJson.Options)),
-            IrJson.Options);
+        return Loaded(loaded, ctx);
     }
+
+    /// <summary>Hydrates the family's stored or transient synthetic default without changing storage.</summary>
+    internal static async Task<IResult> LoadDefault(string name, HttpContext ctx, CancellationToken ct)
+    {
+        var loaded = await EndpointExtensions.Server(ctx).LoadDefaultDocument(name, EndpointExtensions.Context(ctx), ct);
+        return Loaded(loaded, ctx);
+    }
+
+    private static IResult Loaded(
+        InteractiveReportServerResult<InteractiveReportLoadedDocument> loaded,
+        HttpContext ctx)
+        => loaded.Failure is not null
+            ? EndpointExtensions.Failure(loaded.Failure, ctx)
+            : Results.Json(new SavedReportDocument(
+                loaded.Value!.Metadata is { } metadata ? Summary(metadata, Identity(ctx)) : null,
+                loaded.Value.Result), IrJson.Options);
 
     /// <summary>
     /// Applies a partial update to a user report, including selection as the report family's default.
@@ -183,7 +187,7 @@ internal static class SavedReportEndpoints
 
     /// <summary>
     /// Downloads the canonical source-controlled envelope, not the endpoint's
-    /// summary/state response wrapper. The resulting file can be placed directly in a report definition's
+    /// summary/result response wrapper. The resulting file can be placed directly in a report definition's
     /// documentFiles collection after the operator chooses whether it should be the configured default.
     /// </summary>
     /// <param name="id">The numeric report-document identifier from the route.</param>
@@ -212,17 +216,17 @@ internal static class SavedReportEndpoints
     /// Imports a canonical report-document file as a private saved report owned by the
     /// administrator.
     /// </summary>
-    /// <param name="id">The numeric report-document id whose family receives the import.</param>
+    /// <param name="name">The configured report family receiving the import.</param>
     /// <param name="ctx">The current HTTP request and response context.</param>
     /// <param name="ct">Cancels body reading, administrator authorization, validation, and persistence.</param>
     /// <returns>The imported summary with HTTP 201, or an authentication, hidden-denial, validation, title-conflict, or server-error result.</returns>
     internal static async Task<IResult> AdminUploadDocument(
-        long id,
+        string name,
         HttpContext ctx,
         CancellationToken ct)
     {
         var imported = await EndpointExtensions.Server(ctx).ImportDocument(
-            id,
+            name,
             token => JsonSerializer.DeserializeAsync<ReportDocumentFile>(
                 ctx.Request.Body, IrJson.Options, token).AsTask(),
             EndpointExtensions.Context(ctx),

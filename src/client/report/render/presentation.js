@@ -7,7 +7,7 @@
  *
  * @param {object} [format={}] - A column format containing alignment, emphasis, and colors.
  * @param {{defaultAlign?: string}} [options={}] - Alignment to use when the format does not provide one.
- * @returns {{textAlign: string, fontWeight: string, fontStyle: string, color: string, background: string}} A complete supported style projection.
+ * @returns {{textAlign: string, fontWeight: string, fontStyle: string, color: string, backgroundColor: string}} A complete supported style projection.
  */
 export function presentationStyle(format = {}, { defaultAlign = "" } = {}) {
     return {
@@ -15,7 +15,7 @@ export function presentationStyle(format = {}, { defaultAlign = "" } = {}) {
         fontWeight: format?.bold ? "600" : "",
         fontStyle: format?.italic ? "italic" : "",
         color: format?.fg ?? "",
-        background: format?.bg ?? "",
+        backgroundColor: format?.bg ?? "",
     };
 }
 

@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
-import { reportState } from "./report-state-fixture.js";
+import { hydratedResult, reportState } from "./report-state-fixture.js";
 import { reportControlNames } from "../../src/client/report/schema.js";
 
 const window = new Window({ url: "https://host.example/dashboard" });
@@ -37,6 +37,8 @@ let savedListStatus = 200;
 let savedReports = [];
 let savedDocuments = new Map();
 let failNextQuery = null;   // { problem, status } consumed by the next /query
+let failNextLoad = null;
+let syntheticDefault = false;
 let holdQueries = false;
 const heldQueries = [];
 let holdSavedDocuments = false;
@@ -51,16 +53,10 @@ const json = (value, status = 200) => new Response(JSON.stringify(value), {
     status,
     headers: { "Content-Type": "application/json" },
 });
-const queryResult = body => json({
-    document: JSON.parse(body),
-    columns: [{ name: "ID", label: "ID", type: "number" }],
-    rows: [{ ID: 1 }],
-    page: { index: 1, size: 25 },
-    totalRows: 1,
-    aggregates: {},
-    highlights: [],
-    ignored: [],
-});
+const queryResult = body => json(hydratedResult(JSON.parse(body)));
+const defaultSummary = reportName => syntheticDefault ? null
+    : { id: 1, reportName, title: "Default", isDefault: true, isGlobal: true };
+const hydrateSaved = stored => ({ summary: stored.summary, result: hydratedResult(stored.state) });
 
 globalThis.fetch = (url, options = {}) => {
     const method = options.method ?? "GET";
@@ -94,9 +90,8 @@ globalThis.fetch = (url, options = {}) => {
         const visible = savedReports
             .filter(report => !report.reportName || report.reportName === family)
             .map(report => ({ ...report, reportName: report.reportName ?? family }));
-        if (!visible.some(report => report.isDefault)) visible.unshift({
-            id: 1, reportName: family, title: "Default", isDefault: true, isGlobal: true,
-        });
+        if (!syntheticDefault && !visible.some(report => report.isDefault))
+            visible.unshift(defaultSummary(family));
         return Promise.resolve(savedListStatus === 200
             ? json(visible)
             : new Response(null, { status: savedListStatus }));
@@ -110,30 +105,24 @@ globalThis.fetch = (url, options = {}) => {
         }
         return Promise.resolve(json(savedMutationResult, 201));
     }
-    const document = /^\/txn-api\/([^/?]+)\/([^/?]+)$/.exec(path);
+    const document = /^\/txn-api\/([^/?]+)\/(\d+|default)$/.exec(path);
     if (document && method === "GET") {
         const [, reportName, savedId] = document;
+        if (failNextLoad) {
+            const { problem, status } = failNextLoad;
+            failNextLoad = null;
+            return Promise.resolve(json(problem, status));
+        }
         if (holdSavedDocuments) {
             return new Promise(resolve => heldSavedDocuments.push({
                 id: savedId,
                 succeed: document => resolve(json(document)),
             }));
         }
-        const fallback = savedId === "1"
-            ? {
-                summary: {
-                    id: 1,
-                    reportName,
-                    title: "Default",
-                    isDefault: true,
-                    isGlobal: true,
-                },
-                state: {},
-            }
-            : null;
+        const fallback = { summary: defaultSummary(reportName), state: {} };
         return Promise.resolve(savedDocuments.has(savedId)
-            ? json(savedDocuments.get(savedId))
-            : fallback ? json(fallback) : new Response(null, { status: 404 }));
+            ? json(hydrateSaved(savedDocuments.get(savedId)))
+            : json(hydrateSaved(fallback)));
     }
     const savedId = /\/([^/?]+)$/.exec(path)?.[1];
     if (savedId && method === "DELETE")
@@ -181,7 +170,7 @@ const savedSelect = report => report.shadowRoot.querySelector(".ir-saved-select"
 
 const selectSaved = (report, id) => {
     const select = savedSelect(report);
-    select.value = id;
+    select.value = String(id);
     select.dispatchEvent(new window.Event("change", { bubbles: true }));
 };
 
@@ -221,7 +210,7 @@ test("an invalid public replacement leaves the accepted document untouched", asy
         /JSON-compatible object/);
 
     assert.deepEqual(report.getReportDocument(), before, "no partial replacement may survive");
-    assert.equal(requests.filter(r => r.url.endsWith("/query")).length, 1,
+    assert.equal(requests.filter(r => r.url.endsWith("/query")).length, 0,
         "an invalid replacement must not reach the server");
 
     report.remove();
@@ -385,10 +374,14 @@ test("a host submission during a user flight aborts it and cancels coalesced edi
 
 test("saved-report loads are last-request-wins even when GET responses arrive out of order", async () => {
     requests.length = 0;
-    const savedA = { id: "saved-a", reportName: "orders", title: "A", mine: true };
-    const savedB = { id: "saved-b", reportName: "orders", title: "B", mine: true };
+    const savedA = { id: 21, reportName: "orders", title: "A", mine: true };
+    const savedB = { id: 22, reportName: "orders", title: "B", mine: true };
     savedReports = [savedA, savedB];
     const report = await mount();
+    const completed = [];
+    let beforeQueries = 0;
+    report.addEventListener("ir-before-query", () => beforeQueries++);
+    report.addEventListener("ir-query-complete", event => completed.push(event.detail));
 
     holdSavedDocuments = true;
     heldSavedDocuments.length = 0;
@@ -401,15 +394,21 @@ test("saved-report loads are last-request-wins even when GET responses arrive ou
         page: { index: 1, size: 25 },
         ...reportState(),
     });
-    heldSavedDocuments.find(request => request.id === savedB.id)
-        .succeed({ summary: savedB, state: state("B") });
+    heldSavedDocuments.find(request => request.id === String(savedB.id))
+        .succeed({ summary: savedB, result: hydratedResult(state("B")) });
     await settle(() => report.getReportDocument().search === "B");
-    heldSavedDocuments.find(request => request.id === savedA.id)
-        .succeed({ summary: savedA, state: state("A") });
+    heldSavedDocuments.find(request => request.id === String(savedA.id))
+        .succeed({ summary: savedA, result: hydratedResult(state("A")) });
     await new Promise(resolve => setTimeout(resolve, 10));
 
     assert.equal(report.getReportDocument().search, "B");
-    assert.equal(savedSelect(report).value, savedB.id);
+    assert.equal(savedSelect(report).value, String(savedB.id));
+    assert.equal(beforeQueries, 0, "saved loads do not submit a client document");
+    assert.equal(completed.length, 1, "only the adopted saved load emits completion");
+    assert.equal(completed[0].source, "saved-report");
+    assert.equal(completed[0].submitted, null);
+    assert.equal(completed[0].document.search, "B");
+    assert.equal(queryCount(), 0);
 
     holdSavedDocuments = false;
     heldSavedDocuments.length = 0;
@@ -434,10 +433,11 @@ test("a concurrent save cannot promote an unvalidated live document to last-good
     const apply = report.submitReportDocument(bad);
     await settle(() => heldQueries.length === 1);
 
-    const summary = { id: "saved-a", title: "Saved A", mine: true };
+    const summary = { id: 21, title: "Saved A", mine: true };
     savedReports = [summary];
     heldSaves[0].succeed(summary);
-    await settle(() => savedSelect(report).value === summary.id);
+    await settle(() => savedSelect(report).querySelector(`option[value="${summary.id}"]`));
+    assert.ok(savedSelect(report).querySelector(`option[value="${summary.id}"]`));
 
     const rejection = assert.rejects(apply, /validation/i);
     heldQueries[0].fail({ title: "Report state failed validation" }, 400);
@@ -454,19 +454,75 @@ test("a concurrent save cannot promote an unvalidated live document to last-good
     report.remove();
 });
 
+test("a late save cannot make Save As replace a report from another family", async () => {
+    requests.length = 0;
+    savedReports = [];
+    const report = await mount();
+    holdSaves = true;
+    heldSaves.length = 0;
+    try {
+        beginSaveAs(report, "Quarterly copy");
+        await settle(() => heldSaves.length === 1);
+        assert.equal(heldSaves.length, 1);
+
+        report.setAttribute("report", "invoices");
+        await settle(() => report.definitionName === "invoices"
+            && report.shadowRoot.querySelector("tbody tr"));
+        const invoices = report.getReportDocument();
+        invoices.search = "invoice state";
+        await report.submitReportDocument(invoices);
+
+        // A failed refresh preserves locally cached mutations, so an old-family summary
+        // must never enter this cache: the Save As dialog uses it to choose PUT targets.
+        savedListStatus = 500;
+        heldSaves[0].succeed({
+            id: 99, reportName: "orders", title: "Quarterly copy", mine: true, isGlobal: false,
+        });
+        await new Promise(resolve => setTimeout(resolve, 10));
+        assert.equal(!!savedSelect(report).querySelector('option[value="99"]'), false);
+
+        beginSaveAs(report, "Quarterly copy");
+        await settle(() => heldSaves.length === 2
+            || report.shadowRoot.querySelector("dialog.ir-dialog-modal"));
+        assert.equal(!!report.shadowRoot.querySelector("dialog.ir-dialog-modal"), false,
+            "another family's title must not offer replacement");
+        assert.equal(heldSaves.length, 2);
+        assert.equal(requests.filter(request => request.method === "PUT").length, 0);
+        const creation = requests.filter(request => request.method === "POST"
+            && request.url.endsWith("/saved")).at(-1);
+        assert.equal(creation.url, "/txn-api/invoices/saved");
+        assert.equal(JSON.parse(creation.body).state.search, "invoice state");
+
+        const summary = {
+            id: 100, reportName: "invoices", title: "Quarterly copy", mine: true, isGlobal: false,
+        };
+        savedReports = [summary];
+        savedListStatus = 200;
+        heldSaves[1].succeed(summary);
+        await settle(() => report.reportId === "100");
+        assert.equal(report.reportId, "100");
+    } finally {
+        holdSaves = false;
+        heldSaves.length = 0;
+        savedListStatus = 200;
+        savedReports = [];
+        report.remove();
+    }
+});
+
 test("a successful save remains in the local list when its refresh fails", async () => {
     requests.length = 0;
     savedReports = [];
     savedListStatus = 200;
     const report = await mount();
 
-    savedMutationResult = { id: "saved-new", title: "New report", mine: true };
+    savedMutationResult = { id: 31, title: "New report", mine: true };
     savedListStatus = 500;
     beginSaveAs(report, "New report");
     await settle(() => warnText(report).includes("could not be refreshed"));
 
-    assert.equal(!!savedSelect(report).querySelector('option[value="saved-new"]'), true);
-    assert.equal(savedSelect(report).value, "saved-new");
+    assert.equal(!!savedSelect(report).querySelector('option[value="31"]'), true);
+    assert.equal(savedSelect(report).value, "31");
     assert.equal(report.shadowRoot.querySelector(".ir-saved").hidden, false);
     assert.match(warnText(report), /could not be refreshed/i);
 
@@ -481,7 +537,7 @@ test("a saved-list refresh cannot cross a report switch", async () => {
     savedListStatus = 200;
     const report = await mount();
 
-    savedMutationResult = { id: "saved-orders", title: "Orders copy", mine: true };
+    savedMutationResult = { id: 41, title: "Orders copy", mine: true };
     holdSavedLists = true;
     heldSavedLists.length = 0;
     beginSaveAs(report, "Orders copy");
@@ -489,18 +545,18 @@ test("a saved-list refresh cannot cross a report switch", async () => {
     assert.equal(heldSavedLists[0].url, "/txn-api/orders");
 
     holdSavedLists = false;
-    const invoiceSaved = { id: "saved-invoices", title: "Invoices copy", mine: true };
+    const invoiceSaved = { id: 42, title: "Invoices copy", mine: true };
     savedReports = [invoiceSaved];
     report.setAttribute("report", "invoices");
     await settle(() => report.reportId === "1"
         && savedSelect(report).querySelector(`option[value="${invoiceSaved.id}"]`));
 
     heldSavedLists[0].succeed([
-        { id: "late-orders", title: "Late orders response", mine: true },
+        { id: 43, title: "Late orders response", mine: true },
     ]);
     await new Promise(resolve => setTimeout(resolve, 10));
 
-    assert.equal(!!savedSelect(report).querySelector('option[value="late-orders"]'), false,
+    assert.equal(!!savedSelect(report).querySelector('option[value="43"]'), false,
         "the completed Orders request must not replace the Invoices list");
     assert.equal(savedSelect(report).value, "1",
         "the current report's selector remains on its own default document");
@@ -514,13 +570,13 @@ test("a saved-list refresh cannot cross a report switch", async () => {
 test("a successful delete stays removed from the local list when its refresh fails", async () => {
     requests.length = 0;
     const summary = {
-        id: "saved-delete",
+        id: 51,
         reportName: "orders",
         title: "Delete me",
         mine: true,
     };
     savedReports = [summary];
-    savedDocuments = new Map([[summary.id, {
+    savedDocuments = new Map([[String(summary.id), {
         summary,
         state: {
             search: "delete",
@@ -540,7 +596,7 @@ test("a successful delete stays removed from the local list when its refresh fai
     await settle(() => warnText(report).includes("could not be refreshed"));
 
     assert.equal(!!savedSelect(report).querySelector(`option[value="${summary.id}"]`), false);
-    assert.notEqual(savedSelect(report).value, summary.id);
+    assert.notEqual(savedSelect(report).value, String(summary.id));
     assert.match(warnText(report), /could not be refreshed/i);
 
     savedDocuments = new Map();
@@ -549,21 +605,21 @@ test("a successful delete stays removed from the local list when its refresh fai
     report.remove();
 });
 
-test("a saved-report load whose query fails restores doc, selection, and search together", async () => {
+test("a failed hydration load preserves doc, selection, and search together", async () => {
     requests.length = 0;
     savedReports = [{
-        id: "saved-1", reportName: "orders", title: "Acme Only",
+        id: 61, reportName: "orders", title: "Acme Only",
         isGlobal: false, owner: "test-user", mine: true,
     }];
-    savedDocuments = new Map([["saved-1", {
+    savedDocuments = new Map([["61", {
         summary: savedReports[0],
         state: { search: "Acme", page: { index: 1, size: 25 }, ...reportState() },
     }]]);
     const report = await mount();
 
-    failNextQuery = { problem: { title: "The query could not run" }, status: 500 };
+    failNextLoad = { problem: { title: "The query could not run" }, status: 500 };
     const select = report.shadowRoot.querySelector(".ir-saved-select");
-    select.value = "saved-1";
+    select.value = "61";
     select.dispatchEvent(new window.Event("change", { bubbles: true }));
     await settle(() => errorText(report).includes("could not run"));
 
@@ -578,24 +634,24 @@ test("a saved-report load whose query fails restores doc, selection, and search 
     savedDocuments = new Map();
 });
 
-test("a saved report deleted elsewhere reports precisely and refreshes the list", async () => {
+test("a saved report deleted elsewhere adopts the server fallback without a second query", async () => {
     requests.length = 0;
     savedReports = [{
-        id: "ghost-1", reportName: "orders", title: "Ghost",
+        id: 62, reportName: "orders", title: "Ghost",
         isGlobal: false, owner: "test-user", mine: true,
     }];
     savedDocuments = new Map();   // the row exists in the list; the document is gone
     const report = await mount();
 
     const select = report.shadowRoot.querySelector(".ir-saved-select");
-    select.value = "ghost-1";
+    select.value = "62";
     select.dispatchEvent(new window.Event("change", { bubbles: true }));
-    await settle(() => errorText(report).includes("no longer available"));
+    await settle(() => savedSelect(report).value === "1");
 
-    assert.match(errorText(report), /no longer available/i,
-        "a missing saved report must not present as 'Report not found'");
+    assert.equal(errorText(report), "");
     assert.equal(savedSelect(report).value, "1");
     assert.equal(report.getReportDocument().search ?? "", "");
+    assert.equal(queryCount(), 0, "the server fallback is already hydrated");
 
     report.remove();
     savedReports = [];
@@ -604,28 +660,28 @@ test("a saved report deleted elsewhere reports precisely and refreshes the list"
 test("a saved report with a stale schema cache is adopted — the server is the judge", async () => {
     requests.length = 0;
     savedReports = [{
-        id: "stale-1", reportName: "orders", title: "Stale",
+        id: 63, reportName: "orders", title: "Stale",
         isGlobal: false, owner: "test-user", mine: true,
     }];
     // The cache was recorded against a schema that has since moved on. The client never judges
-    // drift: it runs the document as recorded and adopts whatever the server answers.
+    // drift: it adopts the complete hydration response without a second submission.
     const state = { search: "Acme", page: { index: 1, size: 25 }, ...reportState() };
     state.tables.base.schema = [{ name: "GONE", label: "Gone", type: "number" }];
-    savedDocuments = new Map([["stale-1", { summary: savedReports[0], state }]]);
+    savedDocuments = new Map([["63", { summary: savedReports[0], state }]]);
     const report = await mount();
 
     const select = report.shadowRoot.querySelector(".ir-saved-select");
-    select.value = "stale-1";
+    select.value = "63";
     select.dispatchEvent(new window.Event("change", { bubbles: true }));
     // Wait on a rendered outcome (the search chip), not on the request log.
     await settle(() => report.shadowRoot.querySelector(".ir-chips")?.textContent.includes("Acme"));
 
     assert.equal(errorText(report), "", "no client-side drift gate — the document runs");
-    assert.equal(savedSelect(report).value, "stale-1");
+    assert.equal(savedSelect(report).value, "63");
     assert.equal(report.getReportDocument().search, "Acme");
-    const posted = JSON.parse(requests.filter(r => r.url.endsWith("/query")).at(-1).body);
-    assert.deepEqual(posted.tables.base.schema.map(column => column.name), ["GONE"],
-        "the recorded cache travels to the server untouched; the server refreshes what it rejects");
+    assert.deepEqual(report.getReportDocument().tables.base.schema.map(column => column.name), ["GONE"],
+        "the server-returned cache is authoritative");
+    assert.equal(queryCount(), 0);
 
     report.remove();
     savedReports = [];
@@ -648,20 +704,55 @@ test("whoami failures other than 404/401 warn instead of passing for anonymous",
     whoamiStatus = 200;
 });
 
-test("a family-list failure prevents activation instead of inventing a default document", async () => {
+test("a saved-list failure leaves the independently hydrated default usable", async () => {
     requests.length = 0;
     savedListStatus = 500;
     const report = await mount();
 
-    assert.match(errorText(report), /HTTP 500/i);
-    assert.equal(report.shadowRoot.querySelector("tbody tr"), null,
-        "the client cannot select a default document without the family listing");
+    assert.equal(errorText(report), "");
+    assert.match(warnText(report), /could not be refreshed/i);
+    assert.ok(report.shadowRoot.querySelector("tbody tr"));
+    assert.equal(queryCount(), 0);
     report.remove();
 
     savedListStatus = 404;
     const missing = await mount();
-    assert.match(errorText(missing), /not found|access/i,
-        "a missing family is an activation failure, not an optional saved-report feature");
+    assert.equal(errorText(missing), "");
+    assert.ok(missing.shadowRoot.querySelector("tbody tr"));
     missing.remove();
     savedListStatus = 200;
+});
+
+test("synthetic defaults load and reset with empty or non-default lists, then save by definition name", async () => {
+    syntheticDefault = true;
+    for (const listed of [[], [{ id: 22, reportName: "orders", title: "Private copy", mine: true }]]) {
+        savedReports = listed;
+        requests.length = 0;
+        const report = await mount();
+        assert.equal(report.reportId, null);
+        assert.equal(savedSelect(report).options.length, listed.length,
+            "the synthetic default is not inserted into the saved selector");
+        assert.equal(queryCount(), 0);
+        const changed = report.getReportDocument();
+        changed.search = "temporary";
+        await report.submitReportDocument(changed);
+        clickAction(report, "Reset");
+        await settle(() => report.shadowRoot.querySelector("dialog.ir-dialog-modal"));
+        report.shadowRoot.querySelector("dialog.ir-dialog-modal .ir-btn-primary").click();
+        await settle(() => report.getReportDocument().search !== "temporary");
+        assert.equal(report.getReportDocument().search ?? "", "");
+        assert.equal(requests.filter(request => request.url === "/txn-api/orders/default").length, 2);
+        assert.equal(queryCount(), 1, "reset adopts the default result without a POST");
+
+        savedMutationResult = { id: 87, reportName: "orders", title: "My report", mine: true };
+        savedReports = [...listed, savedMutationResult];
+        beginSaveAs(report, "My report");
+        await settle(() => report.reportId === "87");
+        assert.ok(requests.some(request => request.url === "/txn-api/orders/saved" && request.method === "POST"));
+        assert.equal(report.reportId, "87");
+        report.remove();
+    }
+    syntheticDefault = false;
+    savedReports = [];
+    savedMutationResult = null;
 });

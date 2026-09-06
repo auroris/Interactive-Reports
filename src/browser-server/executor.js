@@ -16,7 +16,7 @@ import { parseExpression } from "./expressions/parser.js";
  */
 export async function executeReport(db, definition, requestedState, discoveredSchema) {
     const startTime = Date.now();
-    const document = resolveReportState(definition.defaultState, requestedState);
+    const document = resolveReportState(definition.defaultState, requestedState, definition.defaultPageSize);
     const activeTable = document.activeTable || "base";
 
     const compiler = new ComposableCompiler(db, definition, discoveredSchema);

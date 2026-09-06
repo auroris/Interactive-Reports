@@ -59,9 +59,9 @@ public sealed class ColumnConfigurationHttpTests : IAsyncLifetime
             ["InteractiveReport:Reports:managed:Authorization:AllowAnonymous"] = "true",
             ["InteractiveReport:Reports:managed:Consistency"] = "snapshot",
             // Lowercase placeholder on purpose: the schema payload canonicalizes it.
-            ["InteractiveReport:Reports:managed:EditLink:UrlTemplate"] = "/rows/{id}/edit",
+            ["InteractiveReport:Reports:managed:EditLink:UrlTemplate"] = "workbench:rows/{id}/edit",
             ["InteractiveReport:Reports:managed:EditLink:Label"] = "Edit row",
-            ["InteractiveReport:Reports:managed:EditLink:Target"] = "_blank",
+            ["InteractiveReport:Reports:managed:EditLink:Target"] = "details-pane",
             ["InteractiveReport:Reports:managed:EditLink:Mode"] = "EVENT",
             // Event mode without a URL: the schema carries no url property at all.
             ["InteractiveReport:Reports:managed:CreateLink:Label"] = " New row ",
@@ -121,9 +121,9 @@ public sealed class ColumnConfigurationHttpTests : IAsyncLifetime
         Assert.False(schema.TryGetProperty("consistency", out _));
 
         var editLink = schema.GetProperty("editLink");
-        Assert.Equal("/rows/{ID}/edit", editLink.GetProperty("urlTemplate").GetString());
+        Assert.Equal("workbench:rows/{ID}/edit", editLink.GetProperty("urlTemplate").GetString());
         Assert.Equal("Edit row", editLink.GetProperty("label").GetString());
-        Assert.Equal("_blank", editLink.GetProperty("target").GetString());
+        Assert.Equal("details-pane", editLink.GetProperty("target").GetString());
         Assert.Equal("event", editLink.GetProperty("mode").GetString());
 
         var createLink = schema.GetProperty("createLink");

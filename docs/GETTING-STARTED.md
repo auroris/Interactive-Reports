@@ -109,8 +109,9 @@ report inside an application page, load the packaged module and add the custom e
 <interactive-report report="orders"></interactive-report>
 ```
 
-The element obtains the report family's default document, loads its schema, and queries
-the configured report. See [Embedding the report](EMBEDDING.md) for properties, events,
+The element loads the report family's schema and hydrated default document, then renders
+the returned data. Without a stored default, the server generates a synthetic document
+without saving it. See [Embedding the report](EMBEDDING.md) for properties, events,
 theming, and host integration.
 
 If the viewer does not start, check these boundaries first:

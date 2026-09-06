@@ -137,11 +137,10 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
     }
 
     [Fact]
-    public async Task Family_reconciliation_starts_from_every_private_and_public_database_row()
+    public async Task Explicit_synchronization_reads_every_private_and_public_database_row()
     {
         var (synchronizer, store, _) = Build(_defaultPath);
         await synchronizer.EnsureSynced();
-        var anchor = store.Rows.Values.Single(report => report.Origin == SavedReportOrigin.Configured);
         var otherUsersPrivate = new SavedReport
         {
             Id = 0,
@@ -154,10 +153,10 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
         await store.Create(otherUsersPrivate);
         store.Calls.Clear();
 
-        var family = await synchronizer.ReconcileFamily(anchor.ReportName);
+        await synchronizer.EnsureSynced();
 
-        Assert.Equal([ $"listFamily:{anchor.ReportName}" ], store.Calls);
-        Assert.Contains(family, report => report.Id == otherUsersPrivate.Id);
+        Assert.Equal(["listAll"], store.Calls);
+        Assert.Contains(store.Rows.Values, report => report.Id == otherUsersPrivate.Id);
     }
 
     [Fact]
@@ -233,12 +232,12 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
         store.FailCreates = true;
 
         await Assert.ThrowsAsync<ReportDocumentBootstrapException>(
-            () => synchronizer.ReconcileFamily("orders"));
+            () => synchronizer.EnsureSynced());
         Assert.Empty(store.Rows);
 
         store.FailCreates = false;
-        var retried = await synchronizer.ReconcileFamily("orders");
-        var configured = Assert.Single(retried);
+        await synchronizer.EnsureSynced();
+        var configured = Assert.Single(store.Rows.Values);
         Assert.True(configured.IsDefault);
         Assert.Equal(SavedReportOrigin.Configured, configured.Origin);
     }

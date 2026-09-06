@@ -79,9 +79,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IReportAuthorizationService, ReportAuthorizationService>();
         services.AddSingleton<UserDirectoryCache>();
         services.AddSingleton<IInteractiveReportServer, InteractiveReportServer>();
-        services.AddSingleton(sp => new DefaultReportDocumentService(
-            sp.GetRequiredService<ISavedReportStore>(),
-            logging.For<DefaultReportDocumentService>()));
         services.TryAddSingleton<IContextParameterResolver, ClaimContextParameterResolver>();
 
         services.AddSingleton<ISavedReportStore>(sp => new SqlSavedReportStore(

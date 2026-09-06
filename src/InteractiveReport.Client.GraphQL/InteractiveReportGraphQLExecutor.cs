@@ -2,15 +2,13 @@ using System.Globalization;
 using GraphQL;
 using InteractiveReport.AspNetCore;
 using InteractiveReport.Core.Model;
-using InteractiveReport.Core.Validation;
 using Microsoft.AspNetCore.Http;
 
 namespace InteractiveReport.Client.GraphQL;
 
 /// <summary>
 /// GraphQL client workflow: discover the configurations and saved documents a caller may see,
-/// then load an authorized report document, apply GraphQL view arguments to a detached copy,
-/// and submit it through the ordinary server query boundary.
+/// then hydrate an authorized report document with the requested GraphQL view arguments.
 /// </summary>
 internal sealed class InteractiveReportGraphQLExecutor(
     IHttpContextAccessor httpContextAccessor,
@@ -33,7 +31,7 @@ internal sealed class InteractiveReportGraphQLExecutor(
     /// Lists the saved documents the caller may load for one configured report.
     /// </summary>
     /// <param name="reportName">The appsettings report configuration name.</param>
-    /// <param name="ct">Cancels authorization, document synchronization, and persistence reads.</param>
+    /// <param name="ct">Cancels authorization and persistence reads.</param>
     /// <returns>The caller's visible documents; administrators receive the complete family.</returns>
     /// <exception cref="ExecutionError">Thrown when the report is absent, hidden, or its store is unreachable.</exception>
     public async Task<IReadOnlyList<SavedReportSummary>> SavedReports(
@@ -76,27 +74,26 @@ internal sealed class InteractiveReportGraphQLExecutor(
         if (sorts is not null && sorts.Any(sort => string.IsNullOrWhiteSpace(sort.Col)))
             throw Error("every sort entry needs a non-empty col.", "BAD_USER_INPUT");
 
+        void Configure(ReportState state)
+        {
+            if (page.HasValue || pageSize.HasValue)
+            {
+                state.Page ??= new PageRequest();
+                if (page.HasValue) state.Page.Index = page.Value;
+                if (pageSize.HasValue) state.Page.Size = pageSize.Value;
+            }
+            if (search is not null) state.Search = search;
+            if (sorts is not null) ApplySorts(state, sorts);
+        }
+
         var context = Context();
         // A caller that named the configuration gets the same family verification the REST route
         // applies; one addressing a document by id alone takes the family from the row.
         var loaded = string.IsNullOrWhiteSpace(reportName)
-            ? await server.LoadDocument(id, context, ct)
-            : await server.LoadDocument(reportName, id, context, ct);
+            ? await server.LoadDocument(id, context, ct, Configure)
+            : await server.LoadDocument(reportName, id, context, ct, Configure);
         if (loaded.Failure is not null) throw Failure(loaded.Failure);
-        var document = loaded.Value!;
-        var state = ReportStateResolver.Resolve(defaults: null, document.State);
-        if (page.HasValue || pageSize.HasValue)
-        {
-            state.Page ??= new PageRequest();
-            if (page.HasValue) state.Page.Index = page.Value;
-            if (pageSize.HasValue) state.Page.Size = pageSize.Value;
-        }
-        if (search is not null) state.Search = search;
-        if (sorts is not null) ApplySorts(state, sorts);
-
-        var queried = await server.Query(document, state, context, ct);
-        if (queried.Failure is not null) throw Failure(queried.Failure);
-        return queried.Value;
+        return loaded.Value!.Result;
     }
 
     /// <summary>
@@ -107,7 +104,7 @@ internal sealed class InteractiveReportGraphQLExecutor(
     /// </summary>
     /// <param name="state">The detached state to mutate.</param>
     /// <param name="sorts">The replacement sort rules; an empty list clears the ordering.</param>
-    /// <exception cref="ExecutionError">Thrown when the document declares no table to order.</exception>
+    /// <exception cref="ReportValidationException">Thrown when the document declares no table to order.</exception>
     private static void ApplySorts(ReportState state, IReadOnlyList<SortRule> sorts)
     {
         // Ordering is a document declaration, so it needs a document table to live in. Every
@@ -115,9 +112,8 @@ internal sealed class InteractiveReportGraphQLExecutor(
         // no tables is refused rather than restructured, because a synthesized table would
         // replace — not extend — the definition's own default tables during execution.
         var table = ActiveTable(state)
-            ?? throw Error(
-                "sort requires a saved report whose document declares the table to order.",
-                "BAD_USER_INPUT");
+            ?? throw new ReportValidationException([
+                new("tables", "sort requires a saved report whose document declares the table to order.")]);
 
         table.Composables ??= [];
         var terminal = table.Composables.LastOrDefault(composable => IsKind(composable, "sort"));

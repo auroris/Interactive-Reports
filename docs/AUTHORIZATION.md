@@ -255,9 +255,9 @@ administrator store or user directory.
 | Action | Request that emits it | Built-in notes |
 |---|---|---|
 | `ViewReport` | Root configuration catalogue or schema for an ordinary report | Report-definition authentication and policy run first. The root catalogue returns names and titles only; it does not reconcile documents. |
-| `Query` | Process a client document through JSON, or execute a stored document through GraphQL | JSON processing authorizes only the resolved report definition and never supplies original document metadata. GraphQL loads a stored document and supplies `SavedReport` metadata. |
+| `Query` | Hydrate a client document or load a stored document through JSON or GraphQL | Client-submitted hydration authorizes the resolved definition without saved-document metadata. Stored loads supply each candidate's `SavedReport` metadata; synthetic defaults have none. |
 | `Export` | File-client download | The report's `download` feature must also be enabled. Admin-list download emits `ListAllSavedReports` as well. |
-| `ListSavedReports` | List visible saved reports for one report definition | The server reconciles the complete family in one store query, then filters in memory. Administrators see all rows; other callers see public and exactly owned rows. |
+| `ListSavedReports` | List visible saved reports for one report definition | The server reads the complete family, then filters in memory. Administrators see all rows; other callers see public and exactly owned rows. Listing does not reconcile or write documents. |
 | `ReadSavedReport` | Load one saved report, or execute it through GraphQL | Public, owner, and administrator access are distinguished from `SavedReport` metadata and the principal. |
 | `CreateSavedReport` | Create a saved report | Requires an authenticated canonical owner and the `savedReports` feature. Receives the typed candidate before publication actions are derived. |
 | `UpdateSavedReport` | Update a saved report | Owner or administrator. Receives effective metadata and only client-authored replacement state. Global publication and default selection remain unchanged unless their separate actions also pass. Configured content remains read-only. |
@@ -280,7 +280,7 @@ not first narrow the typed candidate:
   `UpdateSavedReport`, `PublishGlobalReport`, `SelectDefaultReport`, and
   `ChangeSavedReportOwner`.
 - Exporting the administrator listing emits `ListAllSavedReports` and `Export`.
-- Executing a saved report through GraphQL emits `ReadSavedReport` and `Query`.
+- Loading and hydrating a saved report through JSON or GraphQL emits `ReadSavedReport` and `Query`.
 
 Every distinct action must be granted. Evaluation may stop on the first denial, so an
 authorization callback is not a complete audit-event stream. Audit accepted business
@@ -751,7 +751,7 @@ The shared server evaluates row access after operation authorization and before 
 data reads, then binds a detached definition for that operation. The same decision and
 parameters cover schema discovery, rows, counts, totals, charts, pivots, value lookups,
 and exports. JSON, GraphQL, and file downloads all use that server boundary. Saved-report
-loading, validation, and default repair also use it when they perform live discovery.
+loading, validation, and default fallback also use it when they perform live discovery.
 Document-only metadata operations do not trigger a data-access decision. Neither
 administrators nor saved-report owners bypass the callback.
 
@@ -760,14 +760,14 @@ saved report state or client responses. A later execution resolves access for th
 current caller again. The shared definition is never rewritten. Base column metadata
 can still use the ordinary schema cache, but marked reports refresh advisory table
 schemas, including dormant pivots, under the current caller's restriction. This can
-require additional pivot-discovery queries. When the server saves or repairs state under
+require additional pivot-discovery queries. When the server saves state under
 row access, it omits those cached schemas; document downloads also omit them, so
 data-derived column names cannot carry another caller's scope.
 Authored document content, such as titles, labels, and filter literals, remains subject
-to the existing saved-document sharing rules. A live validation failure on a marked
-report is a request failure; it does not delete a configured document or rewrite a
-shared default based on one caller's data. Invalid JSON in a database-backed default
-can still be repaired from configuration.
+to the existing saved-document sharing rules. A failed stored-document load can try the
+stored and synthetic defaults under the same caller's restriction. A client-submitted
+hydration failure returns an error. Neither path deletes a configured document or rewrites
+a shared default. Authorization denials and cancellation never trigger fallback.
 
 Use `IInteractiveReportServer` for host-owned endpoints requiring this integration.
 Low-level `ReportExecutor` calls do not invoke application authorization callbacks;

@@ -693,7 +693,7 @@ test("highlight rendering normalizes precedence and excludes disabled rules", ()
         // Row highlights paint the cells, with cell scope applied afterward.
         // Disabled rules remain in the normalized order but never paint.
         const row = table.querySelector("tr.ir-row");
-        assert.equal(row.children[0].style.background, "#444444");
-        assert.equal(row.children[1].style.background, "#222222");
+        assert.equal(row.children[0].style.backgroundColor, "#444444");
+        assert.equal(row.children[1].style.backgroundColor, "#222222");
     }
 });

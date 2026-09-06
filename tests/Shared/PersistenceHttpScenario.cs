@@ -160,7 +160,7 @@ internal static class PersistenceHttpScenario
             }
 
             using var saveResponse = await host.Client.PostAsync(
-                $"/api/reports/{host.ReportId}/saved",
+                $"/api/reports/{ReportName}/saved",
                 JsonContent.Create(new { title, state = defaultState }));
             Assert.Equal(HttpStatusCode.Created, saveResponse.StatusCode);
             var saved = await ReadJson(saveResponse);
@@ -182,7 +182,7 @@ internal static class PersistenceHttpScenario
             Assert.Equal(title, loaded.GetProperty("summary").GetProperty("title").GetString());
             Assert.True(JsonNode.DeepEquals(
                 JsonNode.Parse(defaultState.GetRawText()),
-                JsonNode.Parse(loaded.GetProperty("state").GetRawText())));
+                JsonNode.Parse(loaded.GetProperty("result").GetProperty("document").GetRawText())));
         }
 
     }
@@ -241,11 +241,7 @@ internal static class PersistenceHttpScenario
         var server = app.Services.GetRequiredService<IServer>();
         var address = server.Features.Get<IServerAddressesFeature>()!.Addresses.Single();
         var client = new HttpClient { BaseAddress = new Uri(address) };
-        var family = await GetJson(client, $"/api/reports/{ReportName}");
-        var reportId = family.EnumerateArray()
-            .Single(item => item.GetProperty("isDefault").GetBoolean())
-            .GetProperty("id").GetInt64();
-        return new RunningHost(app, client, reportId);
+        return new RunningHost(app, client);
     }
 
     private static async Task<JsonElement> GetJson(HttpClient client, string path)
@@ -280,10 +276,9 @@ internal static class PersistenceHttpScenario
             throw new ArgumentException("Table names must be plain SQL identifiers.", nameof(value));
     }
 
-    private sealed class RunningHost(WebApplication app, HttpClient client, long reportId) : IAsyncDisposable
+    private sealed class RunningHost(WebApplication app, HttpClient client) : IAsyncDisposable
     {
         public HttpClient Client { get; } = client;
-        public long ReportId { get; } = reportId;
 
         public async ValueTask DisposeAsync()
         {

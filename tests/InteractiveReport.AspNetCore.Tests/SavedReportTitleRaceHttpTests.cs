@@ -100,7 +100,7 @@ public sealed class SavedReportTitleRaceHttpTests : IAsyncLifetime
     public async Task A_save_losing_the_title_race_gets_the_same_409_as_the_pre_check()
     {
         using var raced = await _client.PostAsync(
-            $"/api/reports/{_reportId}/saved",
+            $"/api/reports/{ReportName}/saved",
             JsonContent.Create(new { title = "Contested", state = new { v = 3 } }));
 
         Assert.Equal(HttpStatusCode.Conflict, raced.StatusCode);
@@ -116,7 +116,7 @@ public sealed class SavedReportTitleRaceHttpTests : IAsyncLifetime
 
         // The rival's row survives; a save under a fresh title still works.
         using var retry = await _client.PostAsync(
-            $"/api/reports/{_reportId}/saved",
+            $"/api/reports/{ReportName}/saved",
             JsonContent.Create(new { title = "Uncontested", state = new { v = 3 } }));
         Assert.Equal(HttpStatusCode.Created, retry.StatusCode);
     }

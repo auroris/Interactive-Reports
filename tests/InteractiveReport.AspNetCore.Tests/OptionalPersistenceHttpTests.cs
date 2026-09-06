@@ -38,6 +38,12 @@ public sealed class OptionalPersistenceHttpTests
             using var schema = await host.Client.GetAsync("/api/reports/items/schema");
             Assert.Equal(HttpStatusCode.OK, schema.StatusCode);
 
+            using var initial = await host.Client.GetAsync("/api/reports/items/default");
+            Assert.Equal(HttpStatusCode.OK, initial.StatusCode);
+            var defaultDocument = await ReadJson(initial);
+            Assert.Equal(JsonValueKind.Null, defaultDocument.GetProperty("summary").ValueKind);
+            Assert.Single(defaultDocument.GetProperty("result").GetProperty("rows").EnumerateArray());
+
             using var query = await host.Client.PostAsJsonAsync(
                 "/api/reports/items/query",
                 new { v = 3 });

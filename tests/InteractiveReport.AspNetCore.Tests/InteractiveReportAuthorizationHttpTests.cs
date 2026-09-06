@@ -53,7 +53,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
 
         using var save = await host.Client.SendAsync(Request(
             HttpMethod.Post,
-            $"/api/reports/{host.OrdersId}/saved",
+            $"/api/reports/orders/saved",
             "action-admin",
             new { title = "Lifecycle", isGlobal = true, state }));
         Assert.Equal(HttpStatusCode.Created, save.StatusCode);
@@ -87,7 +87,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
         Assert.Equal(HttpStatusCode.OK, download.StatusCode);
         using var upload = await host.Client.SendAsync(Request(
             HttpMethod.Post,
-            $"/api/reports/admin/{host.OrdersId}/documents",
+            $"/api/reports/admin/orders/documents",
             "action-admin",
             new { title = "Uploaded", state }));
         Assert.Equal(HttpStatusCode.Created, upload.StatusCode);
@@ -127,7 +127,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
         {
             using var save = await narrowingOnly.Client.SendAsync(Request(
                 HttpMethod.Post,
-                $"/api/reports/{narrowingOnly.OrdersId}/saved",
+                $"/api/reports/orders/saved",
                 "callback-admin",
                 new { title = "Published", isGlobal = true, state = new { } }));
             Assert.Equal(HttpStatusCode.Forbidden, save.StatusCode);
@@ -152,7 +152,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
 
         using var published = await host.Client.SendAsync(Request(
             HttpMethod.Post,
-            $"/api/reports/{host.OrdersId}/saved",
+            $"/api/reports/orders/saved",
             "callback-admin",
             new { title = "Published", isGlobal = true, state = new { } }));
 
@@ -160,7 +160,6 @@ public sealed class InteractiveReportAuthorizationHttpTests
         var calls = seen.ToArray();
         Assert.Equal(
             [
-                InteractiveReportAction.ReadSavedReport,
                 InteractiveReportAction.CreateSavedReport,
                 InteractiveReportAction.PublishGlobalReport,
             ],
@@ -336,7 +335,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
         });
         using var save = await host.Client.SendAsync(Request(
             HttpMethod.Post,
-            $"/api/reports/{host.OrdersId}/saved",
+            $"/api/reports/orders/saved",
             "callback-admin",
             new { title = "Candidate", state = new { v = 3 } }));
         Assert.Equal(HttpStatusCode.Created, save.StatusCode);
@@ -394,7 +393,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
 
         using var save = await host.Client.SendAsync(Request(
             HttpMethod.Post,
-            $"/api/reports/{host.OrdersId}/saved",
+            $"/api/reports/orders/saved",
             "ordinary-user",
             new
             {
@@ -428,7 +427,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
         Assert.Equal("Server approved", saved.GetProperty("title").GetString());
         Assert.False(saved.GetProperty("isGlobal").GetBoolean());
         Assert.Equal(
-            [InteractiveReportAction.ReadSavedReport, InteractiveReportAction.CreateSavedReport],
+            [InteractiveReportAction.CreateSavedReport],
             seen.ToArray());
 
         using var load = await host.Client.SendAsync(Request(
@@ -436,7 +435,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
             $"/api/reports/orders/{saved.GetProperty("id").GetInt64()}",
             "ordinary-user"));
         Assert.Equal(HttpStatusCode.OK, load.StatusCode);
-        var loadedState = (await ReadJson(load)).GetProperty("state");
+        var loadedState = (await ReadJson(load)).GetProperty("result").GetProperty("document");
         Assert.Equal(
             "server-normalized",
             loadedState.GetProperty("search").GetString());
@@ -473,7 +472,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
 
         using var save = await host.Client.SendAsync(Request(
             HttpMethod.Post,
-            $"/api/reports/{host.OrdersId}/saved",
+            $"/api/reports/orders/saved",
             "ordinary-user",
             new { title = "Invalid after authorization", state = new { } }));
 
@@ -512,7 +511,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
 
         using var save = await host.Client.SendAsync(Request(
             HttpMethod.Post,
-            $"/api/reports/{host.OrdersId}/saved",
+            $"/api/reports/orders/saved",
             "ordinary-user",
             new { title = "Original", state = new { v = 3, search = "untouched" } }));
         Assert.Equal(HttpStatusCode.Created, save.StatusCode);
@@ -550,14 +549,13 @@ public sealed class InteractiveReportAuthorizationHttpTests
 
         using var save = await host.Client.SendAsync(Request(
             HttpMethod.Post,
-            $"/api/reports/{host.OrdersId}/saved",
+            $"/api/reports/orders/saved",
             "ordinary-user",
             new { title = "Escalated in stages", state = new { v = 3 } }));
 
         Assert.Equal(HttpStatusCode.Created, save.StatusCode);
         Assert.Equal(
             [
-                InteractiveReportAction.ReadSavedReport,
                 InteractiveReportAction.CreateSavedReport,
                 InteractiveReportAction.PublishGlobalReport,
             ],
@@ -589,7 +587,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
             "ordinary-user"));
 
         Assert.Equal(HttpStatusCode.OK, load.StatusCode);
-        var state = (await ReadJson(load)).GetProperty("state");
+        var state = (await ReadJson(load)).GetProperty("result").GetProperty("document");
         Assert.Equal("kept", state.GetProperty("search").GetString());
         Assert.False(state.TryGetProperty("foreignShape", out _));
     }
@@ -601,14 +599,14 @@ public sealed class InteractiveReportAuthorizationHttpTests
 
         using var privateSave = await host.Client.SendAsync(Request(
             HttpMethod.Post,
-            $"/api/reports/{host.OrdersId}/saved",
+            $"/api/reports/orders/saved",
             "ordinary-user",
             new { title = "Mine", state = new { v = 3 } }));
         Assert.Equal(HttpStatusCode.Created, privateSave.StatusCode);
 
         using var globalSave = await host.Client.SendAsync(Request(
             HttpMethod.Post,
-            $"/api/reports/{host.OrdersId}/saved",
+            $"/api/reports/orders/saved",
             "ordinary-user",
             new { title = "Global", isGlobal = true, state = new { v = 3 } }));
         Assert.Equal(HttpStatusCode.Forbidden, globalSave.StatusCode);
@@ -630,7 +628,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
 
         using var nonListed = await host.Client.SendAsync(Request(
             HttpMethod.Post,
-            $"/api/reports/{host.OrdersId}/saved",
+            $"/api/reports/orders/saved",
             "not-listed",
             new { title = "Rejected", isGlobal = true, state = new { v = 3 } },
             roles: ["release"]));
@@ -638,14 +636,14 @@ public sealed class InteractiveReportAuthorizationHttpTests
 
         using var restrictedAdmin = await host.Client.SendAsync(Request(
             HttpMethod.Post,
-            $"/api/reports/{host.OrdersId}/saved",
+            $"/api/reports/orders/saved",
             "configured-admin",
             new { title = "Restricted", isGlobal = true, state = new { v = 3 } }));
         Assert.Equal(HttpStatusCode.Forbidden, restrictedAdmin.StatusCode);
 
         using var allowedAdmin = await host.Client.SendAsync(Request(
             HttpMethod.Post,
-            $"/api/reports/{host.OrdersId}/saved",
+            $"/api/reports/orders/saved",
             "configured-admin",
             new { title = "Allowed", isGlobal = true, state = new { v = 3 } },
             roles: ["release"]));
@@ -668,14 +666,13 @@ public sealed class InteractiveReportAuthorizationHttpTests
 
         using var response = await host.Client.SendAsync(Request(
             HttpMethod.Post,
-            $"/api/reports/{host.OrdersId}/saved",
+            $"/api/reports/orders/saved",
             "native-admin",
             new { title = "Native", isGlobal = true, state = new { v = 3 } }));
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         Assert.Equal(
             [
-                InteractiveReportAction.ReadSavedReport,
                 InteractiveReportAction.CreateSavedReport,
                 InteractiveReportAction.PublishGlobalReport,
             ],
@@ -771,18 +768,14 @@ public sealed class InteractiveReportAuthorizationHttpTests
     public async Task Id_only_routes_report_a_hidden_family_exactly_like_a_missing_row()
     {
         // The built-in listing is administrators-only, so its family is hidden from everyone
-        // else; listing it as an administrator materializes a row whose id an outsider can probe.
+        // else; an explicitly saved listing document gives an outsider an id to probe.
         await using var host = await Start(administrators: ["admin"]);
-        using var listing = await host.Client.SendAsync(Request(
-            HttpMethod.Get, "/api/reports/__saved-reports", "admin"));
-        Assert.Equal(HttpStatusCode.OK, listing.StatusCode);
-        var hiddenId = (await ReadJson(listing)).EnumerateArray().First().GetProperty("id").GetInt64();
+        var hiddenId = await ReportDocumentTestIds.Default(host.Services, "__saved-reports");
 
         foreach (var (method, path, body) in new (HttpMethod, string, object?)[]
                  {
                      (HttpMethod.Put, "/api/reports/{0}", new { title = "probe" }),
                      (HttpMethod.Delete, "/api/reports/{0}", null),
-                     (HttpMethod.Post, "/api/reports/{0}/saved", new { title = "probe", state = new { } }),
                      (HttpMethod.Get, "/api/reports/admin/saved/{0}/document", null),
                  })
         {
@@ -832,7 +825,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
                      (HttpMethod.Post, "/api/reports/orders/lov"),
                      (HttpMethod.Post, "/api/download/orders/csv"),
                      (HttpMethod.Put, "/api/reports/admin/administrators"),
-                     (HttpMethod.Post, $"/api/reports/{host.OrdersId}/saved"),
+                     (HttpMethod.Post, $"/api/reports/orders/saved"),
                  })
         {
             using var request = new HttpRequestMessage(method, path)

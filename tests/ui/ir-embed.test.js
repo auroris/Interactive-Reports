@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
 import { inputComposableLocation } from "../../src/client/report/state.js";
-import { reportState } from "./report-state-fixture.js";
+import { hydratedResult, reportState } from "./report-state-fixture.js";
 import { reportControlNames } from "../../src/client/report/schema.js";
 
 const window = new Window({ url: "https://host.example/dashboard" });
@@ -61,16 +61,22 @@ globalThis.fetch = async (url, options = {}) => {
             id: 1, reportName: family, title: "Default", isDefault: true, isGlobal: true,
         }]);
     }
-    const document = /^\/custom-report-api\/([^/?]+)\/([^/?]+)$/.exec(path);
+    const document = /^\/custom-report-api\/([^/?]+)\/(\d+|default)$/.exec(path);
     if (method === "GET" && document) {
         const [, reportName, savedId] = document;
-        if (savedDocuments.has(savedId)) return json(savedDocuments.get(savedId));
-        const listed = savedReports.find(report => String(report.id) === savedId);
+        const selectedId = savedId === "default"
+            ? String(savedReports.find(report => report.reportName === reportName && report.isDefault)?.id ?? "1")
+            : savedId;
+        if (savedDocuments.has(selectedId)) {
+            const stored = savedDocuments.get(selectedId);
+            return json({ summary: stored.summary, result: hydratedResult({ ...reportState({ labels: { ID: "Ident" } }), ...stored.state }) });
+        }
+        const listed = savedReports.find(report => String(report.id) === selectedId);
         return json({
             summary: listed ?? {
-                id: Number(savedId), reportName, title: "Default", isDefault: true, isGlobal: true,
+                id: Number(selectedId), reportName, title: "Default", isDefault: true, isGlobal: true,
             },
-            state: {},
+            result: hydratedResult(reportState({ labels: { ID: "Ident" } })),
         });
     }
     if (path.endsWith("/query")) {
@@ -110,7 +116,7 @@ test("the report is style-isolated and uses its explicit API base", async () => 
     report.setAttribute("stylesheet", "/styles/orders-report.css?v=3");
     document.body.append(report);
 
-    for (let attempt = 0; attempt < 20 && !requests.some(r => r.url.endsWith("/query")); attempt++)
+    for (let attempt = 0; attempt < 20 && !report.shadowRoot.querySelector("tbody tr"); attempt++)
         await new Promise(resolve => setTimeout(resolve, 1));
 
     assert.ok(report.shadowRoot, "the component should render behind a shadow root");
@@ -150,8 +156,8 @@ test("the report is style-isolated and uses its explicit API base", async () => 
     assert.ok(!requests.some(r => r.url === "/custom-report-api"), "the report catalog endpoint must not be requested");
     assert.ok(requests.some(r => r.url === "/custom-report-api/orders/schema"));
     assert.ok(
-        requests.some(r => r.url === "/custom-report-api/orders/query" && r.method === "POST"),
-        `expected a query request; received ${JSON.stringify(requests)}`);
+        requests.some(r => r.url === "/custom-report-api/orders/default" && r.method === "GET"),
+        `expected a hydrated default request; received ${JSON.stringify(requests)}`);
 
     report.shadowRoot.querySelector(".ir-actionsbtn").click();
     const menu = report.shadowRoot.querySelector(".ir-popup");
@@ -184,7 +190,7 @@ test("a host can retrieve the current export without initiating a browser downlo
     report.setAttribute("download-base", "/custom-download-api");
     document.body.append(report);
 
-    for (let attempt = 0; attempt < 20 && !requests.some(r => r.url.endsWith("/query")); attempt++)
+    for (let attempt = 0; attempt < 20 && !report.shadowRoot.querySelector("tbody tr"); attempt++)
         await new Promise(resolve => setTimeout(resolve, 1));
 
     const artifact = await report.getExport("CSV");
@@ -214,11 +220,11 @@ test("the configured report is loaded directly and can be changed through its at
     report.setAttribute("stylesheet", "/styles/orders-report.css?v=3");
     document.body.append(report);
 
-    for (let attempt = 0; attempt < 20 && !requests.some(r => r.url.endsWith("/orders/query")); attempt++)
+    for (let attempt = 0; attempt < 20 && !report.shadowRoot.querySelector("tbody tr"); attempt++)
         await new Promise(resolve => setTimeout(resolve, 1));
 
     report.setAttribute("report", "order-feed");
-    for (let attempt = 0; attempt < 20 && !requests.some(r => r.url.endsWith("/order-feed/query")); attempt++)
+    for (let attempt = 0; attempt < 20 && !(report.definitionName === "order-feed" && report.shadowRoot.querySelector("tbody tr")); attempt++)
         await new Promise(resolve => setTimeout(resolve, 1));
 
     assert.equal(report.reportId, "1");
@@ -233,7 +239,7 @@ test("the configured report is loaded directly and can be changed through its at
     assert.equal(report.shadowRoot.querySelector("link[data-ir-host-stylesheet]"), null,
         "clearing the reflected property removes the link");
     assert.ok(requests.some(r => r.url === "/custom-report-api/order-feed/schema"));
-    assert.ok(requests.some(r => r.url === "/custom-report-api/order-feed/query"));
+    assert.ok(requests.some(r => r.url === "/custom-report-api/order-feed/default"));
     assert.ok(!requests.some(r => r.url === "/custom-report-api"));
 
     report.remove();
@@ -262,7 +268,7 @@ test("the report chrome and dialogs follow the host language", async () => {
     report.setAttribute("api-base", "/custom-report-api");
     document.body.append(report);
 
-    for (let attempt = 0; attempt < 40 && !requests.some(r => r.url.endsWith("/orders/query")); attempt++)
+    for (let attempt = 0; attempt < 40 && !report.shadowRoot.querySelector("tbody tr"); attempt++)
         await new Promise(resolve => setTimeout(resolve, 5));
 
     assert.equal(report.shadowRoot.querySelector(".ir-search-input").placeholder, "Rechercher");
@@ -330,31 +336,31 @@ test("labels resolve client-side: default report seeds them, rename overrides, c
     report.remove();
 });
 
-test("saved-report loads a uniquely named saved report before the initial query", async () => {
+test("saved-report loads its hydrated result directly", async () => {
     requests.length = 0;
     savedReports = [{
-        id: "saved-1", reportName: "orders", title: "My Default",
+        id: 21, reportName: "orders", title: "My Default",
         isGlobal: false, owner: "test-user", mine: true,
     }];
-    savedDocuments = new Map([["saved-1", {
+    savedDocuments = new Map([["21", {
         summary: savedReports[0],
         state: { search: "Acme", page: { index: 1, size: 25 }, view: { mode: "grid" } },
     }]]);
 
     const report = document.createElement("interactive-report");
     report.setAttribute("report", "orders");
-    report.setAttribute("saved-report", "saved-1");
+    report.setAttribute("saved-report", "21");
     report.setAttribute("api-base", "/custom-report-api");
     document.body.append(report);
 
-    for (let attempt = 0; attempt < 20 && !requests.some(r => r.url.endsWith("/orders/query")); attempt++)
+    for (let attempt = 0; attempt < 20 && !report.shadowRoot.querySelector("tbody tr"); attempt++)
         await new Promise(resolve => setTimeout(resolve, 1));
 
-    assert.equal(report.shadowRoot.querySelector(".ir-saved-select").value, "saved-1");
-    assert.ok(requests.some(r => r.url === "/custom-report-api/orders/saved-1"));
+    assert.equal(report.shadowRoot.querySelector(".ir-saved-select").value, "21");
+    assert.ok(requests.some(r => r.url === "/custom-report-api/orders/21"));
     const queries = requests.filter(r => r.url === "/custom-report-api/orders/query");
-    assert.equal(queries.length, 1, "Default should not be queried before the requested saved report");
-    assert.equal(JSON.parse(queries[0].body).search, "Acme");
+    assert.equal(queries.length, 0, "the requested saved report is already hydrated");
+    assert.equal(report.getReportDocument().search, "Acme");
 
     report.remove();
     savedReports = [];
@@ -364,10 +370,10 @@ test("saved-report loads a uniquely named saved report before the initial query"
 test("the flagged default report represents the schema Default", async () => {
     requests.length = 0;
     savedReports = [{
-        id: "default-1", reportName: "orders", title: "Default",
+        id: 1, reportName: "orders", title: "Default",
         isGlobal: true, isDefault: true, owner: null, mine: false,
     }, {
-        id: "global-2", reportName: "orders", title: "Executive",
+        id: 2, reportName: "orders", title: "Executive",
         isGlobal: true, isDefault: false, owner: "admin", mine: false,
     }];
 
@@ -376,16 +382,16 @@ test("the flagged default report represents the schema Default", async () => {
     report.setAttribute("api-base", "/custom-report-api");
     document.body.append(report);
 
-    for (let attempt = 0; attempt < 20 && !requests.some(r => r.url.endsWith("/orders/query")); attempt++)
+    for (let attempt = 0; attempt < 20 && !report.shadowRoot.querySelector("tbody tr"); attempt++)
         await new Promise(resolve => setTimeout(resolve, 1));
 
     const select = report.shadowRoot.querySelector(".ir-saved-select");
-    assert.equal(select.value, "default-1");
+    assert.equal(select.value, "1");
     assert.equal(select.options[0].text, "Default");
-    assert.equal(select.options[0].value, "default-1");
+    assert.equal(select.options[0].value, "1");
     assert.equal(select.querySelector('optgroup[label="Public"] option')?.text, "Default");
-    assert.equal(select.value, "default-1");
-    assert.equal(requests.some(r => r.url.endsWith("/orders/default-1")), true,
+    assert.equal(select.value, "1");
+    assert.equal(requests.some(r => r.url.endsWith("/orders/default")), true,
         "the default document is retrieved independently of the schema");
 
     report.remove();
@@ -396,21 +402,21 @@ test("a read-only saved report never offers Save or Delete, even to an administr
     requests.length = 0;
     whoami = { identity: "test-user", isAdministrator: true };
     savedReports = [{
-        id: "configured-1", reportName: "orders", title: "Configured View",
+        id: 31, reportName: "orders", title: "Configured View",
         isGlobal: true, owner: null, mine: false, isReadOnly: true,
     }];
-    savedDocuments = new Map([["configured-1", {
+    savedDocuments = new Map([["31", {
         summary: savedReports[0],
         state: { page: { index: 1, size: 25 }, view: { mode: "grid" } },
     }]]);
 
     const report = document.createElement("interactive-report");
     report.setAttribute("report", "orders");
-    report.setAttribute("saved-report", "configured-1");
+    report.setAttribute("saved-report", "31");
     report.setAttribute("api-base", "/custom-report-api");
     document.body.append(report);
 
-    for (let attempt = 0; attempt < 40 && !requests.some(r => r.url.endsWith("/orders/query")); attempt++)
+    for (let attempt = 0; attempt < 40 && !report.shadowRoot.querySelector("tbody tr"); attempt++)
         await new Promise(resolve => setTimeout(resolve, 5));
 
     report.shadowRoot.querySelector(".ir-actionsbtn").click();

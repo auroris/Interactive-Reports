@@ -20,7 +20,7 @@ import {
     selectView,
     serializeReportState,
 } from "./state.js";
-import { refreshSavedSelect } from "./saved.js";
+import { loadSavedList, refreshSavedSelect } from "./saved.js";
 import { renderChips } from "./render/chips.js";
 import { renderGrid } from "./render/grid.js";
 import { canRenderChart, renderChartView } from "./render/chart-view.js";
@@ -146,12 +146,12 @@ class ReportController {
      */
     get requestedSavedReportId() { return this.getAttribute("saved-report"); }
     /**
-     * Returns the numeric id of the active report-family anchor document.
+     * Returns the current saved-report association, when the working document has one.
      *
      * @returns {string|null} The report-document id.
      */
-    get reportId() { return this._activeReportId ?? null; }
-    /** Returns the configured definition key learned from the active anchor document. */
+    get reportId() { return this.currentSaved?.id == null ? null : String(this.currentSaved.id); }
+    /** Returns the active configured definition key, independent of saved-report provenance. */
     get definitionName() { return this._activeDefinitionName ?? null; }
 
     /**
@@ -329,7 +329,6 @@ class ReportController {
         this.destroyChart();
 
         this.resetReportContext();
-        this._activeReportId = null;
         this.whoami = null;
         buildSkeleton(this);
 
@@ -354,14 +353,14 @@ class ReportController {
     }
 
     /**
-     * Loads a report's schema, saved state, and initial query result as one sequenced activation.
+     * Loads a report's schema, saved list, and hydrated initial result as one sequenced activation.
      *
      * @param {string} name - The appsettings report configuration name to activate.
      * @param {number} [seq=++this._seq] - The lifecycle sequence used to reject stale asynchronous work.
      * @param {{quiet?: boolean}} [options={}] - Set `quiet` to suppress query errors during activation.
-     * @returns {Promise<boolean|undefined>} True after a current successful query, false for failure or stale work detected at most checkpoints, and undefined at the saved-list checkpoint.
+     * @returns {Promise<boolean>} Whether the hydrated result was accepted for the current activation.
      *
-     * Side effects: aborts prior work, fetches schema and saved reports, adopts initial state, runs a query, and updates styles, controls, notices, and saved selection.
+     * Side effects: aborts prior work, fetches schema, saved summaries, and one hydrated document, then adopts and renders its result without submitting another query.
      */
     async activateReport(name, seq = ++this._seq, { quiet = false } = {}) {
         name = name?.trim();
@@ -370,42 +369,25 @@ class ReportController {
         this._abort?.abort();
         this._abort = null;
         this.resetReportContext();
-        this._activeReportId = null;
+        this._activeDefinitionName = name;
         this.clearReportView();
         refreshSavedSelect(this);
         const finishBusy = this.beginBusy();
+        const requestId = ++this._requestId;
+        const revision = this._stateRevision;
 
         try {
             const requestedSaved = this.requestedSavedReportId?.trim();
-            const saved = await api(apiUrl(this.base, name));
-            if (seq !== this._seq) return false;
-            const selected = requestedSaved
-                ? saved.find(candidate => String(candidate.id) === requestedSaved)
-                : saved.find(candidate => candidate.isDefault);
-            if (!selected)
-                throw new Error(requestedSaved
-                    ? this.t("saved.unavailable")
-                    : `Report configuration “${name}” has no default document.`);
-
-            const definitionName = selected.reportName;
-            this._activeDefinitionName = definitionName;
-            this._activeReportId = String(selected.id);
-
-            // Schema and processing are definition operations. Only document discovery and
-            // persistence use numeric document ids.
-            const [docResponse, schema] = await Promise.all([
-                api(apiUrl(this.base, definitionName, selected.id)),
-                api(apiUrl(this.base, definitionName, "schema")),
+            const [loaded, schema] = await Promise.all([
+                api(this.definitionUrl(requestedSaved || "default")),
+                api(this.definitionUrl("schema")),
+                loadSavedList(this),
             ]);
-            if (seq !== this._seq) return;
+            if (seq !== this._seq) return false;
             this.schema = schema;
+            this.currentSaved = loaded.summary;
             applyFeatureChrome(this);
-            this.savedList = saved;
-
-            this.currentSaved = docResponse.summary;
-            this.adoptState(docResponse.state);
-            refreshSavedSelect(this);
-            await this.runQuery({ quiet, source: "initial" });
+            this.acceptResult(loaded.result, { source: "initial", requestId, revision });
             return seq === this._seq && this.lastResult !== null;
         } catch (err) {
             if (!quiet && err.name !== "AbortError" && seq === this._seq) this.showError(err);
@@ -433,23 +415,6 @@ class ReportController {
             options);
     }
 
-    // Protocol contract: adopt a state document as the working copy. Server-delivered documents
-    // are authoritative, and saved reports are accepted liberally: normalization guarantees
-    // shape, the server judges the content on query — hard problems come back as a validation
-    // response (and the failed operation rolls back), with soft drift returned as `ignored` notices.
-    /**
-     * Normalizes a server-owned report document and installs it as the working state.
-     *
-     * @param {object} rawState - The server-returned report state to normalize and adopt.
-     * @returns {void} No value.
-     *
-     * Side effects: replaces `this.doc` and synchronizes the search input.
-     */
-    adoptState(rawState) {
-        this.doc = this.normalize(rawState);
-        this.els.search.value = this.doc.search ?? "";
-    }
-
     // Protocol contract: canonical state: explicit empty values survive so they can clear
     // report defaults; undefined object properties are omitted by JSON serialization.
     /**
@@ -468,7 +433,7 @@ class ReportController {
      * @throws {Error} When the initial report query has not completed successfully.
      */
     getReportDocument() {
-        if (!this.reportId || !this.definitionName || !this.schema || !this.doc || !this.lastResult)
+        if (!this.definitionName || !this.schema || !this.doc || !this.lastResult)
             throw invalidState("The report must finish loading before its document can be read.");
         return this.serialize();
     }
@@ -483,7 +448,7 @@ class ReportController {
      * Side effects: posts the complete document to the report's query-authorized LOV endpoint.
      */
     async getListOfValues(options = {}) {
-        if (!this.reportId || !this.schema || !this.doc || !this.lastResult)
+        if (!this.definitionName || !this.schema || !this.doc || !this.lastResult)
             throw invalidState("The report must finish loading before values can be requested.");
         const {
             document = this.serialize(),
@@ -521,7 +486,7 @@ class ReportController {
      * rerenders on success, and restores the last validated document on current failure or cancellation.
      */
     async submitReportDocument(document) {
-        if (!this.reportId || !this.definitionName || !this.schema || !this.doc || !this.lastResult)
+        if (!this.definitionName || !this.schema || !this.doc || !this.lastResult)
             throw invalidState("The report must finish loading before a document can be submitted.");
 
         const prev = this.doc;
@@ -633,11 +598,6 @@ class ReportController {
      */
     definitionUrl(resource) {
         return apiUrl(this.base, this.definitionName, resource);
-    }
-
-    /** Builds a document-family persistence URL using the numeric anchor id. */
-    documentFamilyUrl(resource) {
-        return apiUrl(this.base, this.reportId, resource);
     }
 
     /**
@@ -778,34 +738,7 @@ class ReportController {
             // validated result so the user sees progress, but do not adopt its document; the
             // follow-up query will replace the result.
             const coalesced = Boolean(this._coalesced);
-            const accepted = result.document;
-            if (!coalesced) {
-                // Protocol contract: the returned document is the submitted working copy with
-                // null schema caches replaced by the server. A superseding operation aborts this
-                // request before this point, so it cannot overwrite newer edits.
-                this.doc = structuredClone(accepted);
-                this.els.search.value = this.doc.search ?? "";
-            }
-            this.lastResult = result;
-            this.commitLastGood(accepted, revision);
-            this.clearError();
-            // Chips always reflect the working document, which already holds any newer edits.
-            renderChips(this, this.els.chips);
-            this.renderView();
-            renderPager(this, this.els.pager);
-            this.renderIgnored(result.ignored);
-            this.refreshViewButtons();
-            this.dispatchEvent(new EventType("ir-query-complete", {
-                bubbles: true,
-                composed: true,
-                detail: structuredClone({
-                    document: accepted,
-                    result,
-                    submitted,
-                    source,
-                    requestId,
-                }),
-            }));
+            this.acceptResult(result, { submitted, source, requestId, revision, coalesced });
             return coalesced ? COALESCED : result;
         } catch (err) {
             if (ctrl !== this._abort || err.name === "AbortError") return;
@@ -817,6 +750,36 @@ class ReportController {
             if (ctrl === this._abort) this._abort = null;
             finishBusy();
         }
+    }
+
+    /**
+     * Adopts and renders a hydrated result from either a document load or a submitted query.
+     * Loads have no submitted client document; coalesced queries retain newer working edits.
+     *
+     * @param {object} result - The server's complete result and hydrated document.
+     * @param {object} options - Request identity, state revision, and optional submitted document/coalescing state.
+     * @returns {void} No value.
+     */
+    acceptResult(result, { submitted = null, source, requestId, revision, coalesced = false }) {
+        const accepted = result.document;
+        if (!coalesced) {
+            this.doc = structuredClone(accepted);
+            this.els.search.value = this.doc.search ?? "";
+        }
+        this.lastResult = result;
+        this.commitLastGood(accepted, revision);
+        this.clearError();
+        renderChips(this, this.els.chips);
+        this.renderView();
+        renderPager(this, this.els.pager);
+        this.renderIgnored(result.ignored);
+        this.refreshViewButtons();
+        const EventType = this.ownerDocument?.defaultView?.CustomEvent ?? globalThis.CustomEvent;
+        this.dispatchEvent(new EventType("ir-query-complete", {
+            bubbles: true,
+            composed: true,
+            detail: structuredClone({ document: accepted, result, submitted, source, requestId }),
+        }));
     }
 
     // Invariant: route the result to the table or the chart. Only one is ever visible; the
@@ -1160,14 +1123,14 @@ export class InteractiveReportElement extends HTMLElement {
     }
 
     /**
-     * The active report-family anchor id. The `report` attribute contains the appsettings
-     * configuration name instead, so this remains null until family bootstrap succeeds.
+     * The current saved-report association, or null for a synthetic or unassociated document.
+     * A loaded report remains fully usable without a saved-report id.
      *
      * @returns {string|null} The active report-document id.
      */
     get reportId() { return controllerFor(this).reportId; }
 
-    /** The configured definition key learned after the anchor document is retrieved. */
+    /** The active configured definition key. */
     get definitionName() { return controllerFor(this).definitionName; }
 
     /**

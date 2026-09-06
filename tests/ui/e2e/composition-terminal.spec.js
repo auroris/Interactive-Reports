@@ -33,7 +33,7 @@ test("break subtotals wait for a page boundary to close and grand totals wait fo
     try {
         await openWorkbench(page);
         let response = await loadSavedState(page, saved);
-        let result = await response.json();
+        let { result } = await response.json();
         const pages = [];
 
         for (;;) {

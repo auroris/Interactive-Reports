@@ -216,7 +216,7 @@ public sealed class DataSourceHttpTests : IAsyncLifetime
         var id = await ReportDocumentTestIds.Default(_app!.Services, "literal");
         var body = new { title = "Kept", state = new { v = 3 } };
         using var created = await _client.PostAsync(
-            $"/api/reports/{id}/saved", JsonContent.Create(body));
+            $"/api/reports/literal/saved", JsonContent.Create(body));
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
 
         Assert.True(File.Exists(_savedPath), "the dataSource-backed store file was not created");

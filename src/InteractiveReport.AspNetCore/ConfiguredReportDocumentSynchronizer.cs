@@ -5,9 +5,8 @@ using Microsoft.Extensions.Logging;
 namespace InteractiveReport.AspNetCore;
 
 /// <summary>
-/// Reconciles configured report-document file references with the database catalogue. Listing
-/// supplies the database's complete, unfiltered view before caller visibility is applied; the
-/// in-memory appsettings comparison opens only configured files whose identities are absent.
+/// Explicitly reconciles configured report-document file references with the database catalogue.
+/// The appsettings comparison opens only configured files whose identities are absent.
 /// </summary>
 public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
 {
@@ -28,44 +27,16 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
     }
 
     /// <summary>
-    /// Reconciles every report family from one complete database query. Retained for explicit
-    /// host and administration synchronization; normal document listings consume the returned
-    /// snapshot through <see cref="ReconcileAll"/>.
+    /// Reconciles every report family from one complete database query. Hosts call this during
+    /// initialization or administration; ordinary read requests never synchronize stored rows.
     /// </summary>
     public async Task EnsureSynced(CancellationToken ct = default)
-        => _ = await ReconcileAll(ct);
-
-    /// <summary>
-    /// Loads every database report once, reconciles configured identities, and returns the
-    /// corrected unfiltered snapshot for authorization and owner/public filtering in memory.
-    /// </summary>
-    internal async Task<IReadOnlyList<SavedReport>> ReconcileAll(CancellationToken ct = default)
     {
         await _lock.WaitAsync(ct);
         try
         {
             var databaseReports = await _store.ListAll(ct);
-            return await Reconcile(databaseReports, reportName: null, ct);
-        }
-        finally
-        {
-            _lock.Release();
-        }
-    }
-
-    /// <summary>
-    /// Loads the complete family selected by <paramref name="reportName"/> in one query and
-    /// reconciles that configured family even when the database does not contain a document yet.
-    /// </summary>
-    internal async Task<IReadOnlyList<SavedReport>> ReconcileFamily(
-        string reportName,
-        CancellationToken ct = default)
-    {
-        await _lock.WaitAsync(ct);
-        try
-        {
-            var databaseReports = await _store.ListFamily(reportName, ct);
-            return await Reconcile(databaseReports, reportName, ct);
+            await Reconcile(databaseReports, ct);
         }
         finally
         {
@@ -77,12 +48,11 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
     /// Compares one authoritative database snapshot with configured file references, applying
     /// only the missing, superseded-default, and orphan discrepancies it finds.
     /// </summary>
-    private async Task<IReadOnlyList<SavedReport>> Reconcile(
+    private async Task Reconcile(
         IReadOnlyList<SavedReport> databaseReports,
-        string? reportName,
         CancellationToken ct)
     {
-        var references = _documents.ListReferences(reportName).ToArray();
+        var references = _documents.ListReferences().ToArray();
         var desired = references
             .Select(reference => (reference.ReportName, reference.SourceFile))
             .ToHashSet();
@@ -230,12 +200,6 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
                 upserted,
                 deleted);
 
-        return current.Values
-            .OrderBy(report => report.ReportName, StringComparer.Ordinal)
-            .ThenByDescending(report => report.IsDefault)
-            .ThenByDescending(report => report.IsGlobal)
-            .ThenBy(report => report.Title, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
     }
 
     private static SavedReport? CurrentDefault(
@@ -279,25 +243,6 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
             reportName,
             document);
         return failure;
-    }
-
-    /// <summary>Deletes a configured identity whose referenced body was absent.</summary>
-    internal Task RemoveMissing(SavedReport report, CancellationToken ct)
-        => _store.Delete(report.Id, ct);
-
-    /// <summary>Logs and deletes a configured identity whose body failed loading or processing.</summary>
-    internal async Task RemoveInvalid(
-        SavedReport report,
-        Exception exception,
-        CancellationToken ct)
-    {
-        _logger?.LogWarning(
-            exception,
-            "Configured report document {ReportName}/{SourceFile} (id {SavedReportId}) threw while loading; deleting its optimistic database identity",
-            report.ReportName,
-            report.SourceFile,
-            report.Id);
-        await _store.Delete(report.Id, ct);
     }
 
     /// <summary>Releases the synchronization lock.</summary>

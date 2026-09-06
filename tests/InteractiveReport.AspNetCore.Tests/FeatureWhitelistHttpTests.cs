@@ -163,14 +163,14 @@ public sealed class FeatureWhitelistHttpTests : IAsyncLifetime
         var openId = await ReportDocumentTestIds.Default(_app.Services, "open");
         var body = new { title = "Blocked", state = new { } };
         using var refused = await _client.PostAsync(
-            $"/api/reports/{lockedId}/saved", JsonContent.Create(body));
+            $"/api/reports/locked/saved", JsonContent.Create(body));
         Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
         var problem = await ReadJson(refused);
         Assert.Equal("IR-1100", problem.GetProperty("code").GetString());
         Assert.Contains("savedReports", problem.GetProperty("details").GetString());
 
         using var allowed = await _client.PostAsync(
-            $"/api/reports/{openId}/saved", JsonContent.Create(new { title = "Allowed", state = new { } }));
+            $"/api/reports/open/saved", JsonContent.Create(new { title = "Allowed", state = new { } }));
         Assert.Equal(HttpStatusCode.Created, allowed.StatusCode);
     }
 

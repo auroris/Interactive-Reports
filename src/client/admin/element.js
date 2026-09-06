@@ -82,10 +82,7 @@ export class InteractiveReportAdminElement extends WidgetElement {
 
         let availableReports;
         try {
-            const families = await api(this.base);
-            const reportsByFamily = await Promise.all(families.map(family =>
-                api(apiUrl(this.base, family.name))));
-            availableReports = reportsByFamily.flat();
+            availableReports = await api(this.base);
         } catch (error) {
             if (seq !== this._seq || !this.isConnected) return;
             this._mount.replaceChildren(banner("error", error.message, null, this));
@@ -414,7 +411,7 @@ export class InteractiveReportAdminElement extends WidgetElement {
      * Side effects: fetches the saved report and opens a read-only JSON dialog.
      */
     async viewState(id, row) {
-        const doc = await api(apiUrl(this.base, row.REPORT_NAME, id));
+        const doc = await api(apiUrl(this.base, "admin", "saved", id, "document"));
         openDialog({
             owner: this,
             title: this.t("admin.stateDocumentTitle", { title: row.TITLE }),
@@ -470,8 +467,8 @@ export class InteractiveReportAdminElement extends WidgetElement {
      */
     uploadDocument() {
         const reportInp = sel((this.availableReports ?? [])
-            .filter(report => report.isDefault && report.reportName !== LISTING_REPORT)
-            .map(report => ({ value: report.id, label: report.title })));
+            .filter(report => report.name !== LISTING_REPORT)
+            .map(report => ({ value: report.name, label: report.title })));
         reportInp.required = true;
         const fileInp = el("input", {
             class: "ir-input", type: "file", accept: ".json,application/json", required: true,
@@ -487,8 +484,8 @@ export class InteractiveReportAdminElement extends WidgetElement {
                 el("p", { class: "ir-dialog-note" },
                     this.t("admin.uploadNote"))),
             onApply: async () => {
-                const reportId = reportInp.value;
-                if (!reportId) throw new Error(this.t("admin.enterReportName"));
+                const reportName = reportInp.value;
+                if (!reportName) throw new Error(this.t("admin.enterReportName"));
                 const file = fileInp.files?.[0];
                 if (!file) throw new Error(this.t("admin.chooseJson"));
 
@@ -499,7 +496,7 @@ export class InteractiveReportAdminElement extends WidgetElement {
                     throw new Error(this.t("admin.invalidJson"));
                 }
 
-                const imported = await api(apiUrl(this.base, "admin", reportId, "documents"), {
+                const imported = await api(apiUrl(this.base, "admin", reportName, "documents"), {
                     method: "POST",
                     body: document,
                 });

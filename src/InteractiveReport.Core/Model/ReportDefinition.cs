@@ -226,7 +226,7 @@ public sealed class ReportEditLink
     /// <summary>Gets or sets the accessible name and tooltip; the client defaults it to <c>Edit</c>.</summary>
     public string? Label { get; set; }
 
-    /// <summary>Gets or sets <c>_self</c> by default or <c>_blank</c>; the client adds <c>rel="noopener"</c>.</summary>
+    /// <summary>Gets or sets the application-chosen browsing target; defaults to <c>_self</c>.</summary>
     public string? Target { get; set; }
 
     /// <summary>
@@ -253,7 +253,7 @@ public sealed class ReportCreateLink
     /// <summary>Gets or sets the button text and accessible name; the client defaults it to <c>Create</c>.</summary>
     public string? Label { get; set; }
 
-    /// <summary>Gets or sets <c>_self</c> by default or <c>_blank</c>; the client adds <c>rel="noopener"</c>.</summary>
+    /// <summary>Gets or sets the application-chosen browsing target; defaults to <c>_self</c>.</summary>
     public string? Target { get; set; }
 
     /// <summary>
