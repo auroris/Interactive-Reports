@@ -514,7 +514,7 @@ composition internals:
 | `IContextParameterResolver` | Resolve trusted values used by configured SQL. |
 | `InteractiveReportBuilder.UseAuthorization(...)` / `.UseAspNetCoreAuthorization()` | Add application-specific operation authorization. |
 | `ISavedReportStore` | Replace report-document persistence. |
-| `IInteractiveReportUserProvider` | Supply account choices to administration UI without granting authority. |
+| `IInteractiveReportUserProvider` / `UseUserDirectory(...)` | Supply searchable account choices to administration UI without granting authority. |
 | `IInteractiveReportServer` | Invoke the application boundary directly or build another transport adapter. |
 
 The bound-plan and SQL-lowering layers are internal. Custom callers extend the product

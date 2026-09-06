@@ -77,6 +77,7 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<SchemaCache>(),
             logging.For<ReportExecutor>()));
         services.AddSingleton<IReportAuthorizationService, ReportAuthorizationService>();
+        services.AddSingleton<UserDirectoryCache>();
         services.AddSingleton<IInteractiveReportServer, InteractiveReportServer>();
         services.AddSingleton(sp => new DefaultReportDocumentService(
             sp.GetRequiredService<ISavedReportStore>(),
@@ -194,16 +195,56 @@ public sealed class InteractiveReportBuilder
     }
 
     /// <summary>
-    /// Registers the application user directory used by administration account selectors.
-    /// The provider may be scoped and may return no entries to retain free-form identity entry. It supplies
-    /// choices only and does not authorize them.
+    /// Registers the application user directory used by administration account pickers. The
+    /// provider is resolved in request scope, receives each lookup's search text and result limit,
+    /// and may return no entries to leave the picker with the identities the engine already knows.
+    /// It supplies choices only and does not authorize them.
     /// </summary>
     /// <typeparam name="TProvider">The scoped application user-directory implementation.</typeparam>
     /// <returns>This builder for further registration.</returns>
+    /// <remarks>Replaces any previously registered provider or directory callback.</remarks>
     public InteractiveReportBuilder UseUserProvider<TProvider>()
         where TProvider : class, IInteractiveReportUserProvider
     {
         _services.Replace(ServiceDescriptor.Scoped<IInteractiveReportUserProvider, TProvider>());
+        return this;
+    }
+
+    /// <summary>
+    /// Registers an application user-directory callback for administration account selectors. The
+    /// callback receives the administrator, the optional search text, and the result limit, and
+    /// answers with .NET identities; each is projected to the same canonical identity value the
+    /// account resolves to when it signs in. It supplies choices only and does not authorize them.
+    /// </summary>
+    /// <param name="callback">The host callback invoked for each administration account lookup.</param>
+    /// <returns>This builder for further registration.</returns>
+    /// <remarks>Replaces any previously registered provider or directory callback. The callback may resolve scoped services through the search's request services.</remarks>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="callback"/> is <see langword="null"/>.</exception>
+    /// <example>
+    /// <code><![CDATA[
+    /// reports.UseUserDirectory(async (search, ct) =>
+    /// {
+    ///     var users = search.RequestServices.GetRequiredService<UserManager<AppUser>>();
+    ///     var principals = search.RequestServices.GetRequiredService<IUserClaimsPrincipalFactory<AppUser>>();
+    ///     var matches = await users.Users
+    ///         .Where(user => search.Search == null || user.UserName!.Contains(search.Search))
+    ///         .OrderBy(user => user.UserName)
+    ///         .Take(search.Limit)
+    ///         .ToListAsync(ct);
+    ///     var identities = new List<ClaimsIdentity>();
+    ///     foreach (var user in matches)
+    ///         identities.Add((await principals.CreateAsync(user)).Identities.First());
+    ///     return identities;
+    /// });
+    /// ]]></code>
+    /// </example>
+    public InteractiveReportBuilder UseUserDirectory(InteractiveReportUserDirectoryCallback callback)
+    {
+        ArgumentNullException.ThrowIfNull(callback);
+        _services.Replace(ServiceDescriptor.Singleton<IInteractiveReportUserProvider>(sp =>
+            new CallbackInteractiveReportUserProvider(
+                callback,
+                sp.GetRequiredService<IOptionsMonitor<InteractiveReportOptions>>())));
         return this;
     }
 

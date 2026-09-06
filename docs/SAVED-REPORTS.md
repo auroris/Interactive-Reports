@@ -171,38 +171,43 @@ needed.
 
 The page can publish or unpublish a database document, select a default, reassign an owner,
 inspect state, download an envelope, upload an envelope, and delete editable documents.
-Configured documents remain read-only. The authorization editor manages database-backed
-administrator, report-restriction, and report-user grants; configuration entries remain
-source-controlled and cannot be removed there.
+Configured documents remain read-only. The Administrators editor sets the database-backed
+administrator list as a whole, and the Report access editor manages report-restriction and
+report-user grants; configuration entries remain source-controlled and cannot be removed
+there. Every account picker searches the application's user directory together with the
+identities already known from configuration and storage, and still accepts an identity
+value typed exactly.
 
 Report names beginning with `__` are reserved for built-in administration definitions.
 
 ## Supply account choices
 
-Applications can replace free-form identity entry with a directory of display labels and
-canonical values:
+Account pickers always offer the identities Interactive Reports already knows: configured
+administrators and report users, database grants, and saved-report owners. Applications
+add a searchable directory of display names and canonical values with a callback that
+answers a search with .NET identities:
 
 ```csharp
-public sealed class ReportUsers : IInteractiveReportUserProvider
-{
-    public ValueTask<IReadOnlyCollection<InteractiveReportUser>?> GetUsers(
-        ClaimsPrincipal administrator,
-        CancellationToken cancellationToken = default)
-        => ValueTask.FromResult<IReadOnlyCollection<InteractiveReportUser>?>(
-        [
-            new("Ada Lovelace", "ada-id"),
-            new("Grace Hopper", "grace-id"),
-        ]);
-}
+using System.Security.Claims;
 
 builder.Services
     .AddInteractiveReports(builder.Configuration)
-    .UseUserProvider<ReportUsers>();
+    .UseUserDirectory((search, ct) => ValueTask.FromResult<IEnumerable<ClaimsIdentity>?>(
+        AccountDirectory.Find(search.Search, search.Limit)
+            .Select(account => new ClaimsIdentity(
+            [
+                new Claim(ClaimTypes.NameIdentifier, account.SubjectId),
+                new Claim(ClaimTypes.Name, account.DisplayName),
+            ]))));
 ```
 
-The provider is scoped and runs only after the caller passes the administration gate.
-Its order is preserved. Returning `null` or an empty collection retains free-form entry.
-Directory membership supplies choices only; it grants no authority.
+The callback runs only after the caller passes the administration gate. Each identity
+resolves through the same claim chain as sign-in, so the value offered is the value that
+is stored as an owner or grant. Directory order is preserved ahead of known identities.
+Returning `null` or nothing leaves the picker with known identities and free-form entry.
+Directory membership supplies choices only; it grants no authority. The class-based
+`IInteractiveReportUserProvider`, lookup limits, and memoization are described in the
+[Integration API](API.md#supply-administration-user-choices).
 
 ## Import and export
 

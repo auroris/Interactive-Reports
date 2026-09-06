@@ -27,39 +27,33 @@ export function apiUrl(base, ...segments) {
 }
 
 /**
- * Extracts displayable messages from a server problem response.
+ * Extracts displayable messages from a server error document.
  *
- * @param {Error|string|object} error - The error value to normalize for display.
+ * @param {object} error - The decoded server error document (`code`, `title`, `description`, `details`).
  * @param {string|Element|object|null} [locale=null] - The locale or DOM context used to localize a recognized error code.
- * @returns {Array<string>} Sanitized title, description, details, and legacy validation messages in display order.
+ * @returns {Array<string>} Sanitized title, description, and details in display order.
  */
 function serverErrorLines(error, locale = null) {
     const lines = [];
     const localized = error.code ? localizedError(error.code, locale) : null;
     const title = localized?.title ?? error.title;
     if (title) lines.push(title);
-    const description = localized?.description
-        ?? error.description
-        ?? error.detail; // Detail supports pre-code servers.
+    const description = localized?.description ?? error.description;
     if (description)
         lines.push(...String(description).split(/\r?\n/).filter(Boolean));
     if (error.details)
         lines.push(...String(error.details).split(/\r?\n/).filter(Boolean));
-    // ValidationProblemDetails compatibility for clients and servers upgraded at different
-    // times. New servers flatten these entries into details.
-    for (const messages of Object.values(error.errors ?? {}))
-        for (const message of messages) lines.push(message);
     return lines;
 }
 
 export class ApiError extends Error {
     /**
-     * Creates a typed HTTP error from a decoded server problem document.
+     * Creates a typed HTTP error from a decoded server error document.
      *
-     * @param {object|null} error - The decoded problem document; non-object values are treated as empty problems.
+     * @param {object|null} error - The decoded error document; non-object values are treated as empty documents.
      * @param {number} status - The unsuccessful HTTP status.
      *
-     * Side effects: retains the problem, status, stable error code, and trace identifier on the error instance.
+     * Side effects: retains the error document, status, stable error code, and trace identifier on the error instance.
      */
     constructor(error, status) {
         error = error && typeof error === "object" ? error : {};
@@ -67,7 +61,6 @@ export class ApiError extends Error {
         this.name = "ApiError";
         this.status = status;
         this.error = error;
-        this.problem = error; // Compatibility for host code written against the former contract.
         this.code = error.code ?? null;
         this.traceId = error.traceId ?? null; // Protocol contract: sanitized server errors carry a correlation id.
     }
@@ -75,7 +68,7 @@ export class ApiError extends Error {
 
 // Protocol contract: the canonical content of an error, shared by banners and dialog error
 // boxes: the server's sanitized title and description, in order. Duck-typed on error so it also
-// covers plain Errors, strings, and the former problem-details contract.
+// covers plain Errors and strings.
 /**
  * Normalizes an arbitrary failure into user-facing diagnostic lines.
  *
@@ -85,7 +78,7 @@ export class ApiError extends Error {
  */
 export function errorLines(err, locale = null) {
     if (typeof err === "string") return [err];
-    const error = err?.error ?? err?.problem;
+    const error = err?.error;
     if (!error || typeof error !== "object") return [err?.message || translate(locale, "error.generic")];
     const lines = serverErrorLines(error, locale);
     if (!lines.length) lines.push(err.message || translate(locale, "error.http", { status: err.status }));

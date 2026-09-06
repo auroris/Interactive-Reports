@@ -21,6 +21,33 @@ internal static class AuthorizationEndpoints
             : Results.Json(listed.Value, IrJson.Options);
     }
 
+    /// <summary>Lists configured and database-authored administrator identities.</summary>
+    internal static async Task<IResult> ListAdministrators(HttpContext context, CancellationToken ct)
+    {
+        var listed = await EndpointExtensions.Server(context).ListAdministrators(
+            EndpointExtensions.Context(context), ct);
+        return listed.Failure is not null
+            ? EndpointExtensions.Failure(listed.Failure, context)
+            : Results.Json(listed.Value, IrJson.Options);
+    }
+
+    /// <summary>
+    /// Replaces the database-authored administrator list with the identities in the request body.
+    /// The body is read through a deferred callback so the server authorizes administration before
+    /// the request is parsed.
+    /// </summary>
+    internal static async Task<IResult> SetAdministrators(HttpContext context, CancellationToken ct)
+    {
+        var replaced = await EndpointExtensions.Server(context).SetAdministrators(
+            async token => (await JsonSerializer.DeserializeAsync<AuthorizationIdentitiesRequest>(
+                context.Request.Body, IrJson.Options, token))?.Identities,
+            EndpointExtensions.Context(context),
+            ct);
+        return replaced.Failure is not null
+            ? EndpointExtensions.Failure(replaced.Failure, context)
+            : Results.NoContent();
+    }
+
     /// <summary>Grants database-authored administrator access to the identity in the request body.</summary>
     internal static Task<IResult> GrantAdministrator(HttpContext context, CancellationToken ct)
         => Mutate(context, (server, read, requestContext, token)

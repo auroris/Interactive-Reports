@@ -198,10 +198,29 @@ public interface IInteractiveReportServer
         CancellationToken ct = default);
 
     /// <summary>
-    /// Lists the host-supplied identity choices offered for authorization administration.
-    /// Administrator-only; a host with no user provider reports an empty list.
+    /// Looks up account choices for authorization administration: application-directory entries
+    /// merged with the identities Interactive Reports already knows from configuration and
+    /// storage, narrowed by optional search text and bounded by the configured limit.
+    /// Administrator-only; a host with no user directory still lists the identities it knows.
     /// </summary>
-    Task<InteractiveReportServerResult<IReadOnlyList<InteractiveReportUser>>> ListAuthorizationUsers(
+    Task<InteractiveReportServerResult<InteractiveReportUserList>> ListAuthorizationUsers(
+        string? search,
+        InteractiveReportRequestContext context,
+        CancellationToken ct = default);
+
+    /// <summary>Lists configured and database-authored administrator identities. Administrator-only.</summary>
+    Task<InteractiveReportServerResult<InteractiveReportAdministratorList>> ListAdministrators(
+        InteractiveReportRequestContext context,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Replaces the database-authored administrator grants with the supplied identity list,
+    /// granting the identities that are missing and revoking the ones no longer listed.
+    /// Configured administrators are untouched. The list is read through
+    /// <paramref name="readIdentities"/> only after administration has been authorized.
+    /// </summary>
+    Task<InteractiveReportServerResult<bool>> SetAdministrators(
+        Func<CancellationToken, Task<IReadOnlyCollection<string?>?>> readIdentities,
         InteractiveReportRequestContext context,
         CancellationToken ct = default);
 
@@ -272,8 +291,12 @@ internal sealed class InteractiveReportServer(
     DefaultReportDocumentService defaultDocuments,
     ReportExecutor executor,
     IOptionsMonitor<InteractiveReportOptions> options,
+    UserDirectoryCache directoryCache,
     InteractiveReportLogging logging) : IInteractiveReportServer
 {
+    /// <summary>The longest administration user search accepted, matching the report LOV limit.</summary>
+    private const int MaxUserSearchLength = 200;
+
     public async Task<InteractiveReportServerResult<IReadOnlyList<ReportConfigurationSummary>>> ListConfigurations(
         InteractiveReportRequestContext context,
         CancellationToken ct = default)
@@ -935,7 +958,8 @@ internal sealed class InteractiveReportServer(
                 .ToArray()));
     }
 
-    public async Task<InteractiveReportServerResult<IReadOnlyList<InteractiveReportUser>>> ListAuthorizationUsers(
+    public async Task<InteractiveReportServerResult<InteractiveReportUserList>> ListAuthorizationUsers(
+        string? search,
         InteractiveReportRequestContext context,
         CancellationToken ct = default)
     {
@@ -946,36 +970,41 @@ internal sealed class InteractiveReportServer(
                 SavedReportsListingDefinition.Name,
                 context,
                 ct) is { } denied)
-            return InteractiveReportServerResult<IReadOnlyList<InteractiveReportUser>>.Failed(denied);
+            return InteractiveReportServerResult<InteractiveReportUserList>.Failed(denied);
 
-        var provider = context.RequestServices.GetService<IInteractiveReportUserProvider>();
-        if (provider is null)
-            return InteractiveReportServerResult<IReadOnlyList<InteractiveReportUser>>.Success([]);
+        var text = string.IsNullOrWhiteSpace(search) ? null : search.Trim();
+        if (text is { Length: > MaxUserSearchLength })
+            return InteractiveReportServerResult<InteractiveReportUserList>.Failed(
+                Invalid(InteractiveReportErrorCodes.UserSearchInvalid));
 
+        var current = options.CurrentValue;
+        var limit = current.UserDirectory.MaxResults;
         try
         {
-            var supplied = await provider.GetUsers(context.User, ct);
-            if (supplied is null || supplied.Count == 0)
-                return InteractiveReportServerResult<IReadOnlyList<InteractiveReportUser>>.Success([]);
+            var directory = await DirectoryUsers(text, limit, current, context, ct);
+            var known = await KnownIdentities(current, context, ct);
 
-            var users = new List<InteractiveReportUser>(supplied.Count);
-            var values = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var user in supplied)
+            // Directory entries lead in directory order; the identities the engine already knows
+            // follow alphabetically, minus any the directory has described with a display name.
+            var items = new List<InteractiveReportUser>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var user in directory)
             {
-                if (user is null
-                    || string.IsNullOrWhiteSpace(user.Display)
-                    || string.IsNullOrWhiteSpace(user.Value))
-                    throw new InvalidOperationException(
-                        "The Interactive Reports user provider returned an entry with an empty display or value.");
-
-                var normalized = new InteractiveReportUser(user.Display.Trim(), user.Value.Trim());
-                if (!values.Add(normalized.Value))
-                    throw new InvalidOperationException(
-                        $"The Interactive Reports user provider returned duplicate value '{normalized.Value}'.");
-                users.Add(normalized);
+                if (MatchesSearch(user.Display, user.Value, text) && seen.Add(user.Value)) items.Add(user);
+            }
+            var directoryMatches = items.Count;
+            foreach (var identity in known)
+            {
+                if (MatchesSearch(identity, identity, text) && seen.Add(identity))
+                    items.Add(new InteractiveReportUser(identity, identity));
             }
 
-            return InteractiveReportServerResult<IReadOnlyList<InteractiveReportUser>>.Success(users);
+            // A directory that fills the limit is treated as having more: the UI then asks the
+            // administrator to narrow the search rather than presenting the page as complete.
+            var truncated = directoryMatches >= limit || items.Count > limit;
+            if (items.Count > limit) items.RemoveRange(limit, items.Count - limit);
+            return InteractiveReportServerResult<InteractiveReportUserList>.Success(
+                new InteractiveReportUserList(items, truncated));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -983,10 +1012,107 @@ internal sealed class InteractiveReportServer(
         }
         catch (Exception ex)
         {
-            return InteractiveReportServerResult<IReadOnlyList<InteractiveReportUser>>.Failed(Internal(
+            return InteractiveReportServerResult<InteractiveReportUserList>.Failed(Internal(
                 SavedReportsListingDefinition.Name, "administration user lookup", context, ex));
         }
     }
+
+    /// <summary>
+    /// Asks the application directory for one lookup, reusing the memoized no-search answer for
+    /// this administrator while it is fresh. The answer is normalized once: blank entries and
+    /// duplicate values are integration mistakes and are reported rather than hidden.
+    /// </summary>
+    private async Task<IReadOnlyList<InteractiveReportUser>> DirectoryUsers(
+        string? search,
+        int limit,
+        InteractiveReportOptions current,
+        InteractiveReportRequestContext context,
+        CancellationToken ct)
+    {
+        var provider = context.RequestServices.GetService<IInteractiveReportUserProvider>();
+        if (provider is null) return [];
+
+        string? cacheKey = null;
+        if (search is null
+            && current.UserDirectory.CacheSeconds > 0
+            && ReportIdentity.Resolve(context.User, current.IdentityClaim) is { } administrator)
+        {
+            cacheKey = $"{limit}\n{administrator}";
+            if (directoryCache.TryGet(cacheKey, out var cached)) return cached;
+        }
+
+        var supplied = await provider.SearchUsers(
+            new InteractiveReportUserSearch
+            {
+                Administrator = context.User,
+                Search = search,
+                Limit = limit,
+                RequestServices = context.RequestServices,
+            },
+            ct);
+        var users = new List<InteractiveReportUser>(supplied?.Count ?? 0);
+        var values = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var user in supplied ?? [])
+        {
+            if (user is null
+                || string.IsNullOrWhiteSpace(user.Display)
+                || string.IsNullOrWhiteSpace(user.Value))
+                throw new InvalidOperationException(
+                    "The Interactive Reports user provider returned an entry with an empty display or value.");
+
+            var normalized = new InteractiveReportUser(user.Display.Trim(), user.Value.Trim());
+            if (!values.Add(normalized.Value))
+                throw new InvalidOperationException(
+                    $"The Interactive Reports user provider returned duplicate value '{normalized.Value}'.");
+            users.Add(normalized);
+        }
+
+        if (cacheKey is not null)
+            directoryCache.Set(cacheKey, users, TimeSpan.FromSeconds(current.UserDirectory.CacheSeconds));
+        return users;
+    }
+
+    /// <summary>
+    /// Collects every identity the engine already knows: configured administrators and report
+    /// users, database grants, saved-report owners, and the caller. They are choices, not grants;
+    /// an identity that owns a report or holds a grant is one an administrator may need to pick again.
+    /// </summary>
+    private async Task<IReadOnlyList<string>> KnownIdentities(
+        InteractiveReportOptions current,
+        InteractiveReportRequestContext context,
+        CancellationToken ct)
+    {
+        var identities = new HashSet<string>(StringComparer.Ordinal);
+        void Add(string? identity)
+        {
+            var trimmed = identity?.Trim();
+            if (!string.IsNullOrEmpty(trimmed)) identities.Add(trimmed);
+        }
+
+        foreach (var identity in current.Administrators) Add(identity);
+        foreach (var report in current.Reports.Values)
+        {
+            foreach (var identity in report.Authorization?.Users ?? []) Add(identity);
+        }
+        Add(ReportIdentity.Resolve(context.User, current.IdentityClaim));
+
+        if (ReportConnectionRegistry.IsStoreConfigured(current.SavedReports))
+        {
+            foreach (var entry in await authorizationStore.ListAll(ct)) Add(entry.Identity);
+            foreach (var owner in await savedReports.ListOwners(ct)) Add(owner);
+        }
+
+        return identities
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ThenBy(identity => identity, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    /// <summary>Applies the administration lookup match: a case-insensitive partial match on either text.</summary>
+    private static bool MatchesSearch(string display, string value, string? search)
+        => search is null
+           || display.Contains(search, StringComparison.OrdinalIgnoreCase)
+           || value.Contains(search, StringComparison.OrdinalIgnoreCase);
 
     public async Task<InteractiveReportServerResult<InteractiveReportAuthorizationState>> ListAuthorizationState(
         InteractiveReportRequestContext context,
@@ -1083,6 +1209,120 @@ internal sealed class InteractiveReportServer(
             "administrator authorization update",
             context,
             ct);
+
+    public async Task<InteractiveReportServerResult<InteractiveReportAdministratorList>> ListAdministrators(
+        InteractiveReportRequestContext context,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        if (await AuthorizeAdministration(InteractiveReportAction.ManageAuthorization, SavedReportsListingDefinition.Name, context, ct) is { } denied)
+            return InteractiveReportServerResult<InteractiveReportAdministratorList>.Failed(denied);
+
+        try
+        {
+            return InteractiveReportServerResult<InteractiveReportAdministratorList>.Success(
+                new InteractiveReportAdministratorList(
+                    ConfiguredAdministrators(options.CurrentValue),
+                    DatabaseAdministrators(await authorizationStore.ListAll(ct))));
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return InteractiveReportServerResult<InteractiveReportAdministratorList>.Failed(
+                Internal(SavedReportsListingDefinition.Name, "administrator listing", context, ex));
+        }
+    }
+
+    public async Task<InteractiveReportServerResult<bool>> SetAdministrators(
+        Func<CancellationToken, Task<IReadOnlyCollection<string?>?>> readIdentities,
+        InteractiveReportRequestContext context,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(readIdentities);
+        ArgumentNullException.ThrowIfNull(context);
+
+        if (await AuthorizeAdministration(InteractiveReportAction.ManageAuthorization, SavedReportsListingDefinition.Name, context, ct) is { } denied)
+            return InteractiveReportServerResult<bool>.Failed(denied);
+
+        IReadOnlyCollection<string?>? supplied;
+        try
+        {
+            supplied = await readIdentities(ct);
+        }
+        catch (JsonException ex)
+        {
+            return InteractiveReportServerResult<bool>.Failed(
+                Invalid(InteractiveReportErrorCodes.MalformedAuthorizationRequest, ex.Message));
+        }
+        if (supplied is null)
+            return InteractiveReportServerResult<bool>.Failed(
+                Invalid(InteractiveReportErrorCodes.AuthorizationIdentitiesRequired));
+
+        // Every entry is validated before anything changes, so a malformed list never applies
+        // half-way. Identities compare ordinally, exactly as grants are matched.
+        var desired = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var candidate in supplied)
+        {
+            var identity = candidate?.Trim();
+            if (string.IsNullOrEmpty(identity) || identity.Length > 400)
+                return InteractiveReportServerResult<bool>.Failed(
+                    Invalid(InteractiveReportErrorCodes.AuthorizationIdentityInvalid));
+            desired.Add(identity);
+        }
+
+        try
+        {
+            var existing = DatabaseAdministrators(await authorizationStore.ListAll(ct))
+                .ToHashSet(StringComparer.Ordinal);
+            var granted = 0;
+            var revoked = 0;
+            foreach (var identity in desired.Where(identity => !existing.Contains(identity)))
+            {
+                await authorizationStore.GrantAdministrator(identity, ct);
+                granted++;
+            }
+            foreach (var identity in existing.Where(identity => !desired.Contains(identity)))
+            {
+                await authorizationStore.RevokeAdministrator(identity, ct);
+                revoked++;
+            }
+            logging.Logger?.LogInformation(
+                "Replaced database administrators: {Granted} granted, {Revoked} revoked, {Listed} listed (traceId {TraceId})",
+                granted,
+                revoked,
+                desired.Count,
+                context.TraceIdentifier);
+            return InteractiveReportServerResult<bool>.Success(true);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return InteractiveReportServerResult<bool>.Failed(
+                Internal(SavedReportsListingDefinition.Name, "administrator list update", context, ex));
+        }
+    }
+
+    /// <summary>Projects the source-controlled administrator list in presentation order.</summary>
+    private static IReadOnlyList<string> ConfiguredAdministrators(InteractiveReportOptions current)
+        => current.Administrators
+            .Select(identity => identity.Trim())
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    /// <summary>Projects the database administrator grants in presentation order.</summary>
+    private static IReadOnlyList<string> DatabaseAdministrators(IReadOnlyList<ReportAuthorizationEntry> entries)
+        => entries
+            .Where(entry => entry.Kind == ReportAuthorizationEntryKind.Administrator)
+            .Select(entry => entry.Identity!)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
     public async Task<InteractiveReportServerResult<bool>> SetReportRestriction(
         string reportName,

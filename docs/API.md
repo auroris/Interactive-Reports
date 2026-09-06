@@ -160,7 +160,8 @@ and import/export are described in [Saved reports](SAVED-REPORTS.md#source-contr
 | `InteractiveReportBuilder.AddConnection(...)` | Registers an unopened ADO.NET connection factory, with inferred or explicit dialect. |
 | `InteractiveReportBuilder.UseLogger(...)` | Sends package diagnostics to a host-owned `ILogger`. The package is silent when no logger is supplied. |
 | `InteractiveReportBuilder.UseContextParameterResolver<T>()` | Replaces claim-based trusted-context resolution with a singleton application resolver. |
-| `InteractiveReportBuilder.UseUserProvider<T>()` | Adds a scoped application user directory for administration choices. |
+| `InteractiveReportBuilder.UseUserProvider<T>()` | Adds a scoped application user directory for administration account choices; override `SearchUsers` to push the search text and result limit into the application's user store. |
+| `InteractiveReportBuilder.UseUserDirectory(...)` | Adds a user-directory callback that answers a search with .NET identities, projected to the same canonical identity values sign-in produces. |
 | `InteractiveReportBuilder.UseAuthorization(...)` | Adds a direct application authorization callback. |
 | `InteractiveReportBuilder.UseAspNetCoreAuthorization()` | Adds an adapter to ASP.NET Core resource-based authorization. |
 | `IEndpointRouteBuilder.MapInteractiveReportJson(...)` | Maps REST, saved-report, administration, packaged asset, and optional viewer routes. |
@@ -414,24 +415,63 @@ and compare-and-swap contracts.
 
 ## Supply administration user choices
 
-`IInteractiveReportUserProvider` supplies choices to the administration UI. It does
-not authorize those identities.
+The administration page's account pickers (owner reassignment, the administrator list,
+and report-user grants) search `GET {prefix}/admin/users`. One lookup merges two
+sources: the identities Interactive Reports already knows (configured administrators
+and report users, database grants, saved-report owners, and the caller) and an optional
+application user directory, which is what supplies display names. Nothing in the lookup
+grants access; it offers choices, and free-form identity entry remains available.
+
+Register the directory as a callback. It receives the administrator, the trimmed search
+text (`null` for a browse), the result limit, and the request services, and answers with
+.NET identities. Each identity is projected through the same claim chain sign-in uses
+(`InteractiveReport:IdentityClaim`, otherwise NameIdentifier → `sub` → Name), so the value
+an administrator picks is exactly the value that account resolves to when it signs in:
 
 ```csharp
 using System.Security.Claims;
 using InteractiveReport.AspNetCore;
 
+var reports = builder.Services.AddInteractiveReports(builder.Configuration);
+
+reports.UseUserDirectory(async (search, ct) =>
+{
+    var users = search.RequestServices.GetRequiredService<UserManager<AppUser>>();
+    var principals = search.RequestServices
+        .GetRequiredService<IUserClaimsPrincipalFactory<AppUser>>();
+    var matches = await users.Users
+        .Where(user => search.Search == null || user.UserName!.Contains(search.Search))
+        .OrderBy(user => user.UserName)
+        .Take(search.Limit)
+        .ToListAsync(ct);
+
+    var identities = new List<ClaimsIdentity>();
+    foreach (var user in matches)
+        identities.Add((await principals.CreateAsync(user)).Identities.First());
+    return identities;
+});
+```
+
+An identity's display name is its `Name`, then a `name`, `preferred_username`, UPN, or
+email claim, then the identity value itself. An identity that resolves to no value is an
+integration error and fails the lookup rather than being dropped.
+
+`IInteractiveReportUserProvider` is the class-based alternative, registered with
+`UseUserProvider<T>()` and resolved in request scope. Its one method, `SearchUsers`,
+receives the same search and answers with display names and canonical values;
+`InteractiveReportUser.FromIdentity` performs the identity projection described above
+for providers that start from `ClaimsIdentity` values.
+
+```csharp
 public sealed class ReportUserProvider(IApplicationUsers users)
     : IInteractiveReportUserProvider
 {
-    public async ValueTask<IReadOnlyCollection<InteractiveReportUser>?> GetUsers(
-        ClaimsPrincipal administrator,
+    public async ValueTask<IReadOnlyCollection<InteractiveReportUser>?> SearchUsers(
+        InteractiveReportUserSearch search,
         CancellationToken ct = default)
-    {
-        return (await users.List(ct))
+        => (await users.Search(search.Search, search.Limit, ct))
             .Select(user => new InteractiveReportUser(user.DisplayName, user.SubjectId))
             .ToArray();
-    }
 }
 
 builder.Services
@@ -439,8 +479,15 @@ builder.Services
     .UseUserProvider<ReportUserProvider>();
 ```
 
-Returning `null` or an empty collection keeps free-form identity entry available.
-The provider is scoped.
+Directory entries lead the answer in directory order; known identities follow
+alphabetically, minus any the directory already described. Returning `null` or an empty
+collection leaves the picker with the known identities. Lookup limits live under
+`InteractiveReport:UserDirectory`: `MaxResults` (default 50, at most 1000) bounds one
+answer, counting both sources, and a directory that fills it is reported as truncated so
+the UI asks for a narrower search; `CacheSeconds` (default 60) memoizes the directory's
+answer to a browse per administrator, and `0` asks the directory every time. Searched
+lookups are never memoized, and known identities are always read fresh, so a grant or
+reassignment appears in the next lookup.
 
 ## REST surface
 
@@ -459,8 +506,10 @@ With the default prefix, the principal routes are:
 | `PUT /api/reports/{id}` | Applies `UpdateSavedReportRequest`; `isDefault: true` atomically selects a new default. |
 | `DELETE /api/reports/{id}` | Deletes an editable saved report. |
 | `GET /api/reports/whoami` | Optional identity diagnostic; disabled unless `WhoamiEnabled` is true. |
-| `GET /api/reports/admin/users` | Lists application-supplied identity choices after the administration gate. |
+| `GET /api/reports/admin/users` | Searches account choices after the administration gate: the application directory merged with known identities, narrowed by the optional `search` query (at most 200 characters) and bounded by `UserDirectory:MaxResults`. Returns `{ items, truncated }`. |
 | `GET /api/reports/admin/authorization` | Returns configured and database-backed administrator, restriction, and user grants. |
+| `GET /api/reports/admin/authorization/administrators` | Returns configured and database-backed administrator identities as `{ configured, database }`. |
+| `PUT /api/reports/admin/authorization/administrators` | Replaces the database-backed administrator grants with `{ identities }`, granting the missing ones and revoking the rest; configured administrators are unaffected. |
 | `POST /api/reports/admin/authorization/administrators` | Adds a database-backed administrator grant. |
 | `DELETE /api/reports/admin/authorization/administrators` | Removes a database-backed administrator grant. |
 | `PUT /api/reports/admin/authorization/reports/{name}` | Sets the database-backed restriction marker for a report. |
@@ -660,7 +709,6 @@ only the supported element interface; mutable controller state remains private.
 | none | `definitionName` (read-only) | Canonical configured definition key learned during activation. |
 | `saved-report` | none | Optional numeric document id to load on activation. |
 | `api-base` | `apiBase` | API prefix. It is inferred from the module URL when omitted. |
-| `base` | `apiBase` | Older alias for `api-base`. |
 | `download-base` | `downloadBase` | File-download prefix. It is inferred from the API prefix when omitted. |
 | `lang` | none | Client locale. |
 | `theme` | `theme` | `light`, `dark`, or empty to follow the surrounding page and system preference. |

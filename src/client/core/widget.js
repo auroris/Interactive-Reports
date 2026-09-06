@@ -151,9 +151,9 @@ export class WidgetElement extends HTMLElement {
     /**
      * Returns the API base configured on the widget host.
      *
-     * @returns {string} The explicit `api-base`, legacy `base`, or bundle-relative default.
+     * @returns {string} The explicit `api-base` or the bundle-relative default.
      */
-    get apiBase() { return this.getAttribute("api-base") ?? this.getAttribute("base") ?? BASE_DEFAULT; }
+    get apiBase() { return this.getAttribute("api-base") ?? BASE_DEFAULT; }
     /**
      * Sets or removes the API base attribute on the widget host.
      *

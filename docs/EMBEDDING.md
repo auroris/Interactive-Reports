@@ -205,9 +205,8 @@ report documents rather than reproduce those UI rules.
 document id before the first query. Omit it to load the document named by `report`.
 
 `api-base` may be a relative path or an absolute URL. If it is omitted, the
-component infers the API prefix from the script URL. The older `base` attribute
-remains available as an alias. Theme tokens such as `--ir-accent` can be set on
-the custom element without exposing its internal CSS.
+component infers the API prefix from the script URL. Theme tokens such as
+`--ir-accent` can be set on the custom element without exposing its internal CSS.
 
 ```css
 interactive-report {

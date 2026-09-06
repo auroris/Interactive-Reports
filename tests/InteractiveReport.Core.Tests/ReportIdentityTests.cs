@@ -12,7 +12,33 @@ public class ReportIdentityTests
     public void Unauthenticated_resolves_to_null()
     {
         Assert.Null(ReportIdentity.Resolve(new ClaimsPrincipal(new ClaimsIdentity()), null));
-        Assert.Null(ReportIdentity.Resolve(null, null));
+        Assert.Null(ReportIdentity.Resolve((ClaimsPrincipal?)null, null));
+    }
+
+    [Fact]
+    public void A_directory_identity_resolves_through_the_same_chain_without_authentication()
+    {
+        // Directory entries are data, not callers: an identity built without an authentication
+        // type still resolves, and to the same value it would have as a signed-in principal.
+        var unauthenticated = new ClaimsIdentity(
+        [
+            new Claim(ClaimTypes.NameIdentifier, "nid"),
+            new Claim("sub", "s"),
+            new Claim(ClaimTypes.Name, "n"),
+            new Claim("email", "a@b.c"),
+        ]);
+
+        Assert.False(unauthenticated.IsAuthenticated);
+        Assert.Equal("nid", ReportIdentity.Resolve(unauthenticated, null));
+        Assert.Equal("a@b.c", ReportIdentity.Resolve(unauthenticated, "email"));
+        Assert.Null(ReportIdentity.Resolve(unauthenticated, "missing-claim"));
+        Assert.Equal("s", ReportIdentity.Resolve(new ClaimsIdentity([new Claim("sub", "s")]), null));
+        Assert.Equal("n", ReportIdentity.Resolve(new ClaimsIdentity([new Claim(ClaimTypes.Name, "n")]), null));
+        Assert.Null(ReportIdentity.Resolve(new ClaimsIdentity(), null));
+        Assert.Null(ReportIdentity.Resolve((ClaimsIdentity?)null, null));
+        Assert.Equal(
+            ReportIdentity.Resolve(new ClaimsPrincipal(new ClaimsIdentity(unauthenticated.Claims, "test")), null),
+            ReportIdentity.Resolve(unauthenticated, null));
     }
 
     [Fact]

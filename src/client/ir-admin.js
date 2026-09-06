@@ -4,7 +4,7 @@
 
 // Protocol contract: <interactive-report-admin> embeds <interactive-report> against the built-in
 // "__saved-reports" listing, so this entry registers both elements and requires only one script.
-// `api-base` selects the API prefix, with `base` retained as its compatibility alias.
+// `api-base` selects the API prefix.
 
 import { InteractiveReportAdminElement } from "./admin/element.js";
 import { InteractiveReportElement } from "./report/element.js";

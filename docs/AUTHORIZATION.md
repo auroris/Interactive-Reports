@@ -552,11 +552,13 @@ the authorizer should map its `Resource.ReportName` to the application's adminis
 rule. The request carries action and resource facts, not the engine's intermediate
 reason for asking.
 
-The optional administration user-directory endpoint is part of the security surface.
-It performs the same administrator check and emits `ListAuthorizationUsers` before it
-resolves or invokes `IInteractiveReportUserProvider`. Directory entries are account
-choices only; returning an account does not authorize it. The separate Authorization
-editor emits `ManageAuthorization` when it turns a choice into a database grant.
+The administration account lookup is part of the security surface. It performs the
+same administrator check and emits `ListAuthorizationUsers` before it reads known
+identities from configuration and storage or invokes `IInteractiveReportUserProvider`
+or the `UseUserDirectory` callback. Lookup entries are account choices only; returning
+an account does not authorize it. The separate Administrators and Report access editors
+emit `ManageAuthorization` when they turn a choice into a database grant, including
+when the administrator list is replaced as a whole.
 
 Ordinary operations retain the built-in behavior when no application authorizer is
 registered. Registering either `UseAuthorization` or

@@ -64,6 +64,8 @@ public static class InteractiveReportErrorCodes
     public const string AuthorizationIdentityInvalid = "IR-1402";
     public const string ReportRestrictionConflict = "IR-1403";
     public const string ReportUserGrantConflict = "IR-1404";
+    public const string UserSearchInvalid = "IR-1405";
+    public const string AuthorizationIdentitiesRequired = "IR-1406";
 
     public const string GraphQlTransportUnsupported = "IR-1500";
 }
@@ -138,6 +140,10 @@ internal static class InteractiveReportErrorCatalog
             ("Report authorization conflict", "Anonymous and administrators-only reports cannot use user restrictions."),
         InteractiveReportErrorCodes.ReportUserGrantConflict =>
             ("Report authorization conflict", "Anonymous and administrators-only reports cannot have user grants."),
+        InteractiveReportErrorCodes.UserSearchInvalid =>
+            ("Invalid user search", "Enter search text of at most 200 characters."),
+        InteractiveReportErrorCodes.AuthorizationIdentitiesRequired =>
+            ("Identity list required", "The authorization request must include an identities list."),
         InteractiveReportErrorCodes.GraphQlTransportUnsupported =>
             ("Unsupported GraphQL transport", "Interactive Reports GraphQL supports HTTP GET and POST queries only."),
         _ => throw new ArgumentOutOfRangeException(nameof(code), code, "Unknown Interactive Reports error code."),
@@ -276,12 +282,26 @@ public sealed class AuthorizationIdentityRequest
     public string? Identity { get; set; }
 }
 
+/// <summary>Supplies the complete database-authored administrator identity list.</summary>
+public sealed class AuthorizationIdentitiesRequest
+{
+    /// <summary>Gets or sets the identities that should hold database-authored administrator grants after the request.</summary>
+    public List<string?>? Identities { get; set; }
+}
+
 /// <summary>Changes whether a report requires an explicit per-user grant.</summary>
 public sealed class ReportRestrictionRequest
 {
     /// <summary>Gets or sets the required restricted state.</summary>
     public bool? Restricted { get; set; }
 }
+
+/// <summary>Lists configured and database-authored administrator identities.</summary>
+/// <param name="Configured">Source-controlled identities from <c>InteractiveReport:Administrators</c>; read-only here.</param>
+/// <param name="Database">Identities granted through the administration center.</param>
+public sealed record InteractiveReportAdministratorList(
+    IReadOnlyList<string> Configured,
+    IReadOnlyList<string> Database);
 
 /// <summary>Combines configured and database-authored authorization state for administration.</summary>
 public sealed record InteractiveReportAuthorizationState(

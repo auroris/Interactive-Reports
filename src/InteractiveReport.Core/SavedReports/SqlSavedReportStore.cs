@@ -199,6 +199,41 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         => Select(q => q.OrderBy("REPORT_NAME").OrderBy("TITLE"), ct);
 
     /// <summary>
+    /// Lists the distinct owner identities of every owned saved report.
+    /// </summary>
+    /// <param name="ct">Signals that the operation should be canceled; defaults to <c>default</c>.</param>
+    /// <returns>Distinct non-empty owner values; the database decides their order.</returns>
+    /// <remarks>Opens and disposes a database connection and projects only the owner column.</remarks>
+    public async Task<IReadOnlyList<string>> ListOwners(CancellationToken ct = default)
+    {
+        var config = Validated(_config());
+        var query = new Query(config.TableName).Select("OWNER").Distinct().WhereNotNull("OWNER");
+
+        await using var conn = await OpenConnection(config, ct);
+        var compiled = DialectSupport.GetCompiler(config.Dialect).Compile(query);
+        await using var cmd = CommandBuilder.Build(
+            conn, compiled, NoParams, TimeoutSeconds, config.Dialect, _logger);
+        try
+        {
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+
+            var owners = new HashSet<string>(StringComparer.Ordinal);
+            while (await reader.ReadAsync(ct))
+            {
+                if (reader.IsDBNull(0)) continue;
+                var owner = reader.GetString(0);
+                if (!string.IsNullOrWhiteSpace(owner)) owners.Add(owner);
+            }
+            return owners.ToList();
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            LogStoreError(config, ex, "select query");
+            throw;
+        }
+    }
+
+    /// <summary>
     /// Inserts a saved report, assigns its committed timestamp, and translates title conflicts.
     /// </summary>
     /// <param name="report">The new row to insert. Its identifier and title scope must be unique.</param>

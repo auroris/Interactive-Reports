@@ -825,6 +825,36 @@ dialog.ir-dialog::backdrop {
 .ir-lov-item:last-child { border-bottom: 0; }
 .ir-lov-item:hover, .ir-lov-item:focus-visible { background: var(--ir-bg-soft); outline: none; }
 
+.ir-users-status { min-height: 1.25em; margin: 6px 0 4px; }
+.ir-users-items {
+    display: flex;
+    flex-direction: column;
+    max-height: 14rem;
+    overflow: auto;
+    border: 1px solid var(--ir-border-light);
+    border-radius: var(--ir-radius);
+    background: var(--ir-bg);
+}
+.ir-users-items:empty { display: none; }
+.ir-users-item {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 2px 8px;
+    width: 100%;
+    padding: 6px 9px;
+    border: 0;
+    border-bottom: 1px solid var(--ir-border-light);
+    background: transparent;
+    color: var(--ir-text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.ir-users-item:last-child { border-bottom: 0; }
+.ir-users-item:hover, .ir-users-item:focus-visible { background: var(--ir-bg-soft); outline: none; }
+.ir-users-value { color: var(--ir-text-muted); font-size: 11.5px; overflow-wrap: anywhere; }
+
 .ir-fieldset { min-width: 0; margin: 0 0 12px; padding: 0; border: 0; }
 .ir-fieldset > legend { padding: 0; margin-bottom: 5px; }
 .ir-dlgrow { display: flex; align-items: flex-end; gap: 6px; margin-bottom: 7px; }

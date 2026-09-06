@@ -29,6 +29,28 @@ public static class ReportIdentity
     }
 
     /// <summary>
+    /// Resolves the canonical identity value of one identity through the same claim chain a
+    /// signed-in principal uses, without requiring the identity to be authenticated. An
+    /// application user directory hands the engine identities as data, so the value an
+    /// administrator picks from the directory is exactly the value that account resolves to
+    /// when it signs in.
+    /// </summary>
+    /// <param name="identity">The identity describing one application account.</param>
+    /// <param name="identityClaim">The configured claim type from which to resolve the report identity.</param>
+    /// <returns>The resolved stable identity, or <see langword="null"/> when the identity carries no usable claim.</returns>
+    public static string? Resolve(ClaimsIdentity? identity, string? identityClaim)
+    {
+        if (identity is null) return null;
+
+        if (!string.IsNullOrWhiteSpace(identityClaim))
+            return NonEmpty(identity.FindFirst(identityClaim)?.Value);
+
+        return NonEmpty(identity.FindFirst(ClaimTypes.NameIdentifier)?.Value)
+            ?? NonEmpty(identity.FindFirst("sub")?.Value)
+            ?? NonEmpty(identity.Name);
+    }
+
+    /// <summary>
     /// Determines whether the resolved identity exactly matches a configured administrator. Identity-provider subject values are opaque identifiers;
     /// changing their case can identify a different principal.
     /// </summary>

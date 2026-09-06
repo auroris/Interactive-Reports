@@ -612,7 +612,7 @@ row act on that saved report:
 |---|---|
 | **Publish / Unpublish** | Makes a private saved report visible to everyone with access to the report, or makes a global one private again. |
 | **Make default** | Makes this saved report the layout the report opens with. The current default cannot simply be unset; choose another one instead. Not offered when the default is fixed by the application's configuration. |
-| **Reassign** | Hands the saved report to another user. Pick from the list of users when the application supplies one; otherwise enter the user's identity value exactly as the sign-in reports it. |
+| **Reassign** | Hands the saved report to another user. Search the users the application knows and pick one, or type the user's identity value exactly as the sign-in reports it. |
 | **State** | Shows the saved report's stored settings as JSON. |
 | **Download** | Downloads those settings as a JSON file that can be kept, shared, or uploaded again. |
 | **Delete** | Deletes the saved report after confirmation. This cannot be undone. |
@@ -626,8 +626,15 @@ Above the list:
 - **Upload JSON…** imports a report document file (such as one produced by
   **Download**) as your own private saved report under the report family you choose.
   It can be published afterwards.
-- **Authorization…** manages who may use this page and, for reports that are
-  restricted to named users, which users are granted access. Entries that come from
-  the application's configuration are shown but cannot be removed here.
+- **Administrators…** shows who may use this page and lets you set that list: search
+  for users to add, remove entries, then **Save** the list as a whole. Entries that
+  come from the application's configuration are shown but cannot be changed here.
+- **Report access…** manages, for reports that are restricted to named users, which
+  users are granted access. Entries that come from the application's configuration are
+  shown but cannot be removed here.
+
+Every place that asks for a user offers the same searchable list: the users the
+application knows, plus anyone who already owns a saved report or holds a grant. Type to
+narrow it, pick an entry, or enter an identity value exactly.
 
 The page shows who you are signed in as at the top.

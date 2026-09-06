@@ -110,9 +110,7 @@ class ReportController {
     get isConnected() { return this.host.isConnected; }
     getRootNode(options) { return this.host.getRootNode(options); }
     get apiBase() {
-        return this.host.getAttribute("api-base")
-            ?? this.host.getAttribute("base")
-            ?? defaultBase;
+        return this.host.getAttribute("api-base") ?? defaultBase;
     }
     get base() { return this.apiBase.replace(/\/+$/, ""); }
     get downloadBase() {
@@ -1095,10 +1093,10 @@ class ReportController {
      * Side effects: updates the rendered DOM.
      */
     showError(err) {
-        // Protocol contract: friendly text remains as compatibility for older, bodiless
-        // servers. A coded server error is more precise than either stock phrase.
-        const error = err?.error ?? err?.problem ?? {};
-        const hasServerText = error.title || error.description || error.detail;
+        // Protocol contract: a bodiless 401 or 404 (a host authorization challenge, a proxy)
+        // gets stock text. A coded server error is more precise than either stock phrase.
+        const error = err?.error ?? {};
+        const hasServerText = error.title || error.description;
         const friendly = err?.status === 401 && !hasServerText ? this.t("report.signIn")
             : err?.status === 404 && !hasServerText
                 ? this.t("report.notFound")
@@ -1189,7 +1187,7 @@ class ReportController {
  */
 export class InteractiveReportElement extends HTMLElement {
     static observedAttributes = [
-        "report", "saved-report", "api-base", "base", "lang", "disabled", "stylesheet", "theme",
+        "report", "saved-report", "api-base", "lang", "disabled", "stylesheet", "theme",
     ];
 
     constructor() {
@@ -1218,7 +1216,7 @@ export class InteractiveReportElement extends HTMLElement {
     get definitionName() { return controllerFor(this).definitionName; }
 
     /**
-     * The explicit `api-base`, legacy `base`, or bundle-relative default.
+     * The explicit `api-base` or the bundle-relative default.
      *
      * @returns {string} The normalized API prefix.
      */

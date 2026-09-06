@@ -103,6 +103,20 @@ public interface ISavedReportStore
     Task<IReadOnlyList<SavedReport>> ListAll(CancellationToken ct = default);
 
     /// <summary>
+    /// Lists the distinct owner identities of every owned row, for administration account
+    /// choices. The default derives them from <see cref="ListAll"/>; a SQL store projects only
+    /// the owner column instead of loading every document.
+    /// </summary>
+    /// <param name="ct">Cancels persistence access.</param>
+    /// <returns>Distinct non-empty owner values compared ordinally, in no particular order.</returns>
+    async Task<IReadOnlyList<string>> ListOwners(CancellationToken ct = default)
+        => (await ListAll(ct))
+            .Select(report => report.Owner)
+            .Where(owner => !string.IsNullOrWhiteSpace(owner))
+            .Distinct(StringComparer.Ordinal)
+            .ToList()!;
+
+    /// <summary>
     /// Inserts a new saved report and assigns its committed modification timestamp.
     /// </summary>
     /// <param name="report">The new row; its modification timestamp is replaced with the committed revision.</param>

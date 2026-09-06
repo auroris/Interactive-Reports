@@ -143,6 +143,30 @@ public abstract class SavedReportStoreCorpus
     }
 
     [SkippableFact]
+    public async Task ListOwners_projects_distinct_owners_and_skips_unowned_rows()
+    {
+        await Store.Create(Make("A", "alice"));
+        await Store.Create(Make("B", "alice", report: "big-orders"));
+        await Store.Create(Make("C", "Bob", global: true));
+        await Store.Create(new SavedReport
+        {
+            Id = 0,
+            ReportName = "orders",
+            SourceFile = "ReportDocuments/unowned.json",
+            Title = "Unowned",
+            Owner = null,
+            IsGlobal = true,
+            StateJson = null,
+            Origin = SavedReportOrigin.Configured,
+        });
+
+        var owners = await Store.ListOwners();
+
+        // Owners are identities: distinct ordinally, so a case variant is a different account.
+        Assert.Equal(["Bob", "alice"], owners.Order(StringComparer.Ordinal).ToArray());
+    }
+
+    [SkippableFact]
     public async Task FindTitleCollision_is_normalized_visibility_scoped_and_can_exclude_the_current_row()
     {
         var orders = Make("West region", "alice");

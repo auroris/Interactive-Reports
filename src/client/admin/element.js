@@ -3,19 +3,38 @@
 // report: search, sort, pagination, column tools, and CSV export all come from the report
 // widget; this wrapper contributes only what a report cannot: the admin actions its ir-action
 // events request (publish/unpublish, reassign, view state, download, delete), the Upload JSON…
-// dialog, and the identity line. The server enforces the authorization matrix; the embedded
-// report simply has no data (404) for non-administrators.
+// dialog, the administrator list and report-access editors, and the identity line. The server
+// enforces the authorization matrix; the embedded report simply has no data (404) for
+// non-administrators.
 
 import { api, apiUrl, downloadFile, saveBlob } from "../core/api.js";
 import { el, banner, labeled, sel } from "../core/dom.js";
 import { openDialog, confirmDialog } from "../core/dialog.js";
 import { loadWhoami } from "../core/identity.js";
 import { WidgetElement } from "../core/widget.js";
+import { userPicker } from "./users.js";
 
 const LISTING_REPORT = "__saved-reports";
 
+/**
+ * Releases a picker's pending lookup when its dialog closes, whichever control closes it.
+ *
+ * @param {object} dlg - The dialog controller returned by openDialog.
+ * @param {() => object|null} picker - Returns the picker to dispose, or null when none was built.
+ * @returns {void} No value.
+ *
+ * Side effects: wraps the dialog's close method.
+ */
+function disposePickerOnClose(dlg, picker) {
+    const close = dlg.close.bind(dlg);
+    dlg.close = () => {
+        picker()?.dispose();
+        close();
+    };
+}
+
 export class InteractiveReportAdminElement extends WidgetElement {
-    static observedAttributes = ["api-base", "base", "lang"];
+    static observedAttributes = ["api-base", "lang"];
 
     /**
      * Marks the custom element connected and starts administration initialization.
@@ -60,6 +79,7 @@ export class InteractiveReportAdminElement extends WidgetElement {
     async init() {
         const seq = ++this._seq;
         this.whoami = null;
+        this._displayNames ??= new Map();
 
         let availableReports;
         try {
@@ -92,8 +112,12 @@ export class InteractiveReportAdminElement extends WidgetElement {
                 el("button", { type: "button", class: "ir-btn", onclick: () => this.uploadDocument() }, this.t("admin.uploadJson")),
                 el("button", {
                     type: "button", class: "ir-btn",
-                    onclick: () => { void this.authorizationDialog().catch(err => this.showError(err)); },
-                }, this.t("admin.authorization")),
+                    onclick: () => { void this.administratorsDialog().catch(err => this.showError(err)); },
+                }, this.t("admin.administrators")),
+                el("button", {
+                    type: "button", class: "ir-btn",
+                    onclick: () => { void this.reportAccessDialog().catch(err => this.showError(err)); },
+                }, this.t("admin.reportAccessDialog")),
                 el("span", { class: "ir-spacer" }),
                 this.els.identity),
             el("div", { class: "ir-notices", part: "notices" }, this.els.errorSlot, this.els.transientSlot),
@@ -201,99 +225,195 @@ export class InteractiveReportAdminElement extends WidgetElement {
     }
 
     /**
-     * Opens an owner picker and reassigns a saved report to the selected user.
+     * Opens a searchable owner picker and reassigns a saved report to the chosen or typed identity.
      *
      * @param {string} id - The saved-report identifier to reassign.
      * @param {object} row - Listing row containing the current owner and report labels.
-     * @returns {Promise<void>} Resolves after owner choices load and the reassignment dialog opens.
+     * @returns {Promise<void>} Resolves once the reassignment dialog is open.
      *
-     * Side effects: fetches the user directory and opens a dialog whose apply handler updates the owner, notifies the user, and refreshes the listing.
-     * @throws {Error} When loading the user directory fails for a reason other than an unsupported endpoint.
+     * Side effects: opens a dialog whose picker looks up accounts and whose apply handler updates the owner, notifies the user, and refreshes the listing.
      */
     async reassign(id, row) {
-        const users = await this.loadUserDirectory();
-
-        let ownerInp;
-        let note;
-        if (users.length) {
-            const current = users.find(user =>
-                String(user.value).toLocaleLowerCase() === String(row.OWNER ?? "").toLocaleLowerCase());
-            const options = users.map(user => ({ label: user.display, value: user.value }));
-            if (!current) options.unshift({ label: this.t("admin.selectUser"), value: "" });
-            ownerInp = sel(options, current?.value ?? "");
-            ownerInp.required = true;
-            note = this.t("admin.directoryOwnerNote");
-        } else {
-            ownerInp = el("input", {
-                class: "ir-input", type: "text", value: row.OWNER ?? "", required: true,
-            });
-            note = this.t("admin.identityOwnerNote");
-        }
-
-        openDialog({
+        let picker = null;
+        const dlg = openDialog({
             owner: this,
             title: this.t("admin.reassignOwner"),
-            width: "26rem",
+            width: "28rem",
             applyLabel: this.t("admin.reassign"),
-            build: body => body.append(
-                el("p", { class: "ir-confirm-text" }, `"${row.TITLE}" (${row.REPORT_NAME})`),
-                labeled(this.t("admin.newOwner"), ownerInp),
-                el("p", { class: "ir-dialog-note" }, note)),
+            build: (body, dialog) => {
+                const currentOwner = el("p", { class: "ir-dialog-note" });
+                const describeOwner = () => {
+                    currentOwner.textContent = this.t("admin.currentOwner", {
+                        owner: this.displayIdentity(row.OWNER ?? ""),
+                    });
+                };
+                describeOwner();
+                picker = userPicker(this, {
+                    // Picking fills the identity field; Reassign then applies whatever it holds,
+                    // so a typed value that the directory does not list works the same way.
+                    onPick: user => { picker.value = user.value; dialog.setError(null); },
+                    onError: error => dialog.setError(error),
+                    onResults: items => { this.rememberDisplayNames(items); describeOwner(); },
+                });
+                body.append(
+                    el("p", { class: "ir-confirm-text" }, `"${row.TITLE}" (${row.REPORT_NAME})`),
+                    currentOwner,
+                    labeled(this.t("admin.newOwner"), picker.input),
+                    picker.results,
+                    el("p", { class: "ir-dialog-note" }, this.t("admin.ownerNote")));
+            },
             onApply: async () => {
-                const owner = ownerInp.value.trim();
+                const owner = picker.value;
                 if (!owner) throw new Error(this.t("admin.enterIdentity"));
                 await api(apiUrl(this.base, id), { method: "PUT", body: { owner } });
                 this.notify(this.t("admin.reassigned", { title: row.TITLE, owner }));
                 this.refresh();
             },
         });
+        disposePickerOnClose(dlg, () => picker);
     }
 
     /**
-     * Loads and caches the users eligible to own saved reports.
+     * Records the display names a lookup returned so grant lists can show them beside identity values.
      *
-     * @returns {Promise<Array<object>>} Directory entries, or an empty array when the provider route is unavailable or returns a non-array value.
-     *
-     * Side effects: may perform network I/O.
+     * @param {Array<{display: string, value: string}>} items - One lookup's account choices.
+     * @returns {void} No value.
      */
-    async loadUserDirectory() {
-        try {
-            const supplied = await api(apiUrl(this.base, "admin", "users"));
-            return Array.isArray(supplied) ? supplied : [];
-        } catch (err) {
-            // Provider constraint: a separately hosted older API has no lookup route. Its
-            // behavior is the same as an application that did not register a provider.
-            if (err?.status === 404) return [];
-            throw err;
+    rememberDisplayNames(items) {
+        for (const user of items ?? []) {
+            if (user?.display && user.value && user.display !== user.value)
+                this._displayNames.set(String(user.value), String(user.display));
         }
     }
 
     /**
-     * Loads authorization and directory data, then opens the administrator and report-access editor.
+     * Formats an identity value with its display name when a lookup has supplied one.
      *
-     * @returns {Promise<void>} Resolves after authorization data and users load and the editor opens.
-     *
-     * Side effects: fetches authorization data and users, then opens a dialog whose controls perform and reload authorization mutations.
+     * @param {string} value - The canonical identity value.
+     * @returns {string} `Display (value)`, or the bare value.
      */
-    async authorizationDialog() {
-        let [authorization, users] = await Promise.all([
-            api(apiUrl(this.base, "admin", "authorization")),
-            this.loadUserDirectory(),
-        ]);
-        let selectedReport = authorization.reports?.[0]?.name ?? null;
-        const directory = new Map(users.map(user => [
-            String(user.value).toLocaleLowerCase(), user.display,
-        ]));
-        const displayIdentity = value => {
-            const display = directory.get(String(value).toLocaleLowerCase());
-            return display && display !== value ? `${display} (${value})` : value;
-        };
+    displayIdentity(value) {
+        const display = this._displayNames.get(String(value));
+        return display ? `${display} (${value})` : String(value);
+    }
 
-        openDialog({
+    /**
+     * Renders configured (read-only) and database (removable) identity rows.
+     *
+     * @param {Array<string>} configured - Identities from appsettings.json.
+     * @param {Array<string>} database - Identities the administration center may remove.
+     * @param {(identity: string) => void} remove - Invoked with a database identity to remove.
+     * @returns {HTMLElement} The list, or a note when neither source has entries.
+     */
+    identityRows(configured, database, remove) {
+        const rows = [];
+        for (const identity of configured ?? []) {
+            rows.push(el("div", { class: "ir-auth-row" },
+                el("span", {}, this.displayIdentity(identity)),
+                el("span", { class: "ir-auth-source" }, this.t("admin.sourceConfiguration"))));
+        }
+        for (const identity of database ?? []) {
+            rows.push(el("div", { class: "ir-auth-row" },
+                el("span", {}, this.displayIdentity(identity)),
+                el("span", { class: "ir-auth-source" }, this.t("admin.sourceCenter")),
+                el("button", {
+                    type: "button", class: "ir-btn ir-row-x",
+                    "aria-label": this.t("common.removeNamed", { name: identity }),
+                    onclick: () => remove(identity),
+                }, this.t("common.remove"))));
+        }
+        return rows.length
+            ? el("div", { class: "ir-auth-list" }, rows)
+            : el("p", { class: "ir-dialog-note" }, this.t("admin.noExplicitIdentities"));
+    }
+
+    /**
+     * Loads the administrator lists and opens the editor that sets the database list as a whole.
+     *
+     * @returns {Promise<void>} Resolves once the editor is open.
+     *
+     * Side effects: fetches the administrator lists and opens a dialog whose Save replaces the database list in one request.
+     */
+    async administratorsDialog() {
+        const current = await api(apiUrl(this.base, "admin", "authorization", "administrators"));
+        const configured = current?.configured ?? [];
+        const saved = current?.database ?? [];
+        const pending = [...saved];
+        let picker = null;
+        const dlg = openDialog({
             owner: this,
-            title: this.t("admin.authorizationTitle"),
-            width: "48rem",
-            build: (body, dlg) => {
+            title: this.t("admin.administratorsTitle"),
+            width: "34rem",
+            applyLabel: this.t("admin.saveList"),
+            build: (body, dialog) => {
+                const listSlot = el("div");
+                const render = () => listSlot.replaceChildren(this.identityRows(configured, pending, identity => {
+                    pending.splice(pending.indexOf(identity), 1);
+                    render();
+                }));
+                const add = identity => {
+                    const value = String(identity ?? "").trim();
+                    if (!value) { dialog.setError(this.t("admin.enterIdentity")); return; }
+                    dialog.setError(null);
+                    if (!pending.includes(value) && !configured.includes(value)) pending.push(value);
+                    picker.value = "";
+                    render();
+                };
+                picker = userPicker(this, {
+                    onPick: user => add(user.value),
+                    onError: error => dialog.setError(error),
+                    onResults: items => { this.rememberDisplayNames(items); render(); },
+                });
+                body.append(
+                    el("p", { class: "ir-dialog-note" }, this.t("admin.administratorsNote")),
+                    listSlot,
+                    el("div", { class: "ir-auth-add" },
+                        labeled(this.t("admin.addAdministrator"), picker.input),
+                        el("button", {
+                            type: "button", class: "ir-btn",
+                            onclick: () => add(picker.value),
+                        }, this.t("common.add"))),
+                    picker.results,
+                    el("p", { class: "ir-dialog-note" }, this.t("admin.identityNote")));
+                render();
+            },
+            onApply: async () => {
+                // Saving a list that drops the caller's own database grant locks them out unless
+                // configuration still names them; ask first when the identity is known.
+                const me = this.whoami?.identity;
+                if (me && saved.includes(me) && !pending.includes(me) && !configured.includes(me)
+                    && !await confirmDialog(
+                        this,
+                        this.t("admin.removeSelfTitle"),
+                        this.t("admin.removeSelfConfirm"),
+                        this.t("common.remove"))) return false;
+                await api(apiUrl(this.base, "admin", "authorization", "administrators"), {
+                    method: "PUT",
+                    body: { identities: pending },
+                });
+                this.notify(this.t("admin.administratorsSaved"));
+            },
+        });
+        disposePickerOnClose(dlg, () => picker);
+    }
+
+    /**
+     * Loads authorization state and opens the per-report restriction and user-grant editor.
+     *
+     * @returns {Promise<void>} Resolves once the editor is open.
+     *
+     * Side effects: fetches authorization state and opens a dialog whose controls perform and reload grant mutations.
+     */
+    async reportAccessDialog() {
+        let authorization = await api(apiUrl(this.base, "admin", "authorization"));
+        let selectedReport = authorization.reports?.[0]?.name ?? null;
+        let picker = null;
+
+        const dlg = openDialog({
+            owner: this,
+            title: this.t("admin.reportAccessTitle"),
+            width: "40rem",
+            build: (body, dialog) => {
                 const reload = async () => {
                     authorization = await api(apiUrl(this.base, "admin", "authorization"));
                     if (!authorization.reports?.some(report => report.name === selectedReport))
@@ -301,76 +421,26 @@ export class InteractiveReportAdminElement extends WidgetElement {
                     render();
                 };
                 const mutate = async operation => {
-                    dlg.setError(null);
+                    dialog.setError(null);
                     try {
                         await operation();
                         await reload();
                     } catch (err) {
-                        dlg.setError(err);
+                        dialog.setError(err);
                     }
                 };
-                const identityControl = () => {
-                    if (users.length) {
-                        const control = sel([
-                            { label: this.t("admin.selectUser"), value: "" },
-                            ...users.map(user => ({ label: user.display, value: user.value })),
-                        ], "");
-                        control.required = true;
-                        return control;
-                    }
-                    return el("input", {
-                        class: "ir-input", type: "text", required: true,
-                        placeholder: this.t("admin.identityPlaceholder"), autocomplete: "off",
-                    });
+                const usersUrl = name => apiUrl(this.base, "admin", "authorization", "reports", name, "users");
+                const grant = identity => {
+                    const value = String(identity ?? "").trim();
+                    if (!value) { dialog.setError(this.t("admin.enterIdentity")); return; }
+                    if (!selectedReport) return;
+                    picker.value = "";
+                    void mutate(() => api(usersUrl(selectedReport), { method: "POST", body: { identity: value } }));
                 };
-                const identityRows = (configured, database, remove) => {
-                    const rows = [];
-                    for (const identity of configured ?? []) {
-                        rows.push(el("div", { class: "ir-auth-row" },
-                            el("span", {}, displayIdentity(identity)),
-                            el("span", { class: "ir-auth-source" }, this.t("admin.sourceConfiguration"))));
-                    }
-                    for (const identity of database ?? []) {
-                        rows.push(el("div", { class: "ir-auth-row" },
-                            el("span", {}, displayIdentity(identity)),
-                            el("span", { class: "ir-auth-source" }, this.t("admin.sourceCenter")),
-                            el("button", {
-                                type: "button", class: "ir-btn ir-row-x",
-                                "aria-label": this.t("common.removeNamed", { name: identity }),
-                                onclick: () => { void mutate(() => remove(identity)); },
-                            }, this.t("common.remove"))));
-                    }
-                    return rows.length
-                        ? el("div", { class: "ir-auth-list" }, rows)
-                        : el("p", { class: "ir-dialog-note" }, this.t("admin.noExplicitIdentities"));
-                };
-                const addIdentity = (label, operation) => {
-                    const control = identityControl();
-                    const button = el("button", {
-                        type: "button", class: "ir-btn",
-                        onclick: () => {
-                            const identity = control.value.trim();
-                            if (!identity) { dlg.setError(this.t("admin.selectOrEnterIdentity")); return; }
-                            void mutate(() => operation(identity));
-                        },
-                    }, this.t("common.add"));
-                    return el("div", { class: "ir-auth-add" }, labeled(label, control), button);
-                };
+                // Lookup results only refresh the grant rows (for display names), never the body:
+                // rebuilding the body would move the picker's input and drop the typist's focus.
+                let renderRows = () => {};
                 const render = () => {
-                    const administratorSection = el("section", { class: "ir-auth-section" },
-                        el("h3", {}, this.t("admin.administrationAccess")),
-                        el("p", { class: "ir-dialog-note" },
-                            this.t("admin.administrationAccessNote")),
-                        identityRows(
-                            authorization.configuredAdministrators,
-                            authorization.databaseAdministrators,
-                            identity => api(apiUrl(this.base, "admin", "authorization", "administrators"), {
-                                method: "DELETE", body: { identity },
-                            })),
-                        addIdentity(this.t("admin.administrator"), identity => api(
-                            apiUrl(this.base, "admin", "authorization", "administrators"),
-                            { method: "POST", body: { identity } })));
-
                     const reports = authorization.reports ?? [];
                     const reportSelect = sel(reports.map(report => ({
                         label: report.title, value: report.name,
@@ -396,6 +466,16 @@ export class InteractiveReportAdminElement extends WidgetElement {
                                 apiUrl(this.base, "admin", "authorization", "reports", report.name),
                                 { method: "PUT", body: { restricted: restricted.checked } })); },
                         });
+                        const rowsSlot = el("div");
+                        renderRows = () => rowsSlot.replaceChildren(this.identityRows(
+                            report.configuredUsers,
+                            report.databaseUsers,
+                            identity => { void mutate(() => api(usersUrl(report.name), {
+                                method: "DELETE", body: { identity },
+                            })); }));
+                        renderRows();
+                        // The one picker survives re-renders: its nodes move into each new body,
+                        // keeping the typed search and its results.
                         reportBody = el("div", { class: "ir-auth-report" },
                             el("label", { class: "ir-checkline" }, restricted,
                                 el("span", {}, this.t("admin.restrictReport"))),
@@ -404,32 +484,35 @@ export class InteractiveReportAdminElement extends WidgetElement {
                                     this.t("admin.configuredRestriction"))
                                 : null,
                             el("h4", {}, this.t("admin.grantedUsers")),
-                            identityRows(
-                                report.configuredUsers,
-                                report.databaseUsers,
-                                identity => api(apiUrl(
-                                    this.base, "admin", "authorization", "reports", report.name, "users"), {
-                                    method: "DELETE", body: { identity },
-                                })),
-                            addIdentity(this.t("admin.reportUser"), identity => api(apiUrl(
-                                this.base, "admin", "authorization", "reports", report.name, "users"), {
-                                method: "POST", body: { identity },
-                            })),
+                            rowsSlot,
+                            el("div", { class: "ir-auth-add" },
+                                labeled(this.t("admin.reportUser"), picker.input),
+                                el("button", {
+                                    type: "button", class: "ir-btn",
+                                    onclick: () => grant(picker.value),
+                                }, this.t("common.add"))),
+                            picker.results,
+                            el("p", { class: "ir-dialog-note" }, this.t("admin.identityNote")),
                             !report.restricted
                                 ? el("p", { class: "ir-dialog-note" },
                                     this.t("admin.inactiveGrants"))
                                 : null);
                     }
 
-                    const reportSection = el("section", { class: "ir-auth-section" },
-                        el("h3", {}, this.t("admin.reportAccess")),
+                    if (!report?.canRestrict) renderRows = () => {};
+                    body.replaceChildren(
                         reports.length ? labeled(this.t("admin.report"), reportSelect) : null,
                         reportBody);
-                    body.replaceChildren(administratorSection, reportSection);
                 };
+                picker = userPicker(this, {
+                    onPick: user => grant(user.value),
+                    onError: error => dialog.setError(error),
+                    onResults: items => { this.rememberDisplayNames(items); renderRows(); },
+                });
                 render();
             },
         });
+        disposePickerOnClose(dlg, () => picker);
     }
 
     /**

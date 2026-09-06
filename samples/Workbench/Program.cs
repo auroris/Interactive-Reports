@@ -30,7 +30,10 @@ builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
 // Provider constraint: the code-registered connection declares no dialect: the engine detects
 // it from the factory's connection type (see the redistributable-package milestone).
 var interactiveReports = builder.Services.AddInteractiveReports(builder.Configuration)
-    .AddConnection("SampleDb", _ => new SqliteConnection(connectionString));
+    .AddConnection("SampleDb", _ => new SqliteConnection(connectionString))
+    // The administration page's account pickers search this directory (plus the identities the
+    // saved-report tables already know). See WorkbenchUsers for the sample-only implementation.
+    .UseUserDirectory(WorkbenchUsers.Find);
 
 // Browser automation can isolate saved-report writes from the explicitly configured Workbench
 // database by supplying this path and selecting the named connection in configuration.

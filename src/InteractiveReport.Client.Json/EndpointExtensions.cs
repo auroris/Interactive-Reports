@@ -190,9 +190,13 @@ public static class EndpointExtensions
         ProtectedApi(
                 group.MapGet("/admin/users", SavedReportEndpoints.AdminListUsers),
                 AdministrationTag,
-                "List authorization users",
-                "Returns application-provided identity choices for authorization administration.")
-            .Produces<InteractiveReportUser[]>();
+                "Search authorization users",
+                "Returns a bounded list of account choices for authorization administration: application "
+                + "user-directory entries merged with the identities Interactive Reports already knows from "
+                + "configuration and storage. The optional search query performs a case-insensitive partial "
+                + "match on display names and identity values before the configured limit.")
+            .Produces<InteractiveReportUserList>()
+            .Produces<InteractiveReportError>(StatusCodes.Status400BadRequest);
         ProtectedApi(
                 group.MapGet("/admin/authorization", AuthorizationEndpoints.List),
                 AdministrationTag,
@@ -213,6 +217,21 @@ public static class EndpointExtensions
                 "Revoke administrator access",
                 "Removes a database-authored administrator grant.")
             .Accepts<AuthorizationIdentityRequest>("application/json")
+            .Produces(StatusCodes.Status204NoContent)
+            .Produces<InteractiveReportError>(StatusCodes.Status400BadRequest);
+        ProtectedApi(
+                group.MapGet("/admin/authorization/administrators", AuthorizationEndpoints.ListAdministrators),
+                AdministrationTag,
+                "List administrators",
+                "Returns configured and database-authored administrator identities as two lists.")
+            .Produces<InteractiveReportAdministratorList>();
+        ProtectedApi(
+                group.MapPut("/admin/authorization/administrators", AuthorizationEndpoints.SetAdministrators),
+                AdministrationTag,
+                "Set administrators",
+                "Replaces the database-authored administrator grants with the supplied identity list; "
+                + "configured administrators are unaffected.")
+            .Accepts<AuthorizationIdentitiesRequest>("application/json")
             .Produces(StatusCodes.Status204NoContent)
             .Produces<InteractiveReportError>(StatusCodes.Status400BadRequest);
         ProtectedApi(

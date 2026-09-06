@@ -46,6 +46,12 @@ public sealed class InteractiveReportOptions
     public AuthorizationStoreOptions Authorization { get; set; } = new();
 
     /// <summary>
+    /// Gets or sets the limits of administration account lookups (GET {prefix}/admin/users), which
+    /// merge the application user directory with the identities Interactive Reports already knows.
+    /// </summary>
+    public UserDirectoryOptions UserDirectory { get; set; } = new();
+
+    /// <summary>
     /// Gets or sets whether to serve the packaged browser pages at GET {prefix}/{name}/view and
     /// GET {prefix}/admin. On by default; the pages are anonymous shells (the data
     /// endpoints keep their own authorization), so disabling them only matters to
@@ -62,6 +68,25 @@ public sealed class AuthorizationStoreOptions
     /// SavedReports table prefix, when present, is prepended to this value.
     /// </summary>
     public string TableName { get; set; } = "IR_REPORT_AUTHORIZATION";
+}
+
+/// <summary>Configures administration account lookups.</summary>
+public sealed class UserDirectoryOptions
+{
+    /// <summary>
+    /// Gets or sets the most accounts one lookup returns, counting application-directory entries
+    /// and identities already known to Interactive Reports together. Between 1 and 1000; 50 by
+    /// default. Search text narrows the list before the limit applies.
+    /// </summary>
+    public int MaxResults { get; set; } = 50;
+
+    /// <summary>
+    /// Gets or sets how many seconds the application directory's answer to a no-search browse is
+    /// reused for the same administrator before the directory is asked again. 60 by default; 0
+    /// asks the directory on every lookup. Searched lookups are never reused, and the identities
+    /// known from Interactive Reports storage are always read fresh.
+    /// </summary>
+    public int CacheSeconds { get; set; } = 60;
 }
 
 /// <summary>

@@ -61,6 +61,12 @@ internal sealed class InteractiveReportStartupValidator(
             .Distinct(StringComparer.Ordinal).Count() != current.Administrators.Count)
             throw new InvalidOperationException(
                 "InteractiveReport:Administrators contains duplicate identity values.");
+        if (current.UserDirectory.MaxResults is < 1 or > 1000)
+            throw new InvalidOperationException(
+                "InteractiveReport:UserDirectory:MaxResults must be between 1 and 1000.");
+        if (current.UserDirectory.CacheSeconds < 0)
+            throw new InvalidOperationException(
+                "InteractiveReport:UserDirectory:CacheSeconds cannot be negative.");
         foreach (var (name, configured) in current.Reports)
         {
             var snapshot = ConfigurationReportDefinitionStore.Snapshot(name, configured);

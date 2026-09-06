@@ -45,15 +45,17 @@ internal static class SavedReportEndpoints
     // Application-provided authorization user directory.
 
     /// <summary>
-    /// Returns application-provided identity choices after administrator authorization.
+    /// Returns bounded account choices after administrator authorization: application-directory
+    /// entries merged with the identities Interactive Reports already knows.
     /// </summary>
+    /// <param name="search">Optional case-insensitive partial-match text bound from the query string.</param>
     /// <param name="ctx">The current HTTP request and response context.</param>
-    /// <param name="ct">Cancels authorization and user-provider lookup.</param>
+    /// <param name="ct">Cancels authorization, storage reads, and the directory lookup.</param>
     /// <returns>A normalized JSON user list, a hidden-denial result, or a sanitized provider failure.</returns>
-    internal static async Task<IResult> AdminListUsers(HttpContext ctx, CancellationToken ct)
+    internal static async Task<IResult> AdminListUsers(string? search, HttpContext ctx, CancellationToken ct)
     {
         var listed = await EndpointExtensions.Server(ctx).ListAuthorizationUsers(
-            EndpointExtensions.Context(ctx), ct);
+            search, EndpointExtensions.Context(ctx), ct);
         return listed.Failure is not null
             ? EndpointExtensions.Failure(listed.Failure, ctx)
             : Results.Json(listed.Value, IrJson.Options);

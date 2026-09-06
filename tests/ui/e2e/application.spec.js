@@ -773,38 +773,90 @@ test("admin uploads a validated report document and downloads its canonical file
     }
 });
 
-test("admin adds and removes a database administrator grant", async ({ page, request }) => {
+test("admin sets the database administrator list as a whole", async ({ page, request }) => {
     const identity = `authorization-${randomUUID()}`;
+    const administrators = "/api/reports/admin/authorization/administrators";
+    const saveList = async dialog => {
+        const response = page.waitForResponse(candidate =>
+            candidate.request().method() === "PUT"
+            && new URL(candidate.url()).pathname === administrators);
+        await dialog.getByRole("button", { name: "Save", exact: true }).click();
+        expect((await response).status()).toBe(204);
+        await expect(dialog).toBeHidden();
+    };
     let granted = false;
     try {
         await page.goto("/admin.html");
-        await page.getByRole("button", { name: "Authorization…", exact: true }).click();
-        const dialog = page.getByRole("dialog", { name: "Authorization", exact: true });
-        await expect(dialog).toContainText("Administration access");
+        await page.getByRole("button", { name: "Administrators…", exact: true }).click();
+        let dialog = page.getByRole("dialog", { name: "Administrators", exact: true });
+        await expect(dialog).toContainText("workbench-dev");
+        await expect(dialog).toContainText("appsettings.json");
 
-        await dialog.getByLabel("Administrator", { exact: true }).fill(identity);
+        // The Workbench directory answers the picker; typing narrows it to one match.
+        const picker = dialog.getByLabel("Add administrator", { exact: true });
+        await picker.fill("hopper");
+        await expect(dialog.getByRole("option")).toHaveText([/Grace Hopper/]);
+
+        // A typed identity the directory does not know is added locally, then saved in one PUT.
+        await picker.fill(identity);
+        await expect(dialog).toContainText("No matching users.");
+        await dialog.locator(".ir-auth-add").getByRole("button", { name: "Add", exact: true }).click();
+        await expect(dialog.getByRole("button", { name: `Remove ${identity}`, exact: true })).toBeVisible();
+        await saveList(dialog);
+        granted = true;
+        await expect(page.getByText("Administrator list saved.", { exact: true })).toBeVisible();
+
+        const listed = await request.get(administrators);
+        expect(listed.ok()).toBe(true);
+        expect((await listed.json()).database).toContain(identity);
+
+        await page.getByRole("button", { name: "Administrators…", exact: true }).click();
+        dialog = page.getByRole("dialog", { name: "Administrators", exact: true });
+        // The saved grant is now an identity the server knows, so the picker offers it too;
+        // the grant rows are what this checks.
+        const grantRows = dialog.locator(".ir-auth-list");
+        await expect(grantRows.getByText(identity, { exact: true })).toBeVisible();
+        await dialog.getByRole("button", { name: `Remove ${identity}`, exact: true }).click();
+        await expect(grantRows.getByText(identity, { exact: true })).toBeHidden();
+        await saveList(dialog);
+        granted = false;
+
+        const cleared = await request.get(administrators);
+        expect((await cleared.json()).database).not.toContain(identity);
+    } finally {
+        if (granted) await request.delete(administrators, { data: { identity } });
+    }
+});
+
+test("admin grants report access from the searchable directory", async ({ page, request }) => {
+    const users = "/api/reports/admin/authorization/reports/orders-restricted/users";
+    let granted = false;
+    try {
+        await page.goto("/admin.html");
+        await page.getByRole("button", { name: "Report access…", exact: true }).click();
+        const dialog = page.getByRole("dialog", { name: "Report access", exact: true });
+        await dialog.getByRole("combobox", { name: "Report", exact: true })
+            .selectOption({ label: "Orders (restricted)" });
+        await expect(dialog).toContainText("Granted users");
+
+        await dialog.getByLabel("Report user", { exact: true }).fill("lovelace");
         const grantResponse = page.waitForResponse(response =>
             response.request().method() === "POST"
-            && new URL(response.url()).pathname === "/api/reports/admin/authorization/administrators");
-        await dialog.locator(".ir-auth-add").first()
-            .getByRole("button", { name: "Add", exact: true }).click();
+            && new URL(response.url()).pathname === users);
+        await dialog.getByRole("option", { name: /Ada Lovelace/ }).click();
         expect((await grantResponse).status()).toBe(204);
         granted = true;
-        await expect(dialog.getByText(identity, { exact: true })).toBeVisible();
+        await expect(dialog.getByText("Ada Lovelace (ada-lovelace)", { exact: true })).toBeVisible();
 
         const revokeResponse = page.waitForResponse(response =>
             response.request().method() === "DELETE"
-            && new URL(response.url()).pathname === "/api/reports/admin/authorization/administrators");
-        await dialog.getByRole("button", { name: `Remove ${identity}`, exact: true }).click();
+            && new URL(response.url()).pathname === users);
+        await dialog.getByRole("button", { name: "Remove ada-lovelace", exact: true }).click();
         expect((await revokeResponse).status()).toBe(204);
         granted = false;
-        await expect(dialog.getByText(identity, { exact: true })).toBeHidden();
+        await expect(dialog.getByText("Ada Lovelace (ada-lovelace)", { exact: true })).toBeHidden();
     } finally {
-        if (granted) {
-            await request.delete("/api/reports/admin/authorization/administrators", {
-                data: { identity },
-            });
-        }
+        if (granted) await request.delete(users, { data: { identity: "ada-lovelace" } });
     }
 });
 

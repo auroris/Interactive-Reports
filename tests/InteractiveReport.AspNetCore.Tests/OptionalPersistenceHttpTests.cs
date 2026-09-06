@@ -73,9 +73,15 @@ public sealed class OptionalPersistenceHttpTests
                 "/api/reports/admin/authorization");
             await AssertStorageFailure(administration);
 
+            // The account lookup never touches storage that is not configured: it offers only
+            // what configuration and the caller supply.
             using var directory = await host.Client.GetAsync("/api/reports/admin/users");
             Assert.Equal(HttpStatusCode.OK, directory.StatusCode);
-            Assert.Equal(0, (await ReadJson(directory)).GetArrayLength());
+            var lookup = await ReadJson(directory);
+            Assert.False(lookup.GetProperty("truncated").GetBoolean());
+            Assert.Equal(
+                "admin",
+                Assert.Single(lookup.GetProperty("items").EnumerateArray()).GetProperty("value").GetString());
 
             Assert.False(Directory.Exists(Path.Combine(tempRoot, "App_Data")));
             Assert.Equal(

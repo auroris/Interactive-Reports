@@ -108,6 +108,15 @@ public sealed class InteractiveReportAuthorizationHttpTests
             "action-admin",
             new { identity = "action-admin" }));
         Assert.Equal(HttpStatusCode.NoContent, grantAdministrator.StatusCode);
+        using var listAdministrators = await host.Client.SendAsync(Request(
+            HttpMethod.Get, "/api/reports/admin/authorization/administrators", "action-admin"));
+        Assert.Equal(HttpStatusCode.OK, listAdministrators.StatusCode);
+        using var setAdministrators = await host.Client.SendAsync(Request(
+            HttpMethod.Put,
+            "/api/reports/admin/authorization/administrators",
+            "action-admin",
+            new { identities = new[] { "action-admin", "second-admin" } }));
+        Assert.Equal(HttpStatusCode.NoContent, setAdministrators.StatusCode);
         using var restriction = await host.Client.SendAsync(Request(
             HttpMethod.Put,
             "/api/reports/admin/authorization/reports/orders",
@@ -136,8 +145,59 @@ public sealed class InteractiveReportAuthorizationHttpTests
         Assert.Equal(
             Enum.GetValues<InteractiveReportAction>().Order(),
             seen.Distinct().Order());
-        Assert.Equal(6, seen.Count(action => action == InteractiveReportAction.ManageAuthorization));
+        Assert.Equal(8, seen.Count(action => action == InteractiveReportAction.ManageAuthorization));
     }
+
+    [Fact]
+    public async Task Administrator_list_is_set_as_a_whole_and_configured_entries_are_untouched()
+    {
+        const string administrators = "/api/reports/admin/authorization/administrators";
+        await using var host = await Start(administrators: ["configured-admin"]);
+        using var grant = await host.Client.SendAsync(Request(
+            HttpMethod.Post, administrators, "configured-admin", new { identity = "old-admin" }));
+        Assert.Equal(HttpStatusCode.NoContent, grant.StatusCode);
+
+        using var replaced = await host.Client.SendAsync(Request(
+            HttpMethod.Put,
+            administrators,
+            "configured-admin",
+            new { identities = new[] { " kept-admin ", "kept-admin", "new-admin" } }));
+        Assert.Equal(HttpStatusCode.NoContent, replaced.StatusCode);
+
+        using var listed = await host.Client.SendAsync(Request(HttpMethod.Get, administrators, "configured-admin"));
+        Assert.Equal(HttpStatusCode.OK, listed.StatusCode);
+        var lists = await ReadJson(listed);
+        Assert.Equal(["configured-admin"], Strings(lists.GetProperty("configured")));
+        Assert.Equal(["kept-admin", "new-admin"], Strings(lists.GetProperty("database")));
+
+        // The grants take effect immediately: a listed identity administers, a dropped one is hidden.
+        using var newAdmin = await host.Client.SendAsync(Request(HttpMethod.Get, administrators, "new-admin"));
+        Assert.Equal(HttpStatusCode.OK, newAdmin.StatusCode);
+        using var oldAdmin = await host.Client.SendAsync(Request(HttpMethod.Get, administrators, "old-admin"));
+        Assert.Equal(HttpStatusCode.NotFound, oldAdmin.StatusCode);
+
+        // A malformed list changes nothing.
+        using var missing = await host.Client.SendAsync(Request(
+            HttpMethod.Put, administrators, "configured-admin", new { }));
+        Assert.Equal(HttpStatusCode.BadRequest, missing.StatusCode);
+        Assert.Equal("IR-1406", (await ReadJson(missing)).GetProperty("code").GetString());
+        using var blank = await host.Client.SendAsync(Request(
+            HttpMethod.Put, administrators, "configured-admin", new { identities = new[] { "fine", " " } }));
+        Assert.Equal(HttpStatusCode.BadRequest, blank.StatusCode);
+        Assert.Equal("IR-1402", (await ReadJson(blank)).GetProperty("code").GetString());
+        using var unchanged = await host.Client.SendAsync(Request(HttpMethod.Get, administrators, "configured-admin"));
+        Assert.Equal(["kept-admin", "new-admin"], Strings((await ReadJson(unchanged)).GetProperty("database")));
+
+        // Emptying the database list is allowed; configuration still names an administrator.
+        using var cleared = await host.Client.SendAsync(Request(
+            HttpMethod.Put, administrators, "configured-admin", new { identities = Array.Empty<string>() }));
+        Assert.Equal(HttpStatusCode.NoContent, cleared.StatusCode);
+        using var afterClear = await host.Client.SendAsync(Request(HttpMethod.Get, administrators, "configured-admin"));
+        Assert.Empty(Strings((await ReadJson(afterClear)).GetProperty("database")));
+    }
+
+    private static string[] Strings(JsonElement array)
+        => array.EnumerateArray().Select(element => element.GetString()!).ToArray();
 
     [Fact]
     public async Task Callback_receives_intent_and_authorizes_admin_actions_when_list_is_empty()
