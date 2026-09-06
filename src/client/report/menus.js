@@ -1,7 +1,7 @@
 // The two popup menus: the toolbar Actions menu and the per-column header menu. Menus are pure
 // dispatch: every entry opens a dialog, opens a submenu of pickable values, or applies a one-line
-// document mutation; nothing here owns state of its own. Every entry is gated by the effective client control policy and enabled per
-// the active table's capabilities: the same Columns/Compute/Filter/Sort/Highlight surfaces
+// document mutation; nothing here owns state of its own. Every entry is gated by the effective client control policy:
+// the same Columns/Compute/Filter/Sort/Highlight surfaces
 // operate on whichever named table is active.
 
 import { popupMenu } from "../core/menu.js";
@@ -65,32 +65,31 @@ function paginationEntry(w, enabled) {
 }
 
 // Invariant: the Actions menu entries the effective control policy leaves standing. Exported so the toolbar
-// can hide the Actions button when nothing remains. Entries the active table cannot use stay
-// visible but disabled. The menu shape is stable while the active table changes.
+// can hide the Actions button when nothing remains. Document editors stay disabled until a
+// document loads. The menu shape is stable while the active table changes.
 /**
  * Builds the actions-menu entries allowed by the current schema and state.
  *
- * @param {object} w - The report controller containing state, schema features, table capabilities, and actions.
+ * @param {object} w - The report controller containing state, schema features, and actions.
  * @returns {Array<object|string>} Action, heading, and separator entries in display order.
  */
 export function actionsMenuItems(w) {
-    const ctx = w.doc ? tableContext(w) : null;
-    const caps = ctx?.caps ?? {};
+    const ready = !!w.doc;
     const feature = (name, ...entries) => featureEnabled(w, name) ? entries : [];
     const canSave = canManageCurrentSaved(w);
     const items = joinSections([
         [
-            ...feature("columns", { label: w.t("menu.columns"), disabled: !caps.columns, onPick: () => columnsDialog(w) }),
-            ...feature("columnSettings", { label: w.t("menu.columnSettings"), disabled: !caps.columnSettings, onPick: () => columnSettingsDialog(w) }),
-            ...feature("filter", { label: w.t("menu.filter"), disabled: !caps.filter, onPick: () => filterDialog(w, {}) }),
-            ...feature("sort", { label: w.t("menu.sort"), disabled: !caps.sort, onPick: () => sortDialog(w) }),
-            ...feature("pagination", paginationEntry(w, caps.pagination)),
+            ...feature("columns", { label: w.t("menu.columns"), disabled: !ready, onPick: () => columnsDialog(w) }),
+            ...feature("columnSettings", { label: w.t("menu.columnSettings"), disabled: !ready, onPick: () => columnSettingsDialog(w) }),
+            ...feature("filter", { label: w.t("menu.filter"), disabled: !ready, onPick: () => filterDialog(w, {}) }),
+            ...feature("sort", { label: w.t("menu.sort"), disabled: !ready, onPick: () => sortDialog(w) }),
+            ...feature("pagination", paginationEntry(w, ready)),
         ],
         [
-            ...feature("controlBreak", { label: w.t("menu.controlBreak"), disabled: !caps.break, onPick: () => breakDialog(w) }),
-            ...feature("highlight", { label: w.t("menu.highlight"), disabled: !caps.highlight, onPick: () => highlightDialog(w) }),
-            ...feature("aggregate", { label: w.t("menu.aggregate"), disabled: !caps.aggregate, onPick: () => aggregateDialog(w) }),
-            ...feature("compute", { label: w.t("menu.compute"), disabled: !caps.compute, onPick: () => computeDialog(w) }),
+            ...feature("controlBreak", { label: w.t("menu.controlBreak"), disabled: !ready, onPick: () => breakDialog(w) }),
+            ...feature("highlight", { label: w.t("menu.highlight"), disabled: !ready, onPick: () => highlightDialog(w) }),
+            ...feature("aggregate", { label: w.t("menu.aggregate"), disabled: !ready, onPick: () => aggregateDialog(w) }),
+            ...feature("compute", { label: w.t("menu.compute"), disabled: !ready, onPick: () => computeDialog(w) }),
         ],
         [
             ...feature("groupBy", { label: w.t("menu.groupBy"), onPick: () => groupByDialog(w) }),
@@ -148,7 +147,7 @@ export function openHeaderMenu(w, col, anchor) {
     const feature = (name, ...entries) => featureEnabled(w, name) ? entries : [];
 
     // Sorting follows the current table, including generated Pivot cells.
-    const sortable = ctx.caps.sort && columnSortable(w, col);
+    const sortable = columnSortable(w, col);
     const sortItems = sortable
         ? feature("sort",
             {
@@ -164,28 +163,26 @@ export function openHeaderMenu(w, col, anchor) {
         : [];
 
     const presentation = [
-        ...(ctx.caps.rename ? feature("rename", { label: w.t("menu.rename"), onPick: () => renameDialog(w, col) }) : []),
-        ...(ctx.caps.columnSettings
-            ? feature("columnSettings", { label: w.t("menu.columnSettings"), onPick: () => columnSettingsDialog(w, col) })
-            : []),
+        ...feature("rename", { label: w.t("menu.rename"), onPick: () => renameDialog(w, col) }),
+        ...feature("columnSettings", { label: w.t("menu.columnSettings"), onPick: () => columnSettingsDialog(w, col) }),
     ];
 
     // Hiding is simply a terminal select composable. Dimensions and generated columns obey the
     // same rule as every other column.
-    if (ctx.caps.columns && ctx.caps.visibility) {
+    if (featureEnabled(w, "columns")) {
         const visible = visibleTableColumnNames(ctx, w);
-        presentation.push(...feature("columns", {
+        presentation.push({
             label: w.t("menu.hideColumn"),
             disabled: visible.length <= 1,
             onPick: () => w.applyOrBanner(d => ctx.edit(d, "select", node => {
                 node.columns = visible.filter(n => !sameColumn(n, col));
             })),
-        }));
+        });
     }
 
-    if (ctx.caps.break && columnSortable(w, col)) {
+    if (featureEnabled(w, "controlBreak") && columnSortable(w, col)) {
         const breaking = (ctx.node(w.doc, "break")?.breaks ?? []).some(b => sameColumn(b, col));
-        presentation.push(...feature("controlBreak", {
+        presentation.push({
             label: breaking ? w.t("menu.removeControlBreak") : w.t("break.title"),
             checked: breaking,
             onPick: () => w.applyOrBanner(d => ctx.edit(d, "break", node => {
@@ -193,10 +190,10 @@ export function openHeaderMenu(w, col, anchor) {
                     ? (node.breaks ?? []).filter(b => !sameColumn(b, col))
                     : [...(node.breaks ?? []), col];
             })),
-        }));
+        });
     }
 
-    const filterable = ctx.caps.filter && columnFilterable(w, col);
+    const filterable = columnFilterable(w, col);
     const filterItems = filterable
         ? feature("filter",
             { label: w.t("menu.filterByValue"), onPick: () => filterByLovDialog(w, col) },

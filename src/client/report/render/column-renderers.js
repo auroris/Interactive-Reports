@@ -211,7 +211,7 @@ const renderers = {
 export function renderColumnValue(w, row, col, decimal = false, format = null, allowDisplayAs = true) {
     const effective = format ?? formatForColumn(w, col);
     const name = typeof effective?.displayAs === "string" ? effective.displayAs.toLowerCase() : "";
-    const renderer = allowDisplayAs ? renderers[name] : null;
+    const renderer = allowDisplayAs && Object.hasOwn(renderers, name) ? renderers[name] : null;
     return renderer
         ? renderer(w, row, col, decimal, effective)
         : renderTextValue(w, row, col, decimal, effective);

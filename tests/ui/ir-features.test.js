@@ -73,6 +73,7 @@ globalThis.fetch = async (url, options = {}) => {
     }
     if (String(url).endsWith("/query")) {
         return json({
+            document: JSON.parse(options.body),
             columns: [{ name: "ID", label: "ID", type: "number" }],
             rows: [{ ID: 1 }],
             page: { index: 1, size: 25 },

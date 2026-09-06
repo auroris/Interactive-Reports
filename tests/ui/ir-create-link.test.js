@@ -34,7 +34,7 @@ test("navigate-mode create links are primary anchors with the plus icon and labe
     assert.equal(anchor.getAttribute("title"), "New order");
     assert.equal(anchor.textContent.trim(), "New order", "visible text is the accessible name");
     assert.equal(!!anchor.querySelector(".ir-icon svg"), true);
-    assert.equal(anchor.hasAttribute("target"), false);
+    assert.equal(anchor.getAttribute("target"), "_self");
     assert.equal(anchor.hasAttribute("rel"), false);
 
     const blank = renderCreateButton(controller({ url: "/orders/new", target: "_blank" }));
@@ -74,13 +74,19 @@ test("event-mode create links are buttons that only dispatch ir-create, URL opti
     assert.equal(w.events.length, 1);
     assert.deepEqual(w.events[0].detail, { url: null }, "no URL configured, none offered");
 
-    const withUrl = controller({ url: "/orders/new", mode: "event" });
+    const withUrl = controller({ url: "myapp:orders/new", mode: "event" });
     renderCreateButton(withUrl).click();
-    assert.deepEqual(withUrl.events[0].detail, { url: "/orders/new" }, "a configured URL rides the event");
+    assert.deepEqual(withUrl.events[0].detail, { url: "myapp:orders/new" }, "the configured destination rides the event unchanged");
 });
 
-test("unsafe or missing URLs render nothing in navigate mode", () => {
-    assert.equal(renderCreateButton(controller({ url: "javascript:alert(1)" })), null);
+test("programmer-owned create destinations and named targets are preserved", () => {
+    const anchor = renderCreateButton(controller({ url: "myapp:orders/new", target: "OrderEditor" }));
+    assert.equal(anchor.getAttribute("href"), "myapp:orders/new");
+    assert.equal(anchor.getAttribute("target"), "OrderEditor");
+    assert.equal(anchor.hasAttribute("rel"), false, "named targets retain their browsing-context behavior");
+});
+
+test("missing create definitions or navigation URLs render nothing", () => {
     assert.equal(renderCreateButton(controller({ label: "New order" })), null, "navigate mode needs a URL");
     assert.equal(renderCreateButton(controller(null)), null);
     assert.equal(renderCreateButton({ schema: null, t: k => k }), null, "no schema yet, no button");

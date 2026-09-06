@@ -3,13 +3,12 @@ using System.Data.Common;
 using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Model;
 using InteractiveReport.Core.SavedReports;
-using InteractiveReport.Core.Validation;
 using Microsoft.Extensions.Logging;
 
 namespace InteractiveReport.AspNetCore;
 
 /// <summary>
-/// Lazily creates and repairs the durable default document associated with one configured report family.
+/// Creates missing default documents and reads their persisted state without implicit repairs.
 /// Configuration supplies execution rules; the database document supplies the client-visible identity
 /// and initial state.
 /// </summary>
@@ -17,46 +16,20 @@ internal sealed class DefaultReportDocumentService(
     ISavedReportStore store,
     ILogger? logger = null)
 {
-    /// <summary>Returns a stored document without attempting definition resolution.</summary>
-    internal Task<SavedReport?> Get(long id, CancellationToken ct)
-        => store.Get(id, ct);
-
-    /// <summary>
-    /// Processes a stored default against the current definition. Invalid stored JSON or report-state
-    /// validation causes the row to be rebuilt in place from current appsettings.
-    /// </summary>
-    internal async Task<(SavedReport Report, ReportState State)> LoadState(
+    /// <summary>Loads and validates the stored default without changing its persistent document.</summary>
+    internal async Task<ReportState> LoadState(
         SavedReport report,
         ReportDefinition definition,
         ReportExecutor executor,
         IReadOnlyDictionary<string, object?> contextParameters,
         CancellationToken ct)
     {
-        if (!report.IsDefault || report.Origin == SavedReportOrigin.Configured)
-            throw new InvalidOperationException("Only a database-backed default report document can be auto-repaired.");
-
-        try
-        {
-            var stored = JsonSerializer.Deserialize<ReportState>(
-                    report.StateJson ?? throw new JsonException("The default report document has no state."),
-                    IrJson.Options)
-                ?? throw new JsonException("The default report document has no state.");
-            var refreshed = await executor.RefreshSchemaCaches(
-                definition, stored, contextParameters, ct);
-            return (report, refreshed);
-        }
-        catch (JsonException)
-        {
-            return await Rebuild(report, definition, executor, contextParameters, ct);
-        }
-        // A live validation failure may describe this caller's restricted pivot shape,
-        // not a broken shared document. It must not rewrite that document for everyone.
-        catch (ReportValidationException) when (!definition.RowRestrictionApplied)
-        {
-            return await Rebuild(report, definition, executor, contextParameters, ct);
-        }
+        var stored = JsonSerializer.Deserialize<ReportState>(
+                report.StateJson ?? throw new JsonException("The default report document has no state."),
+                IrJson.Options)
+            ?? throw new JsonException("The default report document has no state.");
+        return await executor.RefreshSchemaCaches(definition, stored, contextParameters, ct);
     }
-
     /// <summary>
     /// Creates the missing default for the configured report family. A concurrent winner is reloaded.
     /// </summary>
@@ -114,53 +87,6 @@ internal sealed class DefaultReportDocumentService(
             }
             throw BootstrapFailure(definition.Name, insertException);
         }
-    }
-
-    /// <summary>
-    /// Replaces an invalid default state while retaining its stable id and presentation metadata.
-    /// A concurrent replacement wins and is returned to the caller.
-    /// </summary>
-    internal async Task<SavedReport> Repair(
-        SavedReport expected,
-        ReportDefinition definition,
-        ReportState state,
-        CancellationToken ct)
-    {
-        if (!expected.IsDefault || expected.Origin == SavedReportOrigin.Configured)
-            throw new InvalidOperationException("Only a database-backed default report document can be repaired.");
-
-        if (definition.RowRestrictionApplied)
-        {
-            state = ReportStateResolver.Resolve(defaults: null, state);
-            if (state.Tables is not null)
-                foreach (var table in state.Tables.Values) table.Schema = null;
-        }
-
-        var replacement = expected with
-        {
-            ReportName = definition.Name,
-            IsGlobal = true,
-            IsDefault = true,
-            StateJson = JsonSerializer.Serialize(state, IrJson.Options),
-        };
-        if (await store.Update(replacement, expected, ct)) return replacement;
-        return await store.Get(expected.Id, ct)
-            ?? throw new InvalidOperationException(
-                $"Default report document '{expected.Id}' disappeared during repair.");
-    }
-
-    private async Task<(SavedReport Report, ReportState State)> Rebuild(
-        SavedReport expected,
-        ReportDefinition definition,
-        ReportExecutor executor,
-        IReadOnlyDictionary<string, object?> contextParameters,
-        CancellationToken ct)
-    {
-        var synthetic = ReportDocumentDefaults.Create(definition);
-        var refreshed = await executor.RefreshSchemaCaches(
-            definition, synthetic, contextParameters, ct);
-        var repaired = await Repair(expected, definition, refreshed, ct);
-        return (repaired, refreshed);
     }
 
     /// <summary>Builds the first persisted form of a configured report's synthetic document.</summary>

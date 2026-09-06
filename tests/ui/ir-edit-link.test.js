@@ -45,7 +45,7 @@ test("edit cells render icon-only anchors with accessible names and native navig
     assert.equal(anchor.getAttribute("href"), "/orders/42/edit");
     assert.equal(anchor.getAttribute("aria-label"), "Edit order");
     assert.equal(anchor.getAttribute("title"), "Edit order");
-    assert.equal(anchor.hasAttribute("target"), false, "_self is the default — no target, no rel");
+    assert.equal(anchor.getAttribute("target"), "_self");
     assert.equal(anchor.hasAttribute("rel"), false);
     assert.equal(!!anchor.querySelector(".ir-icon svg"), true, "the pencil icon, aria-hidden");
     assert.equal(anchor.textContent.trim(), "", "icon-only: the accessible name is the aria-label");
@@ -58,14 +58,20 @@ test("edit cells render icon-only anchors with accessible names and native navig
     assert.equal(unnamed.getAttribute("aria-label"), "Edit", "the default accessible name");
 });
 
-test("withheld and unsafe links render empty cells", () => {
+test("withheld edit links render empty cells", () => {
     assert.equal(renderEditCell({ urlTemplate: "/orders/{ID}/edit" }, { ID: null }, host()), "");
-    // Defense in depth: the definition is trusted config, but the substituted
-    // result still passes the renderer protocol allowlist.
-    assert.equal(renderEditCell({ urlTemplate: "javascript:{ID}" }, { ID: "alert(1)" }, host()), "");
-    // Event mode hands the URL to the host, so the same allowlist guards it.
-    assert.equal(
-        renderEditCell({ urlTemplate: "javascript:{ID}", mode: "event" }, { ID: "alert(1)" }, host()), "");
+});
+
+test("programmer-owned edit destinations and named targets preserve encoded row values", () => {
+    const editLink = { urlTemplate: "myapp:orders/{ID}", target: "OrderEditor" };
+    const element = host();
+    const anchor = renderEditCell(editLink, { ID: "A/B &?" }, element);
+    assert.equal(anchor.getAttribute("href"), "myapp:orders/A%2FB%20%26%3F");
+    assert.equal(anchor.getAttribute("target"), "OrderEditor");
+    assert.equal(anchor.hasAttribute("rel"), false);
+
+    renderEditCell({ ...editLink, mode: "event" }, { ID: "A/B &?" }, element).click();
+    assert.equal(element.events[0].detail.url, "myapp:orders/A%2FB%20%26%3F");
 });
 
 test("navigate-mode anchors dispatch ir-edit first and a prevented event cancels navigation", () => {

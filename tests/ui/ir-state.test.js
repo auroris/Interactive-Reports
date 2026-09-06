@@ -119,7 +119,7 @@ test("normalization follows whole-document defaults and serialization preserves 
     const cleared = normalizeReportState({
         search: "",
         ...report({ filters: [], sorts: [], columns: [] }),
-        _transient: true,
+        _extension: true,
         omitted: undefined,
     }, 25, defaults);
     const saved = serializeReportState(cleared);
@@ -127,8 +127,28 @@ test("normalization follows whole-document defaults and serialization preserves 
     assert.deepEqual(inputComposableLocation(saved, "filter").composable.filters, []);
     assert.deepEqual(inputComposableLocation(saved, "sort").composable.sorts, []);
     assert.deepEqual(inputComposableLocation(saved, "select").composable.columns, []);
-    assert.equal("_transient" in saved, false);
+    assert.equal(saved._extension, true);
     assert.equal("omitted" in saved, false);
+});
+
+test("serialization preserves underscore-prefixed table and column dictionary keys", () => {
+    const state = {
+        activeTable: "_analysis",
+        tables: {
+            _analysis: {
+                from: "definition",
+                composables: [
+                    { kind: "labels", labels: { __count: "Rows", _AMOUNT: "Amount" } },
+                    { kind: "formats", formats: { __count: { mask: "#,##0" }, ["__proto__"]: { bold: true } } },
+                ],
+            },
+        },
+    };
+    const saved = serializeReportState(state);
+    assert.deepEqual(saved, state);
+    saved.tables._analysis.composables[0].labels.__count = "Changed";
+    assert.equal(state.tables._analysis.composables[0].labels.__count, "Rows",
+        "the transport document is detached from the working document");
 });
 
 test("toolbar identity comes only from shapes directly owned by the active table", () => {
@@ -429,8 +449,6 @@ test("the active table schema and direct shape determine generic table context",
     assert.equal(context.mode, "pivot");
     assert.deepEqual(context.dims, ["CUSTOMER"]);
     assert.deepEqual(visibleTableColumnNames(context, w), ["CUSTOMER"]);
-    assert.equal(context.caps.visibility, true);
-    assert.equal(context.caps.displayAs, true);
 });
 
 test("generated labels resolve through the completed parent table", () => {

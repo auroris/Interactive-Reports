@@ -76,6 +76,7 @@ globalThis.fetch = async (url, options = {}) => {
         const state = JSON.parse(request.body);
         if (chartStageOf(state)) {
             return json({
+                document: state,
                 columns: [
                     { name: "STATUS", label: "Status", type: "text" },
                     { name: "__count", label: "Count", type: "number" },
@@ -93,6 +94,7 @@ globalThis.fetch = async (url, options = {}) => {
             });
         }
         return json({
+            document: state,
             columns: [
                 { name: "STATUS", label: "Status", type: "text" },
                 { name: "AMOUNT", label: "Amount", type: "number" },

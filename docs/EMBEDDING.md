@@ -363,6 +363,12 @@ load), `label` is the button text (default *Create*), and `target` behaves as fo
 pencil. Unlike the toolbar's feature-driven controls it is never hidden by the
 `features` policy or a client override: configuring it is what shows it.
 
+These destinations and targets are trusted application configuration. Custom URL
+schemes such as `myapp:orders/{ORDER_ID}` and named targets such as `OrderEditor`
+pass through to the browser or the host's event handler. Row values substituted
+into edit templates remain URL-encoded. URLs read from report rows by the Link
+and Image column renderers retain their separate protocol restrictions.
+
 ### Observing edit and create activations
 
 Every activation of either control dispatches a bubbling, composed, **cancelable**
@@ -378,8 +384,8 @@ then rendered as a `<button>` with the same icon, label, and accessible name, so
 keyboard and assistive-technology activation behave like any button, and the event is
 its whole behavior. In event mode `createLink.url` may be omitted (`url` arrives as
 `null`); `editLink.urlTemplate` stays required because it is what declares which row
-values ride along with the event. Substitution and the protocol allowlist still apply,
-so a NULL key still withholds the pencil.
+values ride along with the event. Substitution still applies, so a NULL key
+withholds the pencil.
 
 ```js
 report.addEventListener("ir-create", event => {

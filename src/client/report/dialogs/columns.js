@@ -23,8 +23,8 @@ import { presentationStyle } from "../render/presentation.js";
  * Side effects: opens a dialog; its shuttle controls move option nodes, and applying stores the ordered visible names and runs the report.
  */
 export function columnsDialog(w) {
+    if (!w.doc || !featureEnabled(w, "columns")) return;
     const ctx = tableContext(w);
-    if (!ctx.caps.columns) return;
     const universe = ctx.columns;
     const byName = new Map(universe.map(c => [c.name, c]));
     const visible = visibleTableColumnNames(ctx, w);
@@ -94,15 +94,14 @@ export function columnsDialog(w) {
  * Side effects: opens a dialog, registers staged-preview handlers, and on apply may replace format and selection entries and run the report.
  */
 export function columnSettingsDialog(w, initialCol) {
+    if (!w.doc || !featureEnabled(w, "columnSettings")) return;
     const ctx = tableContext(w);
-    if (!ctx.caps.columnSettings) return;
     const universe = ctx.columns;
     const byName = new Map(universe.map(c => [c.name, c]));
     // Resolves terminal column types before falling back to the definition-input schema.
     const columnType = name => byName.get(name)?.type ?? typeOf(w, name);
     const originallyVisible = visibleTableColumnNames(ctx, w);
-    const canHide = ctx.caps.visibility && featureEnabled(w, "columns");
-    const withDisplayAs = ctx.caps.displayAs;
+    const canHide = featureEnabled(w, "columns");
     // Reads the active table's owner-local format map from a particular document snapshot.
     const formatsOf = d => ctx.node(d, "formats")?.formats ?? {};
     const staged = new Map();
@@ -172,7 +171,7 @@ export function columnSettingsDialog(w, initialCol) {
     const read = () => ({
         visible: canHide ? visChk.checked : undefined,
         action: settingsFor(active).action,
-        displayAs: withDisplayAs ? (displayAsSel.value || null) : null,
+        displayAs: displayAsSel.value || null,
         urlColumn: urlColumnSel.value || colSel.value,
         textColumn: textColumnSel.value || colSel.value,
         mask: maskInp.value.trim() || null,
@@ -203,7 +202,7 @@ export function columnSettingsDialog(w, initialCol) {
             // Invariant: definition-authored action renderers are not editable here (the select
             // offers Text/Link/Image), but they must survive an unrelated restyle.
             action: displayAs === "action" ? { command: fmt.command, keyColumn: fmt.keyColumn } : null,
-            displayAs: withDisplayAs && ["link", "image"].includes(displayAs) ? displayAs : null,
+            displayAs: ["link", "image"].includes(displayAs) ? displayAs : null,
             urlColumn: canonicalName(fmt.urlColumn) ?? name,
             textColumn: canonicalName(fmt.textColumn) ?? name,
             mask: fmt.mask ?? null,
@@ -297,9 +296,9 @@ export function columnSettingsDialog(w, initialCol) {
         build: body => body.append(
             labeled(w.t("common.column"), colSel),
             visLine,
-            withDisplayAs ? labeled(w.t("columns.displayAs"), displayAsSel) : null,
-            withDisplayAs ? urlColumnField : null,
-            withDisplayAs ? textColumnField : null,
+            labeled(w.t("columns.displayAs"), displayAsSel),
+            urlColumnField,
+            textColumnField,
             labeled(w.t("columns.alignment"), alignSel),
             maskField,
             el("div", { class: "ir-checklines" },

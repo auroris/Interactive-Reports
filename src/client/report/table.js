@@ -4,7 +4,6 @@
 import {
     columnFilterable,
     columnSortable,
-    featureEnabled,
 } from "./schema.js";
 import {
     activeChain,
@@ -470,7 +469,6 @@ export function tableContext(w) {
         computeTokens: columns,
         sortColumns: columns.filter(column => columnSortable(w, column.name)),
         filterColumns: columns.filter(column => columnFilterable(w, column.name)),
-        caps: capabilities(w),
     };
 }
 
@@ -490,28 +488,4 @@ export function visibleTableColumnNames(ctx, w) {
             .filter(name => name !== undefined);
     }
     return ctx.columns.map(column => column.name);
-}
-
-/**
- * Returns the active schema capability contract with safe empty defaults.
- *
- * @param {object} w - The report controller containing server suggestions and client overrides.
- * @returns {object} Boolean editor capabilities, with visibility and display renderers always enabled inside an available column-settings surface.
- */
-function capabilities(w) {
-    const gate = feature => featureEnabled(w, feature);
-    return {
-        columns: gate("columns"),
-        columnSettings: gate("columnSettings"),
-        rename: gate("rename"),
-        compute: gate("compute"),
-        highlight: gate("highlight"),
-        sort: gate("sort"),
-        filter: gate("filter"),
-        break: gate("controlBreak"),
-        aggregate: gate("aggregate"),
-        pagination: gate("pagination"),
-        visibility: true,
-        displayAs: true,
-    };
 }

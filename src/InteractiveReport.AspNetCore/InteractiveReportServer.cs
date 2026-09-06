@@ -58,7 +58,7 @@ public sealed record InteractiveReportDocumentExport(string ReportName, ReportDo
 
 /// <summary>A loaded, authorized report document ready for a client to echo, mutate, and query.</summary>
 /// <param name="ReportName">The canonical configured report the document belongs to.</param>
-/// <param name="Metadata">The row as it exists after any reconciliation or auto-repair.</param>
+/// <param name="Metadata">The stored snapshot authorized for this request.</param>
 /// <param name="State">
 /// The document bound to the current state model, with schema caches refreshed for the origins that
 /// require it. Every document is served through this one model, so what a client reads is what this
@@ -502,48 +502,21 @@ internal sealed class InteractiveReportServer(
                 }
                 catch (Exception ex)
                 {
-                    await synchronizer.RemoveInvalid(saved, ex, ct);
+                    logging.Logger?.LogWarning(ex,
+                        "Report {Report}: configured document {SourceFile} could not be loaded",
+                        saved.ReportName, saved.SourceFile);
                     return NotFoundDocument<InteractiveReportLoadedDocument>();
                 }
 
                 if (file is null)
-                {
-                    await synchronizer.RemoveMissing(saved, ct);
-                    try
-                    {
-                        await defaultDocuments.CreateMissing(definition, ct);
-                    }
-                    catch (ReportDocumentBootstrapException)
-                    {
-                        // The missing configured identity remains a hidden not-found result.
-                    }
                     return NotFoundDocument<InteractiveReportLoadedDocument>();
-                }
-
-                try
-                {
-                    state = await executor.RefreshSchemaCaches(
-                        definition, file.State, contextParameters, ct);
-                }
-                catch (ReportValidationException ex)
-                {
-                    if (definition.RowRestrictionApplied)
-                        return InteractiveReportServerResult<InteractiveReportLoadedDocument>.Failed(Validation(ex));
-                    await synchronizer.RemoveInvalid(saved, ex, ct);
-                    return NotFoundDocument<InteractiveReportLoadedDocument>();
-                }
+                state = await executor.RefreshSchemaCaches(
+                    definition, file.State, contextParameters, ct);
             }
             else if (saved.IsDefault)
             {
-                SavedReport current;
-                (current, state) = await defaultDocuments.LoadState(
+                state = await defaultDocuments.LoadState(
                     saved, definition, executor, contextParameters, ct);
-                // Auto-repair rewrites the publication flags, and a lost repair race re-reads
-                // whatever another writer committed. Authorization above deliberately judged the
-                // row as it was read, but the returned document — which clients hand back as the
-                // authorization resource for the follow-up query — must describe the row that
-                // now exists.
-                metadata = current.Metadata();
             }
             else
             {
@@ -562,7 +535,12 @@ internal sealed class InteractiveReportServer(
         {
             return InteractiveReportServerResult<InteractiveReportLoadedDocument>.Failed(RowAccessDenied(context));
         }
-        catch (ReportValidationException ex) when (definition.RowRestrictionApplied)
+        catch (JsonException)
+        {
+            return InteractiveReportServerResult<InteractiveReportLoadedDocument>.Failed(
+                Invalid(InteractiveReportErrorCodes.MalformedReportState));
+        }
+        catch (ReportValidationException ex)
         {
             return InteractiveReportServerResult<InteractiveReportLoadedDocument>.Failed(Validation(ex));
         }
@@ -729,7 +707,7 @@ internal sealed class InteractiveReportServer(
     }
 
     private static string ResolveLinkTarget(string? target)
-        => string.Equals(target, "_blank", StringComparison.OrdinalIgnoreCase) ? "_blank" : "_self";
+        => string.IsNullOrWhiteSpace(target) ? "_self" : target.Trim();
 
     private static string ResolveLinkMode(string? mode)
         => string.Equals(mode, "event", StringComparison.OrdinalIgnoreCase) ? "event" : "navigate";
@@ -1258,8 +1236,8 @@ internal sealed class InteractiveReportServer(
             {
                 // The export is the source-controlled envelope, so a configured document is taken
                 // from its declaring file as authored — schema caches are deliberately not refreshed.
-                // A present file that no longer parses is handled exactly as a load handles it: the
-                // optimistic identity is removed and the id reads as not found, not as a server error.
+                // An absent or invalid file reads as not found, while its database identity remains
+                // unchanged until an explicit synchronization or mutation.
                 try
                 {
                     state = report.SourceFile is null
@@ -1272,29 +1250,20 @@ internal sealed class InteractiveReportServer(
                 }
                 catch (Exception ex)
                 {
-                    await synchronizer.RemoveInvalid(report, ex, ct);
+                    logging.Logger?.LogWarning(ex,
+                        "Report {Report}: configured document {SourceFile} could not be loaded",
+                        report.ReportName, report.SourceFile);
                     return NotFoundDocument<InteractiveReportDocumentExport>();
                 }
                 if (state is null)
-                {
-                    await synchronizer.RemoveMissing(report, ct);
-                    try
-                    {
-                        await defaultDocuments.CreateMissing(definition, ct);
-                    }
-                    catch (ReportDocumentBootstrapException)
-                    {
-                        // The missing configured identity stays a hidden not-found result.
-                    }
                     return NotFoundDocument<InteractiveReportDocumentExport>();
-                }
             }
             else if (report.IsDefault)
             {
                 var prepared = await PrepareQuery(definition, context, ct);
                 definition = prepared.Definition;
                 var contextParameters = prepared.Parameters;
-                (_, state) = await defaultDocuments.LoadState(
+                state = await defaultDocuments.LoadState(
                     report, definition, executor, contextParameters, ct);
             }
             else
@@ -1314,7 +1283,12 @@ internal sealed class InteractiveReportServer(
         {
             return InteractiveReportServerResult<InteractiveReportDocumentExport>.Failed(RowAccessDenied(context));
         }
-        catch (ReportValidationException ex) when (definition.RowRestrictionApplied)
+        catch (JsonException)
+        {
+            return InteractiveReportServerResult<InteractiveReportDocumentExport>.Failed(
+                Invalid(InteractiveReportErrorCodes.MalformedReportState));
+        }
+        catch (ReportValidationException ex)
         {
             return InteractiveReportServerResult<InteractiveReportDocumentExport>.Failed(Validation(ex));
         }

@@ -32,7 +32,7 @@ const json = value => new Response(JSON.stringify(value), {
     headers: { "Content-Type": "application/json" },
 });
 
-globalThis.fetch = async url => {
+globalThis.fetch = async (url, options = {}) => {
     const path = String(url);
     if (path.endsWith("/schema")) {
         return json({
@@ -68,6 +68,7 @@ globalThis.fetch = async url => {
     }
     if (path.endsWith("/query")) {
         return json({
+            document: JSON.parse(options.body),
             columns: [
                 { name: "LABEL", label: "Label", type: "text" },
                 { name: "NOTES", label: "Notes", type: "text" },

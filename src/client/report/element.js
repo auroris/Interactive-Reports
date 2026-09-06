@@ -20,7 +20,7 @@ import {
     selectView,
     serializeReportState,
 } from "./state.js";
-import { loadSavedList, refreshSavedSelect } from "./saved.js";
+import { refreshSavedSelect } from "./saved.js";
 import { renderChips } from "./render/chips.js";
 import { renderGrid } from "./render/grid.js";
 import { canRenderChart, renderChartView } from "./render/chart-view.js";
@@ -67,8 +67,7 @@ const invalidDocument = cause => new TypeError(
 function copyReportDocument(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) throw invalidDocument();
     try {
-        const copy = serializeReportState(value);
-        return JSON.parse(JSON.stringify(copy));
+        return serializeReportState(value);
     } catch (error) {
         throw invalidDocument(error);
     }
@@ -98,8 +97,6 @@ class ReportController {
         this._stateRevision = 0;
         this._requestId = 0;
         this._controlOverrides = new Map();
-        this._savedListLoaded = false;
-        this._savedListPromise = null;
         this._coalesced = null;
     }
 
@@ -295,8 +292,6 @@ class ReportController {
         this._activeDefinitionName = null;
         this.searchScopeCol = null;
         this._lastGood = null;
-        this._savedListLoaded = false;
-        this._savedListPromise = null;
     }
 
     /**
@@ -392,11 +387,7 @@ class ReportController {
                     ? this.t("saved.unavailable")
                     : `Report configuration “${name}” has no default document.`);
 
-            const definitionName = selected.reportName?.trim();
-            if (!definitionName)
-                throw new Error("The report listing did not identify its configured definition.");
-            if (definitionName.localeCompare(name, undefined, { sensitivity: "accent" }) !== 0)
-                throw new Error("The default report document belongs to a different report definition.");
+            const definitionName = selected.reportName;
             this._activeDefinitionName = definitionName;
             this._activeReportId = String(selected.id);
 
@@ -407,16 +398,11 @@ class ReportController {
                 api(apiUrl(this.base, definitionName, "schema")),
             ]);
             if (seq !== this._seq) return;
-            if (docResponse.summary?.reportName !== definitionName)
-                throw new Error("The selected report document belongs to a different report definition.");
             this.schema = schema;
             applyFeatureChrome(this);
-            this._savedListLoaded = true;
             this.savedList = saved;
 
             this.currentSaved = docResponse.summary;
-            if (!saved.some(candidate => String(candidate.id) === String(docResponse.summary.id)))
-                this.savedList = [...saved, docResponse.summary];
             this.adoptState(docResponse.state);
             refreshSavedSelect(this);
             await this.runQuery({ quiet, source: "initial" });
@@ -433,9 +419,9 @@ class ReportController {
     // entry, serialize only protocol fields on exit, and address every request under the active report.
 
     /**
-     * Normalizes an untrusted report-state value against the active schema defaults.
+     * Applies the active schema defaults to a report-state value.
      *
-     * @param {object} raw - The untrusted state value to normalize.
+     * @param {object} raw - The state value to normalize.
      * @param {{resetPageIndex?: boolean}} [options={}] - Whether adoption starts again on page one.
      * @returns {object} A detached, structurally valid working document using the schema's defaults and page-size limit.
      */
@@ -465,12 +451,11 @@ class ReportController {
     }
 
     // Protocol contract: canonical state: explicit empty values survive so they can clear
-    // report defaults; undefined values and underscore-prefixed working data do not cross the
-    // protocol.
+    // report defaults; undefined object properties are omitted by JSON serialization.
     /**
      * Serializes the working report state into its transport-safe representation.
      *
-     * @returns {object} A detached transport document without client-only fields.
+     * @returns {object} A detached JSON-compatible transport document.
      */
     serialize() {
         return serializeReportState(this.doc);
@@ -511,7 +496,7 @@ class ReportController {
         if (typeof column !== "string" || !column.trim()) throw new TypeError("A current-table column is required.");
         if (typeof search !== "string") throw new TypeError("LOV search text must be a string.");
 
-        const result = await api(this.definitionUrl("lov"), {
+        return api(this.definitionUrl("lov"), {
             method: "POST",
             body: {
                 document: copyReportDocument(document),
@@ -521,7 +506,6 @@ class ReportController {
             },
             signal,
         });
-        return structuredClone(result);
     }
 
     /**
@@ -691,8 +675,7 @@ class ReportController {
      *
      * @returns {void} No value.
      *
-     * Side effects: closes stale menus/dialogs, refreshes chrome and result controls, and may
-     * lazily request saved-report summaries when the client force-enables that control family.
+     * Side effects: closes stale menus/dialogs and refreshes chrome and result controls.
      */
     refreshControlSurface() {
         if (!this.els) return;
@@ -704,29 +687,6 @@ class ReportController {
             renderPager(this, this.els.pager);
             this.refreshViewButtons();
         }
-        if (this.schema && featureEnabled(this, "savedReports") && !this._savedListLoaded)
-            this.ensureSavedList();
-    }
-
-    /**
-     * Loads the saved-report list once for a report whose client controls were enabled after activation.
-     *
-     * @returns {Promise<void>} The in-flight or completed lazy-load operation.
-     */
-    ensureSavedList() {
-        if (this._savedListLoaded) return Promise.resolve();
-        if (this._savedListPromise) return this._savedListPromise;
-        const sequence = this._seq;
-        const reportId = this.reportId;
-        const promise = this._savedListPromise = loadSavedList(this).then(() => {
-            if (sequence !== this._seq || reportId !== this.reportId) return;
-            this._savedListLoaded = true;
-            refreshSavedSelect(this);
-            applyFeatureChrome(this);
-        }).finally(() => {
-            if (this._savedListPromise === promise) this._savedListPromise = null;
-        });
-        return promise;
     }
 
     /**
@@ -789,9 +749,9 @@ class ReportController {
         const requestId = ++this._requestId;
         const finishBusy = this.beginBusy();
         try {
-            const beforeHook = this.serialize();
+            const beforeHook = this.doc;
             const detail = {
-                document: structuredClone(beforeHook),
+                document: this.serialize(),
                 source,
                 requestId,
                 signal: ctrl.signal,
@@ -808,9 +768,8 @@ class ReportController {
                 return;
             }
 
-            const outgoing = copyReportDocument(detail.document);
-            invalidateChangedSchemas(beforeHook, outgoing);
-            const submitted = serializeReportState(outgoing);
+            const submitted = copyReportDocument(detail.document);
+            invalidateChangedSchemas(beforeHook, submitted);
             const result = await api(this.definitionUrl("query"), {
                 method: "POST", body: submitted, signal: ctrl.signal,
             });
@@ -819,11 +778,7 @@ class ReportController {
             // validated result so the user sees progress, but do not adopt its document; the
             // follow-up query will replace the result.
             const coalesced = Boolean(this._coalesced);
-            const accepted = copyReportDocument(result.document ?? submitted);
-            const completedResult = {
-                ...result,
-                document: structuredClone(accepted),
-            };
+            const accepted = result.document;
             if (!coalesced) {
                 // Protocol contract: the returned document is the submitted working copy with
                 // null schema caches replaced by the server. A superseding operation aborts this
@@ -831,27 +786,27 @@ class ReportController {
                 this.doc = structuredClone(accepted);
                 this.els.search.value = this.doc.search ?? "";
             }
-            this.lastResult = completedResult;
+            this.lastResult = result;
             this.commitLastGood(accepted, revision);
             this.clearError();
             // Chips always reflect the working document, which already holds any newer edits.
             renderChips(this, this.els.chips);
             this.renderView();
             renderPager(this, this.els.pager);
-            this.renderIgnored(completedResult.ignored);
+            this.renderIgnored(result.ignored);
             this.refreshViewButtons();
             this.dispatchEvent(new EventType("ir-query-complete", {
                 bubbles: true,
                 composed: true,
-                detail: {
-                    document: structuredClone(accepted),
-                    result: structuredClone(completedResult),
-                    submitted: structuredClone(submitted),
+                detail: structuredClone({
+                    document: accepted,
+                    result,
+                    submitted,
                     source,
                     requestId,
-                },
+                }),
             }));
-            return coalesced ? COALESCED : completedResult;
+            return coalesced ? COALESCED : result;
         } catch (err) {
             if (ctrl !== this._abort || err.name === "AbortError") return;
             if (this._coalesced) return COALESCED;

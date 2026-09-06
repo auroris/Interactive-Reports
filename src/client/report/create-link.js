@@ -7,11 +7,9 @@
 
 import { el, icon } from "../core/dom.js";
 import { anchorClickHandler, dispatchLinkEvent, eventMode } from "./link-events.js";
-import { safeRendererUrl } from "./render/column-renderers.js";
 
 /**
- * Builds the toolbar create control for the current schema, or null when the definition has none
- * or its URL fails the renderer protocol allowlist.
+ * Builds the toolbar create control from the trusted report definition.
  *
  * @param {object} w - The report controller: schema, localization, and event target.
  * @returns {HTMLAnchorElement|HTMLButtonElement|null} A detached control, or null when nothing should show.
@@ -22,7 +20,7 @@ export function renderCreateButton(w) {
     const createLink = w.schema?.createLink;
     if (!createLink) return null;
     const label = createLink.label ?? w.t("toolbar.create");
-    const url = createLink.url == null ? null : safeRendererUrl(createLink.url, "link");
+    const url = createLink.url ?? null;
     const detail = () => ({ url });
     if (eventMode(createLink)) {
         return el("button", {
@@ -33,12 +31,12 @@ export function renderCreateButton(w) {
         }, icon("plus"), label);
     }
     if (!url) return null;
-    const blank = createLink.target === "_blank";
+    const blank = createLink.target?.toLowerCase() === "_blank";
     return el("a", {
         class: "ir-btn ir-btn-primary ir-createbtn",
         href: url,
         title: label,
-        target: blank ? "_blank" : undefined,
+        target: createLink.target,
         rel: blank ? "noopener" : undefined,
         onclick: anchorClickHandler(w, "ir-create", detail),
     }, icon("plus"), label);

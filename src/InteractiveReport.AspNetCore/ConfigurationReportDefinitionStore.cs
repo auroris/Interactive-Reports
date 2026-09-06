@@ -337,7 +337,7 @@ public sealed partial class ConfigurationReportDefinitionStore :
     /// Validates a definition's per-row edit-link template and presentation options.
     /// </summary>
     /// <param name="def">The definition whose optional edit link is being validated.</param>
-    /// <exception cref="InvalidOperationException">Thrown when the template, URL scheme, label, or target violates the public contract.</exception>
+    /// <exception cref="InvalidOperationException">Thrown when the template, label, or mode violates the public contract.</exception>
     private static void ValidateEditLink(ReportDefinition def)
     {
         if (def.EditLink is not { } editLink) return;
@@ -355,15 +355,7 @@ public sealed partial class ConfigurationReportDefinitionStore :
         if (placeholders.Count == 0)
             throw new InvalidOperationException(
                 $"Report '{def.Name}': editLink.urlTemplate needs at least one {{COLUMN}} placeholder — a constant URL is not a per-row edit link.");
-        // Apply the stylesheet URL rule after neutralizing placeholders:
-        // relative URLs (the primary case) always pass, and substituted values cannot introduce
-        // a scheme because the client URL-encodes them.
-        var probe = EditLinkTemplate.Rewrite(editLink.UrlTemplate, _ => "x").Replace("{", "").Replace("}", "");
-        if (!IsNavigableUrl(probe))
-            throw new InvalidOperationException(
-                $"Report '{def.Name}': editLink.urlTemplate absolute URLs must use http or https.");
-
-        ValidateLinkPresentation(def, "editLink", editLink.Label, editLink.Target, editLink.Mode);
+        ValidateLinkPresentation(def, "editLink", editLink.Label, editLink.Mode);
     }
 
     /// <summary>
@@ -371,7 +363,7 @@ public sealed partial class ConfigurationReportDefinitionStore :
     /// rejected because no row exists to substitute, and the URL may be omitted only in event mode.
     /// </summary>
     /// <param name="def">The definition whose optional create link is being validated.</param>
-    /// <exception cref="InvalidOperationException">Thrown when the URL, label, target, or mode violates the public contract.</exception>
+    /// <exception cref="InvalidOperationException">Thrown when the URL, label, or mode violates the public contract.</exception>
     private static void ValidateCreateLink(ReportDefinition def)
     {
         if (def.CreateLink is not { } createLink) return;
@@ -391,26 +383,14 @@ public sealed partial class ConfigurationReportDefinitionStore :
             if (createLink.Url.Contains('{') || createLink.Url.Contains('}'))
                 throw new InvalidOperationException(
                     $"Report '{def.Name}': createLink.url does not take {{COLUMN}} placeholders — there is no row to create from.");
-            if (!IsNavigableUrl(createLink.Url.Trim()))
-                throw new InvalidOperationException(
-                    $"Report '{def.Name}': createLink.url absolute URLs must use http or https.");
         }
 
-        ValidateLinkPresentation(def, "createLink", createLink.Label, createLink.Target, createLink.Mode);
+        ValidateLinkPresentation(def, "createLink", createLink.Label, createLink.Mode);
     }
 
-    /// <summary>
-    /// Applies the stylesheet URL rule: relative URLs always pass; absolute URLs must be http(s).
-    /// </summary>
-    private static bool IsNavigableUrl(string candidate)
-        => !Uri.TryCreate(candidate, UriKind.RelativeOrAbsolute, out var uri)
-            || !uri.IsAbsoluteUri
-            || string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase);
-
-    /// <summary>Validates the label, target, and mode shared by the edit and create links.</summary>
+    /// <summary>Validates the label and mode; destinations and targets are trusted application choices.</summary>
     private static void ValidateLinkPresentation(
-        ReportDefinition def, string setting, string? label, string? target, string? mode)
+        ReportDefinition def, string setting, string? label, string? mode)
     {
         if (label is not null && string.IsNullOrWhiteSpace(label))
             throw new InvalidOperationException(
@@ -418,11 +398,6 @@ public sealed partial class ConfigurationReportDefinitionStore :
         if (label is { Length: > 200 })
             throw new InvalidOperationException(
                 $"Report '{def.Name}': {setting}.label must be at most 200 characters.");
-        if (target is not null
-            && !string.Equals(target, "_self", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(target, "_blank", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException(
-                $"Report '{def.Name}': {setting}.target must be '_self' or '_blank'.");
         if (mode is not null
             && !string.Equals(mode, "navigate", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(mode, "event", StringComparison.OrdinalIgnoreCase))

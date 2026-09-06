@@ -51,7 +51,8 @@ const json = (value, status = 200) => new Response(JSON.stringify(value), {
     status,
     headers: { "Content-Type": "application/json" },
 });
-const queryResult = () => json({
+const queryResult = body => json({
+    document: JSON.parse(body),
     columns: [{ name: "ID", label: "ID", type: "number" }],
     rows: [{ ID: 1 }],
     page: { index: 1, size: 25 },
@@ -145,7 +146,7 @@ globalThis.fetch = (url, options = {}) => {
                 options.signal?.addEventListener("abort", abort);
                 heldQueries.push({
                     body: options.body,
-                    succeed: () => resolve(queryResult()),
+                    succeed: () => resolve(queryResult(options.body)),
                     fail: (problem, status) => resolve(json(problem, status)),
                 });
             });
@@ -155,7 +156,7 @@ globalThis.fetch = (url, options = {}) => {
             failNextQuery = null;
             return Promise.resolve(json(problem, status));
         }
-        return Promise.resolve(queryResult());
+        return Promise.resolve(queryResult(options.body));
     }
     return Promise.resolve(new Response(null, { status: 404 }));
 };

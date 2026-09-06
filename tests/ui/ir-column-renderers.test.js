@@ -18,6 +18,13 @@ test("column renderer URLs accept navigable URLs and reject active or embedded c
     assert.equal(safeRendererUrl("data:image/png;base64,AAAA", "image"), null);
 });
 
+test("unknown renderer names fall back to text even when they name object properties", () => {
+    const host = document.createElement("div");
+    const column = { name: "AMOUNT", type: "number" };
+    for (const displayAs of ["unrecognized", "constructor", "__proto__"])
+        assert.equal(renderColumnValue(host, { AMOUNT: 42 }, column, false, { displayAs }), "42");
+});
+
 test("action cells render buttons for labeled rows only and dispatch ir-action with the row copy", () => {
     const host = document.createElement("div");
     const events = [];

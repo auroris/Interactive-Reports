@@ -1,15 +1,14 @@
 // Definition-owned per-row edit links: a leading synthetic grid column
 // built from the schema payload's editLink (urlTemplate/label/target/mode). Definition chrome, not a
 // ColumnFormat renderer. It exists independent of the document's column selection and uses
-// template columns the server projects as hidden row data. Substituted values are URL-encoded
-// and the result still passes the renderer protocol allowlist, so row data can never smuggle a
-// scheme. Every activation dispatches `ir-edit` from the host; navigate mode then follows the
+// template columns the server projects as hidden row data. Substituted values are URL-encoded;
+// the destination and target belong to the trusted definition. Every activation dispatches
+// `ir-edit` from the host; navigate mode then follows the
 // anchor unless the event was prevented, and event mode renders a button that never navigates.
 
 import { el, icon } from "../../core/dom.js";
 import { translate } from "../../core/localization.js";
 import { anchorClickHandler, dispatchLinkEvent, eventMode } from "../link-events.js";
-import { safeRendererUrl } from "./column-renderers.js";
 
 /**
  * The active edit link, or null. The pencil is a grid-row affordance: grouped, pivoted, and charted
@@ -61,16 +60,13 @@ export function substituteEditUrl(template, row) {
  * @param {object} editLink - The edit-link definition used to build the row-specific control.
  * @param {object} row - The result row supplying URL-template values and the event's row copy.
  * @param {object} w - The report controller or host element: localization context and event target.
- * @returns {string|HTMLAnchorElement|HTMLButtonElement} A detached pencil control, or an empty string when substitution or protocol validation fails.
+ * @returns {string|HTMLAnchorElement|HTMLButtonElement} A detached pencil control, or an empty string when a required row value is absent.
  *
- * Side effects: creates a detached control and icon when a safe link is available; activating it dispatches `ir-edit`.
+ * Side effects: creates a detached control and icon when the row supplies its link values; activating it dispatches `ir-edit`.
  */
 export function renderEditCell(editLink, row, w) {
-    const url = substituteEditUrl(editLink.urlTemplate, row);
-    // The allowlist applies in both modes: the URL reaches the host's handler in event mode, and
-    // a definition that cannot navigate should not hand out a scheme it could not follow itself.
-    const href = url === null ? null : safeRendererUrl(url, "link");
-    if (!href) return "";
+    const href = substituteEditUrl(editLink.urlTemplate, row);
+    if (href === null) return "";
     const label = editLink.label ?? translate(w, "grid.edit");
     const detail = () => ({ url: href, row: { ...row } });
     if (eventMode(editLink)) {
@@ -82,13 +78,13 @@ export function renderEditCell(editLink, row, w) {
             onclick: () => dispatchLinkEvent(w, "ir-edit", detail()),
         }, icon("pencil"));
     }
-    const blank = editLink.target === "_blank";
+    const blank = editLink.target?.toLowerCase() === "_blank";
     return el("a", {
         class: "ir-cell-edit",
         href,
         "aria-label": label,
         title: label,
-        target: blank ? "_blank" : undefined,
+        target: editLink.target,
         rel: blank ? "noopener" : undefined,
         onclick: anchorClickHandler(w, "ir-edit", detail),
     }, icon("pencil"));

@@ -137,11 +137,9 @@ internal static class CommandBuilder
                 if (inputs.TryGetValue(name, out var existing) && !Equals(existing, value))
                 {
                     var renamed = $"{name}_r{i}";
-                    while (inputs.ContainsKey(renamed)) renamed += "_";
-                    text = System.Text.RegularExpressions.Regex.Replace(
-                        text,
-                        $@":{System.Text.RegularExpressions.Regex.Escape(name)}(?![A-Za-z0-9_])",
-                        ":" + renamed);
+                    while (inputs.ContainsKey(renamed)
+                        || contextParams.Keys.Contains(renamed, StringComparer.OrdinalIgnoreCase)) renamed += "_";
+                    text = RenameOracleParameter(text, name, renamed);
                     name = renamed;
                 }
                 inputs[name] = value;
@@ -174,7 +172,7 @@ internal static class CommandBuilder
         for (var i = 0; i < resultSets.Count; i++)
         {
             sql.Append("  OPEN :").Append(cursorNames[i]).Append(" FOR\n    ")
-                .Append(statements[i].Replace("\n", "\n    ", StringComparison.Ordinal))
+                .Append(statements[i])
                 .Append(";\n");
         }
         sql.Append("END;");
@@ -192,6 +190,31 @@ internal static class CommandBuilder
 
         Log(cmd, logger);
         return cmd;
+    }
+
+    /// <summary>Renames an Oracle bind token without changing quoted SQL or comments.</summary>
+    private static string RenameOracleParameter(string sql, string name, string replacement)
+    {
+        var rewritten = new StringBuilder();
+        var copied = 0;
+        foreach (var (start, length) in SqlCodeScanner.CodeSpans(sql))
+        {
+            var end = start + length;
+            for (var index = start; index < end; index++)
+            {
+                if (sql[index] != ':') continue;
+                var tokenEnd = index + 1;
+                while (tokenEnd < end && (char.IsLetterOrDigit(sql[tokenEnd])
+                    || sql[tokenEnd] is '_' or '$' or '#')) tokenEnd++;
+                if (sql.AsSpan(index + 1, tokenEnd - index - 1).Equals(name, StringComparison.OrdinalIgnoreCase))
+                {
+                    rewritten.Append(sql, copied, index - copied).Append(':').Append(replacement);
+                    copied = tokenEnd;
+                }
+                index = tokenEnd - 1;
+            }
+        }
+        return copied == 0 ? sql : rewritten.Append(sql, copied, sql.Length - copied).ToString();
     }
 
     /// <summary>

@@ -40,26 +40,14 @@ export function normalizeReportState(raw, defaultPageSize = 50, defaults = null,
 }
 
 /**
- * Serializes report state after removing client-only fields.
+ * Copies report state into its JSON transport form. Client-only state lives on the controller;
+ * document keys, including underscore-prefixed table and column identifiers, are protocol data.
  *
  * @param {object} source - The report-state document to prepare for persistence or transport.
- * @returns {object} A detached document without underscore-prefixed properties or undefined values.
+ * @returns {object} A detached JSON-compatible document with undefined object properties omitted.
  */
 export function serializeReportState(source) {
-    const walk = value => {
-        if (Array.isArray(value)) return value.map(walk);
-        if (value && typeof value === "object") {
-            const result = {};
-            for (const [key, child] of Object.entries(value)) {
-                if (key.startsWith("_") || child === undefined) continue;
-                result[key] = walk(child);
-            }
-            return result;
-        }
-        return value;
-    };
-
-    return walk(source);
+    return JSON.parse(JSON.stringify(source));
 }
 
 /**

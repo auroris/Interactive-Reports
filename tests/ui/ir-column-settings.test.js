@@ -120,6 +120,7 @@ globalThis.fetch = async (url, options = {}) => {
         const doc = options.body ? JSON.parse(options.body) : {};
         if (doc.activeTable === "grouped") {
             return json({
+                document: doc,
                 availableColumns: GROUPED_COLUMNS,
                 columns: GROUPED_COLUMNS,
                 rows: [{ URL: "https://images.example/sales.png", ir2: 1234.5 }],
@@ -144,6 +145,7 @@ globalThis.fetch = async (url, options = {}) => {
             }
         }
         return json({
+            document: doc,
             availableColumns: ALL_COLUMNS,
             columns: visible,
             rows: [Object.fromEntries(projected.map(c => [c.name, ROW[c.name]]))],

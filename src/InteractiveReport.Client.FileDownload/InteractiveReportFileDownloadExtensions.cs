@@ -1,7 +1,6 @@
 using System.Text.Json;
 using InteractiveReport.AspNetCore;
 using InteractiveReport.Core.Model;
-using InteractiveReport.Core.Validation;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -133,20 +132,12 @@ public static class InteractiveReportFileDownloadExtensions
                 ex.Message);
         }
 
-        // The detached copy that carries the paging override is made by the same deep copy the
-        // executor uses, and that copy assumes the structural pass has run: a null table or a pair
-        // of case-colliding table ids must be the documented per-path 400, not a copy failure.
-        var structural = ReportStateResolver.CollectStructuralErrors(posted);
-        if (structural.Count > 0)
-            return Failure(InteractiveReportServer.Validation(new ReportValidationException(structural)), http);
-
-        var document = ReportStateResolver.Resolve(defaults: null, posted);
-        document.Page ??= new PageRequest();
-        document.Page.Index = 1;
-        document.Page.Size = 0;
+        // This adapter owns the deserialized request. The executor validates and copies it
+        // after authorization, including malformed table entries and case-colliding names.
+        posted.Page = new PageRequest { Index = 1, Size = 0 };
 
         var request = InteractiveReportHttpRequest.Context(http);
-        var queried = await server.QueryForDownload(name, document, request, ct);
+        var queried = await server.QueryForDownload(name, posted, request, ct);
         if (queried.Failure is not null)
             return Failure(queried.Failure, http);
 

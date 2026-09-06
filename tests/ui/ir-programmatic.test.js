@@ -129,6 +129,7 @@ test("the public document API is detached, transactional, and emits query lifecy
             // Completion payloads are detached observations; changing them cannot mutate the widget.
             event.detail.document.search = "event tamper";
             event.detail.result.document.search = "result tamper";
+            event.detail.result.rows[0].ID = 99;
         });
     });
 
@@ -163,6 +164,7 @@ test("the public document API is detached, transactional, and emits query lifecy
     snapshot.extension = { retained: true };
     const result = await report.submitReportDocument(snapshot);
     assert.equal(result.document.search, "host hook");
+    assert.equal(result.rows[0].ID, 1, "completion-event data cannot mutate the returned result");
     assert.equal(result.document.page.index, 3, "whole-document submission honors its requested page");
     assert.deepEqual(result.document.extension, { retained: true });
     assert.equal(report.getReportDocument().search, "host hook");
