@@ -248,8 +248,11 @@ or executable report details are hydrated.
 
 After definition authorization, the server checks the requested action and resource.
 Saved-report ownership, publication rules, administrator requirements, feature gates,
-and host-provided authorizers are applied at this layer. Only then does it resolve
-trusted context parameters from claims or a host replacement.
+and host-provided authorizers are applied at this layer. SQL with an executable
+`{{RowRestriction}}` slot then invokes the application's row-restriction callbacks.
+Only after that decision does the server resolve trusted context parameters from
+claims or a host replacement and bind a detached definition. SQL without the marker
+never invokes a row callback. Parameter values remain separate from SQL throughout.
 
 See [Authorization](AUTHORIZATION.md) for the complete gate ordering and failure rules.
 
@@ -400,6 +403,7 @@ host endpoint policy
     + report-definition policy
     + saved-report ownership and publication rules
     + configured application authorizers
+    + optional {{RowRestriction}} decision
     + trusted context parameters in the base SQL
 ```
 
@@ -409,8 +413,13 @@ in-process calls. A hidden browser control is never considered an authorization
 mechanism.
 
 Context parameters are resolved on the server, normally from claims. They bind values
-referenced by the trusted base query and provide the row-level restriction mechanism.
-Client state cannot set or replace them.
+referenced by the trusted base query. `UseRowRestrictions` additionally supplies a
+predicate at the configured expression slot, before any subsequent report composition.
+Client state cannot set or replace either parameter class. Row decisions are reused
+within one server operation and never cached across callers. Core compilation rejects
+unresolved slots. On marked reports, advisory table schemas are refreshed under the
+current restriction and omitted from persisted states and document exports; the shared
+base-schema cache holds only column metadata, never pivot keys or row-access decisions.
 
 Internal exceptions are logged with a trace identifier and converted to sanitized,
 coded failures. Adapters map those failures into their own wire format without exposing
@@ -512,6 +521,7 @@ composition internals:
 | `IReportDefinitionAuthorizationStore` | Resolve a lightweight authorization envelope before hydrating executable definitions. |
 | `IReportConnectionFactory` / `AddConnection` | Create unopened ADO.NET connections controlled by the host. |
 | `IContextParameterResolver` | Resolve trusted values used by configured SQL. |
+| `UseRowRestrictions(...)` | Resolve caller-specific predicates for SQL containing `{{RowRestriction}}`. |
 | `InteractiveReportBuilder.UseAuthorization(...)` / `.UseAspNetCoreAuthorization()` | Add application-specific operation authorization. |
 | `ISavedReportStore` | Replace report-document persistence. |
 | `IInteractiveReportUserProvider` / `UseUserDirectory(...)` | Supply searchable account choices to administration UI without granting authority. |

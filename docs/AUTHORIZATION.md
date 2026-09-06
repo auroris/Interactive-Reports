@@ -70,7 +70,8 @@ request may need to pass all of these gates:
 3. Built-in saved-report ownership, publication, and read-only rules, and the
    administrator decision for administrator actions.
 4. Every configured application-operation authorizer.
-5. Server-resolved context parameters used for row-level constraints.
+5. The optional `{{RowRestriction}}` decision and server-resolved context parameters
+   used for row-level constraints.
 
 The operation authorizer does not replace report policies, ownership rules, feature
 flags, configured-document immutability, or row-level security. It can further
@@ -141,7 +142,8 @@ false, `State` is null. The server deliberately does not deserialize current sto
 state merely to authorize an update.
 
 Query and export authorization receives the report name and action, not the submitted
-query state. Data partitioning belongs in trusted server-side context parameters rather
+query state. Data partitioning belongs in the [row-restriction callback](#row-restrictions)
+or trusted server-side context parameters rather
 than in client-authored filters.
 
 ## Typed candidate inspection and mutation
@@ -601,6 +603,175 @@ identities from configuration and storage or invokes `IInteractiveReportUserProv
 or the `UseUserDirectory` callback. Lookup entries are account choices only; returning
 an account does not authorize it. The Administrators editor emits `ManageAdministrators`
 when it replaces the database list.
+
+## Row restrictions
+
+An application can give each caller a restricted view of a configured dataset. For
+example, users without controlled-goods permission can see ordinary products while
+controlled products contribute no rows, counts, totals, or filter choices.
+
+Place the exact, case-sensitive `{{RowRestriction}}` expression marker in the report's
+configured SQL, at the point where the application's restriction belongs:
+
+```json
+{
+  "InteractiveReport": {
+    "Reports": {
+      "products": {
+        "connection": "MainDb",
+        "sql": "SELECT p.ProductID, p.ProductName FROM Products p WHERE {{RowRestriction}}"
+      }
+    }
+  }
+}
+```
+
+The marker is the sole opt-in. **SQL without the marker executes normally and never
+calls the row-restriction callback.** The application does not need to list or handle
+those reports. A marker inside a SQL comment, string, or quoted identifier is literal
+text and does not opt in. Unknown or misspelled template expressions in executable SQL
+produce an error; this is a reserved expression slot, not a general template language.
+
+Register a callback returning `ValueTask<RowRestriction>`. It can consult application
+services or existing ASP.NET Core policies. This example uses a policy to decide
+whether the caller may see controlled goods:
+
+```csharp
+using InteractiveReport.AspNetCore;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.Extensions.DependencyInjection;
+
+builder.Services.AddAuthorization(options =>
+    options.AddPolicy("ViewControlledGoods", policy =>
+        policy.RequireAuthenticatedUser().RequireClaim("cg_access", "true")));
+
+var reports = builder.Services.AddInteractiveReports(builder.Configuration);
+
+reports.UseRowRestrictions(async (request, ct) =>
+{
+    ct.ThrowIfCancellationRequested();
+    if (request.ReportName != "products")
+        return RowRestriction.NotApplicable;
+
+    var authorization = request.RequestServices
+        .GetRequiredService<IAuthorizationService>();
+    var permitted = await authorization.AuthorizeAsync(
+        request.User, "ViewControlledGoods");
+
+    return permitted.Succeeded
+        ? RowRestriction.Unrestricted
+        : RowRestriction.Where("p.CG = ?", 0);
+});
+```
+
+`InteractiveReportRowRestrictionRequest` contains:
+
+| Member | Meaning |
+|---|---|
+| `User` | The current `ClaimsPrincipal`, including claims and roles. It may be anonymous. |
+| `UserId` | The canonical identity resolved using `InteractiveReport:IdentityClaim`, or the usual NameIdentifier / sub / Name chain. Null for an anonymous caller or a missing usable identity claim. |
+| `ReportName` | The canonical configured report key, independent of saved-report titles. |
+| `RequestServices` | The current request scope for resolving scoped application services. |
+
+Callbacks are registered once; resolve services that belong to a request through
+`RequestServices` rather than capturing them during startup. The separate cancellation
+token follows the current operation. No client-authored report state or SQL is supplied
+to the callback.
+
+| Result | Effect on a marked report |
+|---|---|
+| `RowRestriction.Where(expression, values...)` | Adds a parenthesized SQL predicate with separately bound values. |
+| `RowRestriction.Unrestricted` | Explicitly permits the configured dataset, substituting `(1 = 1)` when no other callback contributes a predicate. |
+| `RowRestriction.NotApplicable` | Contributes no decision for this report; another callback must decide. |
+| `RowRestriction.Deny` | Refuses the operation: 401 for anonymous callers, 403 for authenticated callers. |
+
+Multiple `UseRowRestrictions` registrations combine their predicates with `AND`.
+`Unrestricted` cannot remove another callback's predicate, and any `Deny` stops the
+operation. Missing registration, every callback returning `NotApplicable`, a null
+result, a blank predicate, mismatched parameters, or an unexpected callback exception
+fails before report execution with a sanitized 500 response. There is no unrestricted
+fallback. Cancellation propagates; `InteractiveReportAuthorizationDeniedException`
+has the same effect as `Deny`.
+
+### SQL expressions and parameters
+
+Supply an expression **without the `WHERE` keyword**. The configured SQL owns its
+placement and Boolean relationship to existing conditions. The engine adds parentheses
+around the returned expression, so an `OR` inside it stays grouped:
+
+```sql
+SELECT c.CustomerID, SUM(od.Quantity) AS TotalQuantity
+FROM Customers c
+JOIN Orders o ON c.CustomerID = o.CustomerID
+JOIN OrderDetails od ON o.OrderID = od.OrderID
+JOIN Products p ON od.ProductID = p.ProductID
+WHERE (o.Status = 'Complete' OR o.Status = 'Shipped')
+  AND {{RowRestriction}}
+GROUP BY c.CustomerID
+```
+
+Here `RowRestriction.Where("p.CG = ?", 0)` restricts the source rows **before** the
+configured aggregate. `CG` need not appear in the report's output. Aliases and identifier
+quoting in the expression are native SQL and must match the scope containing the marker.
+For unions or other queries with several branches, the same marker may appear more
+than once; each occurrence receives the same predicate and shares its parameter values.
+The programmer chooses the locations that enforce the intended data boundary.
+
+Every unquoted `?` in an expression binds one scalar argument, in order. For example:
+
+```csharp
+return RowRestriction.Where("p.ProductID IN (?, ?, ?)", 1, 2, 3);
+```
+
+Values remain database parameters, using the provider's parameter syntax. Generated
+names cannot collide with configured context parameters or the report composer's
+bindings. Collections are not expanded automatically; supply one placeholder per
+value. To bind SQL null, pass `(object?)null`. Use `??` for a literal question mark
+outside quotes, such as PostgreSQL's JSON existence operator; question marks inside
+strings and comments are already literal. The engine preserves native SQL quoting.
+The expression itself is trusted application code: never concatenate caller input into
+it. Unknown nested template expressions are not supported.
+
+`RowRestriction.Where("1 = 0")` permits the report to execute with an empty source;
+`Deny` refuses the operation entirely. Existing `ContextParams` still work alongside
+the inserted expression. Configured SQL continues to omit top-level `ORDER BY`, with
+sorting supplied by report state.
+
+### Anonymous callers and execution scope
+
+`allowAnonymous` and the marker are independent. A public report without a marker
+requires neither a row callback nor application authorization code just to function.
+A public report **with** a marker calls the provider with the current principal;
+`UserId` is null for anonymous callers. The callback may return a public subset, allow
+the entire configured dataset, or deny access. Signed-in callers retain their identities
+even on a public report. Existing explicitly registered operation authorizers still
+have their ordinary veto; row restriction does not replace them or grant privileges.
+
+The shared server evaluates row access after operation authorization and before report
+data reads, then binds a detached definition for that operation. The same decision and
+parameters cover schema discovery, rows, counts, totals, charts, pivots, value lookups,
+and exports. JSON, GraphQL, and file downloads all use that server boundary. Saved-report
+loading, validation, and default repair also use it when they perform live discovery.
+Document-only metadata operations do not trigger a data-access decision. Neither
+administrators nor saved-report owners bypass the callback.
+
+Decisions and their parameter values are not cached between requests and never enter
+saved report state or client responses. A later execution resolves access for the
+current caller again. The shared definition is never rewritten. Base column metadata
+can still use the ordinary schema cache, but marked reports refresh advisory table
+schemas, including dormant pivots, under the current caller's restriction. This can
+require additional pivot-discovery queries. When the server saves or repairs state under
+row access, it omits those cached schemas; document downloads also omit them, so
+data-derived column names cannot carry another caller's scope.
+Authored document content, such as titles, labels, and filter literals, remains subject
+to the existing saved-document sharing rules. A live validation failure on a marked
+report is a request failure; it does not delete a configured document or rewrite a
+shared default based on one caller's data. Invalid JSON in a database-backed default
+can still be repaired from configuration.
+
+Use `IInteractiveReportServer` for host-owned endpoints requiring this integration.
+Low-level `ReportExecutor` calls do not invoke application authorization callbacks;
+they reject an unresolved marker before report SQL execution.
 
 ## Composition rules
 

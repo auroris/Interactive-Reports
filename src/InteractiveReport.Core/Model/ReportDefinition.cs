@@ -6,6 +6,18 @@ namespace InteractiveReport.Core.Model;
 /// </summary>
 public sealed class ReportDefinition
 {
+    // Only the request's detached definition carries this flag. It never enters configuration
+    // or a saved document, and prevents advisory schemas from crossing row-access boundaries.
+    internal bool RowRestrictionApplied { get; private set; }
+
+    internal ReportDefinition WithRowRestrictionSql(string sql)
+    {
+        var copy = (ReportDefinition)MemberwiseClone();
+        copy.Sql = sql;
+        copy.RowRestrictionApplied = true;
+        return copy;
+    }
+
     /// <summary>Gets or sets the canonical name assigned by the definition store; it is not part of the configuration payload.</summary>
     public string Name { get; set; } = "";
 
@@ -68,6 +80,8 @@ public sealed class ReportDefinition
     /// ORDER BY. Context parameter placeholders use the dialect's native style
     /// (@name on SqlServer/SQLite, :name on Oracle). Placeholder names matching
     /// p0/p1/... are reserved for the composer.
+    /// The optional {{RowRestriction}} expression slot opts into the host's row-access
+    /// callback and is resolved before composition. Without it, no row callback runs.
     /// </summary>
     public string Sql { get; set; } = "";
 
@@ -84,7 +98,8 @@ public sealed class ReportDefinition
     /// <summary>
     /// Gets or sets server-resolved parameters, claims by default. Client-supplied values can never
     /// bind to these — they are a separate parameter class from filter values. This is
-    /// the row-level security mechanism (the :APP_USER pattern).
+    /// a row-level security mechanism (the :APP_USER pattern), independent of the optional
+    /// {{RowRestriction}} expression slot in <see cref="Sql"/>.
     /// </summary>
     public Dictionary<string, ContextParamSpec>? ContextParams { get; set; }
 
@@ -98,7 +113,7 @@ public sealed class ReportDefinition
     /// persist or egress data (download at the file-client endpoint, savedReports at
     /// saved-report creation). The other tokens are presentation-level only — the query
     /// endpoint still accepts any valid state document, because hiding a dialog is not
-    /// a data-security boundary (trusted context parameters are). Note the JSON config binder
+    /// a data-security boundary (trusted context parameters and row restrictions are). Note the JSON config binder
     /// cannot represent an empty array ([] binds as absent = everything); to lock a
     /// report down, list the one or two features it should keep.
     /// </summary>

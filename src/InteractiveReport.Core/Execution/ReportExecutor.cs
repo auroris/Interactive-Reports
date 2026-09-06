@@ -64,6 +64,7 @@ public sealed class ReportExecutor
         IReadOnlyDictionary<string, object?> contextParams,
         CancellationToken ct = default)
     {
+        ReportSqlTemplate.RequireResolved(definition);
         // One discovery task is shared by every concurrent caller of the same key, so it must not
         // be tied to the first caller's request: if that caller aborts, the others would fault with
         // a cancellation they never asked for and be reported as server errors. Discovery runs under
@@ -327,6 +328,10 @@ public sealed class ReportExecutor
         // client adopts this value, so inherited default tables and their refreshed caches must
         // be present in the response.
         var document = ReportStateResolver.Resolve(definition.DefaultState, state);
+        // A previously returned pivot cache may contain values from a different caller's
+        // dataset. Refresh it even when that table is dormant in this request.
+        if (definition.RowRestrictionApplied && document.Tables is not null)
+            foreach (var table in document.Tables.Values) table.Schema = null;
         ValidateSyntheticColumnIdentities(document);
         var results = new Dictionary<string, ReportResult>(StringComparer.OrdinalIgnoreCase);
         var hasNamedTables = document.Tables is { Count: > 0 };

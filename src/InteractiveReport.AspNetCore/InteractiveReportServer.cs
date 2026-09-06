@@ -483,7 +483,9 @@ internal sealed class InteractiveReportServer(
 
         try
         {
-            var contextParameters = await authorization.ResolveContextParameters(definition, context, ct);
+            var prepared = await PrepareQuery(definition, context, ct);
+            definition = prepared.Definition;
+            var contextParameters = prepared.Parameters;
             ReportState state;
             if (saved.Origin == SavedReportOrigin.Configured)
             {
@@ -525,6 +527,8 @@ internal sealed class InteractiveReportServer(
                 }
                 catch (ReportValidationException ex)
                 {
+                    if (definition.RowRestrictionApplied)
+                        return InteractiveReportServerResult<InteractiveReportLoadedDocument>.Failed(Validation(ex));
                     await synchronizer.RemoveInvalid(saved, ex, ct);
                     return NotFoundDocument<InteractiveReportLoadedDocument>();
                 }
@@ -547,10 +551,20 @@ internal sealed class InteractiveReportServer(
                         saved.StateJson ?? throw new JsonException("The report document has no state."),
                         IrJson.Options)
                     ?? throw new JsonException("The report document has no state.");
+                if (definition.RowRestrictionApplied)
+                    state = await executor.RefreshSchemaCaches(definition, state, contextParameters, ct);
             }
 
             return InteractiveReportServerResult<InteractiveReportLoadedDocument>.Success(
                 new InteractiveReportLoadedDocument(definition.Name, metadata, state));
+        }
+        catch (InteractiveReportAuthorizationDeniedException)
+        {
+            return InteractiveReportServerResult<InteractiveReportLoadedDocument>.Failed(RowAccessDenied(context));
+        }
+        catch (ReportValidationException ex) when (definition.RowRestrictionApplied)
+        {
+            return InteractiveReportServerResult<InteractiveReportLoadedDocument>.Failed(Validation(ex));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -623,7 +637,9 @@ internal sealed class InteractiveReportServer(
 
         try
         {
-            var contextParameters = await authorization.ResolveContextParameters(definition, context, ct);
+            var prepared = await PrepareQuery(definition, context, ct);
+            definition = prepared.Definition;
+            var contextParameters = prepared.Parameters;
             var columns = await executor.GetSchema(definition, contextParameters, ct);
 
             return InteractiveReportServerResult<InteractiveReportSchema>.Success(new InteractiveReportSchema(
@@ -633,7 +649,7 @@ internal sealed class InteractiveReportServer(
                 EditLink: ResolveEditLink(definition, columns),
                 CreateLink: ResolveCreateLink(definition),
                 ColumnOverrides: ResolveColumnOverrides(definition, columns),
-                DefaultState: ReportDocumentDefaults.Create(definition),
+                DefaultState: DefinitionDefaults(definition),
                 Capabilities: new InteractiveReportCapabilities(
                     ExpressionLanguageCatalog.Functions,
                     AggregateCatalog.FunctionsByColumnType,
@@ -650,6 +666,10 @@ internal sealed class InteractiveReportServer(
                 // concrete action and resource.
                 Authorization: new InteractiveReportAuthorizationHint(
                     await authorization.MayRequestAdministration(context, ct))));
+        }
+        catch (InteractiveReportAuthorizationDeniedException)
+        {
+            return InteractiveReportServerResult<InteractiveReportSchema>.Failed(RowAccessDenied(context));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -759,9 +779,15 @@ internal sealed class InteractiveReportServer(
 
         try
         {
-            var contextParameters = await authorization.ResolveContextParameters(definition, context, ct);
+            var prepared = await PrepareQuery(definition, context, ct);
+            definition = prepared.Definition;
+            var contextParameters = prepared.Parameters;
             return InteractiveReportServerResult<ReportLovResult>.Success(
                 await executor.Lov(definition, request, contextParameters, ct));
+        }
+        catch (InteractiveReportAuthorizationDeniedException)
+        {
+            return InteractiveReportServerResult<ReportLovResult>.Failed(RowAccessDenied(context));
         }
         catch (ReportValidationException ex)
         {
@@ -1265,7 +1291,9 @@ internal sealed class InteractiveReportServer(
             }
             else if (report.IsDefault)
             {
-                var contextParameters = await authorization.ResolveContextParameters(definition, context, ct);
+                var prepared = await PrepareQuery(definition, context, ct);
+                definition = prepared.Definition;
+                var contextParameters = prepared.Parameters;
                 (_, state) = await defaultDocuments.LoadState(
                     report, definition, executor, contextParameters, ct);
             }
@@ -1275,6 +1303,20 @@ internal sealed class InteractiveReportServer(
                     report.StateJson ?? throw new JsonException("The report document has no state."),
                     IrJson.Options);
             }
+            // Documents carry authored state, not another caller's discovered data values.
+            if (state is not null && (definition.RowRestrictionApplied || ReportSqlTemplate.RequiresRowRestriction(definition.Sql)))
+            {
+                state = ReportStateResolver.Resolve(defaults: null, state);
+                ClearSchemaCaches(state);
+            }
+        }
+        catch (InteractiveReportAuthorizationDeniedException)
+        {
+            return InteractiveReportServerResult<InteractiveReportDocumentExport>.Failed(RowAccessDenied(context));
+        }
+        catch (ReportValidationException ex) when (definition.RowRestrictionApplied)
+        {
+            return InteractiveReportServerResult<InteractiveReportDocumentExport>.Failed(Validation(ex));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -1813,10 +1855,17 @@ internal sealed class InteractiveReportServer(
 
         try
         {
-            var contextParameters = await authorization.ResolveContextParameters(definition, context, ct);
+            var prepared = await PrepareQuery(definition, context, ct);
+            definition = prepared.Definition;
+            var contextParameters = prepared.Parameters;
             candidate.State = await executor.RefreshSchemaCaches(
                 definition, candidate.State, contextParameters, ct);
+            if (definition.RowRestrictionApplied) ClearSchemaCaches(candidate.State);
             return null;
+        }
+        catch (InteractiveReportAuthorizationDeniedException)
+        {
+            return RowAccessDenied(context);
         }
         catch (ReportValidationException ex)
         {
@@ -1910,10 +1959,16 @@ internal sealed class InteractiveReportServer(
 
         try
         {
-            var contextParameters = await authorization.ResolveContextParameters(definition, context, ct);
+            var prepared = await PrepareQuery(definition, context, ct);
+            definition = prepared.Definition;
+            var contextParameters = prepared.Parameters;
             var result = await executor.Query(definition, state, contextParameters, ct);
             var truncated = result.Page.Size == 0 && result.TotalRows > result.Rows.Count;
             return InteractiveReportServerResult<ReportResult>.Success(result, truncated);
+        }
+        catch (InteractiveReportAuthorizationDeniedException)
+        {
+            return InteractiveReportServerResult<ReportResult>.Failed(RowAccessDenied(context));
         }
         catch (ReportValidationException ex)
         {
@@ -1928,6 +1983,44 @@ internal sealed class InteractiveReportServer(
             return InteractiveReportServerResult<ReportResult>.Failed(
                 Internal(definition.Name, action == InteractiveReportAction.Export ? "export query" : "query", context, ex));
         }
+    }
+
+    private async Task<(ReportDefinition Definition, IReadOnlyDictionary<string, object?> Parameters)> PrepareQuery(
+        ReportDefinition definition,
+        InteractiveReportRequestContext context,
+        CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        RowRestriction? restriction = null;
+        if (ReportSqlTemplate.RequiresRowRestriction(definition.Sql))
+        {
+            logging.Logger?.LogDebug("Resolving row access for report {Report} (traceId {TraceId})",
+                definition.Name, context.TraceIdentifier);
+            restriction = await ReportRowRestrictions.Resolve(
+                definition, context, options.CurrentValue.IdentityClaim, ct);
+        }
+        var parameters = await authorization.ResolveContextParameters(definition, context, ct);
+        return restriction is null
+            ? (definition, parameters)
+            : ReportSqlTemplate.Bind(definition, restriction.Expression ?? "1 = 1", restriction.Values, parameters);
+    }
+
+    private static InteractiveReportFailure RowAccessDenied(InteractiveReportRequestContext context)
+        => context.User.Identity?.IsAuthenticated == true
+            ? new(InteractiveReportFailureKind.Forbidden, InteractiveReportErrorCodes.AuthorizationDenied)
+            : new(InteractiveReportFailureKind.Unauthenticated, InteractiveReportErrorCodes.AuthenticationRequired);
+
+    private static ReportState DefinitionDefaults(ReportDefinition definition)
+    {
+        var state = ReportDocumentDefaults.Create(definition);
+        if (definition.RowRestrictionApplied) ClearSchemaCaches(state);
+        return state;
+    }
+
+    private static void ClearSchemaCaches(ReportState state)
+    {
+        if (state.Tables is not null)
+            foreach (var table in state.Tables.Values) table.Schema = null;
     }
 
     /// <summary>

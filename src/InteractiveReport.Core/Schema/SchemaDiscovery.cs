@@ -50,6 +50,7 @@ public static class SchemaDiscovery
         ILogger? logger,
         CancellationToken ct = default)
     {
+        ReportSqlTemplate.RequireResolved(def);
         var probe = new Query()
             .FromRaw(SqlKataSyntax.PreserveRaw(
                 $"({def.Sql}) {SqlKataSyntax.BaseRelationAlias}")) // Provider constraint: no AS: Oracle table aliases.

@@ -299,6 +299,19 @@ public sealed class InteractiveReportBuilder
     }
 
     /// <summary>
+    /// Adds a row-access callback for SQL containing {{RowRestriction}}. Reports without the
+    /// marker never invoke it. Multiple callbacks compose with AND; any denial stops execution.
+    /// This is additional to ordinary operation authorization and accepts anonymous principals.
+    /// </summary>
+    /// <example><code>reports.UseRowRestrictions((request, ct) => ValueTask.FromResult(RowRestriction.Where("p.CG = ?", 0)));</code></example>
+    public InteractiveReportBuilder UseRowRestrictions(InteractiveReportRowRestrictionCallback callback)
+    {
+        ArgumentNullException.ThrowIfNull(callback);
+        _services.AddSingleton(new RegisteredRowRestriction(callback));
+        return this;
+    }
+
+    /// <summary>
     /// Sends each operation through ASP.NET Core resource-based
     /// authorization using InteractiveReportAuthorizationRequirement and
     /// InteractiveReportAuthorizationResource.

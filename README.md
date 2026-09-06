@@ -103,7 +103,7 @@ data-source choices, persistence, authorization, and the next integration steps.
 | [Saved reports](docs/SAVED-REPORTS.md) | Persistence, document visibility and defaults, source-controlled documents, import/export, and administration. |
 | [Embedding the report](docs/EMBEDDING.md) | The custom element, host JavaScript API, events, client controls, theming, stylesheets, renderers, edit links, and create buttons. |
 | [Integration API](docs/API.md) | Server registration, authorization hooks, trusted context, in-process execution and export, REST routes, and element reference tables. |
-| [Authorization](docs/AUTHORIZATION.md) | The action and resource model, the three integration styles, administrator resolution, and denial behaviour. |
+| [Authorization](docs/AUTHORIZATION.md) | The action and resource model, row restrictions with `{{RowRestriction}}`, the three integration styles, administrator resolution, and denial behaviour. |
 | [GraphQL adapter](docs/GRAPHQL.md) | The optional query-only transport for saved reports. |
 | [Architecture](docs/ARCHITECTURE.md) | System boundaries, package structure, report planning and execution, database integration, authorization, persistence, and browser responsibilities. |
 | [Developing](docs/DEVELOPING.md) | Building the client, running the test layers, packing, and regenerating documentation screenshots. |

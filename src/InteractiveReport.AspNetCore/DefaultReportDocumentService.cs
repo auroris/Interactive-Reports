@@ -3,6 +3,7 @@ using System.Data.Common;
 using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Model;
 using InteractiveReport.Core.SavedReports;
+using InteractiveReport.Core.Validation;
 using Microsoft.Extensions.Logging;
 
 namespace InteractiveReport.AspNetCore;
@@ -48,7 +49,9 @@ internal sealed class DefaultReportDocumentService(
         {
             return await Rebuild(report, definition, executor, contextParameters, ct);
         }
-        catch (ReportValidationException)
+        // A live validation failure may describe this caller's restricted pivot shape,
+        // not a broken shared document. It must not rewrite that document for everyone.
+        catch (ReportValidationException) when (!definition.RowRestrictionApplied)
         {
             return await Rebuild(report, definition, executor, contextParameters, ct);
         }
@@ -125,6 +128,13 @@ internal sealed class DefaultReportDocumentService(
     {
         if (!expected.IsDefault || expected.Origin == SavedReportOrigin.Configured)
             throw new InvalidOperationException("Only a database-backed default report document can be repaired.");
+
+        if (definition.RowRestrictionApplied)
+        {
+            state = ReportStateResolver.Resolve(defaults: null, state);
+            if (state.Tables is not null)
+                foreach (var table in state.Tables.Values) table.Schema = null;
+        }
 
         var replacement = expected with
         {

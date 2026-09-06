@@ -221,6 +221,39 @@ builder.Services
 The resolver is registered as a singleton. Its dependencies must therefore be safe
 to consume from a singleton, or it must use a scope-safe accessor.
 
+## Row-restriction callback
+
+Place `{{RowRestriction}}` in configured SQL and register
+`InteractiveReportBuilder.UseRowRestrictions(InteractiveReportRowRestrictionCallback)`
+to provide a caller-specific SQL predicate. The delegate receives an
+`InteractiveReportRowRestrictionRequest` (`User`, nullable canonical `UserId`,
+`ReportName`, and `RequestServices`) plus a cancellation token, and returns
+`ValueTask<RowRestriction>`.
+
+```csharp
+reports.UseRowRestrictions((request, ct) =>
+{
+    ct.ThrowIfCancellationRequested();
+    return ValueTask.FromResult(request.User.IsInRole("ControlledGoods")
+        ? RowRestriction.Unrestricted
+        : RowRestriction.Where("p.CG = ?", 0));
+});
+```
+
+For SQL such as `SELECT p.ID FROM Products p WHERE {{RowRestriction}}`, the engine
+inserts a parenthesized expression and binds `0` as a database parameter. `Where`
+accepts no `WHERE` keyword; each `?` represents one scalar value. `NotApplicable`
+contributes no decision, `Unrestricted` explicitly permits the configured dataset,
+and `Deny` stops execution. Multiple callbacks combine with `AND`.
+
+SQL **without** the marker never invokes this callback and needs no restriction
+registration. Marked SQL requires an explicit decision, including for anonymous
+callers; missing or failed decisions cannot fall back to the unrestricted query.
+This hook runs within the shared server used by JSON, GraphQL, and file downloads,
+after the existing authorization gates. See
+[Row restrictions](AUTHORIZATION.md#row-restrictions) for placement before grouping,
+anonymous callers, multiple callbacks, binding rules, and saved-schema behavior.
+
 ## Application authorization
 
 Report-definition authorization remains active for every integration. Application

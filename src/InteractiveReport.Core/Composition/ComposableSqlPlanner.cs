@@ -35,6 +35,7 @@ internal sealed record ComposableSqlRelation(
         ReportDefinition definition,
         ReportSchema schema)
     {
+        ReportSqlTemplate.RequireResolved(definition);
         var dialect = definition.GetEffectiveDialect();
         var names = new SqlPhysicalNameAllocator(schema.Columns.Select(column => column.Name));
         var physical = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
