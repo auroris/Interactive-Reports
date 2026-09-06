@@ -22,10 +22,6 @@ export function normalizeReportState(raw, defaultPageSize = 50, defaults = null,
     for (const [key, value] of Object.entries(raw ? structuredClone(raw) : {}))
         if (value !== null && value !== undefined) state[key] = value;
 
-    // Legacy schema snapshots are discarded because the server document is authoritative and
-    // every query is validated server-side.
-    delete state.schema;
-    delete state.v;
     if (!state.tables || typeof state.tables !== "object" || Array.isArray(state.tables))
         state.tables = {};
     if (Object.keys(state.tables).length === 0) {
@@ -44,10 +40,10 @@ export function normalizeReportState(raw, defaultPageSize = 50, defaults = null,
 }
 
 /**
- * Serializes report state after removing client-only and obsolete transport fields.
+ * Serializes report state after removing client-only fields.
  *
  * @param {object} source - The report-state document to prepare for persistence or transport.
- * @returns {object} A detached document without underscore-prefixed properties, undefined values, or the legacy version field.
+ * @returns {object} A detached document without underscore-prefixed properties or undefined values.
  */
 export function serializeReportState(source) {
     const walk = value => {
@@ -63,9 +59,7 @@ export function serializeReportState(source) {
         return value;
     };
 
-    const result = walk(source);
-    delete result.v;
-    return result;
+    return walk(source);
 }
 
 /**

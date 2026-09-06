@@ -130,7 +130,7 @@ context; mutation routes use the id directly.
 | `connection` | A name registered through `AddConnection`; an alternative to `dataSource`. |
 | `sql` | The developer-owned base `SELECT`. It never crosses the client boundary. |
 | `contextParams` | Trusted server-resolved values used by the base SQL. |
-| `authorization` | Authentication, policy, administrator-only, restriction, and configured-user rules. |
+| `authorization` | Public access (`allowAnonymous`) and an optional ASP.NET Core `policy`. Everything else needs an authenticated caller; narrower access is the application's decision. |
 | `features` | Initial client-control suggestions. `download` and saved-report creation also have server checks. |
 | `defaultState` | The developer-owned initial `ReportState`. |
 | `documentFiles` | Source-controlled saved-report envelopes, relative to the content root unless absolute. |
@@ -162,6 +162,7 @@ and import/export are described in [Saved reports](SAVED-REPORTS.md#source-contr
 | `InteractiveReportBuilder.UseContextParameterResolver<T>()` | Replaces claim-based trusted-context resolution with a singleton application resolver. |
 | `InteractiveReportBuilder.UseUserProvider<T>()` | Adds a scoped application user directory for administration account choices; override `SearchUsers` to push the search text and result limit into the application's user store. |
 | `InteractiveReportBuilder.UseUserDirectory(...)` | Adds a user-directory callback that answers a search with .NET identities, projected to the same canonical identity values sign-in produces. |
+| `InteractiveReportBuilder.UseAdministrators(...)` | Makes the application the authority on who administers. Without it, `InteractiveReport:AdministratorPolicy` answers, and without that the configured list plus the administration center's list. |
 | `InteractiveReportBuilder.UseAuthorization(...)` | Adds a direct application authorization callback. |
 | `InteractiveReportBuilder.UseAspNetCoreAuthorization()` | Adds an adapter to ASP.NET Core resource-based authorization. |
 | `IEndpointRouteBuilder.MapInteractiveReportJson(...)` | Maps REST, saved-report, administration, packaged asset, and optional viewer routes. |
@@ -223,8 +224,8 @@ to consume from a singleton, or it must use a scope-safe accessor.
 ## Application authorization
 
 Report-definition authorization remains active for every integration. Application
-authorization can add restrictions; it cannot bypass authentication, configured
-users, administrator rules, or database grants.
+authorization can add restrictions; it cannot bypass authentication, the administrator
+decision, or the saved-report ownership rules.
 
 ### Direct callback
 
@@ -415,12 +416,12 @@ and compare-and-swap contracts.
 
 ## Supply administration user choices
 
-The administration page's account pickers (owner reassignment, the administrator list,
-and report-user grants) search `GET {prefix}/admin/users`. One lookup merges two
-sources: the identities Interactive Reports already knows (configured administrators
-and report users, database grants, saved-report owners, and the caller) and an optional
-application user directory, which is what supplies display names. Nothing in the lookup
-grants access; it offers choices, and free-form identity entry remains available.
+The administration page's account pickers (owner reassignment and the administrator
+list) search `GET {prefix}/admin/users`. One lookup merges two sources: the identities
+Interactive Reports already knows (configured and database administrators, saved-report
+owners, and the caller) and an optional application user directory, which is what
+supplies display names. Nothing in the lookup grants access; it offers choices, and
+free-form identity entry remains available.
 
 Register the directory as a callback. It receives the administrator, the trimmed search
 text (`null` for a browse), the result limit, and the request services, and answers with
@@ -507,14 +508,8 @@ With the default prefix, the principal routes are:
 | `DELETE /api/reports/{id}` | Deletes an editable saved report. |
 | `GET /api/reports/whoami` | Optional identity diagnostic; disabled unless `WhoamiEnabled` is true. |
 | `GET /api/reports/admin/users` | Searches account choices after the administration gate: the application directory merged with known identities, narrowed by the optional `search` query (at most 200 characters) and bounded by `UserDirectory:MaxResults`. Returns `{ items, truncated }`. |
-| `GET /api/reports/admin/authorization` | Returns configured and database-backed administrator, restriction, and user grants. |
-| `GET /api/reports/admin/authorization/administrators` | Returns configured and database-backed administrator identities as `{ configured, database }`. |
-| `PUT /api/reports/admin/authorization/administrators` | Replaces the database-backed administrator grants with `{ identities }`, granting the missing ones and revoking the rest; configured administrators are unaffected. |
-| `POST /api/reports/admin/authorization/administrators` | Adds a database-backed administrator grant. |
-| `DELETE /api/reports/admin/authorization/administrators` | Removes a database-backed administrator grant. |
-| `PUT /api/reports/admin/authorization/reports/{name}` | Sets the database-backed restriction marker for a report. |
-| `POST /api/reports/admin/authorization/reports/{name}/users` | Adds a database-backed user grant for a report. |
-| `DELETE /api/reports/admin/authorization/reports/{name}/users` | Removes a database-backed user grant for a report. |
+| `GET /api/reports/admin/administrators` | Returns `{ configured, database, managedByApplication }`: the configured and database-backed administrator identities, and whether the application decides administrators itself, which leaves both lists inert. |
+| `PUT /api/reports/admin/administrators` | Replaces the database-backed administrator grants with `{ identities }`, granting the missing ones and revoking the rest; configured administrators are unaffected. |
 | `GET /api/reports/admin/saved/{id}/document` | Downloads a saved report as a configured-document envelope. |
 | `POST /api/reports/admin/{id}/documents` | Validates and imports an envelope as a private document in the selected family. |
 | `GET /api/reports/ui/{file}` | Packaged browser assets. |

@@ -45,8 +45,10 @@ public sealed record ReportDefinitionAccessResult(
 
 /// <summary>
 /// Central authorization service shared by every client adapter. It owns definition,
-/// administrator, stored-grant, ownership-resource, application-authorizer, feature, and
-/// trusted-context decisions, but contains no route or response types.
+/// administrator, ownership-resource, application-authorizer, feature, and trusted-context
+/// decisions, but contains no route or response types. Report access itself is the
+/// integrating application's business: the engine only distinguishes public reports from
+/// reports that need an authenticated caller, and lets the application narrow from there.
 /// </summary>
 public interface IReportAuthorizationService
 {
@@ -75,6 +77,16 @@ public interface IReportAuthorizationService
         CancellationToken ct = default);
 
     ReportAuthorizationFailure? CheckFeature(ReportDefinition definition, string feature);
+
+    /// <summary>
+    /// Decides whether the caller administers Interactive Reports and where that authority comes
+    /// from: the application's registered callback, the configured administrator policy, or the
+    /// built-in fallbacks (the configured list, then the administration center's database grants).
+    /// The first implemented source answers; an unauthenticated caller is never an administrator.
+    /// </summary>
+    Task<InteractiveReportAdministratorDecision> ResolveAdministrator(
+        InteractiveReportRequestContext context,
+        CancellationToken ct = default);
 
     Task<bool> MayRequestAdministration(
         InteractiveReportRequestContext context,
@@ -193,11 +205,13 @@ internal sealed class ReportAuthorizationService(
         var canonicalResource = resource is null
             ? new InteractiveReportAuthorizationResource { ReportName = definition.Name }
             : resource with { ReportName = definition.Name };
+        // The built-in saved-reports listing is the one report that belongs to administrators.
+        var listing = SavedReportsListingDefinition.Matches(definition.Name);
         return AuthorizeOperations(
             actions,
             canonicalResource,
-            administratorRequired || definition.Authorization?.AdministratorsOnly == true,
-            hideDenied || definition.Authorization?.AdministratorsOnly == true,
+            administratorRequired || listing,
+            hideDenied || listing,
             denialDetail,
             context,
             ct);
@@ -228,6 +242,103 @@ internal sealed class ReportAuthorizationService(
                 InteractiveReportErrorCodes.FeatureDisabled,
                 $"'{feature}' is not enabled for this report");
 
+    public async Task<InteractiveReportAdministratorDecision> ResolveAdministrator(
+        InteractiveReportRequestContext context,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        var options = context.RequestServices
+            .GetRequiredService<IOptionsMonitor<InteractiveReportOptions>>().CurrentValue;
+        var application = context.RequestServices.GetService<IInteractiveReportAdministrators>();
+        var policy = string.IsNullOrWhiteSpace(options.AdministratorPolicy)
+            ? null
+            : options.AdministratorPolicy.Trim();
+        var managed = application is not null || policy is not null;
+
+        if (context.User.Identity?.IsAuthenticated != true)
+            return new(false, InteractiveReportAdministratorSource.None, managed);
+
+        // The first implemented source answers. Registering a callback, or naming a policy, is
+        // how the application takes the question over; not doing either leaves the fallbacks.
+        if (application is not null)
+        {
+            try
+            {
+                var granted = await application.IsAdministrator(
+                    new InteractiveReportAdministratorRequest
+                    {
+                        User = context.User,
+                        RequestServices = context.RequestServices,
+                    },
+                    ct);
+                return new(
+                    granted,
+                    granted ? InteractiveReportAdministratorSource.Application : InteractiveReportAdministratorSource.None,
+                    ManagedByApplication: true);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                return new(false, InteractiveReportAdministratorSource.None, true, Internal(
+                    SavedReportsListingDefinition.Name, "application administrator decision", context, ex));
+            }
+        }
+
+        if (policy is not null)
+        {
+            try
+            {
+                var service = context.RequestServices.GetService<IAuthorizationService>()
+                    ?? throw new InvalidOperationException(
+                        $"InteractiveReport:AdministratorPolicy names policy '{policy}' but the host has not registered authorization services (AddAuthorization).");
+                var decision = await service.AuthorizeAsync(context.User, policy);
+                return new(
+                    decision.Succeeded,
+                    decision.Succeeded ? InteractiveReportAdministratorSource.Policy : InteractiveReportAdministratorSource.None,
+                    ManagedByApplication: true);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                return new(false, InteractiveReportAdministratorSource.None, true, Internal(
+                    SavedReportsListingDefinition.Name, "administrator policy evaluation", context, ex));
+            }
+        }
+
+        if (ReportIdentity.IsAdministrator(context.User, options.IdentityClaim, options.Administrators))
+            return new(true, InteractiveReportAdministratorSource.Configuration, false);
+
+        var identity = ReportIdentity.Resolve(context.User, options.IdentityClaim);
+        if (identity is null || !ReportConnectionRegistry.IsStoreConfigured(options.SavedReports))
+            return new(false, InteractiveReportAdministratorSource.None, false);
+
+        try
+        {
+            var granted = await context.RequestServices
+                .GetRequiredService<IAdministratorStore>()
+                .IsAdministrator(identity, ct);
+            return new(
+                granted,
+                granted ? InteractiveReportAdministratorSource.Database : InteractiveReportAdministratorSource.None,
+                false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return new(false, InteractiveReportAdministratorSource.None, false, Internal(
+                SavedReportsListingDefinition.Name, "administrator grant lookup", context, ex));
+        }
+    }
+
     public async Task<bool> MayRequestAdministration(
         InteractiveReportRequestContext context,
         CancellationToken ct = default)
@@ -236,11 +347,10 @@ internal sealed class ReportAuthorizationService(
         var options = context.RequestServices
             .GetRequiredService<IOptionsMonitor<InteractiveReportOptions>>().CurrentValue;
         if (!ReportConnectionRegistry.IsStoreConfigured(options.SavedReports)) return false;
-        var administrator = await AdministratorAccess(context, options, ct);
+        var administrator = await ResolveAdministrator(context, ct);
         if (administrator.Failure is not null)
             throw new InvalidOperationException("Administration access lookup failed.");
-        if (administrator.Configured) return administrator.Granted;
-        return context.RequestServices.GetServices<IInteractiveReportAuthorizer>().Any();
+        return administrator.IsAdministrator;
     }
 
     public async Task<IReadOnlyDictionary<string, object?>> ResolveContextParameters(
@@ -286,37 +396,41 @@ internal sealed class ReportAuthorizationService(
             context,
             ct);
 
+    /// <summary>
+    /// Applies the report-level gate: a public report admits anyone, any other report needs an
+    /// authenticated caller, an optional policy narrows further, and the built-in listing is
+    /// hidden from everyone but administrators. Who else may see a report is decided by the
+    /// application's own authorizers, not here.
+    /// </summary>
     private async Task<ReportAuthorizationFailure?> AuthorizeDefinition(
         ReportDefinitionAuthorization definition,
         InteractiveReportRequestContext context,
         CancellationToken ct)
     {
         var authorization = definition.Authorization;
-        var options = context.RequestServices
-            .GetRequiredService<IOptionsMonitor<InteractiveReportOptions>>().CurrentValue;
 
-        if (authorization?.AdministratorsOnly == true)
+        if (SavedReportsListingDefinition.Matches(definition.Name))
         {
             if (context.User.Identity?.IsAuthenticated != true)
             {
                 logging.Logger?.LogDebug(
-                    "Access denied for report '{Report}': caller is not authenticated for administrators-only report (traceId {TraceId})",
+                    "Access denied for report '{Report}': caller is not authenticated for the administrators-only listing (traceId {TraceId})",
                     definition.Name,
                     context.TraceIdentifier);
                 return Unauthenticated();
             }
-            var administrator = await AdministratorAccess(context, options, ct);
+            var administrator = await ResolveAdministrator(context, ct);
             if (administrator.Failure is not null) return administrator.Failure;
-            if (administrator.Configured && !administrator.Granted)
+            if (!administrator.IsAdministrator)
             {
-                var id = ReportIdentity.Resolve(context.User, options.IdentityClaim);
                 logging.Logger?.LogDebug(
                     "Access denied for report '{Report}': caller '{Identity}' is not an administrator (traceId {TraceId})",
                     definition.Name,
-                    id ?? "anonymous",
+                    CallerForLog(context),
                     context.TraceIdentifier);
                 return Hidden();
             }
+            return null;
         }
 
         if (authorization?.AllowAnonymous == true) return null;
@@ -347,42 +461,6 @@ internal sealed class ReportAuthorizationService(
             }
         }
 
-        if (authorization?.AdministratorsOnly == true) return null;
-
-        var identity = ReportIdentity.Resolve(context.User, options.IdentityClaim);
-        var storageConfigured = ReportConnectionRegistry.IsStoreConfigured(options.SavedReports);
-        var databaseAccess = new DatabaseReportAccess(false, false);
-        if (storageConfigured)
-        {
-            try
-            {
-                databaseAccess = await context.RequestServices
-                    .GetRequiredService<IReportAuthorizationStore>()
-                    .GetReportAccess(definition.Name, identity, ct);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                return Internal(definition.Name, "report access lookup", context, ex);
-            }
-        }
-
-        var restricted = authorization?.Restricted == true || databaseAccess.Restricted;
-        var configuredGrant = identity is not null
-            && authorization?.Users?.Any(user => string.Equals(
-                user.Trim(), identity, StringComparison.Ordinal)) == true;
-        if (restricted && !configuredGrant && !databaseAccess.UserGranted)
-        {
-            logging.Logger?.LogDebug(
-                "Access denied for report '{Report}': report is restricted and caller '{Identity}' lacks a configured or database user grant (traceId {TraceId})",
-                definition.Name,
-                identity ?? "anonymous",
-                context.TraceIdentifier);
-            return Hidden();
-        }
         return null;
     }
 
@@ -401,12 +479,13 @@ internal sealed class ReportAuthorizationService(
         if (actions.Count == 0)
             throw new ArgumentException("At least one authorization action is required.", nameof(actions));
 
-        var options = context.RequestServices
-            .GetRequiredService<IOptionsMonitor<InteractiveReportOptions>>().CurrentValue;
         var authorizers = context.RequestServices
             .GetServices<IInteractiveReportAuthorizer>()
             .ToArray();
 
+        // Administrator authority is decided once, by the first implemented source. The
+        // application's operation authorizers then keep their veto: they can narrow an
+        // administrator's actions, never widen a non-administrator's.
         if (administratorRequired)
         {
             if (context.User.Identity?.IsAuthenticated != true)
@@ -418,25 +497,15 @@ internal sealed class ReportAuthorizationService(
                     context.TraceIdentifier);
                 return Unauthenticated();
             }
-            var administrator = await AdministratorAccess(context, options, ct);
+            var administrator = await ResolveAdministrator(context, ct);
             if (administrator.Failure is not null) return administrator.Failure;
-            if (administrator.Configured && !administrator.Granted)
+            if (!administrator.IsAdministrator)
             {
-                var id = ReportIdentity.Resolve(context.User, options.IdentityClaim);
                 logging.Logger?.LogDebug(
                     "Actions {Actions} on resource '{Resource}' denied: caller '{Identity}' is not an administrator (traceId {TraceId})",
                     string.Join(",", actions),
                     resource.ReportName,
-                    id ?? "anonymous",
-                    context.TraceIdentifier);
-                return Denied(context, hideDenied, denialDetail);
-            }
-            if (!administrator.Configured && authorizers.Length == 0)
-            {
-                logging.Logger?.LogDebug(
-                    "Actions {Actions} on resource '{Resource}' denied: no administrators configured and no custom authorizers registered (traceId {TraceId})",
-                    string.Join(",", actions),
-                    resource.ReportName,
+                    CallerForLog(context),
                     context.TraceIdentifier);
                 return Denied(context, hideDenied, denialDetail);
             }
@@ -475,13 +544,12 @@ internal sealed class ReportAuthorizationService(
 
                 if (!allowed)
                 {
-                    var id = ReportIdentity.Resolve(context.User, options.IdentityClaim);
                     logging.Logger?.LogDebug(
                         "Action '{Action}' on resource '{Resource}' was denied by authorizer '{AuthorizerType}' for caller '{Identity}' (traceId {TraceId})",
                         action,
                         resource.ReportName,
                         authorizer.GetType().Name,
-                        id ?? "anonymous",
+                        CallerForLog(context),
                         context.TraceIdentifier);
                     return Denied(context, hideDenied, denialDetail);
                 }
@@ -490,38 +558,11 @@ internal sealed class ReportAuthorizationService(
         return null;
     }
 
-    private async Task<AdministratorDecision> AdministratorAccess(
-        InteractiveReportRequestContext context,
-        InteractiveReportOptions options,
-        CancellationToken ct)
+    private static string CallerForLog(InteractiveReportRequestContext context)
     {
-        var identity = ReportIdentity.Resolve(context.User, options.IdentityClaim);
-        var configuredGrant = ReportIdentity.IsAdministrator(
-            context.User, options.IdentityClaim, options.Administrators);
-        if (configuredGrant) return new(true, true, null);
-
-        try
-        {
-            var database = await context.RequestServices
-                .GetRequiredService<IReportAuthorizationStore>()
-                .GetAdministratorAccess(identity, ct);
-            return new(
-                options.Administrators.Count > 0 || database.Configured,
-                database.UserGranted,
-                null);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return new(false, false, Internal(
-                SavedReportsListingDefinition.Name,
-                "administrator access lookup",
-                context,
-                ex));
-        }
+        var options = context.RequestServices
+            .GetRequiredService<IOptionsMonitor<InteractiveReportOptions>>().CurrentValue;
+        return ReportIdentity.Resolve(context.User, options.IdentityClaim) ?? "anonymous";
     }
 
     private static bool AuthorizationEquivalent(
@@ -531,10 +572,7 @@ internal sealed class ReportAuthorizationService(
         if (ReferenceEquals(left, right)) return true;
         if (left is null || right is null) return false;
         return string.Equals(left.Policy, right.Policy, StringComparison.Ordinal)
-               && left.AllowAnonymous == right.AllowAnonymous
-               && left.Restricted == right.Restricted
-               && left.AdministratorsOnly == right.AdministratorsOnly
-               && (left.Users ?? []).SequenceEqual(right.Users ?? [], StringComparer.Ordinal);
+               && left.AllowAnonymous == right.AllowAnonymous;
     }
 
     private ReportAuthorizationFailure Internal(
@@ -557,7 +595,7 @@ internal sealed class ReportAuthorizationService(
                 diagnosis.ProviderCode ?? "none",
                 context.TraceIdentifier,
                 diagnosis.Summary,
-                diagnosis.RemediationHint ?? "Check database connection and authorization store table permissions.");
+                diagnosis.RemediationHint ?? "Check database connection and administrator table permissions.");
         }
         else
         {
@@ -597,9 +635,4 @@ internal sealed class ReportAuthorizationService(
         => new(
             ReportAuthorizationFailureKind.NotFound,
             InteractiveReportErrorCodes.ReportNotFound);
-
-    private sealed record AdministratorDecision(
-        bool Configured,
-        bool Granted,
-        ReportAuthorizationFailure? Failure);
 }

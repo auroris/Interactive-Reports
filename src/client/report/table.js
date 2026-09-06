@@ -362,9 +362,9 @@ function foldedLabels(w) {
     return labels;
 }
 
-// Cache policy: complete active-table schema, independent of the current projection. Newer
-// servers return it in the selected table's cache; response and definition columns remain
-// compatibility fallbacks for an older server or first request.
+// Cache policy: complete active-table schema, independent of the current projection. The
+// server returns it in the selected table's cache; the last result's columns cover a cache the
+// client invalidated for an in-flight edit, and the definition columns cover the first request.
 /**
  * Returns the effective columns produced at the active table's terminal boundary.
  *

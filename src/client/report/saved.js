@@ -32,14 +32,11 @@ export function canManageCurrentSaved(w) {
  * Computes the client-side hint for whether the current identity may request report administration.
  *
  * @param {object} w - The report controller containing identity and schema authorization hints.
- * @returns {boolean} Whether any explicit or bootstrap administration path may be available; the server remains authoritative.
+ * @returns {boolean} Whether whoami or the schema hint says the caller administers; the server remains authoritative.
  */
 export function canRequestAdministration(w) {
     return !!w.whoami?.isAdministrator
-        || !!w.schema?.authorization?.mayRequestAdministration
-        || (!!w.whoami?.authenticated
-            && !w.whoami?.administratorListConfigured
-            && !!w.whoami?.applicationAuthorizationConfigured);
+        || !!w.schema?.authorization?.mayRequestAdministration;
 }
 
 /**

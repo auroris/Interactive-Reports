@@ -198,64 +198,19 @@ public static class EndpointExtensions
             .Produces<InteractiveReportUserList>()
             .Produces<InteractiveReportError>(StatusCodes.Status400BadRequest);
         ProtectedApi(
-                group.MapGet("/admin/authorization", AuthorizationEndpoints.List),
-                AdministrationTag,
-                "Get authorization configuration",
-                "Returns configured and database-authored administrator, restriction, and user grants.")
-            .Produces<InteractiveReportAuthorizationState>();
-        ProtectedApi(
-                group.MapPost("/admin/authorization/administrators", AuthorizationEndpoints.GrantAdministrator),
-                AdministrationTag,
-                "Grant administrator access",
-                "Adds a database-authored administrator grant.")
-            .Accepts<AuthorizationIdentityRequest>("application/json")
-            .Produces(StatusCodes.Status204NoContent)
-            .Produces<InteractiveReportError>(StatusCodes.Status400BadRequest);
-        ProtectedApi(
-                group.MapDelete("/admin/authorization/administrators", AuthorizationEndpoints.RevokeAdministrator),
-                AdministrationTag,
-                "Revoke administrator access",
-                "Removes a database-authored administrator grant.")
-            .Accepts<AuthorizationIdentityRequest>("application/json")
-            .Produces(StatusCodes.Status204NoContent)
-            .Produces<InteractiveReportError>(StatusCodes.Status400BadRequest);
-        ProtectedApi(
-                group.MapGet("/admin/authorization/administrators", AuthorizationEndpoints.ListAdministrators),
+                group.MapGet("/admin/administrators", AdministratorEndpoints.List),
                 AdministrationTag,
                 "List administrators",
-                "Returns configured and database-authored administrator identities as two lists.")
+                "Returns the configured and database-authored administrator identities, and whether the "
+                + "application decides administrators itself (in which case both lists are inert).")
             .Produces<InteractiveReportAdministratorList>();
         ProtectedApi(
-                group.MapPut("/admin/authorization/administrators", AuthorizationEndpoints.SetAdministrators),
+                group.MapPut("/admin/administrators", AdministratorEndpoints.Set),
                 AdministrationTag,
                 "Set administrators",
                 "Replaces the database-authored administrator grants with the supplied identity list; "
                 + "configured administrators are unaffected.")
             .Accepts<AuthorizationIdentitiesRequest>("application/json")
-            .Produces(StatusCodes.Status204NoContent)
-            .Produces<InteractiveReportError>(StatusCodes.Status400BadRequest);
-        ProtectedApi(
-                group.MapPut("/admin/authorization/reports/{name}", AuthorizationEndpoints.SetReportRestriction),
-                AdministrationTag,
-                "Set report restriction",
-                "Controls whether the report requires an explicit per-user grant.")
-            .Accepts<ReportRestrictionRequest>("application/json")
-            .Produces(StatusCodes.Status204NoContent)
-            .Produces<InteractiveReportError>(StatusCodes.Status400BadRequest);
-        ProtectedApi(
-                group.MapPost("/admin/authorization/reports/{name}/users", AuthorizationEndpoints.GrantReportUser),
-                AdministrationTag,
-                "Grant report access",
-                "Adds a database-authored user grant for one report.")
-            .Accepts<AuthorizationIdentityRequest>("application/json")
-            .Produces(StatusCodes.Status204NoContent)
-            .Produces<InteractiveReportError>(StatusCodes.Status400BadRequest);
-        ProtectedApi(
-                group.MapDelete("/admin/authorization/reports/{name}/users", AuthorizationEndpoints.RevokeReportUser),
-                AdministrationTag,
-                "Revoke report access",
-                "Removes a database-authored user grant for one report.")
-            .Accepts<AuthorizationIdentityRequest>("application/json")
             .Produces(StatusCodes.Status204NoContent)
             .Produces<InteractiveReportError>(StatusCodes.Status400BadRequest);
         ProtectedApi(

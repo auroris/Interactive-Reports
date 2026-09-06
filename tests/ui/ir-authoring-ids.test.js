@@ -5,6 +5,7 @@ import { translate } from "../../src/client/core/localization.js";
 import { computeDialog, highlightDialog } from "../../src/client/report/dialogs/rules.js";
 import { groupByDialog } from "../../src/client/report/dialogs/view.js";
 import { terminalComposableLocation } from "../../src/client/report/state.js";
+import { reportControlNames } from "../../src/client/report/schema.js";
 
 const window = new Window({ url: "https://host.example/report" });
 function Option(text = "", value = "", defaultSelected = false, selected = false) {
@@ -61,6 +62,7 @@ function widget() {
             },
         },
         schema: {
+            features: [...reportControlNames],
             columns,
             capabilities: {
                 aggregateFunctions: { number: ["sum", "avg"], other: [] },

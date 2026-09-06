@@ -60,10 +60,7 @@ public static class InteractiveReportErrorCodes
     public const string ConfiguredDefaultControlled = "IR-1313";
 
     public const string MalformedAuthorizationRequest = "IR-1400";
-    public const string AuthorizationRestrictionRequired = "IR-1401";
     public const string AuthorizationIdentityInvalid = "IR-1402";
-    public const string ReportRestrictionConflict = "IR-1403";
-    public const string ReportUserGrantConflict = "IR-1404";
     public const string UserSearchInvalid = "IR-1405";
     public const string AuthorizationIdentitiesRequired = "IR-1406";
 
@@ -132,14 +129,8 @@ internal static class InteractiveReportErrorCatalog
             ("Configured default report", "The default report is selected by application configuration and cannot be replaced through the API."),
         InteractiveReportErrorCodes.MalformedAuthorizationRequest =>
             ("Malformed authorization request", "The authorization request is not valid JSON."),
-        InteractiveReportErrorCodes.AuthorizationRestrictionRequired =>
-            ("Restriction value required", "The authorization request must include a restriction value."),
         InteractiveReportErrorCodes.AuthorizationIdentityInvalid =>
             ("Invalid identity", "Enter an identity between 1 and 400 characters."),
-        InteractiveReportErrorCodes.ReportRestrictionConflict =>
-            ("Report authorization conflict", "Anonymous and administrators-only reports cannot use user restrictions."),
-        InteractiveReportErrorCodes.ReportUserGrantConflict =>
-            ("Report authorization conflict", "Anonymous and administrators-only reports cannot have user grants."),
         InteractiveReportErrorCodes.UserSearchInvalid =>
             ("Invalid user search", "Enter search text of at most 200 characters."),
         InteractiveReportErrorCodes.AuthorizationIdentitiesRequired =>
@@ -198,15 +189,21 @@ public sealed record InteractiveReportLimits(
 /// </summary>
 public sealed record InteractiveReportAuthorizationHint(bool MayRequestAdministration);
 
-/// <summary>Reports the current caller identity and authorization bootstrap diagnostics.</summary>
+/// <summary>Reports the current caller identity and administrator bootstrap diagnostics.</summary>
+/// <param name="Authenticated">Whether the caller is authenticated.</param>
+/// <param name="Identity">The canonical identity value, exactly as ownership and the administrator list use it.</param>
+/// <param name="IsAdministrator">Whether the caller administers Interactive Reports.</param>
+/// <param name="AdministratorSource">The source that granted administrator authority, or <c>none</c>.</param>
+/// <param name="AdministratorsManagedByApplication">Whether the application decides administrators, leaving the configured list and database grants inert.</param>
+/// <param name="Name">The principal's name claim, when any.</param>
+/// <param name="AuthenticationType">The authentication scheme that produced the principal.</param>
+/// <param name="Claims">Every claim on the principal, for diagnosing identity resolution.</param>
 public sealed record InteractiveReportIdentity(
     bool Authenticated,
     string? Identity,
     bool IsAdministrator,
-    bool ConfiguredAdministrator,
-    bool DatabaseAdministrator,
-    bool AdministratorListConfigured,
-    bool ApplicationAuthorizationConfigured,
+    InteractiveReportAdministratorSource AdministratorSource,
+    bool AdministratorsManagedByApplication,
     string? Name,
     string? AuthenticationType,
     IReadOnlyList<InteractiveReportClaim> Claims);
@@ -275,13 +272,6 @@ public sealed record SavedReportSummary(
 /// <summary>Contains a saved report's metadata and report-state document.</summary>
 public sealed record SavedReportDocument(SavedReportSummary Summary, JsonElement State);
 
-/// <summary>Supplies an identity for an administrator or per-report authorization grant.</summary>
-public sealed class AuthorizationIdentityRequest
-{
-    /// <summary>Gets or sets the normalized application identity to add or remove.</summary>
-    public string? Identity { get; set; }
-}
-
 /// <summary>Supplies the complete database-authored administrator identity list.</summary>
 public sealed class AuthorizationIdentitiesRequest
 {
@@ -289,33 +279,11 @@ public sealed class AuthorizationIdentitiesRequest
     public List<string?>? Identities { get; set; }
 }
 
-/// <summary>Changes whether a report requires an explicit per-user grant.</summary>
-public sealed class ReportRestrictionRequest
-{
-    /// <summary>Gets or sets the required restricted state.</summary>
-    public bool? Restricted { get; set; }
-}
-
-/// <summary>Lists configured and database-authored administrator identities.</summary>
+/// <summary>Lists configured and database-authored administrator identities and who decides them.</summary>
 /// <param name="Configured">Source-controlled identities from <c>InteractiveReport:Administrators</c>; read-only here.</param>
 /// <param name="Database">Identities granted through the administration center.</param>
+/// <param name="ManagedByApplication">Whether the application decides administrators, in which case both lists are inert and the editor is pointless.</param>
 public sealed record InteractiveReportAdministratorList(
     IReadOnlyList<string> Configured,
-    IReadOnlyList<string> Database);
-
-/// <summary>Combines configured and database-authored authorization state for administration.</summary>
-public sealed record InteractiveReportAuthorizationState(
-    IReadOnlyList<string> ConfiguredAdministrators,
-    IReadOnlyList<string> DatabaseAdministrators,
-    IReadOnlyList<InteractiveReportAuthorizationReport> Reports);
-
-/// <summary>Combines authorization settings and grants for one configured report.</summary>
-public sealed record InteractiveReportAuthorizationReport(
-    string Name,
-    string Title,
-    bool Restricted,
-    bool ConfiguredRestricted,
-    bool DatabaseRestricted,
-    bool CanRestrict,
-    IReadOnlyList<string> ConfiguredUsers,
-    IReadOnlyList<string> DatabaseUsers);
+    IReadOnlyList<string> Database,
+    bool ManagedByApplication);

@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
 import { reportState } from "./report-state-fixture.js";
+import { reportControlNames } from "../../src/client/report/schema.js";
 
 const window = new Window({ url: "https://host.example/dashboard" });
 function Option(text = "", value = "", defaultSelected = false, selected = false) {
@@ -72,6 +73,7 @@ globalThis.fetch = (url, options = {}) => {
             },
             limits: { defaultPageSize: 25, maxPageSize: 100 },
             columns: [{ name: "ID", label: "ID", type: "number" }],
+            features: [...reportControlNames],
             capabilities: { aggregateFunctions: {}, expressionFunctions: [] },
         }));
     }
@@ -598,21 +600,17 @@ test("a saved report deleted elsewhere reports precisely and refreshes the list"
     savedReports = [];
 });
 
-test("a saved report with a stale recorded schema is adopted — the server is the judge", async () => {
+test("a saved report with a stale schema cache is adopted — the server is the judge", async () => {
     requests.length = 0;
     savedReports = [{
         id: "stale-1", reportName: "orders", title: "Stale",
         isGlobal: false, owner: "test-user", mine: true,
     }];
-    savedDocuments = new Map([["stale-1", {
-        summary: savedReports[0],
-        state: {
-            schema: { GONE: "number" },   // authored against a schema that moved on
-            search: "Acme",
-            page: { index: 1, size: 25 },
-            ...reportState(),
-        },
-    }]]);
+    // The cache was recorded against a schema that has since moved on. The client never judges
+    // drift: it runs the document as recorded and adopts whatever the server answers.
+    const state = { search: "Acme", page: { index: 1, size: 25 }, ...reportState() };
+    state.tables.base.schema = [{ name: "GONE", label: "Gone", type: "number" }];
+    savedDocuments = new Map([["stale-1", { summary: savedReports[0], state }]]);
     const report = await mount();
 
     const select = report.shadowRoot.querySelector(".ir-saved-select");
@@ -624,10 +622,9 @@ test("a saved report with a stale recorded schema is adopted — the server is t
     assert.equal(errorText(report), "", "no client-side drift gate — the document runs");
     assert.equal(savedSelect(report).value, "stale-1");
     assert.equal(report.getReportDocument().search, "Acme");
-    assert.equal("schema" in report.getReportDocument(), false,
-        "the retired snapshot key is dropped on adoption");
     const posted = JSON.parse(requests.filter(r => r.url.endsWith("/query")).at(-1).body);
-    assert.equal("schema" in posted, false, "and never travels back to the server");
+    assert.deepEqual(posted.tables.base.schema.map(column => column.name), ["GONE"],
+        "the recorded cache travels to the server untouched; the server refreshes what it rejects");
 
     report.remove();
     savedReports = [];

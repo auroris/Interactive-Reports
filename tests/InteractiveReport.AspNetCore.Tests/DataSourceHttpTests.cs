@@ -94,6 +94,8 @@ public sealed class DataSourceHttpTests : IAsyncLifetime
         });
         builder.Configuration.AddJsonFile(_mutableConfigPath, optional: false, reloadOnChange: false);
 
+        builder.Services.AddAuthorization(options =>
+            options.AddPolicy("NeverAllowed", policy => policy.RequireAssertion(_ => false)));
         builder.Services
             .AddInteractiveReports(builder.Configuration)
             .AddConnection("SniffedDb", _ => new SqliteConnection(connectionString))
@@ -132,7 +134,10 @@ public sealed class DataSourceHttpTests : IAsyncLifetime
     private static string MutableConfig(
         string dataSource,
         bool allowAnonymous = true,
-        bool restricted = false) => $$"""
+        string? policy = null)
+    {
+        var policyEntry = policy is null ? "" : ", \"policy\": \"" + policy + "\"";
+        return $$"""
         {
           "InteractiveReport": {
             "Reports": {
@@ -140,14 +145,14 @@ public sealed class DataSourceHttpTests : IAsyncLifetime
                 "dataSource": "{{dataSource}}",
                 "sql": "SELECT ID, LABEL FROM IR_DS_TEST",
                 "authorization": {
-                  "allowAnonymous": {{allowAnonymous.ToString().ToLowerInvariant()}},
-                  "restricted": {{restricted.ToString().ToLowerInvariant()}}
+                  "allowAnonymous": {{allowAnonymous.ToString().ToLowerInvariant()}}{{policyEntry}}
                 }
               }
             }
           }
         }
         """;
+    }
 
     [Theory]
     [InlineData("literal")]
@@ -255,12 +260,12 @@ public sealed class DataSourceHttpTests : IAsyncLifetime
             "/api/reports/mutable/query", JsonContent.Create(new { v = 3 }));
         Assert.Equal(HttpStatusCode.OK, before.StatusCode);
 
-        // Both changes arrive in one reload. The report is now protected and its
-        // executable connection is invalid; authentication must win before connection
-        // resolution attempts to hydrate the definition.
+        // Both changes arrive in one reload. The report now names a policy that denies this
+        // caller and its executable connection is invalid; the report-level gate must win before
+        // connection resolution attempts to hydrate the definition.
         await File.WriteAllTextAsync(
             _mutableConfigPath,
-            MutableConfig("GhostDb", allowAnonymous: false, restricted: true));
+            MutableConfig("GhostDb", allowAnonymous: false, policy: "NeverAllowed"));
         ((IConfigurationRoot)_app!.Services.GetRequiredService<IConfiguration>()).Reload();
 
         using var denied = await _client.PostAsync(

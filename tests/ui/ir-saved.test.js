@@ -12,32 +12,15 @@ test("saved-title equality is case-insensitive and Unicode-normalization aware",
     assert.equal(sameTitle(null, "Quarterly Café"), false);
 });
 
-test("administration controls are only hints for eligible authorization modes", () => {
+test("administration controls are only hints, taken from whoami or the schema", () => {
     assert.equal(canRequestAdministration({ whoami: { isAdministrator: true } }), true);
-    assert.equal(canRequestAdministration({
-        whoami: {
-            authenticated: true,
-            administratorListConfigured: false,
-            applicationAuthorizationConfigured: true,
-        },
-    }), true);
     assert.equal(canRequestAdministration({
         schema: { authorization: { mayRequestAdministration: true } },
     }), true);
     assert.equal(canRequestAdministration({
-        whoami: {
-            authenticated: true,
-            administratorListConfigured: true,
-            applicationAuthorizationConfigured: true,
-        },
+        whoami: { authenticated: true, isAdministrator: false, administratorsManagedByApplication: true },
     }), false);
-    assert.equal(canRequestAdministration({
-        whoami: {
-            authenticated: false,
-            administratorListConfigured: false,
-            applicationAuthorizationConfigured: true,
-        },
-    }), false);
+    assert.equal(canRequestAdministration({ whoami: null, schema: { authorization: {} } }), false);
 });
 
 test("owners can manage their published report without controlling publication flags", () => {

@@ -124,9 +124,11 @@ public sealed partial class ConfigurationReportDefinitionStore :
             if (_synchronizer is null)
                 return ValueTask.FromResult<ReportDefinitionAuthorization?>(null);
 
+            // The listing carries no configured block: the authorization service recognizes the
+            // reserved name and admits administrators only.
             return ValueTask.FromResult<ReportDefinitionAuthorization?>(new(
                 SavedReportsListingDefinition.Name,
-                new ReportAuthorization { AdministratorsOnly = true }));
+                null));
         }
 
         var reports = _options.CurrentValue.Reports;
@@ -152,9 +154,6 @@ public sealed partial class ConfigurationReportDefinitionStore :
             {
                 Policy = source.Policy,
                 AllowAnonymous = source.AllowAnonymous,
-                Restricted = source.Restricted,
-                Users = source.Users is null ? [] : [.. source.Users],
-                AdministratorsOnly = source.AdministratorsOnly,
             };
 
     /// <summary>
@@ -222,34 +221,6 @@ public sealed partial class ConfigurationReportDefinitionStore :
         if (def.Authorization is { AllowAnonymous: true, Policy: not null })
             throw new InvalidOperationException(
                 $"Report '{def.Name}': authorization policy cannot be combined with allowAnonymous.");
-        if (def.Authorization is { AllowAnonymous: true, AdministratorsOnly: true })
-            throw new InvalidOperationException(
-                $"Report '{def.Name}': authorization cannot be both allowAnonymous and administratorsOnly.");
-        if (def.Authorization is { AllowAnonymous: true, Restricted: true })
-            throw new InvalidOperationException(
-                $"Report '{def.Name}': authorization cannot be both allowAnonymous and restricted.");
-        if (def.Authorization is { AdministratorsOnly: true, Restricted: true })
-            throw new InvalidOperationException(
-                $"Report '{def.Name}': authorization cannot be both administratorsOnly and restricted.");
-        if (def.Authorization is { Users: null })
-            throw new InvalidOperationException(
-                $"Report '{def.Name}': authorization users must be an array, not null.");
-        if (def.Authorization is { Users.Count: > 0 } reportAuthorization)
-        {
-            if (reportAuthorization.AllowAnonymous)
-                throw new InvalidOperationException(
-                    $"Report '{def.Name}': authorization users cannot be combined with allowAnonymous.");
-            if (reportAuthorization.AdministratorsOnly)
-                throw new InvalidOperationException(
-                    $"Report '{def.Name}': authorization users cannot be combined with administratorsOnly.");
-            if (reportAuthorization.Users.Any(string.IsNullOrWhiteSpace))
-                throw new InvalidOperationException(
-                    $"Report '{def.Name}': authorization users must be non-empty identity values.");
-            if (reportAuthorization.Users.Select(user => user.Trim())
-                .Distinct(StringComparer.Ordinal).Count() != reportAuthorization.Users.Count)
-                throw new InvalidOperationException(
-                    $"Report '{def.Name}': authorization users contain duplicate identity values.");
-        }
         if (string.IsNullOrWhiteSpace(def.Sql))
             throw new InvalidOperationException($"Report '{def.Name}': sql is required.");
 

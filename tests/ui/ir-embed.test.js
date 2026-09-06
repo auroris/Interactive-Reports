@@ -3,6 +3,7 @@ import test from "node:test";
 import { Window } from "happy-dom";
 import { inputComposableLocation } from "../../src/client/report/state.js";
 import { reportState } from "./report-state-fixture.js";
+import { reportControlNames } from "../../src/client/report/schema.js";
 
 const window = new Window({ url: "https://host.example/dashboard" });
 function Option(text = "", value = "", defaultSelected = false, selected = false) {
@@ -48,6 +49,7 @@ globalThis.fetch = async (url, options = {}) => {
             },
             limits: { defaultPageSize: 25, maxPageSize: 100 },
             columns: [{ name: "ID", label: "ID", type: "number" }],
+            features: [...reportControlNames],
             capabilities: { aggregateFunctions: {}, expressionFunctions: [] },
         });
     }

@@ -240,14 +240,6 @@ public sealed class LoggingHttpTests
                 ["InteractiveReport:Reports:authonly:Connection"] = "Data",
                 ["InteractiveReport:Reports:authonly:Dialect"] = "Sqlite",
                 ["InteractiveReport:Reports:authonly:Sql"] = "SELECT ID, LABEL FROM LOG_AUTH",
-                ["InteractiveReport:Reports:adminonly:Connection"] = "Data",
-                ["InteractiveReport:Reports:adminonly:Dialect"] = "Sqlite",
-                ["InteractiveReport:Reports:adminonly:Sql"] = "SELECT ID, LABEL FROM LOG_AUTH",
-                ["InteractiveReport:Reports:adminonly:Authorization:AdministratorsOnly"] = "true",
-                ["InteractiveReport:Reports:restricted:Connection"] = "Data",
-                ["InteractiveReport:Reports:restricted:Dialect"] = "Sqlite",
-                ["InteractiveReport:Reports:restricted:Sql"] = "SELECT ID, LABEL FROM LOG_AUTH",
-                ["InteractiveReport:Reports:restricted:Authorization:Restricted"] = "true",
                 ["InteractiveReport:SavedReports:Connection"] = "Data",
             });
             builder.Services
@@ -265,7 +257,7 @@ public sealed class LoggingHttpTests
             using var unauth = await client.GetAsync("/api/reports/authonly/schema");
             Assert.Equal(HttpStatusCode.Unauthorized, unauth.StatusCode);
 
-            using var adminUnauth = await client.GetAsync("/api/reports/adminonly/schema");
+            using var adminUnauth = await client.GetAsync("/api/reports/__saved-reports/schema");
             Assert.Equal(HttpStatusCode.Unauthorized, adminUnauth.StatusCode);
 
             Assert.Contains(logger.Events, item =>
@@ -274,7 +266,7 @@ public sealed class LoggingHttpTests
 
             Assert.Contains(logger.Events, item =>
                 item.Level == LogLevel.Debug
-                && item.Message.Contains("Access denied for report 'adminonly': caller is not authenticated for administrators-only report", StringComparison.Ordinal));
+                && item.Message.Contains("Access denied for report '__saved-reports': caller is not authenticated for the administrators-only listing", StringComparison.Ordinal));
         }
         finally
         {
@@ -321,9 +313,6 @@ public sealed class LoggingHttpTests
                 ["InteractiveReport:Reports:demo:Dialect"] = "Sqlite",
                 ["InteractiveReport:Reports:demo:Sql"] = "SELECT ID, LABEL FROM LIFE_ROWS",
                 ["InteractiveReport:Reports:demo:Authorization:AllowAnonymous"] = "true",
-                ["InteractiveReport:Reports:restricted_demo:Connection"] = "Data",
-                ["InteractiveReport:Reports:restricted_demo:Dialect"] = "Sqlite",
-                ["InteractiveReport:Reports:restricted_demo:Sql"] = "SELECT ID, LABEL FROM LIFE_ROWS",
                 ["InteractiveReport:SavedReports:Connection"] = "Data",
             });
             builder.Services
@@ -374,21 +363,14 @@ public sealed class LoggingHttpTests
             var deleted = await server.DeleteDocument(newId, context);
             Assert.Null(deleted.Failure);
 
-            // 6. Admin mutations
-            var grantAdmin = await server.GrantAdministrator(_ => Task.FromResult<string?>("new-admin"), context);
-            Assert.Null(grantAdmin.Failure);
+            // 6. Administrator list mutations
+            var granted = await server.SetAdministrators(
+                _ => Task.FromResult<IReadOnlyCollection<string?>?>(["new-admin"]), context);
+            Assert.Null(granted.Failure);
 
-            var revokeAdmin = await server.RevokeAdministrator(_ => Task.FromResult<string?>("new-admin"), context);
-            Assert.Null(revokeAdmin.Failure);
-
-            var setRestricted = await server.SetReportRestriction("restricted_demo", _ => Task.FromResult<bool?>(true), context);
-            Assert.Null(setRestricted.Failure);
-
-            var grantUser = await server.GrantReportUser("restricted_demo", _ => Task.FromResult<string?>("allowed-user"), context);
-            Assert.Null(grantUser.Failure);
-
-            var revokeUser = await server.RevokeReportUser("restricted_demo", _ => Task.FromResult<string?>("allowed-user"), context);
-            Assert.Null(revokeUser.Failure);
+            var revoked = await server.SetAdministrators(
+                _ => Task.FromResult<IReadOnlyCollection<string?>?>([]), context);
+            Assert.Null(revoked.Failure);
 
             // Assertions on log events
             Assert.Contains(logger.Events, item =>
@@ -411,16 +393,11 @@ public sealed class LoggingHttpTests
 
             Assert.Contains(logger.Events, item =>
                 item.Level == LogLevel.Information
-                && item.Message.Contains("Administrative authorization mutation", StringComparison.Ordinal)
-                && item.Message.Contains("new-admin", StringComparison.Ordinal));
+                && item.Message.Contains("Replaced database administrators: 1 granted, 0 revoked, 1 listed", StringComparison.Ordinal));
 
             Assert.Contains(logger.Events, item =>
                 item.Level == LogLevel.Information
-                && item.Message.Contains("Set report restriction for report 'restricted_demo' to True", StringComparison.Ordinal));
-
-            Assert.Contains(logger.Events, item =>
-                item.Level == LogLevel.Information
-                && item.Message.Contains("Updated user grant on report 'restricted_demo' for identity 'allowed-user'", StringComparison.Ordinal));
+                && item.Message.Contains("Replaced database administrators: 0 granted, 1 revoked, 0 listed", StringComparison.Ordinal));
         }
         finally
         {

@@ -51,13 +51,13 @@ public static class ServiceCollectionExtensions
             sp,
             sp.GetRequiredService<IConfiguration>()));
         services.AddSingleton<IReportConnectionFactory>(sp => sp.GetRequiredService<ReportConnectionRegistry>());
-        services.AddSingleton<IReportAuthorizationStore>(sp => new SqlReportAuthorizationStore(
+        services.AddSingleton<IAdministratorStore>(sp => new SqlAdministratorStore(
             () =>
             {
                 var options = sp.GetRequiredService<IOptionsMonitor<InteractiveReportOptions>>().CurrentValue;
                 var saved = sp.GetRequiredService<ReportConnectionRegistry>()
                     .ResolveStoreConfig(options.SavedReports);
-                return new ReportAuthorizationStoreConfig(
+                return new AdministratorStoreConfig(
                     saved.ConnectionName,
                     saved.Dialect,
                     saved.AutoCreate,
@@ -66,7 +66,7 @@ public static class ServiceCollectionExtensions
                         options.Authorization.TableName));
             },
             sp.GetRequiredService<IReportConnectionFactory>(),
-            logging.For<SqlReportAuthorizationStore>()));
+            logging.For<SqlAdministratorStore>()));
         services.AddSingleton<IReportDefinitionStore>(sp => new ConfigurationReportDefinitionStore(
             sp.GetRequiredService<IOptionsMonitor<InteractiveReportOptions>>(),
             sp.GetRequiredService<SchemaCache>(),
@@ -249,9 +249,34 @@ public sealed class InteractiveReportBuilder
     }
 
     /// <summary>
+    /// Makes the application the authority on who administers Interactive Reports. While the
+    /// callback is registered, <c>InteractiveReport:Administrators</c>,
+    /// <c>InteractiveReport:AdministratorPolicy</c>, and the administration center's database
+    /// grants are ignored; the callback is never asked about an unauthenticated caller. Operation
+    /// authorizers registered with UseAuthorization keep their veto over an administrator's actions.
+    /// </summary>
+    /// <param name="callback">The host callback that answers the administrator question.</param>
+    /// <returns>This builder for further registration.</returns>
+    /// <remarks>Replaces any previously registered administrator callback.</remarks>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="callback"/> is <see langword="null"/>.</exception>
+    /// <example>
+    /// <code><![CDATA[
+    /// reports.UseAdministrators((request, ct) =>
+    ///     ValueTask.FromResult(request.User.IsInRole("ReportAdministrators")));
+    /// ]]></code>
+    /// </example>
+    public InteractiveReportBuilder UseAdministrators(InteractiveReportAdministratorCallback callback)
+    {
+        ArgumentNullException.ThrowIfNull(callback);
+        _services.Replace(ServiceDescriptor.Singleton<IInteractiveReportAdministrators>(
+            new CallbackInteractiveReportAdministrators(callback)));
+        return this;
+    }
+
+    /// <summary>
     /// Adds an application authorization callback. Multiple callbacks and the native
-    /// ASP.NET Core adapter compose with AND semantics. Built-in ownership and configured-administrator
-    /// rules remain in force.
+    /// ASP.NET Core adapter compose with AND semantics: they narrow what the built-in ownership
+    /// and administrator rules allow and never widen it.
     /// </summary>
     /// <param name="callback">The host callback invoked for each protected operation.</param>
     /// <returns>This builder for further registration.</returns>

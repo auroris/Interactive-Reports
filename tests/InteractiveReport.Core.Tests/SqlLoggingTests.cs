@@ -80,18 +80,18 @@ public sealed class SqlLoggingTests
             Assert.DoesNotContain("private", message);
         });
 
-        var authorizationLogger = new CapturingLogger<SqlReportAuthorizationStore>(LogLevel.Debug);
-        var authorization = new SqlReportAuthorizationStore(
-            () => new ReportAuthorizationStoreConfig("logging", ReportDialect.Sqlite),
+        var administratorLogger = new CapturingLogger<SqlAdministratorStore>(LogLevel.Debug);
+        var administrators = new SqlAdministratorStore(
+            () => new AdministratorStoreConfig("logging", ReportDialect.Sqlite),
             connections,
-            authorizationLogger);
-        await authorization.GrantAdministrator(sensitiveIdentity);
+            administratorLogger);
+        await administrators.Grant(sensitiveIdentity);
 
         Assert.Contains(
-            authorizationLogger.Messages,
-            message => message.Contains("IR_REPORT_AUTHORIZATION", StringComparison.Ordinal));
+            administratorLogger.Messages,
+            message => message.Contains("IR_ADMINISTRATORS", StringComparison.Ordinal));
         Assert.All(
-            authorizationLogger.Messages,
+            administratorLogger.Messages,
             message => Assert.DoesNotContain(sensitiveIdentity, message));
     }
 

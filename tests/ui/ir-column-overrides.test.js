@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
 import { reportState } from "./report-state-fixture.js";
+import { reportControlNames } from "../../src/client/report/schema.js";
 
 const window = new Window({ url: "https://host.example/dashboard" });
 function Option(text = "", value = "", defaultSelected = false, selected = false) {
@@ -45,6 +46,7 @@ globalThis.fetch = async url => {
                 { name: "LABEL", label: "Label", type: "text" },
                 { name: "NOTES", label: "Notes", type: "text" },
             ],
+            features: [...reportControlNames],
             capabilities: { aggregateFunctions: {}, expressionFunctions: [] },
             editLink: { urlTemplate: "/rows/{ID}/edit", label: "Edit row", target: "_self" },
             createLink: { url: "/rows/new", label: "New row", target: "_self", mode: "navigate" },

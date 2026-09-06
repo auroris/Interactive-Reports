@@ -313,18 +313,18 @@ public sealed class ConfigurationReportDefinitionStoreTests
             Connection = "db",
             Dialect = ReportDialect.Sqlite,
             Sql = "select 1",
-            Authorization = new ReportAuthorization { AllowAnonymous = true, AdministratorsOnly = true },
+            Authorization = new ReportAuthorization { AllowAnonymous = true, Policy = "Readers" },
         };
         using var conflicted = new ConfigurationReportDefinitionStore(
             new OptionsMonitorStub(contradictory),
             new SchemaCache(), TestRegistry());
         var conflict = await Assert.ThrowsAsync<InvalidOperationException>(
             async () => await conflicted.Find("orders"));
-        Assert.Contains("allowAnonymous and administratorsOnly", conflict.Message);
+        Assert.Contains("policy cannot be combined with allowAnonymous", conflict.Message);
     }
 
     [Fact]
-    public void Named_user_authorization_rejects_conflicting_or_ambiguous_configuration()
+    public void Report_authorization_accepts_a_policy_only_on_a_report_that_needs_authentication()
     {
         static ReportDefinition Definition(ReportAuthorization authorization) => new()
         {
@@ -335,39 +335,8 @@ public sealed class ConfigurationReportDefinitionStoreTests
             Authorization = authorization,
         };
 
-        ConfigurationReportDefinitionStore.Validate(Definition(new ReportAuthorization
-        {
-            Restricted = true,
-            Users = ["alice", "bob"],
-        }));
-
-        var anonymous = Assert.Throws<InvalidOperationException>(() =>
-            ConfigurationReportDefinitionStore.Validate(Definition(new ReportAuthorization
-            {
-                AllowAnonymous = true,
-                Restricted = true,
-            })));
-        Assert.Contains("allowAnonymous and restricted", anonymous.Message);
-
-        var administrators = Assert.Throws<InvalidOperationException>(() =>
-            ConfigurationReportDefinitionStore.Validate(Definition(new ReportAuthorization
-            {
-                AdministratorsOnly = true,
-                Users = ["alice"],
-            })));
-        Assert.Contains("users cannot be combined with administratorsOnly", administrators.Message);
-
-        ConfigurationReportDefinitionStore.Validate(Definition(new ReportAuthorization
-        {
-            Users = ["alice", "ALICE"],
-        }));
-
-        var duplicates = Assert.Throws<InvalidOperationException>(() =>
-            ConfigurationReportDefinitionStore.Validate(Definition(new ReportAuthorization
-            {
-                Users = ["alice", " alice "],
-            })));
-        Assert.Contains("duplicate identity", duplicates.Message);
+        ConfigurationReportDefinitionStore.Validate(Definition(new ReportAuthorization { Policy = "CanQuery" }));
+        ConfigurationReportDefinitionStore.Validate(Definition(new ReportAuthorization { AllowAnonymous = true }));
 
         var policyWithAnonymous = Assert.Throws<InvalidOperationException>(() =>
             ConfigurationReportDefinitionStore.Validate(Definition(new ReportAuthorization
@@ -407,8 +376,8 @@ public sealed class ConfigurationReportDefinitionStoreTests
         Assert.Equal("__saved-reports", definition.Name);
         Assert.Equal("ReportsDb", definition.Connection);
         Assert.Equal(ReportDialect.Sqlite, definition.Dialect);
-        Assert.True(definition.Authorization!.AdministratorsOnly);
-        Assert.False(definition.Authorization.AllowAnonymous);
+        // The reserved name, not a configured block, is what makes the listing administrators-only.
+        Assert.Null(definition.Authorization);
         Assert.Null(definition.Features);
 
         var table = definition.DefaultState!.Tables![definition.DefaultState.ActiveTable!];

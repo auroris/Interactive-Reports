@@ -27,11 +27,14 @@ public sealed class InteractiveReportAuthorizationHttpTests
     {
         var seen = new ConcurrentQueue<InteractiveReportAction>();
         await using var host = await Start((reports, _) =>
+        {
+            reports.UseAdministrators((_, _) => ValueTask.FromResult(true));
             reports.UseAuthorization((request, _) =>
             {
                 seen.Enqueue(request.Action);
                 return ValueTask.FromResult(true);
-            }));
+            });
+        });
 
         using var schemaResponse = await host.Client.SendAsync(Request(
             HttpMethod.Get, "/api/reports/orders/schema", "action-admin"));
@@ -99,62 +102,180 @@ public sealed class InteractiveReportAuthorizationHttpTests
         using var users = await host.Client.SendAsync(Request(
             HttpMethod.Get, "/api/reports/admin/users", "action-admin"));
         Assert.Equal(HttpStatusCode.OK, users.StatusCode);
-        using var authorization = await host.Client.SendAsync(Request(
-            HttpMethod.Get, "/api/reports/admin/authorization", "action-admin"));
-        Assert.Equal(HttpStatusCode.OK, authorization.StatusCode);
-        using var grantAdministrator = await host.Client.SendAsync(Request(
-            HttpMethod.Post,
-            "/api/reports/admin/authorization/administrators",
-            "action-admin",
-            new { identity = "action-admin" }));
-        Assert.Equal(HttpStatusCode.NoContent, grantAdministrator.StatusCode);
         using var listAdministrators = await host.Client.SendAsync(Request(
-            HttpMethod.Get, "/api/reports/admin/authorization/administrators", "action-admin"));
+            HttpMethod.Get, "/api/reports/admin/administrators", "action-admin"));
         Assert.Equal(HttpStatusCode.OK, listAdministrators.StatusCode);
         using var setAdministrators = await host.Client.SendAsync(Request(
             HttpMethod.Put,
-            "/api/reports/admin/authorization/administrators",
+            "/api/reports/admin/administrators",
             "action-admin",
-            new { identities = new[] { "action-admin", "second-admin" } }));
+            new { identities = new[] { "second-admin" } }));
         Assert.Equal(HttpStatusCode.NoContent, setAdministrators.StatusCode);
-        using var restriction = await host.Client.SendAsync(Request(
-            HttpMethod.Put,
-            "/api/reports/admin/authorization/reports/orders",
-            "action-admin",
-            new { restricted = false }));
-        Assert.Equal(HttpStatusCode.NoContent, restriction.StatusCode);
-        using var grantUser = await host.Client.SendAsync(Request(
-            HttpMethod.Post,
-            "/api/reports/admin/authorization/reports/orders/users",
-            "action-admin",
-            new { identity = "report-user" }));
-        Assert.Equal(HttpStatusCode.BadRequest, grantUser.StatusCode);
-        using var revokeUser = await host.Client.SendAsync(Request(
-            HttpMethod.Delete,
-            "/api/reports/admin/authorization/reports/orders/users",
-            "action-admin",
-            new { identity = "report-user" }));
-        Assert.Equal(HttpStatusCode.BadRequest, revokeUser.StatusCode);
-        using var revokeAdministrator = await host.Client.SendAsync(Request(
-            HttpMethod.Delete,
-            "/api/reports/admin/authorization/administrators",
-            "action-admin",
-            new { identity = "action-admin" }));
-        Assert.Equal(HttpStatusCode.NoContent, revokeAdministrator.StatusCode);
 
         Assert.Equal(
             Enum.GetValues<InteractiveReportAction>().Order(),
             seen.Distinct().Order());
-        Assert.Equal(8, seen.Count(action => action == InteractiveReportAction.ManageAuthorization));
+        Assert.Equal(2, seen.Count(action => action == InteractiveReportAction.ManageAdministrators));
+    }
+
+    [Fact]
+    public async Task Operation_authorizers_cannot_grant_administration_but_the_administrator_callback_can()
+    {
+        // An affirmative operation authorizer alone never makes anyone an administrator.
+        await using (var narrowingOnly = await Start((reports, _) =>
+            reports.UseAuthorization((_, _) => ValueTask.FromResult(true))))
+        {
+            using var save = await narrowingOnly.Client.SendAsync(Request(
+                HttpMethod.Post,
+                $"/api/reports/{narrowingOnly.OrdersId}/saved",
+                "callback-admin",
+                new { title = "Published", isGlobal = true, state = new { } }));
+            Assert.Equal(HttpStatusCode.Forbidden, save.StatusCode);
+            using var listing = await narrowingOnly.Client.SendAsync(Request(
+                HttpMethod.Get,
+                $"/api/reports/{SavedReportsListingDefinition.Name}/schema",
+                "callback-admin"));
+            Assert.Equal(HttpStatusCode.NotFound, listing.StatusCode);
+        }
+
+        var seen = new ConcurrentQueue<InteractiveReportAuthorizationRequest>();
+        await using var host = await Start((reports, _) =>
+        {
+            reports.UseAdministrators((request, _) => ValueTask.FromResult(
+                request.User.FindFirstValue(ClaimTypes.NameIdentifier) == "callback-admin"));
+            reports.UseAuthorization((request, _) =>
+            {
+                seen.Enqueue(request);
+                return ValueTask.FromResult(true);
+            });
+        });
+
+        using var published = await host.Client.SendAsync(Request(
+            HttpMethod.Post,
+            $"/api/reports/{host.OrdersId}/saved",
+            "callback-admin",
+            new { title = "Published", isGlobal = true, state = new { } }));
+
+        Assert.Equal(HttpStatusCode.Created, published.StatusCode);
+        var calls = seen.ToArray();
+        Assert.Equal(
+            [
+                InteractiveReportAction.ReadSavedReport,
+                InteractiveReportAction.CreateSavedReport,
+                InteractiveReportAction.PublishGlobalReport,
+            ],
+            calls.Select(call => call.Action).ToArray());
+        Assert.All(calls, call =>
+        {
+            Assert.Equal("callback-admin", call.User.FindFirstValue(ClaimTypes.NameIdentifier));
+            Assert.Equal("orders", call.Resource.ReportName);
+            Assert.Equal("Published", call.Resource.Candidate!.Title);
+            Assert.True(call.Resource.Candidate.Public);
+            Assert.True(call.Resource.Candidate.StateChanged);
+            Assert.NotNull(call.Resource.Candidate.State);
+        });
+
+        using var adminListing = await host.Client.SendAsync(Request(
+            HttpMethod.Get,
+            $"/api/reports/{SavedReportsListingDefinition.Name}/schema",
+            "callback-admin"));
+        Assert.Equal(HttpStatusCode.OK, adminListing.StatusCode);
+        Assert.Contains(seen, call => call.Action == InteractiveReportAction.ListAllSavedReports);
+        using var outsiderListing = await host.Client.SendAsync(Request(
+            HttpMethod.Get,
+            $"/api/reports/{SavedReportsListingDefinition.Name}/schema",
+            "someone-else"));
+        Assert.Equal(HttpStatusCode.NotFound, outsiderListing.StatusCode);
+    }
+
+    [Fact]
+    public async Task The_administrator_callback_is_the_authority_and_the_fallback_lists_are_inert()
+    {
+        var asked = new ConcurrentQueue<string?>();
+        await using var host = await Start(
+            (reports, _) => reports.UseAdministrators((request, _) =>
+            {
+                asked.Enqueue(request.User.FindFirstValue(ClaimTypes.NameIdentifier));
+                return ValueTask.FromResult(request.User.IsInRole("admins"));
+            }),
+            administrators: ["configured-admin"]);
+
+        // The configured administrator is not one while the application answers the question.
+        using var configured = await host.Client.SendAsync(Request(
+            HttpMethod.Get, $"/api/reports/{SavedReportsListingDefinition.Name}/schema", "configured-admin"));
+        Assert.Equal(HttpStatusCode.NotFound, configured.StatusCode);
+        using var configuredWhoami = await host.Client.SendAsync(Request(
+            HttpMethod.Get, "/api/reports/whoami", "configured-admin"));
+        var configuredIdentity = await ReadJson(configuredWhoami);
+        Assert.False(configuredIdentity.GetProperty("isAdministrator").GetBoolean());
+        Assert.Equal("none", configuredIdentity.GetProperty("administratorSource").GetString());
+        Assert.True(configuredIdentity.GetProperty("administratorsManagedByApplication").GetBoolean());
+
+        using var hooked = await host.Client.SendAsync(Request(
+            HttpMethod.Get, $"/api/reports/{SavedReportsListingDefinition.Name}/schema", "hooked-admin", roles: ["admins"]));
+        Assert.Equal(HttpStatusCode.OK, hooked.StatusCode);
+        using var hookedWhoami = await host.Client.SendAsync(Request(
+            HttpMethod.Get, "/api/reports/whoami", "hooked-admin", roles: ["admins"]));
+        Assert.Equal("application", (await ReadJson(hookedWhoami)).GetProperty("administratorSource").GetString());
+        using var lists = await host.Client.SendAsync(Request(
+            HttpMethod.Get, "/api/reports/admin/administrators", "hooked-admin", roles: ["admins"]));
+        Assert.Equal(HttpStatusCode.OK, lists.StatusCode);
+        Assert.True((await ReadJson(lists)).GetProperty("managedByApplication").GetBoolean());
+
+        // Unauthenticated callers are never put to the application.
+        using var anonymous = await host.Client.SendAsync(Request(
+            HttpMethod.Get, $"/api/reports/{SavedReportsListingDefinition.Name}/schema", null));
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        Assert.DoesNotContain(null, asked);
+        Assert.Contains("configured-admin", asked);
+        Assert.Contains("hooked-admin", asked);
+    }
+
+    [Fact]
+    public async Task The_administrator_policy_answers_when_no_callback_is_registered()
+    {
+        await using var host = await Start(
+            (_, services) => services.AddAuthorization(options =>
+                options.AddPolicy("IrAdmins", policy => policy.RequireRole("admins"))),
+            administrators: ["configured-admin"],
+            settings: new Dictionary<string, string?> { ["InteractiveReport:AdministratorPolicy"] = "IrAdmins" });
+
+        using var configured = await host.Client.SendAsync(Request(
+            HttpMethod.Get, $"/api/reports/{SavedReportsListingDefinition.Name}/schema", "configured-admin"));
+        Assert.Equal(HttpStatusCode.NotFound, configured.StatusCode);
+
+        using var policyAdmin = await host.Client.SendAsync(Request(
+            HttpMethod.Get, $"/api/reports/{SavedReportsListingDefinition.Name}/schema", "policy-admin", roles: ["admins"]));
+        Assert.Equal(HttpStatusCode.OK, policyAdmin.StatusCode);
+        using var whoami = await host.Client.SendAsync(Request(
+            HttpMethod.Get, "/api/reports/whoami", "policy-admin", roles: ["admins"]));
+        var identity = await ReadJson(whoami);
+        Assert.Equal("policy", identity.GetProperty("administratorSource").GetString());
+        Assert.True(identity.GetProperty("administratorsManagedByApplication").GetBoolean());
+    }
+
+    [Fact]
+    public async Task An_administrator_callback_failure_is_an_infrastructure_error()
+    {
+        await using var host = await Start((reports, _) =>
+            reports.UseAdministrators((_, _) => throw new InvalidOperationException("directory offline")));
+
+        using var response = await host.Client.SendAsync(Request(
+            HttpMethod.Get, $"/api/reports/{SavedReportsListingDefinition.Name}/schema", "anyone"));
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        var problem = await ReadJson(response);
+        Assert.Equal("IR-1005", problem.GetProperty("code").GetString());
+        Assert.DoesNotContain("directory offline", problem.ToString());
     }
 
     [Fact]
     public async Task Administrator_list_is_set_as_a_whole_and_configured_entries_are_untouched()
     {
-        const string administrators = "/api/reports/admin/authorization/administrators";
+        const string administrators = "/api/reports/admin/administrators";
         await using var host = await Start(administrators: ["configured-admin"]);
         using var grant = await host.Client.SendAsync(Request(
-            HttpMethod.Post, administrators, "configured-admin", new { identity = "old-admin" }));
+            HttpMethod.Put, administrators, "configured-admin", new { identities = new[] { "old-admin" } }));
         Assert.Equal(HttpStatusCode.NoContent, grant.StatusCode);
 
         using var replaced = await host.Client.SendAsync(Request(
@@ -167,6 +288,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
         using var listed = await host.Client.SendAsync(Request(HttpMethod.Get, administrators, "configured-admin"));
         Assert.Equal(HttpStatusCode.OK, listed.StatusCode);
         var lists = await ReadJson(listed);
+        Assert.False(lists.GetProperty("managedByApplication").GetBoolean());
         Assert.Equal(["configured-admin"], Strings(lists.GetProperty("configured")));
         Assert.Equal(["kept-admin", "new-admin"], Strings(lists.GetProperty("database")));
 
@@ -200,59 +322,18 @@ public sealed class InteractiveReportAuthorizationHttpTests
         => array.EnumerateArray().Select(element => element.GetString()!).ToArray();
 
     [Fact]
-    public async Task Callback_receives_intent_and_authorizes_admin_actions_when_list_is_empty()
-    {
-        var seen = new ConcurrentQueue<InteractiveReportAuthorizationRequest>();
-        await using var host = await Start((reports, _) =>
-            reports.UseAuthorization((request, _) =>
-            {
-                seen.Enqueue(request);
-                return ValueTask.FromResult(true);
-            }));
-
-        using var save = await host.Client.SendAsync(Request(
-            HttpMethod.Post,
-            $"/api/reports/{host.OrdersId}/saved",
-            "callback-admin",
-            new { title = "Published", isGlobal = true, state = new { } }));
-
-        Assert.Equal(HttpStatusCode.Created, save.StatusCode);
-        var calls = seen.ToArray();
-        Assert.Equal(
-            [
-                InteractiveReportAction.ReadSavedReport,
-                InteractiveReportAction.CreateSavedReport,
-                InteractiveReportAction.PublishGlobalReport,
-            ],
-            calls.Select(call => call.Action).ToArray());
-        Assert.All(calls, call =>
-        {
-            Assert.Equal("callback-admin", call.User.FindFirstValue(ClaimTypes.NameIdentifier));
-            Assert.Equal("orders", call.Resource.ReportName);
-            Assert.Equal("Published", call.Resource.Candidate!.Title);
-            Assert.True(call.Resource.Candidate.Public);
-            Assert.True(call.Resource.Candidate.StateChanged);
-            Assert.NotNull(call.Resource.Candidate.State);
-        });
-
-        using var listing = await host.Client.SendAsync(Request(
-            HttpMethod.Get,
-            $"/api/reports/{SavedReportsListingDefinition.Name}/schema",
-            "callback-admin"));
-        Assert.Equal(HttpStatusCode.OK, listing.StatusCode);
-        Assert.Contains(seen, call => call.Action == InteractiveReportAction.ListAllSavedReports);
-    }
-
-    [Fact]
     public async Task Selecting_a_default_emits_update_global_and_default_actions()
     {
         var seen = new ConcurrentQueue<InteractiveReportAuthorizationRequest>();
         await using var host = await Start((reports, _) =>
+        {
+            reports.UseAdministrators((_, _) => ValueTask.FromResult(true));
             reports.UseAuthorization((request, _) =>
             {
                 seen.Enqueue(request);
                 return ValueTask.FromResult(true);
-            }));
+            });
+        });
         using var save = await host.Client.SendAsync(Request(
             HttpMethod.Post,
             $"/api/reports/{host.OrdersId}/saved",
@@ -456,13 +537,16 @@ public sealed class InteractiveReportAuthorizationHttpTests
     {
         var seen = new ConcurrentQueue<InteractiveReportAction>();
         await using var host = await Start((reports, _) =>
+        {
+            reports.UseAdministrators((_, _) => ValueTask.FromResult(true));
             reports.UseAuthorization((request, _) =>
             {
                 seen.Enqueue(request.Action);
                 if (request.Action == InteractiveReportAction.CreateSavedReport)
                     request.Resource.Candidate!.Public = true;
                 return ValueTask.FromResult(true);
-            }));
+            });
+        });
 
         using var save = await host.Client.SendAsync(Request(
             HttpMethod.Post,
@@ -537,7 +621,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
     }
 
     [Fact]
-    public async Task Explicit_administrator_list_is_authoritative_and_callback_can_restrict_it()
+    public async Task The_fallback_administrator_list_grants_and_operation_authorizers_still_narrow()
     {
         await using var host = await Start(
             (reports, _) => reports.UseAuthorization((request, _) =>
@@ -577,6 +661,7 @@ public sealed class InteractiveReportAuthorizationHttpTests
             InteractiveReportAction.PublishGlobalReport);
         await using var host = await Start((reports, services) =>
         {
+            reports.UseAdministrators((_, _) => ValueTask.FromResult(true));
             reports.UseAspNetCoreAuthorization();
             services.AddSingleton<IAuthorizationHandler>(handler);
         });
@@ -655,14 +740,20 @@ public sealed class InteractiveReportAuthorizationHttpTests
     }
 
     [Fact]
-    public async Task Definition_policy_infrastructure_errors_are_sanitized()
+    public async Task An_unregistered_report_policy_is_evaluated_per_request_and_its_failure_is_sanitized()
     {
+        // A policy the provider does not know at startup only warns: a dynamic provider may
+        // resolve it later. When it is still unknown at request time, the failure is sanitized.
         await using var host = await Start((_, services) =>
+        {
+            services.AddAuthorization(options =>
+                options.AddPolicy("Known", policy => policy.RequireAssertion(_ => true)));
             services.PostConfigure<InteractiveReportOptions>(options =>
                 options.Reports["orders"].Authorization = new ReportAuthorization
                 {
                     Policy = "MissingPolicyInfrastructure",
-                }));
+                });
+        });
 
         using var response = await host.Client.SendAsync(Request(
             HttpMethod.Get, "/api/reports/orders/schema", "policy-user"));
@@ -735,16 +826,16 @@ public sealed class InteractiveReportAuthorizationHttpTests
         // only, without a CORS preflight) can never reach a body reader on a cookie-auth host.
         await using var host = await Start();
 
-        foreach (var path in new[]
+        foreach (var (method, path) in new (HttpMethod, string)[]
                  {
-                     "/api/reports/orders/query",
-                     "/api/reports/orders/lov",
-                     "/api/download/orders/csv",
-                     "/api/reports/admin/authorization/administrators",
-                     $"/api/reports/{host.OrdersId}/saved",
+                     (HttpMethod.Post, "/api/reports/orders/query"),
+                     (HttpMethod.Post, "/api/reports/orders/lov"),
+                     (HttpMethod.Post, "/api/download/orders/csv"),
+                     (HttpMethod.Put, "/api/reports/admin/administrators"),
+                     (HttpMethod.Post, $"/api/reports/{host.OrdersId}/saved"),
                  })
         {
-            using var request = new HttpRequestMessage(HttpMethod.Post, path)
+            using var request = new HttpRequestMessage(method, path)
             {
                 Content = new StringContent("{}", Encoding.UTF8, "text/plain"),
             };
@@ -779,7 +870,8 @@ public sealed class InteractiveReportAuthorizationHttpTests
 
     private static async Task<RunningHost> Start(
         Action<InteractiveReportBuilder, IServiceCollection>? configure = null,
-        IReadOnlyList<string>? administrators = null)
+        IReadOnlyList<string>? administrators = null,
+        IReadOnlyDictionary<string, string?>? settings = null)
     {
         var tempRoot = Directory.CreateTempSubdirectory("interactive-report-authorization-").FullName;
         var dataPath = Path.Combine(tempRoot, "data.db");
@@ -800,20 +892,23 @@ public sealed class InteractiveReportAuthorizationHttpTests
         });
         builder.Logging.ClearProviders();
         builder.WebHost.UseUrls("http://127.0.0.1:0");
-        var settings = new Dictionary<string, string?>
+        var configuration = new Dictionary<string, string?>
         {
             ["InteractiveReport:Reports:orders:Connection"] = "Data",
             ["InteractiveReport:Reports:orders:Dialect"] = "Sqlite",
             ["InteractiveReport:Reports:orders:Sql"] = "SELECT ID, LABEL FROM ORDERS",
             ["InteractiveReport:Reports:orders:Authorization:AllowAnonymous"] = "true",
             ["InteractiveReport:SavedReports:Connection"] = "Data",
+            ["InteractiveReport:WhoamiEnabled"] = "true",
         };
         if (administrators is not null)
         {
             for (var i = 0; i < administrators.Count; i++)
-                settings[$"InteractiveReport:Administrators:{i}"] = administrators[i];
+                configuration[$"InteractiveReport:Administrators:{i}"] = administrators[i];
         }
-        builder.Configuration.AddInMemoryCollection(settings);
+        foreach (var (key, value) in settings ?? new Dictionary<string, string?>())
+            configuration[key] = value;
+        builder.Configuration.AddInMemoryCollection(configuration);
 
         var reports = builder.Services
             .AddInteractiveReports(builder.Configuration)

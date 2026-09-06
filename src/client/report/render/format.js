@@ -76,8 +76,9 @@ export function maskIsValid(type, mask, context = null) {
 }
 
 /**
- * All number-like column values, whether legacy JSON numbers or exact JSON strings, enter one
- * arbitrary-precision representation before comparison or formatting.
+ * All number-like column values enter one arbitrary-precision representation before comparison
+ * or formatting: JSON numbers (doubles and 32-bit integers) and the exact JSON strings the server
+ * uses for Int64, UInt64, and decimal values.
  *
  * @param {unknown} value - A finite JavaScript number, invariant numeric string, or bigint.
  * @returns {Big|null} An arbitrary-precision value, or `null` when the input is not a valid report number.

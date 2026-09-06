@@ -43,7 +43,8 @@ internal static class SavedReportsListingDefinition
             Connection = cfg.ConnectionName,
             Dialect = cfg.Dialect,
             Sql = Sql(cfg.Dialect, cfg.TableName),
-            Authorization = new ReportAuthorization { AdministratorsOnly = true },
+            // No configured block: the authorization service recognizes the reserved name and
+            // admits administrators only.
             ColumnLabels = new()
             {
                 ["ID"] = "Id",

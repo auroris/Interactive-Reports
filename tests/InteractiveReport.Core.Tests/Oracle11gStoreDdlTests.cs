@@ -51,12 +51,12 @@ public sealed class Oracle11gStoreDdlTests
     }
 
     [Fact]
-    public void Authorization_store_table_ddl_supports_oracle11g()
+    public void Administrator_store_table_ddl_supports_oracle11g()
     {
-        var config = new ReportAuthorizationStoreConfig("Oracle11gConn", ReportDialect.Oracle11g, AutoCreate: true, TableName: "IR_AUTH");
-        var ddl = GetPrivateMethodString(typeof(SqlReportAuthorizationStore), "CreateTableSql", config);
-        Assert.Contains("CREATE TABLE \"IR_AUTH\"", ddl);
-        Assert.Contains("ID             VARCHAR2(80) PRIMARY KEY", ddl);
+        var config = new AdministratorStoreConfig("Oracle11gConn", ReportDialect.Oracle11g, AutoCreate: true, TableName: "IR_ADMINS");
+        var ddl = GetPrivateMethodString(typeof(SqlAdministratorStore), "CreateTableSql", config);
+        Assert.Contains("CREATE TABLE \"IR_ADMINS\"", ddl);
+        Assert.Contains("IDENTITY_VALUE VARCHAR2(400 CHAR) PRIMARY KEY", ddl);
     }
 
     private static string GetPrivateMethodString(Type type, string methodName, object argument)

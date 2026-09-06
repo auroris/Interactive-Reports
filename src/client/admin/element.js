@@ -3,9 +3,8 @@
 // report: search, sort, pagination, column tools, and CSV export all come from the report
 // widget; this wrapper contributes only what a report cannot: the admin actions its ir-action
 // events request (publish/unpublish, reassign, view state, download, delete), the Upload JSON…
-// dialog, the administrator list and report-access editors, and the identity line. The server
-// enforces the authorization matrix; the embedded report simply has no data (404) for
-// non-administrators.
+// dialog, the administrator list editor, and the identity line. The server enforces the
+// authorization matrix; the embedded report simply has no data (404) for non-administrators.
 
 import { api, apiUrl, downloadFile, saveBlob } from "../core/api.js";
 import { el, banner, labeled, sel } from "../core/dom.js";
@@ -106,26 +105,29 @@ export class InteractiveReportAdminElement extends WidgetElement {
             errorSlot: el("div", { role: "alert", "aria-atomic": "true" }),
             transientSlot: el("div", { role: "status", "aria-live": "polite", "aria-atomic": "true" }),
         };
+        const administratorsButton = el("button", {
+            type: "button", class: "ir-btn",
+            onclick: () => { void this.administratorsDialog().catch(err => this.showError(err)); },
+        }, this.t("admin.administrators"));
         this._mount.replaceChildren(
             el("div", { class: "ir-toolbar ir-admin-bar", part: "toolbar" },
                 el("button", { type: "button", class: "ir-btn", onclick: () => this.refresh() }, this.t("admin.refresh")),
                 el("button", { type: "button", class: "ir-btn", onclick: () => this.uploadDocument() }, this.t("admin.uploadJson")),
-                el("button", {
-                    type: "button", class: "ir-btn",
-                    onclick: () => { void this.administratorsDialog().catch(err => this.showError(err)); },
-                }, this.t("admin.administrators")),
-                el("button", {
-                    type: "button", class: "ir-btn",
-                    onclick: () => { void this.reportAccessDialog().catch(err => this.showError(err)); },
-                }, this.t("admin.reportAccessDialog")),
+                administratorsButton,
                 el("span", { class: "ir-spacer" }),
                 this.els.identity),
             el("div", { class: "ir-notices", part: "notices" }, this.els.errorSlot, this.els.transientSlot),
             report);
 
-        const identity = await loadWhoami(this.base);
+        const [identity, administrators] = await Promise.all([
+            loadWhoami(this.base),
+            // Who decides administrators is the server's to say. A refusal here (the caller is
+            // not an administrator) simply leaves the button in place; the dialog reports precisely.
+            api(apiUrl(this.base, "admin", "administrators")).catch(() => null),
+        ]);
         if (seq !== this._seq || !this.isConnected) return;
         this.whoami = identity.whoami;
+        administratorsButton.hidden = administrators?.managedByApplication === true;
         if (this.whoami?.identity)
             this.els.identity.textContent = this.t("admin.signedInAs", { identity: this.whoami.identity });
         // The embedded report answers 404 for non-administrators; when whoami is available,
@@ -136,13 +138,14 @@ export class InteractiveReportAdminElement extends WidgetElement {
         } else if (this.whoami === null) {
             this.els.errorSlot.replaceChildren(banner(
                 "warn", this.t("admin.whoamiDisabled"), null, this));
-        } else if (this.whoami.administratorListConfigured && !this.whoami.isAdministrator) {
+        } else if (!this.whoami.isAdministrator) {
             this.els.errorSlot.replaceChildren(banner(
-                "error", this.t("admin.accessRequired"), null, this));
-        } else if (!this.whoami.isAdministrator
-            && !this.whoami.applicationAuthorizationConfigured) {
-            this.els.errorSlot.replaceChildren(banner(
-                "error", this.t("admin.accessConfigurationRequired"), null, this));
+                "error",
+                this.t(this.whoami.administratorsManagedByApplication
+                    ? "admin.accessDecidedByApplication"
+                    : "admin.accessRequired"),
+                null,
+                this));
         }
     }
 
@@ -335,7 +338,11 @@ export class InteractiveReportAdminElement extends WidgetElement {
      * Side effects: fetches the administrator lists and opens a dialog whose Save replaces the database list in one request.
      */
     async administratorsDialog() {
-        const current = await api(apiUrl(this.base, "admin", "authorization", "administrators"));
+        const current = await api(apiUrl(this.base, "admin", "administrators"));
+        if (current?.managedByApplication) {
+            this.notify(this.t("admin.accessDecidedByApplication"), "warn");
+            return;
+        }
         const configured = current?.configured ?? [];
         const saved = current?.database ?? [];
         const pending = [...saved];
@@ -387,129 +394,11 @@ export class InteractiveReportAdminElement extends WidgetElement {
                         this.t("admin.removeSelfTitle"),
                         this.t("admin.removeSelfConfirm"),
                         this.t("common.remove"))) return false;
-                await api(apiUrl(this.base, "admin", "authorization", "administrators"), {
+                await api(apiUrl(this.base, "admin", "administrators"), {
                     method: "PUT",
                     body: { identities: pending },
                 });
                 this.notify(this.t("admin.administratorsSaved"));
-            },
-        });
-        disposePickerOnClose(dlg, () => picker);
-    }
-
-    /**
-     * Loads authorization state and opens the per-report restriction and user-grant editor.
-     *
-     * @returns {Promise<void>} Resolves once the editor is open.
-     *
-     * Side effects: fetches authorization state and opens a dialog whose controls perform and reload grant mutations.
-     */
-    async reportAccessDialog() {
-        let authorization = await api(apiUrl(this.base, "admin", "authorization"));
-        let selectedReport = authorization.reports?.[0]?.name ?? null;
-        let picker = null;
-
-        const dlg = openDialog({
-            owner: this,
-            title: this.t("admin.reportAccessTitle"),
-            width: "40rem",
-            build: (body, dialog) => {
-                const reload = async () => {
-                    authorization = await api(apiUrl(this.base, "admin", "authorization"));
-                    if (!authorization.reports?.some(report => report.name === selectedReport))
-                        selectedReport = authorization.reports?.[0]?.name ?? null;
-                    render();
-                };
-                const mutate = async operation => {
-                    dialog.setError(null);
-                    try {
-                        await operation();
-                        await reload();
-                    } catch (err) {
-                        dialog.setError(err);
-                    }
-                };
-                const usersUrl = name => apiUrl(this.base, "admin", "authorization", "reports", name, "users");
-                const grant = identity => {
-                    const value = String(identity ?? "").trim();
-                    if (!value) { dialog.setError(this.t("admin.enterIdentity")); return; }
-                    if (!selectedReport) return;
-                    picker.value = "";
-                    void mutate(() => api(usersUrl(selectedReport), { method: "POST", body: { identity: value } }));
-                };
-                // Lookup results only refresh the grant rows (for display names), never the body:
-                // rebuilding the body would move the picker's input and drop the typist's focus.
-                let renderRows = () => {};
-                const render = () => {
-                    const reports = authorization.reports ?? [];
-                    const reportSelect = sel(reports.map(report => ({
-                        label: report.title, value: report.name,
-                    })), selectedReport);
-                    reportSelect.setAttribute("aria-label", this.t("admin.report"));
-                    reportSelect.onchange = () => {
-                        selectedReport = reportSelect.value;
-                        render();
-                    };
-                    const report = reports.find(item => item.name === selectedReport);
-                    let reportBody;
-                    if (!report) {
-                        reportBody = el("p", { class: "ir-dialog-note" }, this.t("admin.noReports"));
-                    } else if (!report.canRestrict) {
-                        reportBody = el("p", { class: "ir-dialog-note" },
-                            this.t("admin.reportCannotRestrict"));
-                    } else {
-                        const restricted = el("input", {
-                            type: "checkbox",
-                            checked: report.restricted,
-                            disabled: report.configuredRestricted,
-                            onchange: () => { void mutate(() => api(
-                                apiUrl(this.base, "admin", "authorization", "reports", report.name),
-                                { method: "PUT", body: { restricted: restricted.checked } })); },
-                        });
-                        const rowsSlot = el("div");
-                        renderRows = () => rowsSlot.replaceChildren(this.identityRows(
-                            report.configuredUsers,
-                            report.databaseUsers,
-                            identity => { void mutate(() => api(usersUrl(report.name), {
-                                method: "DELETE", body: { identity },
-                            })); }));
-                        renderRows();
-                        // The one picker survives re-renders: its nodes move into each new body,
-                        // keeping the typed search and its results.
-                        reportBody = el("div", { class: "ir-auth-report" },
-                            el("label", { class: "ir-checkline" }, restricted,
-                                el("span", {}, this.t("admin.restrictReport"))),
-                            report.configuredRestricted
-                                ? el("p", { class: "ir-dialog-note" },
-                                    this.t("admin.configuredRestriction"))
-                                : null,
-                            el("h4", {}, this.t("admin.grantedUsers")),
-                            rowsSlot,
-                            el("div", { class: "ir-auth-add" },
-                                labeled(this.t("admin.reportUser"), picker.input),
-                                el("button", {
-                                    type: "button", class: "ir-btn",
-                                    onclick: () => grant(picker.value),
-                                }, this.t("common.add"))),
-                            picker.results,
-                            el("p", { class: "ir-dialog-note" }, this.t("admin.identityNote")),
-                            !report.restricted
-                                ? el("p", { class: "ir-dialog-note" },
-                                    this.t("admin.inactiveGrants"))
-                                : null);
-                    }
-
-                    if (!report?.canRestrict) renderRows = () => {};
-                    body.replaceChildren(
-                        reports.length ? labeled(this.t("admin.report"), reportSelect) : null,
-                        reportBody);
-                };
-                picker = userPicker(this, {
-                    onPick: user => grant(user.value),
-                    onError: error => dialog.setError(error),
-                    onResults: items => { this.rememberDisplayNames(items); renderRows(); },
-                });
-                render();
             },
         });
         disposePickerOnClose(dlg, () => picker);

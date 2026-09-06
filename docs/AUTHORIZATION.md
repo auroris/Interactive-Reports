@@ -16,7 +16,7 @@ deployment. Keep the application on a trusted network when practical. If it must
 publicly reachable, use a dedicated reporting database or read replica and a
 least-privileged read-only principal, never the primary production database.
 
-Every published data and security-administration endpoint participates in application
+Every published data and administration endpoint participates in application
 operation authorization. The only exceptions are the opt-in `whoami` bootstrap
 diagnostic and packaged HTML/CSS/JavaScript delivery. Those exceptions expose no report
 data and grant no authority.
@@ -30,15 +30,34 @@ ClaimsPrincipal + Action + Resource -> allow or deny
 
 Only an allowed operation proceeds to execution or persistence.
 
-This guide covers the three supported application-operation integrations:
+## The three rules
 
-1. A direct Interactive Reports callback.
-2. Native ASP.NET Core resource-based authorization handlers.
-3. A callback that delegates each operation to a named ASP.NET Core policy.
+Interactive Reports deliberately keeps a small amount of access control of its own and
+leaves the rest to the integrating application. The engine is built so that an
+application can start with the minimal quickstart and take over each decision as it
+grows.
 
-All three receive the same action and resource vocabulary. Choose the integration
-style that fits the host application. They can be combined, although every configured
-adapter must then grant the operation.
+1. **A report is public or it is not.** `authorization.allowAnonymous: true` admits
+   anyone, including callers no authentication system has identified. Every other
+   report admits any authenticated caller. Which authenticated users may see a report
+   beyond that is the application's business: name an ASP.NET Core `policy` on the
+   definition, or narrow with the operation authorizers described below. The engine
+   holds no per-report user lists.
+2. **The application decides who administers, when it wants to.** Administrators list
+   every saved report, publish and unpublish, select defaults, reassign owners, delete,
+   download and upload documents, and manage the administrator list. The first
+   implemented source answers the administrator question: a callback registered with
+   `UseAdministrators`, then an `InteractiveReport:AdministratorPolicy`, then the
+   built-in fallback of `InteractiveReport:Administrators` plus the list kept by the
+   administration center. See [Administrators](#administrators).
+3. **Saved reports have owners.** A private document is visible to its owner and to
+   administrators; a global or default document is visible to everyone who may see the
+   report. Only the owner or an administrator changes or deletes a document; only an
+   administrator publishes, selects a default, or reassigns ownership.
+
+Operation authorizers registered by the application always get the final say on the
+built-in decisions: they can deny any action, including an administrator's, and never
+widen what the rules above allow.
 
 ## Authorization layers
 
@@ -47,15 +66,15 @@ request may need to pass all of these gates:
 
 1. Host endpoint conventions, such as
    `app.MapInteractiveReportJson(...).RequireAuthorization(...)`.
-2. The report definition's `authorization` block.
-3. Built-in saved-report ownership, publication, and read-only rules.
+2. The report definition's `authorization` block: public, authenticated, or a policy.
+3. Built-in saved-report ownership, publication, and read-only rules, and the
+   administrator decision for administrator actions.
 4. Every configured application-operation authorizer.
 5. Server-resolved context parameters used for row-level constraints.
 
 The operation authorizer does not replace report policies, ownership rules, feature
 flags, configured-document immutability, or row-level security. It can further
-restrict them. When no administrator identities are configured, it can also supply
-the affirmative decision required for an administrator operation.
+restrict them.
 
 The usual ASP.NET Core setup still applies:
 
@@ -85,7 +104,9 @@ must arrange for the correct principal to be present before the mapped endpoints
 | Callback to named policies | Applications with an established policy catalog but no need for a new handler type | `UseAuthorization(...)` plus `AddAuthorization(...)` | Resolve `IAuthorizationService` and call `AuthorizeAsync` with a policy name |
 
 There is no security-strength difference between the three. The difference is how
-the application expresses and composes its decision.
+the application expresses and composes its decision. The administrator question has
+the same two flavours, a callback and a policy name, described under
+[Administrators](#administrators).
 
 ## Common request contract
 
@@ -206,25 +227,26 @@ Authorization is expressed in facts rather than in how the caller reached an
 endpoint. For saved reports, the relevant facts are available on the resource:
 
 - `ReadSavedReport` is normally allowed when the report is default/global, the caller
-  owns it, or the caller is an application administrator.
+  owns it, or the caller is an administrator.
 - `UpdateSavedReport` and `DeleteSavedReport` are normally allowed when the caller owns
-  the report or is an application administrator. Publication does not remove owner
+  the report or is an administrator. Publication does not remove owner
   rights over title/state or deletion.
 - Changing global publication, default selection, or ownership emits a separate action, so those
   decisions do not have to be inferred from `UpdateSavedReport`.
 
-The engine applies the same built-in facts, including configured/database report-user
-grants and the union of configured/database administrators. The application authorizer
-receives the operation facts so it can add restrictions or supply administrator
-authority only when both built-in administrator sources are empty.
+The engine applies the same built-in facts, with the administrator decision made as
+described under [Administrators](#administrators). The application authorizer receives
+the operation facts so it can add restrictions; it cannot supply administrator
+authority.
 
 Authorization decisions are centralized in the server's transport-neutral
 `IReportAuthorizationService` and `IInteractiveReportServer`. Transport adapters call
-those boundaries and translate their results. Configuration stores expose a lightweight name/authorization envelope, allowing authentication,
-policy, administrator, and named-user gates to run before connection resolution and
-saved-default hydration. Saved-report listing and normalized title-collision queries
-occur only after that report-level gate succeeds. Definition-free security endpoints
-use the same service before invoking their authorization store or user provider.
+those boundaries and translate their results. Configuration stores expose a lightweight
+name/authorization envelope, allowing the authentication and policy gates to run before
+connection resolution and saved-default hydration. Saved-report listing and normalized
+title-collision queries occur only after that report-level gate succeeds.
+Definition-free administration endpoints use the same service before invoking the
+administrator store or user directory.
 
 ## Action reference
 
@@ -242,8 +264,8 @@ use the same service before invoking their authorization store or user provider.
 | `SelectDefaultReport` | Effective definition selects a new family default | Administrator action. The new default becomes global and the previous default remains global. A configured default cannot be replaced through the API. |
 | `ChangeSavedReportOwner` | Effective definition changes owner | Administrator action. |
 | `ListAllSavedReports` | Administrator view of a family list, or schema/query/download of the built-in `__saved-reports` definition | Administrator action. Its download also emits `Export`. |
-| `ListAuthorizationUsers` | Resolve the protected administration user directory | Administrator action. Directory entries are choices, not grants. |
-| `ManageAuthorization` | List or change database administrators, report restrictions, and report-user grants | Administrator action. Configuration grants remain read-only. |
+| `ListAuthorizationUsers` | Look up application accounts for the administration pickers | Administrator action. Lookup entries are choices, not grants. |
+| `ManageAdministrators` | List or replace the database-authored administrator list | Administrator action. Configured administrators remain read-only, and both lists are inert while the application decides administrators. |
 | `DownloadReportDocument` | Download the canonical admin JSON envelope | Administrator action. |
 | `UploadReportDocument` | Validate and import an admin JSON envelope | Administrator action. Upload always creates a private user document; file publication metadata is ignored. |
 
@@ -303,7 +325,7 @@ reports.UseAuthorization((request, cancellationToken) =>
             or InteractiveReportAction.ChangeSavedReportOwner
             or InteractiveReportAction.ListAllSavedReports
             or InteractiveReportAction.ListAuthorizationUsers
-            or InteractiveReportAction.ManageAuthorization
+            or InteractiveReportAction.ManageAdministrators
             or InteractiveReportAction.DownloadReportDocument
             or InteractiveReportAction.UploadReportDocument =>
             isAdministrator,
@@ -324,7 +346,9 @@ reports.UseAuthorization((request, cancellationToken) =>
 This pattern makes the owner/public/administrator facts explicit. The identity claim
 used for `caller` must match `InteractiveReport:IdentityClaim`; the example uses the
 default first choice, `ClaimTypes.NameIdentifier`. In a real application, centralize
-that identity mapping instead of duplicating it in several callbacks.
+that identity mapping instead of duplicating it in several callbacks. Note that the
+callback's `isAdministrator` only narrows: to make the same role the source of
+administrator authority, register it with `UseAdministrators` as well.
 
 Callbacks can be asynchronous and can resolve scoped services from the request:
 
@@ -484,7 +508,7 @@ reports.UseAuthorization(async (request, cancellationToken) =>
             or InteractiveReportAction.ChangeSavedReportOwner
             or InteractiveReportAction.ListAllSavedReports
             or InteractiveReportAction.ListAuthorizationUsers
-            or InteractiveReportAction.ManageAuthorization
+            or InteractiveReportAction.ManageAdministrators
             or InteractiveReportAction.DownloadReportDocument
             or InteractiveReportAction.UploadReportDocument =>
             "Reports.Administer",
@@ -517,62 +541,66 @@ normal cancellation strategy.
 Do not also call `UseAspNetCoreAuthorization()` merely because this callback resolves
 `IAuthorizationService`. The callback already delegates to ASP.NET Core. Register the
 native adapter as well only when both the named policy result and a separate native
-`InteractiveReportAuthorizationRequirement` handler must approve.
+`InteractiveReportAuthorizationRequirement` handler must approve. With this option the
+`Reports.Administer` policy is also the natural value for
+`InteractiveReport:AdministratorPolicy`, so one rule answers both questions.
 
-## Administrator resolution and fail-closed behavior
+## Administrators
 
-`InteractiveReport:Administrators` supplies source-controlled administrators. Database
-administrators created through the administration center are additive. The canonical
-identity is resolved through the configured `identityClaim`, then NameIdentifier,
-`sub`, and finally `Identity.Name`. Matching is ordinal and case-sensitive; identity
-provider subject values are treated as opaque identifiers.
+Administrator authority is a single fact about a caller, decided once per request by
+the first source that is implemented:
 
-Operations that require administrator authority use this decision table:
-
-| Effective configured/database administrator list | Caller | Application authorizer | Result |
+| Order | Source | Registration | Notes |
 |---|---|---|---|
-| Nonempty | Listed | None | Allowed by the built-in administrator boundary. |
-| Nonempty | Listed | All grant | Allowed. |
-| Nonempty | Listed | Any denies | Denied. |
-| Nonempty | Not listed | Any | Denied before application operation authorization; an explicit list cannot be bypassed. |
-| Empty | Authenticated | All grant | Allowed for that concrete action and resource. |
-| Empty | Authenticated | Missing or any denies | Denied. |
-| Any | Unauthenticated | Any | `401 Unauthorized`. |
+| 1 | Application callback | `reports.UseAdministrators((request, ct) => …)` | Receives the authenticated principal and the request services. Its answer is final. |
+| 2 | Application policy | `InteractiveReport:AdministratorPolicy` | An ASP.NET Core policy name evaluated through `IAuthorizationService`. Used only when no callback is registered. |
+| 3 | Built-in fallback | `InteractiveReport:Administrators` plus the administration center's list | Consulted only when neither application source exists. Configured entries are read-only; the database list is set as a whole from the administration page or `PUT {prefix}/admin/administrators`. |
 
-This fallback is action-specific. An application can grant
-`SelectDefaultReport` while denying `DeleteSavedReport`; it does not have to promote
-the principal to a permanent administrator identity.
+```csharp
+reports.UseAdministrators((request, cancellationToken) =>
+    ValueTask.FromResult(request.User.IsInRole("ReportAdministrators")));
+```
 
-A definition with `authorization.administratorsOnly: true` uses the same model. With
-a nonempty effective administrator list, only listed callers reach operation
-authorization. With both sources empty, the concrete operation must be affirmatively
-granted by an application authorizer. The built-in `__saved-reports` definition emits the explicit
-`ListAllSavedReports` action. For an application-defined administrators-only report,
-the authorizer should map its `Resource.ReportName` to the application's administrator
-rule. The request carries action and resource facts, not the engine's intermediate
-reason for asking.
+```json
+{
+  "InteractiveReport": {
+    "AdministratorPolicy": "Reports.Administer"
+  }
+}
+```
+
+The rules that follow from this ordering:
+
+- Declining is not implementing. An application that registers neither source leaves
+  the fallback in charge; there is no abstain answer.
+- While the application answers, the configured list and the database list are inert.
+  The administration page hides its Administrators editor and `whoami` reports
+  `administratorsManagedByApplication: true`. A callback that answers false for
+  everyone therefore locks administration until the application changes its answer;
+  the database list cannot rescue it.
+- An unauthenticated caller is never an administrator and is never put to the
+  application. Administration needs an identity for ownership and reassignment.
+- Operation authorizers still see every administrator action and keep their veto. They
+  narrow; they never grant.
+- A callback or policy that throws is an infrastructure error, reported as a sanitized
+  `500` with a trace id, not as a denial.
+
+The canonical identity used by the fallback is resolved through the configured
+`identityClaim`, then NameIdentifier, `sub`, and finally `Identity.Name`. Matching is
+ordinal and case-sensitive; identity-provider subject values are treated as opaque
+identifiers. Enable `InteractiveReport:WhoamiEnabled` to see the exact value while
+bootstrapping.
+
+The built-in `__saved-reports` definition, the listing behind the administration page,
+is the one report that belongs to administrators: it is hidden from everyone else and
+emits `ListAllSavedReports`.
 
 The administration account lookup is part of the security surface. It performs the
 same administrator check and emits `ListAuthorizationUsers` before it reads known
 identities from configuration and storage or invokes `IInteractiveReportUserProvider`
 or the `UseUserDirectory` callback. Lookup entries are account choices only; returning
-an account does not authorize it. The separate Administrators and Report access editors
-emit `ManageAuthorization` when they turn a choice into a database grant, including
-when the administrator list is replaced as a whole.
-
-Ordinary operations retain the built-in behavior when no application authorizer is
-registered. Registering either `UseAuthorization` or
-`UseAspNetCoreAuthorization` opts every operation into application authorization, not
-only administrator operations. Therefore:
-
-- A callback replacing the administrator list should evaluate the action against the
-  resource facts: public/owner/administrator for reads, owner/administrator for update
-  and delete, and administrator for publication, ownership, list-all, and document
-  administration and authorization-management actions.
-- A native handler must also succeed ordinary requirements that the application wants
-  to permit.
-- Registering the native adapter with no successful handler denies ordinary and
-  administrator operations.
+an account does not authorize it. The Administrators editor emits `ManageAdministrators`
+when it replaces the database list.
 
 ## Composition rules
 
@@ -582,7 +610,7 @@ The final decision is conjunctive across the Interactive Reports pipeline:
 - Every callback registered with `UseAuthorization` must return `true` for that action.
 - If the native adapter is registered, its ASP.NET Core authorization result must
   succeed for that action.
-- The built-in report and saved-report rules must also pass.
+- The built-in report, administrator, and saved-report rules must also pass.
 
 Within the native adapter, ASP.NET Core retains its normal handler and requirement
 semantics. Outside it, multiple Interactive Reports adapters use AND semantics.
@@ -617,36 +645,10 @@ The message from `InteractiveReportAuthorizationDeniedException` is not sent to 
 client. Authorization internals and resource existence remain protected. Use
 application logs or an audit store for detailed reasons.
 
-## Built-in named-user report restrictions
+## Report-definition policies
 
-A report can opt into exact identity grants in configuration:
-
-```json
-"authorization": {
-  "restricted": true,
-  "users": [ "orders-user-id", "finance-user-id" ]
-}
-```
-
-The administration center can independently store a restriction marker and report-user
-grants in `IR_REPORT_AUTHORIZATION`. Effective restriction is configuration OR database;
-effective users are the union. This permits source-controlled baseline grants plus
-operator-managed additions. Administrators are not implicit report users. A denied
-authenticated identity receives 404, and an unauthenticated identity receives 401.
-
-The database layer exists only when `InteractiveReport:SavedReports:DataSource` or
-`:Connection` is explicitly configured. It shares that target and the optional
-`SavedReports:TablePrefix`; installing the package alone creates no file or table.
-
-`allowAnonymous`, `administratorsOnly`, and named-user restriction are mutually
-exclusive access modes. `allowAnonymous` cannot be combined with a policy: it is the
-explicit report-specific opt-out from the default authenticated boundary. A policy can
-stack on a named-user restriction and remains an additional requirement. Application
-authorizers also remain restrictive; a built-in grant never bypasses them.
-
-## Report-definition policies remain available
-
-Operation authorization does not replace the existing per-report policy:
+A per-report policy is the declarative way to narrow an authenticated report to some
+of its authenticated callers:
 
 ```json
 {
@@ -667,7 +669,13 @@ Operation authorization does not replace the existing per-report policy:
 The report policy runs before action authorization and receives the user through
 ordinary `IAuthorizationService` policy evaluation. A failed authenticated policy is
 returned as 404 to avoid disclosing the definition. `allowAnonymous: true` is the
-explicit anonymous opt-in; an absent authorization block requires authentication.
+explicit public opt-in and cannot be combined with a policy; an absent authorization
+block requires authentication.
+
+Naming a policy anywhere requires `builder.Services.AddAuthorization()`; the host fails
+at startup otherwise. A policy the provider does not know at startup is only logged as
+a warning, because a dynamic policy provider may resolve it later; if it is still
+unknown when a request arrives, that request fails with a sanitized `500`.
 
 Use report-definition policies for a broad dataset boundary and operation
 authorization for distinctions such as query versus export, private save versus
@@ -680,10 +688,11 @@ administrative controls are worth offering, but neither the API nor authorizatio
 depends on that client and the UI never treats a hint as permission.
 
 - Schema responses include `authorization.mayRequestAdministration`.
-- When the optional `whoami` endpoint is enabled, it includes
-  `isAdministrator`, `administratorListConfigured`, and
-  `applicationAuthorizationConfigured`, plus source-specific
-  `configuredAdministrator` and `databaseAdministrator` flags.
+- When the optional `whoami` endpoint is enabled, it includes `isAdministrator`,
+  `administratorSource` (`application`, `policy`, `configuration`, `database`, or
+  `none`), and `administratorsManagedByApplication`.
+- `GET {prefix}/admin/administrators` includes `managedByApplication`, which the
+  administration page uses to hide the Administrators editor.
 
 These fields only control presentation. The UI may display a button that a
 resource-specific callback later denies. Every protected endpoint evaluates the
@@ -695,18 +704,18 @@ Test through the mapped HTTP and GraphQL endpoints so the report-definition gate
 built-in access matrix, action mapping, and status translation are exercised together.
 At minimum, cover:
 
-- An ordinary allowed and denied query.
+- A public report read anonymously, and an authenticated report refused anonymously.
+- A report policy admitting one caller and hiding the report from another.
 - A private saved-report owner update.
 - A non-owner read/update/delete attempt.
 - Default selection and global publication.
-- Empty administrator list with an affirmative decision.
-- Empty administrator list with no authorizer.
-- Nonempty administrator list with an unlisted caller.
-- A configured administrator restricted by the application authorizer.
+- The administrator callback granting, and the fallback lists ignored while it is registered.
+- The administrator policy granting when no callback is registered.
+- The fallback list granting, with an operation authorizer still able to restrict.
 - A multi-action request where one action is denied.
 - Expected denial exception, cancellation, and unexpected exception behavior.
 - Native handler success and absence of a successful handler.
 
 The repository's end-to-end authorization coverage is in
-`tests/InteractiveReport.AspNetCore.Tests/InteractiveReportAuthorizationHttpTests.cs`
-and `GraphQLHttpTests.cs`.
+`tests/InteractiveReport.AspNetCore.Tests/AuthorizationHttpTests.cs`,
+`InteractiveReportAuthorizationHttpTests.cs`, and `GraphQLHttpTests.cs`.

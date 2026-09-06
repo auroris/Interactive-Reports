@@ -63,10 +63,8 @@ public sealed class InteractiveReportUserProviderHttpTests
     [Fact]
     public async Task Without_a_directory_the_engine_still_offers_the_identities_it_knows()
     {
-        await using var host = await Start(Directory.None, configuredReportUsers: ["report-reader"]);
-        var authorization = host.Services.GetRequiredService<IReportAuthorizationStore>();
-        await authorization.GrantAdministrator("db-admin");
-        await authorization.GrantReportUser("orders", "db-reader");
+        await using var host = await Start(Directory.None);
+        await host.Services.GetRequiredService<IAdministratorStore>().Grant("db-admin");
         var saved = host.Services.GetRequiredService<ISavedReportStore>();
         await saved.Create(new SavedReport
         {
@@ -83,7 +81,7 @@ public sealed class InteractiveReportUserProviderHttpTests
         var result = await ReadJson(response);
         Assert.False(result.GetProperty("truncated").GetBoolean());
         Assert.Equal(
-            ["configured-admin", "db-admin", "db-reader", "report-owner", "report-reader"],
+            ["configured-admin", "db-admin", "report-owner"],
             Users(result).Select(user => user.Value).ToArray());
         Assert.All(Users(result), user => Assert.Equal(user.Value, user.Display));
     }
@@ -154,7 +152,7 @@ public sealed class InteractiveReportUserProviderHttpTests
         Assert.False(exactResult.GetProperty("truncated").GetBoolean());
 
         // Known identities beyond the limit are cut, and the cut is reported.
-        await host.Services.GetRequiredService<IReportAuthorizationStore>().GrantAdministrator("zed-admin");
+        await host.Services.GetRequiredService<IAdministratorStore>().Grant("zed-admin");
         using var overflow = await host.Client.SendAsync(Request("configured-admin"));
         var overflowResult = await ReadJson(overflow);
         Assert.Equal(3, Users(overflowResult).Count);
@@ -175,7 +173,7 @@ public sealed class InteractiveReportUserProviderHttpTests
 
         // Identities the engine learns from storage are merged fresh even while the directory
         // answer is reused.
-        await host.Services.GetRequiredService<IReportAuthorizationStore>().GrantAdministrator("new-admin");
+        await host.Services.GetRequiredService<IAdministratorStore>().Grant("new-admin");
         using var third = await host.Client.SendAsync(Request("configured-admin"));
         Assert.Equal(1, host.State.Calls);
         Assert.Equal(["ada-id", "configured-admin", "new-admin"], Users(await ReadJson(third)).Select(user => user.Value));
@@ -292,8 +290,7 @@ public sealed class InteractiveReportUserProviderHttpTests
         Directory directory,
         int? maxResults = null,
         int? cacheSeconds = null,
-        string? identityClaim = null,
-        IReadOnlyList<string>? configuredReportUsers = null)
+        string? identityClaim = null)
     {
         var tempRoot = System.IO.Directory.CreateTempSubdirectory("interactive-report-users-").FullName;
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
@@ -320,11 +317,6 @@ public sealed class InteractiveReportUserProviderHttpTests
             settings["InteractiveReport:UserDirectory:CacheSeconds"] = cacheSeconds.Value.ToString();
         if (identityClaim is not null)
             settings["InteractiveReport:IdentityClaim"] = identityClaim;
-        for (var index = 0; index < (configuredReportUsers?.Count ?? 0); index++)
-        {
-            settings["InteractiveReport:Reports:orders:Authorization:Restricted"] = "true";
-            settings[$"InteractiveReport:Reports:orders:Authorization:Users:{index}"] = configuredReportUsers![index];
-        }
         builder.Configuration.AddInMemoryCollection(settings);
 
         var state = new ProviderState();

@@ -66,11 +66,12 @@ public sealed class OptionalPersistenceHttpTests
             using var whoami = await host.Client.GetAsync("/api/reports/whoami");
             Assert.Equal(HttpStatusCode.OK, whoami.StatusCode);
             var identity = await ReadJson(whoami);
-            Assert.True(identity.GetProperty("configuredAdministrator").GetBoolean());
-            Assert.False(identity.GetProperty("databaseAdministrator").GetBoolean());
+            Assert.True(identity.GetProperty("isAdministrator").GetBoolean());
+            Assert.Equal("configuration", identity.GetProperty("administratorSource").GetString());
+            Assert.False(identity.GetProperty("administratorsManagedByApplication").GetBoolean());
 
             using var administration = await host.Client.GetAsync(
-                "/api/reports/admin/authorization");
+                "/api/reports/admin/administrators");
             await AssertStorageFailure(administration);
 
             // The account lookup never touches storage that is not configured: it offers only
@@ -118,20 +119,15 @@ public sealed class OptionalPersistenceHttpTests
         {
             await using var host = await Start(tempRoot, connectionString, inaccessibleStore);
 
-            // Catalogue authorization still resolves database-backed administrator access.
+            // Ordinary report access never touches storage: the catalogue answers even though
+            // the saved-report store is unreachable. Listing a family does need the store.
             using var catalogue = await host.Client.GetAsync("/api/reports");
-            await AssertStorageFailure(
-                catalogue,
-                "IR-1005",
-                "Report authorization failed");
+            Assert.Equal(HttpStatusCode.OK, catalogue.StatusCode);
             using var family = await host.Client.GetAsync("/api/reports/items");
-            await AssertStorageFailure(
-                family,
-                "IR-1005",
-                "Report authorization failed");
+            await AssertStorageFailure(family);
 
             using var administration = await host.Client.GetAsync(
-                "/api/reports/admin/authorization");
+                "/api/reports/admin/administrators");
             await AssertStorageFailure(administration);
 
             Assert.False(Directory.Exists(inaccessibleDirectory));

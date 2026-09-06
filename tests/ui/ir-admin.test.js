@@ -28,9 +28,7 @@ let whoamiStatus = 404;
 let whoamiCalls = 0;
 let users = null; // Directory entries, or null when the lookup route does not exist.
 let userSearches = [];
-let authorization = null;
-let authorizationCalls = [];
-let administrators = null;
+let administrators = null; // { configured, database, managedByApplication }, or null for a 404.
 let administratorCalls = [];
 let savedCalls = [];
 const json = (value, status = 200) => new Response(JSON.stringify(value), {
@@ -71,23 +69,13 @@ globalThis.fetch = async (url, options = {}) => {
             truncated: false,
         });
     }
-    if (path.endsWith("/admin/authorization/administrators")) {
+    if (path.endsWith("/admin/administrators")) {
         administratorCalls.push({ method, body });
         if (method === "GET") {
             return administrators === null
                 ? new Response(null, { status: 404 })
                 : json(administrators);
         }
-        return new Response(null, { status: 204 });
-    }
-    if (path.endsWith("/admin/authorization") && method === "GET") {
-        authorizationCalls.push({ url: path, method });
-        return authorization === null
-            ? new Response(null, { status: 404 })
-            : json(authorization);
-    }
-    if (path.includes("/admin/authorization/") && method !== "GET") {
-        authorizationCalls.push({ url: path, method, body });
         return new Response(null, { status: 204 });
     }
     if (path === "/admin-api/saved-1" && method === "PUT") {
@@ -104,13 +92,13 @@ const settle = async condition => {
         await new Promise(resolve => setTimeout(resolve, 10));
 };
 
-const asAdministrator = (identity = "admin-user") => {
+const asAdministrator = (identity = "admin-user", source = "configuration") => {
     whoami = {
         authenticated: true,
         identity,
         isAdministrator: true,
-        administratorListConfigured: true,
-        applicationAuthorizationConfigured: false,
+        administratorSource: source,
+        administratorsManagedByApplication: source === "application" || source === "policy",
     };
     whoamiStatus = 200;
 };
@@ -125,26 +113,27 @@ const submit = form => form.dispatchEvent(new Event("submit"));
 async function mount(language = null) {
     whoamiCalls = 0;
     userSearches = [];
-    authorizationCalls = [];
     administratorCalls = [];
     savedCalls = [];
     const admin = document.createElement("interactive-report-admin");
     admin.setAttribute("api-base", "/admin-api");
     if (language) admin.setAttribute("lang", language);
     document.body.append(admin);
-    await settle(() => admin.shadowRoot?.querySelector(".ir-admin-bar") && whoamiCalls > 0);
+    await settle(() => admin.shadowRoot?.querySelector(".ir-admin-bar") && whoamiCalls > 0
+        && administratorCalls.length > 0);
     return admin;
 }
 
+const toolbarButtons = admin => [...admin.shadowRoot.querySelectorAll(".ir-admin-bar button")]
+    .filter(button => !button.hidden)
+    .map(button => button.textContent.trim());
+
 test("the administration shell and its embedded report share the selected locale", async () => {
     asAdministrator("administrateur");
+    administrators = { configured: ["administrateur"], database: [], managedByApplication: false };
     const admin = await mount("fr-CA");
 
-    const buttons = [...admin.shadowRoot.querySelectorAll(".ir-admin-bar button")]
-        .map(button => button.textContent.trim());
-    assert.deepEqual(buttons, [
-        "Actualiser", "Téléverser un JSON…", "Administrateurs…", "Accès aux rapports…",
-    ]);
+    assert.deepEqual(toolbarButtons(admin), ["Actualiser", "Téléverser un JSON…", "Administrateurs…"]);
     assert.equal(admin.shadowRoot.querySelector(".ir-admin-count").textContent,
         "Connecté en tant que administrateur");
     assert.equal(admin.shadowRoot.querySelector("interactive-report").getAttribute("lang"), "fr-CA");
@@ -153,70 +142,7 @@ test("the administration shell and its embedded report share the selected locale
     ], "the admin shell enumerates the root families and then each family document list");
 
     admin.remove();
-});
-
-test("report access editor distinguishes configured and database grants and grants picked users", async () => {
-    asAdministrator();
-    users = directory;
-    authorization = {
-        configuredAdministrators: ["ada-id"],
-        databaseAdministrators: ["grace-id"],
-        reports: [
-            {
-                name: "configured", title: "Configured report", restricted: true,
-                configuredRestricted: true, databaseRestricted: false, canRestrict: true,
-                configuredUsers: ["ada-id"], databaseUsers: ["grace-id"],
-            },
-            {
-                name: "database", title: "Database report", restricted: false,
-                configuredRestricted: false, databaseRestricted: false, canRestrict: true,
-                configuredUsers: [], databaseUsers: [],
-            },
-        ],
-    };
-    const admin = await mount();
-
-    await admin.reportAccessDialog();
-
-    const dialog = admin.shadowRoot.querySelector(".ir-dialog");
-    assert.ok(dialog);
-    await settle(() => dialog.querySelectorAll(".ir-users-item").length === 2);
-    assert.deepEqual(userSearches, [""], "the picker browses the directory once when the editor opens");
-    // Display names learned from the lookup decorate the grant rows.
-    assert.match(dialog.textContent, /Ada Lovelace \(ada-id\)/);
-    assert.match(dialog.textContent, /Grace Hopper \(grace-id\)/);
-    assert.match(dialog.textContent, /appsettings\.json/);
-    assert.match(dialog.textContent, /administration center/);
-    assert.doesNotMatch(dialog.textContent, /Administration access/, "administrators moved to their own editor");
-    let restriction = dialog.querySelector('.ir-auth-report input[type="checkbox"]');
-    assert.equal(restriction.checked, true);
-    assert.equal(restriction.disabled, true);
-
-    const reportSelect = dialog.querySelector('select[aria-label="Report"]');
-    reportSelect.value = "database";
-    reportSelect.dispatchEvent(new Event("change"));
-    restriction = dialog.querySelector('.ir-auth-report input[type="checkbox"]');
-    assert.equal(restriction.checked, false);
-    assert.equal(restriction.disabled, false);
-
-    restriction.checked = true;
-    restriction.dispatchEvent(new Event("change"));
-    await settle(() => authorizationCalls.some(call => call.method === "PUT"));
-    const update = authorizationCalls.find(call => call.method === "PUT");
-    assert.match(update.url, /\/admin\/authorization\/reports\/database$/);
-    assert.deepEqual(update.body, { restricted: true });
-
-    // Picking a directory entry grants it to the selected report straight away.
-    await settle(() => dialog.querySelectorAll(".ir-users-item").length === 2);
-    dialog.querySelector(".ir-users-item").click();
-    await settle(() => authorizationCalls.some(call => call.method === "POST"));
-    const grant = authorizationCalls.find(call => call.method === "POST");
-    assert.match(grant.url, /\/admin\/authorization\/reports\/database\/users$/);
-    assert.deepEqual(grant.body, { identity: "ada-id" });
-
-    admin.remove();
-    authorization = null;
-    users = null;
+    administrators = null;
 });
 
 test("owner reassignment searches the directory and applies the picked value", async () => {
@@ -282,14 +208,15 @@ test("a failed lookup is reported in the dialog and still allows free-form owner
 test("the administrators editor edits the database list locally and saves it as a whole", async () => {
     asAdministrator();
     users = directory;
-    administrators = { configured: ["ada-id"], database: ["grace-id"] };
+    administrators = { configured: ["ada-id"], database: ["grace-id"], managedByApplication: false };
     const admin = await mount();
+    const initialCalls = administratorCalls.length;
 
     await admin.administratorsDialog();
 
     const dialog = admin.shadowRoot.querySelector(".ir-dialog");
     assert.ok(dialog);
-    assert.deepEqual(administratorCalls.map(call => call.method), ["GET"]);
+    assert.deepEqual(administratorCalls.slice(initialCalls).map(call => call.method), ["GET"]);
     await settle(() => dialog.querySelectorAll(".ir-users-item").length === 2);
     assert.match(dialog.textContent, /Ada Lovelace \(ada-id\)/);
     assert.match(dialog.textContent, /Grace Hopper \(grace-id\)/);
@@ -298,7 +225,7 @@ test("the administrators editor edits the database list locally and saves it as 
 
     dialog.querySelector('button[aria-label="Remove grace-id"]').click();
     assert.equal(dialog.querySelector('button[aria-label="Remove grace-id"]'), null);
-    assert.equal(administratorCalls.length, 1, "removal is local until Save");
+    assert.equal(administratorCalls.length, initialCalls + 1, "removal is local until Save");
 
     const input = dialog.querySelector('input[type="text"]');
     input.value = "new-admin";
@@ -310,9 +237,10 @@ test("the administrators editor edits the database list locally and saves it as 
     assert.ok(dialog.querySelector('button[aria-label="Remove grace-id"]'), "picking adds a directory entry");
 
     submit(dialog.querySelector("form"));
-    await settle(() => administratorCalls.length === 2);
-    assert.equal(administratorCalls[1].method, "PUT");
-    assert.deepEqual(administratorCalls[1].body, { identities: ["new-admin", "grace-id"] });
+    await settle(() => administratorCalls.length === initialCalls + 2);
+    const saved = administratorCalls.at(-1);
+    assert.equal(saved.method, "PUT");
+    assert.deepEqual(saved.body, { identities: ["new-admin", "grace-id"] });
     await settle(() => !admin.shadowRoot.querySelector(".ir-dialog"));
     assert.match(admin.shadowRoot.querySelector(".ir-banner-ok").textContent, /Administrator list saved\./);
 
@@ -322,9 +250,9 @@ test("the administrators editor edits the database list locally and saves it as 
 });
 
 test("saving a list that drops your own access asks first", async () => {
-    asAdministrator("grace-id");
+    asAdministrator("grace-id", "database");
     users = [];
-    administrators = { configured: [], database: ["grace-id", "other-id"] };
+    administrators = { configured: [], database: ["grace-id", "other-id"], managedByApplication: false };
     const admin = await mount();
 
     await admin.administratorsDialog();
@@ -349,6 +277,23 @@ test("saving a list that drops your own access asks first", async () => {
     users = null;
 });
 
+test("when the application decides administrators the editor is withdrawn", async () => {
+    asAdministrator("app-admin", "application");
+    administrators = { configured: ["ignored-id"], database: [], managedByApplication: true };
+    const admin = await mount();
+
+    assert.deepEqual(toolbarButtons(admin), ["Refresh", "Upload JSON…"],
+        "the inert lists are not offered for editing");
+
+    await admin.administratorsDialog();
+    assert.equal(admin.shadowRoot.querySelector(".ir-dialog"), null, "no editor opens");
+    assert.match(admin.shadowRoot.querySelector(".ir-banner-warn").textContent,
+        /The application decides who administers reports/);
+
+    admin.remove();
+    administrators = null;
+});
+
 test("a disabled whoami endpoint yields packaged guidance instead of a bare listing error", async () => {
     whoami = null;
     whoamiStatus = 404;
@@ -365,25 +310,31 @@ test("a disabled whoami endpoint yields packaged guidance instead of a bare list
     admin.remove();
 });
 
-test("a configured administrator list still produces the precise denial", async () => {
+test("a non-administrator is told how administrators are decided", async () => {
     whoami = {
         authenticated: true,
         identity: "ordinary-user",
         isAdministrator: false,
-        administratorListConfigured: true,
-        applicationAuthorizationConfigured: false,
+        administratorSource: "none",
+        administratorsManagedByApplication: false,
     };
     whoamiStatus = 200;
-    const admin = await mount();
+    const fallback = await mount();
 
-    await settle(() => admin.shadowRoot.querySelector(".ir-banner-error"));
-    const banner = admin.shadowRoot.querySelector(".ir-banner-error");
+    await settle(() => fallback.shadowRoot.querySelector(".ir-banner-error"));
+    const banner = fallback.shadowRoot.querySelector(".ir-banner-error");
     assert.ok(banner, "the administrator-required banner renders");
     assert.match(banner.textContent, /Add your identity to InteractiveReport:Administrators/);
-    assert.equal(admin.shadowRoot.querySelector(".ir-banner-warn"), null);
-    assert.match(admin.shadowRoot.querySelector(".ir-admin-count").textContent, /ordinary-user/);
+    assert.equal(fallback.shadowRoot.querySelector(".ir-banner-warn"), null);
+    assert.match(fallback.shadowRoot.querySelector(".ir-admin-count").textContent, /ordinary-user/);
+    fallback.remove();
 
-    admin.remove();
+    whoami = { ...whoami, administratorsManagedByApplication: true };
+    const managed = await mount();
+    await settle(() => managed.shadowRoot.querySelector(".ir-banner-error"));
+    assert.match(managed.shadowRoot.querySelector(".ir-banner-error").textContent,
+        /The application decides who administers reports/);
+    managed.remove();
 });
 
 test("a real whoami failure presents the server problem and trace reference", async () => {

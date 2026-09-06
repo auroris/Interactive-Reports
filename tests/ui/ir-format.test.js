@@ -14,6 +14,7 @@ import { renderGrid } from "../../src/client/report/render/grid.js";
 import { renderPager } from "../../src/client/report/render/pager.js";
 import { applyPageSize, pageSizeChoices } from "../../src/client/report/page-size.js";
 import { reportState, sourceComposableOf } from "./report-state-fixture.js";
+import { reportControlNames } from "../../src/client/report/schema.js";
 
 const window = new Window({ url: "https://host.example/reports/orders" });
 Object.assign(globalThis, {
@@ -103,6 +104,7 @@ test("computed, group, and pivot values all use the normal mask path", () => {
             aggregates: {}, breakTotals: [], highlights: [],
         },
         schema: {
+            features: [...reportControlNames],
             columns: [
                 { name: "STATUS", label: "Status", type: "text" },
                 { name: "CUSTOMER", label: "Customer", type: "text" },
@@ -157,7 +159,7 @@ test("the chart data table retains an exact masked metric", () => {
             ],
             rows: [{ STATUS: "SHIPPED", v0: "9007199254740993.125" }],
         },
-        schema: { columns: [{ name: "STATUS", label: "Status", type: "text" }, { name: "AMOUNT", label: "Amount", type: "number" }] },
+        schema: { features: [...reportControlNames], columns: [{ name: "STATUS", label: "Status", type: "text" }, { name: "AMOUNT", label: "Amount", type: "number" }] },
     };
     const container = document.createElement("div");
     const chartModule = { renderChart: () => null };
@@ -180,6 +182,7 @@ test("chart result columns use the server-disambiguated aggregate metric name", 
             rows: [{ v0: "SHIPPED", v0_metric: 42 }],
         },
         schema: {
+            features: [...reportControlNames],
             columns: [
                 { name: "v0", label: "Bucket", type: "text" },
                 { name: "AMOUNT", label: "Amount", type: "number" },
@@ -203,7 +206,7 @@ test("a count chart renders when its label owns the __count name", () => {
             ],
             rows: [{ __count: "SHIPPED", __count_metric: 3 }],
         },
-        schema: { columns: [{ name: "__count", label: "Bucket", type: "text" }] },
+        schema: { features: [...reportControlNames], columns: [{ name: "__count", label: "Bucket", type: "text" }] },
     };
     const container = document.createElement("div");
 
@@ -242,7 +245,7 @@ test("presentation formats compose through intermediate table ancestry", () => {
             rows: [{ ir1: "9007199254740993.125" }],
             aggregates: {}, breakTotals: [], highlights: [],
         },
-        schema: { columns: [{ name: "AMOUNT", label: "Amount", type: "number" }] },
+        schema: { features: [...reportControlNames], columns: [{ name: "AMOUNT", label: "Amount", type: "number" }] },
     };
     const table = document.createElement("table");
 
@@ -482,7 +485,7 @@ test("a chart with a required output column hidden is a valid non-chartable tabl
 test("pager arithmetic and display preserve an Int64 count", () => {
     const w = {
         doc: reportState(),
-        schema: { limits: { maxPageSize: 500 } },
+        schema: { features: [...reportControlNames], limits: { maxPageSize: 500 } },
         lastResult: {
             page: { index: 1, size: 25 },
             totalRows: "9223372036854775807",
@@ -554,7 +557,7 @@ test("page-size choices offer 25 among the standard limits and mark the current 
     const w = {
         doc: reportState(),
         lastResult: { page: { size: 50 } },
-        schema: { limits: { defaultPageSize: 50, maxPageSize: 1000 } },
+        schema: { features: [...reportControlNames], limits: { defaultPageSize: 50, maxPageSize: 1000 } },
         t: key => key,
     };
     const choices = pageSizeChoices(w);
@@ -575,7 +578,7 @@ test("applying a page size writes the document's page node through the banner-re
     const w = {
         doc: reportState(),
         lastResult: { page: { size: 50 } },
-        schema: { limits: { defaultPageSize: 50, maxPageSize: 1000 } },
+        schema: { features: [...reportControlNames], limits: { defaultPageSize: 50, maxPageSize: 1000 } },
         t: key => key,
         applyOrBanner(mutate) {
             const d = { page: { index: 3, size: 50 } };
@@ -607,7 +610,7 @@ test("control breaks own their columns and defer subtotal and grand total to log
                 formats: {},
             }),
         },
-        schema: { columns },
+        schema: { features: [...reportControlNames], columns },
         lastResult: {
             availableColumns: columns,
             columns,
@@ -671,7 +674,7 @@ test("highlight rendering normalizes precedence and excludes disabled rules", ()
                 formats: {},
                 highlights: structuredClone(ruleOrder),
             }),
-            schema: { columns },
+            schema: { features: [...reportControlNames], columns },
             lastResult: {
                 availableColumns: columns,
                 columns,

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
 import { reportState } from "./report-state-fixture.js";
+import { reportControlNames } from "../../src/client/report/schema.js";
 
 const window = new Window({ url: "https://host.example/dashboard" });
 function Option(text = "", value = "", defaultSelected = false, selected = false) {
@@ -23,7 +24,8 @@ Object.assign(globalThis, {
     requestAnimationFrame: callback => setTimeout(callback, 0),
 });
 
-// Feature whitelists by report name; absent = the field is omitted (legacy server).
+// Feature whitelists by report name; absent = the server lists every control, as it does for a
+// definition that configures none.
 const FEATURES = {
     kiosk: ["search", "sort", "download"],
     chipsy: ["sort"],
@@ -55,7 +57,7 @@ globalThis.fetch = async (url, options = {}) => {
             limits: { defaultPageSize: 25, maxPageSize: 100 },
             columns: [{ name: "ID", label: "ID", type: "number" }],
             capabilities: { aggregateFunctions: {}, expressionFunctions: [] },
-            ...(FEATURES[report] ? { features: FEATURES[report] } : {}),
+            features: FEATURES[report] ?? [...reportControlNames],
         });
     }
     if (String(url).endsWith("/whoami")) return json({ identity: "test-user" });
@@ -137,7 +139,7 @@ test("a whitelisted report hides the chrome its features do not cover", async ()
     report.remove();
 });
 
-test("a schema without a features field (older server) leaves everything on", async () => {
+test("a schema listing every control leaves everything on", async () => {
     requests.length = 0;
     const report = await mount("orders");
 

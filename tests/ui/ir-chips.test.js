@@ -4,6 +4,7 @@ import { Window } from "happy-dom";
 import { translate } from "../../src/client/core/localization.js";
 import { renderChips } from "../../src/client/report/render/chips.js";
 import { normalizeReportState } from "../../src/client/report/state.js";
+import { reportControlNames } from "../../src/client/report/schema.js";
 
 const window = new Window({ url: "https://host.example/report" });
 Object.assign(globalThis, {
@@ -23,7 +24,7 @@ const columns = [
 function widget(doc) {
     return {
         doc,
-        schema: { columns, capabilities: { aggregateFunctions: {} } },
+        schema: { features: [...reportControlNames], columns, capabilities: { aggregateFunctions: {} } },
         lastResult: { availableColumns: columns },
         els: { search: document.createElement("input") },
         t(key, values) { return translate(this, key, values); },

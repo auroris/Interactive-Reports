@@ -41,7 +41,7 @@ the same provider resolution as a report definition. Alternatively, set `connect
 a factory registered with `AddConnection`.
 
 `tablePrefix` is optional. The example produces `MYAPP_IR_SAVED_REPORTS` and
-`MYAPP_IR_REPORT_AUTHORIZATION`. With `autoCreate` left at its default, the current tables
+`MYAPP_IR_ADMINISTRATORS`. With `autoCreate` left at its default, the current tables
 are created when first needed. Set `autoCreate` to `false` when operators provision the
 schema. The current release does not migrate an older saved-report schema in place.
 
@@ -56,7 +56,7 @@ an ordinary global document. The default cannot be unset without selecting anoth
 
 Private ownership uses the canonical identity resolved from
 `InteractiveReport:IdentityClaim`, then the standard identity fallbacks described in
-[Authorization](AUTHORIZATION.md#administrator-resolution-and-fail-closed-behavior).
+[Authorization](AUTHORIZATION.md#administrators).
 Identity comparison is ordinal and case-sensitive.
 
 The family-list endpoint reconciles configured files, then returns:
@@ -172,18 +172,18 @@ needed.
 The page can publish or unpublish a database document, select a default, reassign an owner,
 inspect state, download an envelope, upload an envelope, and delete editable documents.
 Configured documents remain read-only. The Administrators editor sets the database-backed
-administrator list as a whole, and the Report access editor manages report-restriction and
-report-user grants; configuration entries remain source-controlled and cannot be removed
-there. Every account picker searches the application's user directory together with the
-identities already known from configuration and storage, and still accepts an identity
-value typed exactly.
+administrator list as a whole; configuration entries remain source-controlled and cannot be
+removed there, and the editor is withdrawn when the application decides administrators
+itself (see [Authorization](AUTHORIZATION.md#administrators)). Every account picker
+searches the application's user directory together with the identities already known from
+configuration and storage, and still accepts an identity value typed exactly.
 
 Report names beginning with `__` are reserved for built-in administration definitions.
 
 ## Supply account choices
 
 Account pickers always offer the identities Interactive Reports already knows: configured
-administrators and report users, database grants, and saved-report owners. Applications
+and database administrators and saved-report owners. Applications
 add a searchable directory of display names and canonical values with a callback that
 answers a search with .NET identities:
 
@@ -232,7 +232,7 @@ Before deploying saved reports, verify that:
 - configured document files are present under the published content root;
 - the bootstrap administrator identity matches the host's authenticated principal;
 - private ownership values use the same canonical identity format;
-- storage backups cover both saved-report and authorization tables; and
+- storage backups cover both the saved-report and administrator tables; and
 - application authorization grants each required saved-report action.
 
 The complete operation and denial matrix is in [Authorization](AUTHORIZATION.md). The

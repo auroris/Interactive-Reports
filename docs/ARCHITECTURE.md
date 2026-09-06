@@ -515,6 +515,7 @@ composition internals:
 | `InteractiveReportBuilder.UseAuthorization(...)` / `.UseAspNetCoreAuthorization()` | Add application-specific operation authorization. |
 | `ISavedReportStore` | Replace report-document persistence. |
 | `IInteractiveReportUserProvider` / `UseUserDirectory(...)` | Supply searchable account choices to administration UI without granting authority. |
+| `InteractiveReportBuilder.UseAdministrators(...)` / `AdministratorPolicy` | Decide who administers saved reports; the configured list and the administration center's list are the fallback. |
 | `IInteractiveReportServer` | Invoke the application boundary directly or build another transport adapter. |
 
 The bound-plan and SQL-lowering layers are internal. Custom callers extend the product

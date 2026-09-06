@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Window } from "happy-dom";
 import { reportState } from "./report-state-fixture.js";
+import { reportControlNames } from "../../src/client/report/schema.js";
 
 const window = new Window({ url: "https://host.example/dashboard" });
 function Option(text = "", value = "", defaultSelected = false, selected = false) {
@@ -48,6 +49,7 @@ globalThis.fetch = async (url, options = {}) => {
                 { name: "STATUS", label: "Status", type: "text" },
                 { name: "AMOUNT", label: "Amount", type: "number" },
             ],
+            features: [...reportControlNames],
             capabilities: {
                 aggregateFunctions: {},
                 expressionFunctions: [],

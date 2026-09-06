@@ -124,20 +124,19 @@ export function visibleColumnNames(w) {
     return pickable(w).map(c => c.name);
 }
 
-// Protocol contract: the definition's feature suggestion, resolved server-side and delivered on
-// the schema payload. A missing list (schema not loaded yet, or an older server that predates
-// feature configuration) suggests that everything is on. Client overrides remain authoritative
-// for packaged control presentation; endpoint authorization and validation remain server-owned.
+// Protocol contract: the definition's feature suggestion, resolved server-side and always
+// delivered on the schema payload. Until the schema loads, everything is on. Client overrides
+// remain authoritative for packaged control presentation; endpoint authorization and validation
+// remain server-owned.
 /**
  * Determines whether the server suggests that a schema feature be available.
  *
  * @param {object} w - The report controller containing the definition feature suggestion.
  * @param {string} feature - The schema feature flag to evaluate.
- * @returns {boolean} Whether the feature is listed, or whether no suggestion has been loaded.
+ * @returns {boolean} Whether the feature is listed, or whether no schema has been loaded yet.
  */
 export function serverFeatureEnabled(w, feature) {
-    const features = w.schema?.features;
-    return !features || features.includes(feature);
+    return !w.schema || w.schema.features.includes(feature);
 }
 
 /**

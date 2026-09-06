@@ -33,10 +33,10 @@ public enum InteractiveReportAction
     ChangeSavedReportOwner,
     /// <summary>List every saved report for administration.</summary>
     ListAllSavedReports,
-    /// <summary>List application accounts for authorization controls.</summary>
+    /// <summary>Look up application accounts for administration pickers.</summary>
     ListAuthorizationUsers,
-    /// <summary>Modify administrator, restriction, or report-user grants.</summary>
-    ManageAuthorization,
+    /// <summary>List or replace the database-authored administrator list.</summary>
+    ManageAdministrators,
     /// <summary>Download a report-document envelope.</summary>
     DownloadReportDocument,
     /// <summary>Upload a report-document envelope.</summary>

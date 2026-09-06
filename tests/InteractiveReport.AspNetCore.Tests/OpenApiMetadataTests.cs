@@ -51,10 +51,10 @@ public sealed class OpenApiMetadataTests
             typeof(SaveReportRequest),
             create.Metadata.GetMetadata<IAcceptsMetadata>()?.RequestType);
 
-        var grant = Route(routes, "/api/reports/admin/authorization/administrators", "POST");
+        var administrators = Route(routes, "/api/reports/admin/administrators", "PUT");
         Assert.Equal(
-            typeof(AuthorizationIdentityRequest),
-            grant.Metadata.GetMetadata<IAcceptsMetadata>()?.RequestType);
+            typeof(AuthorizationIdentitiesRequest),
+            administrators.Metadata.GetMetadata<IAcceptsMetadata>()?.RequestType);
 
         var download = Route(routes, "/api/download/{name}/{format}", "POST");
         Assert.Equal(

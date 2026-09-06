@@ -628,10 +628,8 @@ Above the list:
   It can be published afterwards.
 - **Administrators…** shows who may use this page and lets you set that list: search
   for users to add, remove entries, then **Save** the list as a whole. Entries that
-  come from the application's configuration are shown but cannot be changed here.
-- **Report access…** manages, for reports that are restricted to named users, which
-  users are granted access. Entries that come from the application's configuration are
-  shown but cannot be removed here.
+  come from the application's configuration are shown but cannot be changed here. The
+  button is absent when the application decides its administrators itself.
 
 Every place that asks for a user offers the same searchable list: the users the
 application knows, plus anyone who already owns a saved report or holds a grant. Type to

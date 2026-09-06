@@ -19,16 +19,23 @@ public sealed class InteractiveReportOptions
 
     /// <summary>
     /// Gets or sets identity values, as resolved by ReportIdentity and shown by whoami, granted
-    /// administrator rights: list all saved reports, publish/unpublish globals,
-    /// reassign or delete anyone's saved reports. Matched by ordinal, case-sensitive equality
-    /// against the resolved identity value (use whoami to see the exact value).
-    /// These source-controlled grants are additive with database administrators
-    /// created in the administration center. When either source contains entries, the
-    /// union is authoritative and application authorization may only restrict it.
-    /// With neither source populated, an affirmative application authorization
-    /// decision may supply administrator authority; otherwise actions fail closed.
+    /// administrator rights: list all saved reports, publish/unpublish globals, reassign or delete
+    /// anyone's saved reports, and manage the administrator list. Matched by ordinal,
+    /// case-sensitive equality against the resolved identity value (use whoami to see the exact
+    /// value). This list and the database grants made in the administration center are the
+    /// built-in fallback; they are consulted only when the application has neither registered
+    /// UseAdministrators nor configured <see cref="AdministratorPolicy"/>.
     /// </summary>
     public List<string> Administrators { get; set; } = [];
+
+    /// <summary>
+    /// Gets or sets the name of an ASP.NET Core authorization policy that decides who administers
+    /// Interactive Reports. While it is set, the policy is the authority and
+    /// <see cref="Administrators"/> and the administration center's database grants are ignored. A
+    /// callback registered with UseAdministrators takes precedence over the policy. Leave it unset
+    /// to keep the built-in fallbacks.
+    /// </summary>
+    public string? AdministratorPolicy { get; set; }
 
     /// <summary>
     /// Gets or sets the optional explicit claim type for the canonical identity value. The default chain is
@@ -40,8 +47,8 @@ public sealed class InteractiveReportOptions
     public SavedReportsOptions SavedReports { get; set; } = new();
 
     /// <summary>
-    /// Gets or sets database authorization storage. It always uses the resolved SavedReports
-    /// connection and dialect so authorization rows live beside saved reports.
+    /// Gets or sets the storage of database-authored administrator grants. It always uses the
+    /// resolved SavedReports connection and dialect so the grants live beside saved reports.
     /// </summary>
     public AuthorizationStoreOptions Authorization { get; set; } = new();
 
@@ -60,14 +67,14 @@ public sealed class InteractiveReportOptions
     public bool ViewerPagesEnabled { get; set; } = true;
 }
 
-/// <summary>Configures the database table used for report authorization rows.</summary>
+/// <summary>Configures the database table that holds administrator grants.</summary>
 public sealed class AuthorizationStoreOptions
 {
     /// <summary>
-    /// Gets or sets the base name of the authorization table on the saved-report connection. The
+    /// Gets or sets the base name of the administrator table on the saved-report connection. The
     /// SavedReports table prefix, when present, is prepended to this value.
     /// </summary>
-    public string TableName { get; set; } = "IR_REPORT_AUTHORIZATION";
+    public string TableName { get; set; } = "IR_ADMINISTRATORS";
 }
 
 /// <summary>Configures administration account lookups.</summary>
@@ -123,7 +130,7 @@ public sealed class SavedReportsOptions
     /// <summary>
     /// Gets or sets the optional prefix prepended to both the saved-report and authorization table
     /// names. For example, APP_ produces APP_IR_SAVED_REPORTS and
-    /// APP_IR_REPORT_AUTHORIZATION with the default base names.
+    /// APP_IR_ADMINISTRATORS with the default base names.
     /// </summary>
     public string TablePrefix { get; set; } = "";
 

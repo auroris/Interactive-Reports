@@ -286,8 +286,11 @@ public sealed class ContextParamSpec
 }
 
 /// <summary>
-/// Defines report-level access. An absent block still requires authentication; anonymous access requires
-/// the explicit opt-in. The lazy path is the safe path.
+/// Defines report-level access. A public report (<see cref="AllowAnonymous"/>) admits anyone; any
+/// other report needs an authenticated caller, and an optional policy narrows further. An absent
+/// block still requires authentication: the lazy path is the safe path. Which authenticated users
+/// may see a report beyond that is the integrating application's decision, expressed through its
+/// own authorizers rather than through configuration here.
 /// </summary>
 public sealed class ReportAuthorization
 {
@@ -295,26 +298,4 @@ public sealed class ReportAuthorization
     public string? Policy { get; set; }
     /// <summary>Gets or sets whether this report explicitly permits unauthenticated callers.</summary>
     public bool AllowAnonymous { get; set; }
-
-    /// <summary>
-    /// Gets or sets whether this report is limited to explicitly granted identities. Configuration grants
-    /// in <see cref="Users"/> and database grants made in the administration center
-    /// are additive. A database restriction marker can also enable this gate.
-    /// </summary>
-    public bool Restricted { get; set; }
-
-    /// <summary>
-    /// Gets or sets canonical identity values granted access when the report is restricted. These
-    /// source-controlled grants are additive with administration-center grants.
-    /// </summary>
-    public List<string> Users { get; set; } = [];
-
-    /// <summary>
-    /// Gets or sets whether the report is restricted to configured or database administrators;
-    /// non-administrators receive 404, matching the saved-report admin surface. If
-    /// both administrator stores are empty, the application operation authorizer must
-    /// affirmatively grant each request. A policy may stack on top. Contradicts
-    /// AllowAnonymous and named-user restriction (rejected at load).
-    /// </summary>
-    public bool AdministratorsOnly { get; set; }
 }

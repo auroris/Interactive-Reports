@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { doSearch } from "../../src/client/report/search.js";
+import { reportControlNames } from "../../src/client/report/schema.js";
 
 test("scoped search adds a filter to the completed active table", () => {
     const doc = {
@@ -27,7 +28,7 @@ test("scoped search adds a filter to the completed active table", () => {
     };
     const widget = {
         doc,
-        schema: { columns: doc.tables.source.schema },
+        schema: { features: [...reportControlNames], columns: doc.tables.source.schema },
         searchScopeCol: "ir1",
         els: { search: { value: "1000" } },
         applyOrBanner: mutate => mutate(doc),

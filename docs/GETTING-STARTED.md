@@ -143,7 +143,7 @@ report documents, and administration, choose a database explicitly:
 
 The storage `dataSource` follows the same rules as a report data source. With the default
 auto-create behavior, this example creates `MYAPP_IR_SAVED_REPORTS` and
-`MYAPP_IR_REPORT_AUTHORIZATION` when the persistence subsystem is first used. A report-only
+`MYAPP_IR_ADMINISTRATORS` when the persistence subsystem is first used. A report-only
 installation still creates neither tables nor local files.
 
 The packaged administration page is then available at:
@@ -154,8 +154,12 @@ The packaged administration page is then available at:
 
 The bootstrap administrator value must match the caller's canonical identity. Enable
 `InteractiveReport:WhoamiEnabled` temporarily when you need the application to show the
-identity it resolved. See [Saved reports](SAVED-REPORTS.md) for persistence, defaults,
-configured JSON documents, import/export, and the administration workflow.
+identity it resolved. The configured list and the administration center's own list are
+the fallback: an application that prefers to decide administrators itself registers
+`UseAdministrators(...)` or names an `AdministratorPolicy`, as described in
+[Authorization](AUTHORIZATION.md#administrators). See [Saved reports](SAVED-REPORTS.md)
+for persistence, defaults, configured JSON documents, import/export, and the
+administration workflow.
 
 ## Choose an authorization integration
 

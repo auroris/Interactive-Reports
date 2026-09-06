@@ -3,6 +3,7 @@ import test from "node:test";
 import { Window } from "happy-dom";
 import { inputComposableLocation, terminalComposableLocation } from "../../src/client/report/state.js";
 import { reportState } from "./report-state-fixture.js";
+import { reportControlNames } from "../../src/client/report/schema.js";
 
 const window = new Window({ url: "https://host.example/dashboard" });
 function Option(text = "", value = "", defaultSelected = false, selected = false) {
@@ -100,7 +101,7 @@ globalThis.fetch = async (url, options = {}) => {
             limits: { defaultPageSize: 25, maxPageSize: 100 },
             columns: report === "grouped-metadata" ? GROUPED_SOURCE_COLUMNS : ALL_COLUMNS,
             capabilities: { aggregateFunctions: {}, expressionFunctions: [] },
-            ...(FEATURES[report] ? { features: FEATURES[report] } : {}),
+            features: FEATURES[report] ?? [...reportControlNames],
         });
     }
     if (String(url).endsWith("/whoami")) return json({ identity: "test-user" });

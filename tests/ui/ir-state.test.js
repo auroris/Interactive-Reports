@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { reportControlNames } from "../../src/client/report/schema.js";
 import {
     activeChain, activeShapeLocation, activeTableSchema, assignShapeMetricIds,
     composableLocations,
@@ -128,13 +129,6 @@ test("normalization follows whole-document defaults and serialization preserves 
     assert.deepEqual(inputComposableLocation(saved, "select").composable.columns, []);
     assert.equal("_transient" in saved, false);
     assert.equal("omitted" in saved, false);
-});
-
-test("retired schema snapshots never enter the working copy", () => {
-    const fromDocument = normalizeReportState({ schema: { GONE: "number" }, ...report() }, 25);
-    assert.equal("schema" in fromDocument, false);
-    const fromDefaults = normalizeReportState(null, 25, { schema: { OLD: "text" }, ...report() });
-    assert.equal("schema" in fromDefaults, false);
 });
 
 test("toolbar identity comes only from shapes directly owned by the active table", () => {
@@ -276,7 +270,7 @@ test("shape edits replace one exact node and preserve all sibling composables", 
     assert.equal(replaced.composable.totals, true);
     assert.deepEqual(state.tables.pivoted.composables.slice(1), siblings);
     assert.equal(shapeEditable(replaced), true);
-    assert.deepEqual(shapeInputColumns({ doc: state, schema: { columns: [] } }, replaced)
+    assert.deepEqual(shapeInputColumns({ doc: state, schema: { features: [...reportControlNames], columns: [] } }, replaced)
         .map(column => column.name), ["CUSTOMER"]);
 
     state.tables.foreign = {
@@ -290,7 +284,7 @@ test("shape edits replace one exact node and preserve all sibling composables", 
     const storedAfterFilter = activeShapeLocation(state, "chart");
     assert.equal(shapeEditable(storedAfterFilter), true,
         "shape editability follows natural semantics rather than array position");
-    assert.deepEqual(shapeInputColumns({ doc: state, schema: { columns: [] } }, storedAfterFilter)
+    assert.deepEqual(shapeInputColumns({ doc: state, schema: { features: [...reportControlNames], columns: [] } }, storedAfterFilter)
         .map(column => column.name), ["CUSTOMER"]);
 });
 
@@ -423,7 +417,7 @@ test("the active table schema and direct shape determine generic table context",
     }, 25);
     const w = {
         doc: state,
-        schema: { columns: [{ name: "AMOUNT", label: "Amount", type: "number" }] },
+        schema: { features: [...reportControlNames], columns: [{ name: "AMOUNT", label: "Amount", type: "number" }] },
         lastResult: { availableColumns: [{ name: "STALE", type: "text" }] },
     };
 
@@ -525,7 +519,7 @@ test("opaque Pivot cells rebuild multi-metric labels from explicit metric proven
 
     assert.deepEqual(terminalTableColumns({
         doc: state,
-        schema: { columns: definitionColumns },
+        schema: { features: [...reportControlNames], columns: definitionColumns },
     }).map(column => [column.name, column.label]), [
         ["CUSTOMER", "Customer"],
         [sumCell, "SHIPPED · sum(Sales)"],
@@ -583,7 +577,7 @@ test("Pivot metric ids disambiguate aggregate-looking keys and repeated sources"
 
     assert.deepEqual(terminalTableColumns({
         doc: state,
-        schema: { columns: definitionColumns },
+        schema: { features: [...reportControlNames], columns: definitionColumns },
     }).map(column => [column.name, column.label]), [
         ["CUSTOMER", "Customer"],
         ["sum-cell", "sum(Amount) · sum(Sales)"],

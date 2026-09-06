@@ -216,9 +216,8 @@ function chip({ w, kind, index, itemKey, text, colLabel, off, toggleable = true,
  */
 const highlightChip = (w, lock) => ({ h, index, sequence, location }) => chip({
     w, kind: "highlight", index, off: h.enabled === false,
-    // Preview whichever color the rule actually sets; the dialog's default background is the
-    // last resort for legacy rules with no style at all.
-    swatch: h.style?.bg ?? h.style?.fg ?? "#fff3cd",
+    // Preview whichever color the rule sets; the server requires one of the two.
+    swatch: h.style?.bg ?? h.style?.fg,
     colLabel: h.name ?? h.id ?? w.t("highlight.label"),
     text: `#${sequence} · ${h.expr} ${w.t(h.scope === "cell" ? "highlight.scopeCell" : "highlight.scopeRow", { column: h.col })}`,
     location,
