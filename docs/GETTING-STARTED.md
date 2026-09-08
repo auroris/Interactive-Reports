@@ -5,6 +5,8 @@ report. It keeps the first run small, then points to the guides that own optiona
 features and operational detail.
 
 For a runnable report-only application, see the [minimal sample](../samples/Minimal/README.md).
+For Windows identity, administration, and authorization hooks, see the
+[Windows Authentication sample](../samples/WindowsAuthentication/README.md).
 
 ## Prerequisites
 

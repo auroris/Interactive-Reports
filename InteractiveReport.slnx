@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/samples/">
     <Project Path="samples/Minimal/Minimal.csproj" />
+    <Project Path="samples/WindowsAuthentication/WindowsAuthentication.csproj" />
     <Project Path="samples/Workbench/Workbench.csproj" />
   </Folder>
   <Folder Name="/src/">

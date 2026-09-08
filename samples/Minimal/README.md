@@ -33,8 +33,9 @@ entries with NuGet references to `InteractiveReport.AspNetCore` and
 JSON client NuGet package includes the browser assets, so a consuming application
 does not need the npm build steps.
 
-To use an existing SQLite database, remove the sample database initialization block
-from `Program.cs`, change `ConnectionStrings:SampleDb` to your database's connection
+To use an existing SQLite database, remove the sample connection's `using` block
+and the `CreateSampleData` method from `Program.cs`, keeping the service registration,
+endpoint mapping, and `app.RunAsync()` call. Change `ConnectionStrings:SampleDb` to your database's connection
 string, and update the report SQL. The `SampleDb_ProviderName` setting identifies
 the provider explicitly.
 

@@ -489,4 +489,5 @@ test-results/
 blob-report/
 /src/InteractiveReport.Client.Json/Ui/dist
 /samples/Workbench/App_Data
+/samples/WindowsAuthentication/App_Data
 /demo

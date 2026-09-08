@@ -50,6 +50,9 @@ the database as SQL text.
 For a runnable application with one report and an explicit SQLite dependency, see
 the [minimal sample](samples/Minimal/README.md).
 
+The [Windows Authentication sample](samples/WindowsAuthentication/README.md) adds
+Windows identity, administration, and application authorization hooks.
+
 Install packages via the command line:
 
 ```sh

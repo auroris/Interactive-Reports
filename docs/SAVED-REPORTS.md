@@ -264,7 +264,12 @@ metadata does not make the uploaded document global or default.
 Before deploying saved reports, verify that:
 
 - the persistence principal can create the two tables, or operators provisioned the current
-  schemas with `autoCreate: false`;
+  schemas with `autoCreate: false`; on Oracle 11g the saved-report identity is a sequence
+  and a trigger, so auto-create there also needs `CREATE SEQUENCE` and `CREATE TRIGGER`;
+- on SQL Server, the administrator table's `IDENTITY_VALUE` column collates binary
+  (`Latin1_General_100_BIN2`), as auto-create declares it; a hand-provisioned table must
+  do the same, and a table created by release 1.0.0 under a case-insensitive database
+  collation merges identities that differ only by case until that column is altered;
 - configured document files are present under the published content root;
 - the bootstrap administrator identity matches the host's authenticated principal;
 - private ownership values use the same canonical identity format;
