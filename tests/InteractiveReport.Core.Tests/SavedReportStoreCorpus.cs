@@ -5,12 +5,19 @@ using InteractiveReport.Core.SavedReports;
 namespace InteractiveReport.Core.Tests;
 
 /// <summary>Dialect-neutral saved-report persistence contract.</summary>
-public abstract class SavedReportStoreCorpus
+public abstract class SavedReportStoreCorpus : IAsyncLifetime
 {
     private SqlSavedReportStore? _store;
 
     /// <summary>Build (or skip) the store. Called once per test via the Store property.</summary>
     protected abstract SqlSavedReportStore CreateStore();
+
+    /// <summary>Removes whatever the store created; live targets drop their scratch objects here after every test.</summary>
+    protected virtual Task CleanUp() => Task.CompletedTask;
+
+    Task IAsyncLifetime.InitializeAsync() => Task.CompletedTask;
+
+    Task IAsyncLifetime.DisposeAsync() => CleanUp();
 
     private SqlSavedReportStore Store => _store ??= CreateStore();
 

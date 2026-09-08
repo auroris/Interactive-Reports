@@ -27,6 +27,7 @@ public sealed class PersistenceHttpLiveTests
         var suffix = Guid.NewGuid().ToString("N")[..12].ToUpperInvariant();
         var defaultTable = $"IR_D_{suffix}";
         var explicitTable = $"IR_E_{suffix}";
+        var administratorsTable = $"IR_A_{suffix}";
         var contentRoot = Directory.CreateTempSubdirectory("interactive-report-live-persistence-").FullName;
 
         try
@@ -38,14 +39,16 @@ public sealed class PersistenceHttpLiveTests
                 ["ORDER_ID", "CUSTOMER", "STATUS", "AMOUNT", "NOTES", "ORDER_DATE", "ORDER_DATE_TEXT"],
                 contentRoot,
                 defaultTable,
-                explicitTable);
+                explicitTable,
+                administratorsTable);
         }
         finally
         {
-            await PersistenceHttpScenario.DropTableIfExists(
-                () => live.CreateConnection("live"), dialect, defaultTable);
-            await PersistenceHttpScenario.DropTableIfExists(
-                () => live.CreateConnection("live"), dialect, explicitTable);
+            foreach (var table in new[] { defaultTable, explicitTable, administratorsTable })
+            {
+                await PersistenceHttpScenario.DropTableIfExists(
+                    () => live.CreateConnection("live"), dialect, table);
+            }
             SqliteConnection.ClearAllPools();
             if (Directory.Exists(contentRoot))
                 Directory.Delete(contentRoot, recursive: true);

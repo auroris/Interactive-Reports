@@ -1,31 +1,27 @@
+using InteractiveReport.Core.Authorization;
 using InteractiveReport.Core.Model;
-using InteractiveReport.Core.SavedReports;
 using Npgsql;
 
 namespace InteractiveReport.Core.Tests;
 
-/// <summary>
-/// Live: every corpus test drops the dedicated table first, so AutoCreate re-runs the
-/// Postgres DDL each time. Quoted identifiers are load-bearing because Postgres folds
-/// unquoted names to lowercase.
-/// </summary>
-public sealed class PostgresSavedReportStoreTests : SavedReportStoreCorpus
+/// <summary>Live PostgreSQL execution of the administrator-grant contract.</summary>
+public sealed class PostgresAdministratorStoreTests : AdministratorStoreCorpus
 {
-    private const string TableName = "IR_SAVED_REPORTS_TEST";
+    private const string TableName = "IR_ADMINISTRATORS_TEST";
 
     private static string? ConnectionString => Environment.GetEnvironmentVariable("IR_TEST_POSTGRES");
 
-    protected override SqlSavedReportStore CreateStore()
+    protected override SqlAdministratorStore CreateStore()
     {
         var connectionString = ConnectionString;
         Skip.If(
             string.IsNullOrWhiteSpace(connectionString),
-            "set IR_TEST_POSTGRES to run live Postgres saved-report verification");
+            "set IR_TEST_POSTGRES to run live Postgres administrator-store verification");
 
         DropTable(connectionString!);
-        return new SqlSavedReportStore(
-            () => new SavedReportStoreConfig(
-                "Saved",
+        return new SqlAdministratorStore(
+            () => new AdministratorStoreConfig(
+                "Administrators",
                 ReportDialect.Postgres,
                 AutoCreate: true,
                 TableName: TableName),

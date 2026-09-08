@@ -4,8 +4,8 @@ using Microsoft.Data.Sqlite;
 namespace InteractiveReport.AspNetCore.Tests;
 
 /// <summary>
-/// The provider catalog: tokens fix connection types and dialects; providers other
-/// than SQLite load by reflection from the host's dependency graph. This test
+/// The provider catalog: tokens fix connection types and dialects; all providers
+/// load by reflection from the host's dependency graph. This test
 /// project deliberately references only Microsoft.Data.Sqlite, so the missing-
 /// assembly paths here are the real ones a consumer hits, package hints included.
 /// </summary>

@@ -309,10 +309,14 @@ public sealed class SqlAdministratorStore : IAdministratorStore
                     MODIFIED_UTC   TEXT NOT NULL
                 )
                 """,
+            // The identity is an opaque, ordinally compared key. It collates binary so the
+            // database's own equality in UPDATE, DELETE, and the primary key agrees with that
+            // rule instead of merging case variants under a case-insensitive default collation
+            // (the saved-report store keys its title scope the same way).
             ReportDialect.SqlServer => $"""
                 IF OBJECT_ID(N'{config.TableName}', N'U') IS NULL
                 CREATE TABLE {config.TableName} (
-                    IDENTITY_VALUE NVARCHAR(400) PRIMARY KEY,
+                    IDENTITY_VALUE NVARCHAR(400) COLLATE Latin1_General_100_BIN2 PRIMARY KEY,
                     MODIFIED_UTC   NVARCHAR(40) NOT NULL
                 )
                 """,

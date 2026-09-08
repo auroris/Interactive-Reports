@@ -268,8 +268,7 @@ Before deploying saved reports, verify that:
   and a trigger, so auto-create there also needs `CREATE SEQUENCE` and `CREATE TRIGGER`;
 - on SQL Server, the administrator table's `IDENTITY_VALUE` column collates binary
   (`Latin1_General_100_BIN2`), as auto-create declares it; a hand-provisioned table must
-  do the same, and a table created by release 1.0.0 under a case-insensitive database
-  collation merges identities that differ only by case until that column is altered;
+  do the same;
 - configured document files are present under the published content root;
 - the bootstrap administrator identity matches the host's authenticated principal;
 - private ownership values use the same canonical identity format;

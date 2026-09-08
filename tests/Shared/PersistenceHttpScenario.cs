@@ -37,10 +37,12 @@ internal static class PersistenceHttpScenario
         IReadOnlyCollection<string> expectedColumns,
         string contentRoot,
         string defaultStoreTable,
-        string explicitStoreTable)
+        string explicitStoreTable,
+        string administratorsTable)
     {
         Assert.False(await TableExists(createDataConnection, dialect, defaultStoreTable));
         Assert.False(await TableExists(createDataConnection, dialect, explicitStoreTable));
+        Assert.False(await TableExists(createDataConnection, dialect, administratorsTable));
 
         await SaveRestartAndLoad(
             dialect,
@@ -49,11 +51,13 @@ internal static class PersistenceHttpScenario
             expectedColumns,
             contentRoot,
             savedReportsConnection: null,
-            defaultStoreTable);
+            defaultStoreTable,
+            administratorsTable);
 
         Assert.True(File.Exists(ExplicitFileStorePath(contentRoot)));
         Assert.False(await TableExists(createDataConnection, dialect, defaultStoreTable));
         Assert.False(await TableExists(createDataConnection, dialect, explicitStoreTable));
+        Assert.False(await TableExists(createDataConnection, dialect, administratorsTable));
 
         await SaveRestartAndLoad(
             dialect,
@@ -62,9 +66,12 @@ internal static class PersistenceHttpScenario
             expectedColumns,
             contentRoot,
             savedReportsConnection: DataConnectionName,
-            explicitStoreTable);
+            explicitStoreTable,
+            administratorsTable);
 
+        // The administrator table follows the saved-report store into the report database.
         Assert.True(await TableExists(createDataConnection, dialect, explicitStoreTable));
+        Assert.True(await TableExists(createDataConnection, dialect, administratorsTable));
     }
 
     public static async Task<bool> TableExists(
@@ -129,7 +136,8 @@ internal static class PersistenceHttpScenario
         IReadOnlyCollection<string> expectedColumns,
         string contentRoot,
         string? savedReportsConnection,
-        string savedReportsTable)
+        string savedReportsTable,
+        string administratorsTable)
     {
         var title = $"Persistence {Guid.NewGuid():N}";
         JsonElement defaultState;
@@ -141,7 +149,8 @@ internal static class PersistenceHttpScenario
                          reportSql,
                          contentRoot,
                          savedReportsConnection,
-                         savedReportsTable))
+                         savedReportsTable,
+                         administratorsTable))
         {
             var schema = await GetJson(host.Client, $"/api/reports/{ReportName}/schema");
             AssertColumns(expectedColumns, schema.GetProperty("columns"));
@@ -173,7 +182,8 @@ internal static class PersistenceHttpScenario
                          reportSql,
                          contentRoot,
                          savedReportsConnection,
-                         savedReportsTable))
+                         savedReportsTable,
+                         administratorsTable))
         {
             var visible = await GetJson(restarted.Client, $"/api/reports/{ReportName}");
             Assert.Contains(visible.EnumerateArray(), item => item.GetProperty("id").GetInt64() == id);
@@ -193,7 +203,8 @@ internal static class PersistenceHttpScenario
         string reportSql,
         string contentRoot,
         string? savedReportsConnection,
-        string savedReportsTable)
+        string savedReportsTable,
+        string administratorsTable)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -211,6 +222,7 @@ internal static class PersistenceHttpScenario
             [$"InteractiveReport:Reports:{ReportName}:Authorization:AllowAnonymous"] = "true",
         };
         settings["InteractiveReport:SavedReports:TableName"] = savedReportsTable;
+        settings["InteractiveReport:Authorization:TableName"] = administratorsTable;
         if (savedReportsConnection is null)
         {
             settings["InteractiveReport:SavedReports:DataSource"] =

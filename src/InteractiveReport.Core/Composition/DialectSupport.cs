@@ -127,12 +127,16 @@ public static class DialectSupport
             => base.WrapValue(SqlKataSyntax.ProtectQuestionMarks(value));
     }
 
+    /// <summary>
+    /// Oracle 11g has no OFFSET/FETCH, so every limited query becomes a ROWNUM window. SqlKata's
+    /// <c>UseLegacyPagination</c> wrapper is not used: for a page beyond the first it returns its ROWNUM
+    /// helper column through <c>SELECT *</c>, so the page carries one more column than its projection.
+    /// This compiler emits the same window but names the query's own output columns in the outer SELECT.
+    /// </summary>
     private sealed class InteractiveReportOracle11gCompiler : OracleCompiler
     {
-        public InteractiveReportOracle11gCompiler()
-        {
-            UseLegacyPagination = true;
-        }
+        private const string WrapperAlias = "results_wrapper";
+        private const string RowNumberAlias = "row_num";
 
         /// <summary>
         /// Compiles one Oracle 11g query with ROWNUM pagination and restores literal question marks protected in raw fragments.
@@ -149,6 +153,174 @@ public static class DialectSupport
         /// <returns>The Oracle-quoted identifier.</returns>
         public override string WrapValue(string value)
             => base.WrapValue(SqlKataSyntax.ProtectQuestionMarks(value));
+
+        /// <summary>
+        /// Emits no OFFSET/FETCH clause; <see cref="CompileSelectQuery"/> applies the ROWNUM window instead.
+        /// </summary>
+        /// <param name="ctx">The result being compiled.</param>
+        /// <returns>Always <see langword="null"/>.</returns>
+        public override string? CompileLimit(SqlResult ctx) => null;
+
+        /// <summary>
+        /// Compiles a select statement and wraps a limited or offset query in a ROWNUM window that
+        /// preserves the projection width.
+        /// </summary>
+        /// <param name="query">The SqlKata query to compile.</param>
+        /// <returns>The compiled result whose raw SQL and positional bindings include the window.</returns>
+        /// <exception cref="InvalidOperationException">Thrown when an offset query has no projection this compiler can name in the outer SELECT.</exception>
+        protected override SqlResult CompileSelectQuery(Query query)
+        {
+            var ctx = base.CompileSelectQuery(query);
+            var limit = ctx.Query.GetOneComponent<LimitClause>("limit", EngineCode)?.Limit ?? 0;
+            var offset = ctx.Query.GetOneComponent<OffsetClause>("offset", EngineCode)?.Offset ?? 0;
+            if (limit == 0 && offset == 0) return ctx;
+
+            if (offset == 0)
+            {
+                ctx.RawSql = $"SELECT * FROM ({ctx.RawSql}) WHERE ROWNUM <= ?";
+                ctx.Bindings.Add(limit);
+                return ctx;
+            }
+
+            var projection = string.Join(", ", OutputColumns(ctx.Query));
+            var ranked = $"SELECT {WrapValue(WrapperAlias)}.*, ROWNUM {WrapValue(RowNumberAlias)} "
+                + $"FROM ({ctx.RawSql}) {WrapValue(WrapperAlias)}";
+            if (limit == 0)
+            {
+                ctx.RawSql = $"SELECT {projection} FROM ({ranked}) WHERE {WrapValue(RowNumberAlias)} > ?";
+                ctx.Bindings.Add(offset);
+                return ctx;
+            }
+
+            ctx.RawSql = $"SELECT {projection} FROM ({ranked} WHERE ROWNUM <= ?) WHERE {WrapValue(RowNumberAlias)} > ?";
+            ctx.Bindings.Add(limit + offset);
+            ctx.Bindings.Add(offset);
+            return ctx;
+        }
+
+        /// <summary>
+        /// Names each select item's output column exactly as the inner statement emits it.
+        /// </summary>
+        /// <param name="query">The query whose select components are re-projected.</param>
+        /// <returns>Quoted output identifiers in projection order.</returns>
+        /// <exception cref="InvalidOperationException">Thrown for <c>SELECT *</c> or a select item whose output name cannot be determined.</exception>
+        private IEnumerable<string> OutputColumns(Query query)
+        {
+            var columns = query.GetComponents<AbstractColumn>("select", EngineCode);
+            if (columns.Count == 0)
+                throw new InvalidOperationException(
+                    "Oracle 11g pagination beyond the first page requires an explicit projection; SELECT * cannot be re-projected around the ROWNUM window.");
+            foreach (var column in columns)
+            {
+                yield return column switch
+                {
+                    Column plain => ColumnOutputName(plain.Name),
+                    RawColumn raw => RawOutputName(raw.Expression),
+                    QueryColumn sub when !string.IsNullOrWhiteSpace(sub.Query.QueryAlias) => WrapValue(sub.Query.QueryAlias),
+                    AggregatedColumn aggregate => AggregateOutputName(aggregate),
+                    _ => throw new InvalidOperationException(
+                        $"Oracle 11g pagination cannot re-project a {column.GetType().Name} select item."),
+                };
+            }
+        }
+
+        /// <summary>
+        /// Resolves an aggregated select item's output name. SqlKata names such an item only when its
+        /// column carries an alias; an unaliased aggregate has no stable name to re-project.
+        /// </summary>
+        /// <param name="aggregate">The aggregated select item.</param>
+        /// <returns>The quoted alias.</returns>
+        /// <exception cref="InvalidOperationException">Thrown when the aggregate carries no alias.</exception>
+        private string AggregateOutputName(AggregatedColumn aggregate)
+        {
+            if (aggregate.Column is Column { Name: var name })
+            {
+                var (_, alias) = SplitAlias(name);
+                if (!string.IsNullOrWhiteSpace(alias)) return WrapValue(alias);
+            }
+            throw new InvalidOperationException(
+                "Oracle 11g pagination beyond the first page requires every aggregate select item to carry an alias.");
+        }
+
+        /// <summary>
+        /// Resolves a plain column's output name the way SqlKata's <c>Wrap</c> does: the alias when present,
+        /// otherwise the last dotted segment.
+        /// </summary>
+        /// <param name="name">The select item as written, optionally qualified or aliased.</param>
+        /// <returns>The quoted output identifier.</returns>
+        private string ColumnOutputName(string name)
+        {
+            var (columnName, alias) = SplitAlias(name);
+            var output = alias ?? columnName;
+            if (output.Contains('*'))
+                throw new InvalidOperationException(
+                    "Oracle 11g pagination beyond the first page cannot re-project a wildcard select item.");
+            var segment = output.LastIndexOf('.') is var dot && dot >= 0 ? output[(dot + 1)..] : output;
+            return WrapValue(segment);
+        }
+
+        /// <summary>
+        /// Extracts the trailing <c>AS alias</c> from a raw select expression. Every raw projection in the
+        /// engine ends with one, written through <see cref="SqlKataSyntax.Identifier"/>.
+        /// </summary>
+        /// <param name="expression">The raw select expression.</param>
+        /// <returns>The alias rendered exactly as the inner statement renders it.</returns>
+        private string RawOutputName(string expression)
+        {
+            var text = expression.TrimEnd();
+            var start = AliasStart(text);
+            var head = start > 0 ? text[..start].TrimEnd() : "";
+            if (start <= 0
+                || head.Length < 3
+                || !head.EndsWith("AS", StringComparison.OrdinalIgnoreCase)
+                || !char.IsWhiteSpace(head[^3]))
+                throw new InvalidOperationException(
+                    "Oracle 11g pagination beyond the first page requires every raw select item to end with an AS alias.");
+            return WrapIdentifiers(text[start..]);
+        }
+
+        /// <summary>
+        /// Finds where the trailing identifier token starts: a SqlKata <c>[marker]</c> token, a
+        /// double-quoted identifier with doubled embedded quotes, or a bare identifier.
+        /// </summary>
+        /// <param name="text">The trimmed raw expression.</param>
+        /// <returns>The token's start index, or -1 when the text does not end with an identifier token.</returns>
+        private static int AliasStart(string text)
+        {
+            if (text.Length == 0) return -1;
+            if (text[^1] == ']')
+            {
+                // Markers inside a token are backslash-escaped, so the first unescaped '[' opens it.
+                for (var index = text.Length - 2; index >= 0; index--)
+                {
+                    if (text[index] == '[' && (index == 0 || text[index - 1] != '\\')) return index;
+                }
+                return -1;
+            }
+            if (text[^1] == '"')
+            {
+                var index = text.Length - 2;
+                while (index >= 0)
+                {
+                    if (text[index] != '"')
+                    {
+                        index--;
+                        continue;
+                    }
+                    if (index > 0 && text[index - 1] == '"')
+                    {
+                        index -= 2;
+                        continue;
+                    }
+                    return index;
+                }
+                return -1;
+            }
+            var start = text.Length;
+            while (start > 0 && (char.IsLetterOrDigit(text[start - 1]) || text[start - 1] is '_' or '$' or '#'))
+                start--;
+            return start == text.Length ? -1 : start;
+        }
     }
 
     private sealed class InteractiveReportSqliteCompiler : SqliteCompiler

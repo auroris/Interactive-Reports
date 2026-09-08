@@ -262,32 +262,34 @@ public sealed class ReportExecutor
         // compiler is chosen only after the connection is open.
         await using var connection = await _connections.Open(definition, ct);
         var sqlCompiler = DialectSupport.GetCompiler(definition.GetEffectiveDialect());
-        await using var scope = await _connections.BeginReadScope(connection, definition, ct);
-        var reader = CreateReader(connection, sqlCompiler, definition, contextParams, scope.Transaction);
-        var compiler = new ComposableTableCompiler(
-            definition,
-            document,
-            schema,
-            DateTime.UtcNow,
-            (query, rowDimensions, columnDimensions, values, token) =>
-                reader.ReadPivotGroups(query, rowDimensions, columnDimensions, values, token));
-        var plan = compiler.CompleteForTarget(await compiler.Compile(activeTable, ct));
-        if (!plan.Relation.Schema.TryGetValue(requestedColumn, out var column))
-            throw new ReportValidationException(
-                [new ValidationError("column", $"unknown active-table column '{requestedColumn}'")]);
+        var (column, rows) = await _connections.Read(connection, definition, async scope =>
+        {
+            var reader = CreateReader(connection, sqlCompiler, definition, contextParams, scope.Transaction);
+            var compiler = new ComposableTableCompiler(
+                definition,
+                document,
+                schema,
+                DateTime.UtcNow,
+                (query, rowDimensions, columnDimensions, values, token) =>
+                    reader.ReadPivotGroups(query, rowDimensions, columnDimensions, values, token));
+            var plan = compiler.CompleteForTarget(await compiler.Compile(activeTable, ct));
+            if (!plan.Relation.Schema.TryGetValue(requestedColumn, out var lovColumn))
+                throw new ReportValidationException(
+                    [new ValidationError("column", $"unknown active-table column '{requestedColumn}'")]);
 
-        var mapped = ComposableTerminalQueryComposer.ComposeLov(
-            definition,
-            plan.Relation,
-            column,
-            request.Search,
-            MaxLovItems);
-        var rows = await reader.ReadRows(
-            mapped.Query,
-            mapped.PublicNames,
-            MaxLovItems,
-            ct);
-        await scope.CompleteAsync(ct);
+            var mapped = ComposableTerminalQueryComposer.ComposeLov(
+                definition,
+                plan.Relation,
+                lovColumn,
+                request.Search,
+                MaxLovItems);
+            var lovRows = await reader.ReadRows(
+                mapped.Query,
+                mapped.PublicNames,
+                MaxLovItems,
+                ct);
+            return (lovColumn, lovRows);
+        }, ct);
         return new ReportLovResult(
             activeTable,
             column.Name,
@@ -342,7 +344,6 @@ public sealed class ReportExecutor
         if (definition.RestrictsRowsPerCaller && document.Tables is not null)
             foreach (var table in document.Tables.Values) table.Schema = null;
         ValidateSyntheticColumnIdentities(document);
-        var results = new Dictionary<string, ReportResult>(StringComparer.OrdinalIgnoreCase);
         var hasNamedTables = document.Tables is { Count: > 0 };
         var activeTable = hasNamedTables ? ResolveActiveTable(document) : "definition";
 
@@ -360,46 +361,51 @@ public sealed class ReportExecutor
         // nothing, and the request-scoped definition still says plain Oracle until then.
         await using var connection = await _connections.Open(definition, ct);
         var sqlCompiler = DialectSupport.GetCompiler(definition.GetEffectiveDialect());
-        await using var scope = await _connections.BeginReadScope(connection, definition, ct);
-        var reader = CreateReader(connection, sqlCompiler, definition, contextParams, scope.Transaction);
-        var tableCompiler = new ComposableTableCompiler(
-            definition,
-            document,
-            definitionSchema,
-            evaluationUtcNow,
-            (query, rowDimensions, columnDimensions, values, token) =>
-                reader.ReadPivotGroups(query, rowDimensions, columnDimensions, values, token));
-        foreach (var tableId in refreshTargets)
-            _ = await tableCompiler.Compile(tableId, ct);
-        if (executeActive)
+        // The whole read, discovery included, runs inside one scope and starts over from a
+        // fresh compiler if the scope has to be re-established.
+        var results = await _connections.Read(connection, definition, async scope =>
         {
-            var activePlan = tableCompiler.CompleteForTarget(
-                await tableCompiler.Compile(activeTable, ct));
-            results[activeTable] = await ExecuteComposablePlan(
+            var executed = new Dictionary<string, ReportResult>(StringComparer.OrdinalIgnoreCase);
+            var reader = CreateReader(connection, sqlCompiler, definition, contextParams, scope.Transaction);
+            var tableCompiler = new ComposableTableCompiler(
                 definition,
-                activePlan,
-                reader,
-                Stopwatch.StartNew(),
-                ct);
-        }
-        else
-        {
-            // Advisory cache presence never suppresses semantic validation.
-            _ = tableCompiler.CompleteForTarget(
-                await tableCompiler.Compile(activeTable, ct));
-        }
+                document,
+                definitionSchema,
+                evaluationUtcNow,
+                (query, rowDimensions, columnDimensions, values, token) =>
+                    reader.ReadPivotGroups(query, rowDimensions, columnDimensions, values, token));
+            foreach (var tableId in refreshTargets)
+                _ = await tableCompiler.Compile(tableId, ct);
+            if (executeActive)
+            {
+                var activePlan = tableCompiler.CompleteForTarget(
+                    await tableCompiler.Compile(activeTable, ct));
+                executed[activeTable] = await ExecuteComposablePlan(
+                    definition,
+                    activePlan,
+                    reader,
+                    Stopwatch.StartNew(),
+                    ct);
+            }
+            else
+            {
+                // Advisory cache presence never suppresses semantic validation.
+                _ = tableCompiler.CompleteForTarget(
+                    await tableCompiler.Compile(activeTable, ct));
+            }
 
-        // Every named table reached while compiling a refresh target or the
-        // active table already has a live relation and schema in the memo. Replace its advisory
-        // cache even when the submitted value was non-null, so a server-returned cache never
-        // contradicts work this request has just completed. Dormant, uncompiled alternatives
-        // retain their cache without causing extra database work.
-        if (hasNamedTables)
-            foreach (var (tableId, plan) in tableCompiler.Completed)
-                document.Tables![tableId].Schema = CompiledColumns(plan)
-                    .Select(column => column with { })
-                    .ToList();
-        await scope.CompleteAsync(ct);
+            // Every named table reached while compiling a refresh target or the
+            // active table already has a live relation and schema in the memo. Replace its advisory
+            // cache even when the submitted value was non-null, so a server-returned cache never
+            // contradicts work this request has just completed. Dormant, uncompiled alternatives
+            // retain their cache without causing extra database work.
+            if (hasNamedTables)
+                foreach (var (tableId, plan) in tableCompiler.Completed)
+                    document.Tables![tableId].Schema = CompiledColumns(plan)
+                        .Select(column => column with { })
+                        .ToList();
+            return executed;
+        }, ct);
         return new SchemaRefresh(document, results);
     }
 

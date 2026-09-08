@@ -357,6 +357,14 @@ public static class DbErrorClassifier
                 "User requested cancel of current operation (timeout).",
                 "The database command timed out. Increase CommandTimeoutSeconds or optimize the query."),
 
+            // Snapshot consistency
+            1466 => new DbErrorDiagnosis(
+                DbErrorKind.ConcurrencyConflict,
+                "Concurrency",
+                code,
+                "Snapshot read rejected: a queried table's definition changed after the read-only transaction's snapshot time.",
+                "The engine retries the snapshot read once. If the error persists, the server clock or time zone changed under the running instance: restart the Oracle instance and listener, recreate a table that was created or altered while the clock was skewed if it alone stays affected, or set the report's consistency to 'none'."),
+
             // Constraints
             1 => new DbErrorDiagnosis(
                 DbErrorKind.ConstraintViolation,

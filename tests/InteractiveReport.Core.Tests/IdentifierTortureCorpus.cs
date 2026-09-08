@@ -51,7 +51,7 @@ internal static class IdentifierTortureCorpus
             .Concat(SqliteOnlyColumns.Select(column => column.Name));
         // Oracle does not permit an embedded double quote in an identifier. Its
         // compiler output is therefore not presented as executable coverage.
-        if (dialect == ReportDialect.Oracle)
+        if (dialect is ReportDialect.Oracle or ReportDialect.Oracle11g)
             names = names.Where(name => !string.Equals(name, EmbeddedQuoteName, StringComparison.Ordinal));
         return names.ToArray();
     }
@@ -147,7 +147,7 @@ internal static class IdentifierTortureCorpus
         // comment and drops every bind name that follows (ORA-01008), so a bound predicate after
         // such a column can never execute; LiveDialectTests documents the misread in isolation.
         // The compiler corpus still covers the name — only live execution excludes it.
-        if (dialect == ReportDialect.Oracle)
+        if (dialect is ReportDialect.Oracle or ReportDialect.Oracle11g)
             columns = columns.Where(column => !column.Name.Contains("--", StringComparison.Ordinal));
         if (dialect is ReportDialect.SqlServer or ReportDialect.Postgres)
             columns = columns.Append(new TortureColumn("STATUS", EmbeddedQuoteName));

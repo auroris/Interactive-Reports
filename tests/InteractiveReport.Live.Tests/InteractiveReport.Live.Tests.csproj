@@ -48,6 +48,7 @@
   <ItemGroup>
     <Compile Include="..\InteractiveReport.Core.Tests\IdentifierTortureCorpus.cs" Link="IdentifierTortureCorpus.cs" />
     <Compile Include="..\InteractiveReport.Core.Tests\SavedReportStoreCorpus.cs" Link="SavedReportStoreCorpus.cs" />
+    <Compile Include="..\InteractiveReport.Core.Tests\AdministratorStoreCorpus.cs" Link="AdministratorStoreCorpus.cs" />
     <Compile Include="..\InteractiveReport.Core.Tests\TestFixtures.cs" Link="TestFixtures.cs" />
     <Compile Include="..\Shared\PersistenceHttpScenario.cs" Link="PersistenceHttpScenario.cs" />
   </ItemGroup>

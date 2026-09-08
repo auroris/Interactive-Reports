@@ -44,7 +44,8 @@ public sealed class PersistenceHttpTests
                 ["ID", "LABEL", "AMOUNT"],
                 contentRoot,
                 defaultStoreTable: "IR_SAVED_REPORTS",
-                explicitStoreTable: "IR_SAVED_REPORTS");
+                explicitStoreTable: "IR_SAVED_REPORTS",
+                administratorsTable: "IR_ADMINISTRATORS");
         }
         finally
         {

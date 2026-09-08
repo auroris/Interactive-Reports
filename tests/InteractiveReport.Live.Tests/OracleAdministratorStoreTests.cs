@@ -1,27 +1,27 @@
+using InteractiveReport.Core.Authorization;
 using InteractiveReport.Core.Model;
-using InteractiveReport.Core.SavedReports;
 using Oracle.ManagedDataAccess.Client;
 
 namespace InteractiveReport.Core.Tests;
 
-/// <summary>Live Oracle execution of the dialect-neutral saved-report contract.</summary>
-public sealed class OracleSavedReportStoreTests : SavedReportStoreCorpus
+/// <summary>Live Oracle execution of the administrator-grant contract.</summary>
+public sealed class OracleAdministratorStoreTests : AdministratorStoreCorpus
 {
-    private const string TableName = "IR_SAVED_REPORTS_TEST";
+    private const string TableName = "IR_ADMINISTRATORS_TEST";
 
     private static string? ConnectionString => Environment.GetEnvironmentVariable("IR_TEST_ORACLE");
 
-    protected override SqlSavedReportStore CreateStore()
+    protected override SqlAdministratorStore CreateStore()
     {
         var connectionString = ConnectionString;
         Skip.If(
             string.IsNullOrWhiteSpace(connectionString),
-            "set IR_TEST_ORACLE to run live Oracle saved-report verification");
+            "set IR_TEST_ORACLE to run live Oracle administrator-store verification");
 
         DropTable(connectionString!);
-        return new SqlSavedReportStore(
-            () => new SavedReportStoreConfig(
-                "Saved",
+        return new SqlAdministratorStore(
+            () => new AdministratorStoreConfig(
+                "Administrators",
                 ReportDialect.Oracle,
                 AutoCreate: true,
                 TableName: TableName),

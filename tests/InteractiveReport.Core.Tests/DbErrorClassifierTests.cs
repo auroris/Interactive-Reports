@@ -64,6 +64,7 @@ public class DbErrorClassifierTests
     [InlineData(12541, DbErrorKind.ConnectionFailed, "Connection", "ORA-12541")]
     [InlineData(904, DbErrorKind.SyntaxOrSchemaError, "Syntax", "ORA-00904")]
     [InlineData(1013, DbErrorKind.Timeout, "Timeout", "ORA-01013")]
+    [InlineData(1466, DbErrorKind.ConcurrencyConflict, "Concurrency", "ORA-01466")]
     [InlineData(1, DbErrorKind.ConstraintViolation, "Constraint Violation", "ORA-00001")]
     public void Classify_oracle_errors(int number, DbErrorKind expectedKind, string expectedCategory, string expectedCode)
     {

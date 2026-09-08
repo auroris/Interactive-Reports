@@ -66,8 +66,10 @@ Run just the battery:
 dotnet test tests/InteractiveReport.Live.Tests
 ```
 
-**What it does:** on first use per run it **drops and recreates a table named
-`IR_TEST_ORDERS`** in each target database and seeds the canonical 10 rows, then runs
+**What it does:** on first use per run it **creates a table named `IR_TEST_ORDERS`** in
+each target database when it is missing or has the wrong shape, reseeds its canonical 10
+rows with plain DML (that table is the one object the battery keeps between runs, so
+Oracle's read-only snapshots never cross a DDL boundary), then runs
 expression filters and highlights/search/explicit null-or-empty conditions/aggregates/breaks/computed columns (including CASE,
 date-part extraction over native and ISO-text dates, and the date vocabulary —
 NOW/TO_DATE/DATE_TRUNC/TO_STRING, whole-day arithmetic, and BETWEEN), request-scoped
@@ -88,8 +90,16 @@ database. The second pass configures a random saved-report table in the report d
 and repeats the restart/load check. Random live tables are removed after the test.
 
 Finally, the complete saved-report create/list/update/delete contract runs against SQL
-Server, Oracle, and PostgreSQL in a dedicated `IR_SAVED_REPORTS_TEST` table. Point the
-environment variables at scratch databases, not anything you care about.
+Server, Oracle, and PostgreSQL in a dedicated `IR_SAVED_REPORTS_TEST` table, and the
+administrator-grant contract runs the same way in `IR_ADMINISTRATORS_TEST`; every store
+test drops its scratch table when it finishes.
+
+Oracle 11g compatibility mode cannot be proven against a real 11g server, so the battery
+forces that dialect against the modern Oracle server instead. The whole engine corpus and
+both store contracts run in 11g mode (ROWNUM windows, sequence-and-trigger identities)
+while a guard on the engine's SQL log fails any statement that leaves 11g's vocabulary
+(OFFSET/FETCH, identity columns, 12c functions) or exceeds its 30-byte identifier limit.
+Point the environment variables at scratch databases, not anything you care about.
 
 Expected numbers are identical on every dialect by design, including the explicit
 `NOTES IS NULL OR NOTES = ''` condition (4): SQLite/SQL Server/PostgreSQL count three
@@ -145,14 +155,23 @@ WHERE name = N'irtest';  -- must be ON, not IN_TRANSITION_TO_ON
 
 ```sql
 CREATE USER irtest IDENTIFIED BY "YourStrongPassword1!";
-GRANT CREATE SESSION, CREATE TABLE, CREATE SEQUENCE TO irtest;
+GRANT CREATE SESSION, CREATE TABLE, CREATE SEQUENCE, CREATE TRIGGER TO irtest;
 ALTER USER irtest QUOTA UNLIMITED ON USERS;
 ```
 
    `CREATE SEQUENCE` backs the identity column of the saved-report table; without it the
    store's auto-create fails with ORA-01031 and every Oracle saved-report test fails.
+   `CREATE TRIGGER` is needed only by the Oracle 11g-mode saved-report contract, which
+   persists identities through a sequence and a trigger; without it those cases skip and
+   name the missing grant in their reason.
 
 3. The battery connects as `irtest` and works in that user's own schema.
+4. If the Oracle snapshot cases skip saying the instance rejects a read-only snapshot of
+   the seed table, the VM's clock or time zone changed under a running instance. Oracle
+   then rejects read-only snapshots with ORA-01466, first for every recently changed object
+   and, once its clock recovers, still for objects created while it was skewed. The
+   fixture recreates the seed table when it can no longer be snapshot-read; if even the
+   fresh table is rejected, restart the Oracle instance and listener.
 
 ### PostgreSQL VM setup (once)
 

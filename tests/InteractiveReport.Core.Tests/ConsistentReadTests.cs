@@ -246,6 +246,94 @@ public sealed class ConsistentReadTests : IDisposable
         Assert.Equal(["SET TRANSACTION READ ONLY", "ROLLBACK"], connection.Commands);
     }
 
+    [Fact]
+    public async Task Oracle_snapshot_rejected_with_ora_01466_is_retried_once_in_a_fresh_scope()
+    {
+        var manager = new ReportConnectionManager(new UnusedFactory());
+        await using var connection = new ControlStatementConnection();
+        var definition = OracleDefinition(ReportConsistency.Snapshot);
+        var attempts = 0;
+
+        var result = await manager.Read(connection, definition, scope =>
+        {
+            attempts++;
+            if (attempts == 1) throw new FakeOracleException(1466);
+            return Task.FromResult(scope.Transaction is null ? "unscoped" : "scoped");
+        }, CancellationToken.None);
+
+        Assert.Equal("scoped", result);
+        Assert.Equal(2, attempts);
+        // Oracle's documented action: end the transaction and re-execute; the retry gets its
+        // own READ ONLY transaction rather than reusing the rejected one.
+        Assert.Equal(
+            ["SET TRANSACTION READ ONLY", "ROLLBACK", "SET TRANSACTION READ ONLY", "ROLLBACK"],
+            connection.Commands);
+    }
+
+    [Fact]
+    public async Task Persistent_ora_01466_is_reported_after_the_single_retry()
+    {
+        var manager = new ReportConnectionManager(new UnusedFactory());
+        await using var connection = new ControlStatementConnection();
+        var attempts = 0;
+
+        var rejected = await Assert.ThrowsAsync<FakeOracleException>(() => manager.Read<string>(
+            connection,
+            OracleDefinition(ReportConsistency.Snapshot),
+            _ =>
+            {
+                attempts++;
+                throw new FakeOracleException(1466);
+            },
+            CancellationToken.None));
+
+        Assert.Equal(1466, rejected.Number);
+        Assert.Equal(2, attempts);
+        Assert.Equal(
+            ["SET TRANSACTION READ ONLY", "ROLLBACK", "SET TRANSACTION READ ONLY", "ROLLBACK"],
+            connection.Commands);
+        var diagnosis = DbErrorClassifier.Classify(ReportDialect.Oracle, rejected);
+        Assert.Equal("ORA-01466", diagnosis.ProviderCode);
+        Assert.Contains("restart the Oracle instance", diagnosis.RemediationHint);
+    }
+
+    [Theory]
+    [InlineData(ReportConsistency.Snapshot, 942)]
+    [InlineData(ReportConsistency.None, 1466)]
+    public async Task Other_failures_and_unscoped_reads_are_not_retried(ReportConsistency consistency, int number)
+    {
+        var manager = new ReportConnectionManager(new UnusedFactory());
+        await using var connection = new ControlStatementConnection();
+        var attempts = 0;
+
+        await Assert.ThrowsAsync<FakeOracleException>(() => manager.Read<string>(
+            connection,
+            OracleDefinition(consistency),
+            _ =>
+            {
+                attempts++;
+                throw new FakeOracleException(number);
+            },
+            CancellationToken.None));
+
+        Assert.Equal(1, attempts);
+    }
+
+    private static ReportDefinition OracleDefinition(ReportConsistency consistency) => new()
+    {
+        Name = "oracle-snapshot",
+        Connection = "unused",
+        Dialect = ReportDialect.Oracle,
+        Consistency = consistency,
+        Sql = "SELECT 1 AS ID FROM DUAL",
+    };
+
+    private sealed class FakeOracleException(int number)
+        : DbException($"ORA-{number:D5}: simulated Oracle error")
+    {
+        public int Number { get; } = number;
+    }
+
     private sealed class RecordingFactory(ConsistentReadTests owner) : IReportConnectionFactory
     {
         public DbConnection CreateConnection(string name)

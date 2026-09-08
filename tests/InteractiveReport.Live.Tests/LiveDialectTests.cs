@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Data;
 using System.Data.Common;
 using InteractiveReport.Core.Execution;
 using InteractiveReport.Core.Model;
@@ -25,10 +26,20 @@ namespace InteractiveReport.Core.Tests;
 /// Postgres count 3 NULLs + 1 empty string; Oracle turns the empty string into a 4th NULL.
 /// (Postgres folds unquoted identifiers to lowercase; the engine's case-insensitive
 /// schema matching and response dictionaries absorb that without special-casing.)
+///
+/// Oracle 11g mode runs the same corpus against the modern Oracle server with the dialect
+/// forced: an 11g server cannot be provisioned, but its SQL is valid on every later version,
+/// and Oracle11gVocabularyGuard fails any statement that leaves 11g's vocabulary.
 /// </summary>
 public class LiveDialectTests
 {
-    public static TheoryData<ReportDialect> Dialects => new() { ReportDialect.SqlServer, ReportDialect.Oracle, ReportDialect.Postgres };
+    public static TheoryData<ReportDialect> Dialects => new()
+    {
+        ReportDialect.SqlServer,
+        ReportDialect.Oracle,
+        ReportDialect.Oracle11g,
+        ReportDialect.Postgres,
+    };
 
     private static readonly IReadOnlyDictionary<string, object?> NoParams = new Dictionary<string, object?>();
 
@@ -40,6 +51,23 @@ public class LiveDialectTests
         command.CommandText =
             "SELECT snapshot_isolation_state FROM sys.databases WHERE database_id = DB_ID()";
         return Convert.ToInt32(await command.ExecuteScalarAsync()) == 1;
+    }
+
+    private const string OracleSnapshotSkip =
+        "Oracle rejects a read-only snapshot of the freshly recreated seed table with ORA-01466, so the "
+        + "instance's snapshot dating is inconsistent (seen after a clock or time-zone change on the VM); "
+        + "restart the Oracle instance and listener";
+
+    /// <summary>
+    /// The seed fixture recreates the seed table when Oracle cannot snapshot-read it, so a failure here
+    /// means even a fresh table is rejected: the instance's snapshot dating is broken, which has nothing
+    /// to do with the engine, and the snapshot tests skip with the remedy instead.
+    /// </summary>
+    private static async Task<bool> OracleSnapshotReadsWork(LiveDb live)
+    {
+        await using var connection = live.CreateConnection("live");
+        await connection.OpenAsync();
+        return LiveDb.CanSnapshotRead(connection);
     }
 
     [SkippableTheory]
@@ -93,16 +121,36 @@ public class LiveDialectTests
     public async Task Filter_sort_page(ReportDialect dialect)
     {
         var live = LiveDb.For(dialect);
-        var result = await live.Executor.Query(live.Definition(), Doc(
-            source: new StageLayer
-            {
-                Filters = [Filter("STATUS = 'SHIPPED'")],
-                Sorts = [new SortRule { Col = "AMOUNT", Dir = SortDir.Desc }],
-            },
-            page: new PageRequest { Index = 1, Size = 3 }), NoParams);
+        StageLayer Source() => new()
+        {
+            Filters = [Filter("STATUS = 'SHIPPED'")],
+            Sorts = [new SortRule { Col = "AMOUNT", Dir = SortDir.Desc }],
+            Highlights =
+            [
+                new HighlightRule
+                {
+                    Id = "big", Scope = "row", Expr = "AMOUNT >= 5000",
+                    Style = new HighlightStyle { Bg = "#fee2e2" },
+                },
+            ],
+        };
 
-        Assert.Equal(5, result.TotalRows);
-        Assert.Equal([9000m, 7500m, 5000m], result.Rows.Select(r => Convert.ToDecimal(r["AMOUNT"])));
+        var first = await live.Executor.Query(live.Definition(), Doc(
+            source: Source(),
+            page: new PageRequest { Index = 1, Size = 3 }), NoParams);
+        Assert.Equal(5, first.TotalRows);
+        Assert.Equal([9000m, 7500m, 5000m], first.Rows.Select(r => Convert.ToDecimal(r["AMOUNT"])));
+        Assert.Equal(3, first.Highlights.Count(hit => hit.Id == "big"));
+
+        // A later page is where offset emulation (Oracle 11g's ROWNUM window) must still return
+        // exactly the projection: the decoration marker rides along but is never exposed.
+        var second = await live.Executor.Query(live.Definition(), Doc(
+            source: Source(),
+            page: new PageRequest { Index = 2, Size = 3 }), NoParams);
+        Assert.Equal(5, second.TotalRows);
+        Assert.Equal([3000m, 1500m], second.Rows.Select(r => Convert.ToDecimal(r["AMOUNT"])));
+        Assert.Empty(second.Highlights);
+        Assert.All(second.Rows, row => Assert.Equal(5, row.Count));
     }
 
     [SkippableTheory]
@@ -454,7 +502,7 @@ public class LiveDialectTests
         def.TimeZone = "Pacific/Auckland";
         def.Sql = dialect switch
         {
-            ReportDialect.Oracle => "SELECT SESSIONTIMEZONE AS TZ FROM DUAL",
+            ReportDialect.Oracle or ReportDialect.Oracle11g => "SELECT SESSIONTIMEZONE AS TZ FROM DUAL",
             ReportDialect.Postgres => "SELECT current_setting('TimeZone') AS \"TZ\"",
             _ => "SELECT ORDER_ID FROM IR_TEST_ORDERS",
         };
@@ -467,10 +515,13 @@ public class LiveDialectTests
             Assert.Equal("Pacific/Auckland", (string)result.Rows.Single()["TZ"]!);
     }
 
-    [SkippableFact]
-    public async Task Oracle_snapshot_reads_return_all_grid_datasets_from_one_read_only_scope()
+    [SkippableTheory]
+    [InlineData(ReportDialect.Oracle)]
+    [InlineData(ReportDialect.Oracle11g)]
+    public async Task Oracle_snapshot_reads_return_all_grid_datasets_from_one_read_only_scope(ReportDialect dialect)
     {
-        var live = LiveDb.For(ReportDialect.Oracle);
+        var live = LiveDb.For(dialect);
+        Skip.IfNot(await OracleSnapshotReadsWork(live), OracleSnapshotSkip);
         var def = live.Definition();
         def.Consistency = ReportConsistency.Snapshot;
 
@@ -519,6 +570,8 @@ public class LiveDialectTests
             Skip.IfNot(await SqlServerSnapshotEnabled(live),
                 "enable SQL Server snapshot reads with ALTER DATABASE [database] SET ALLOW_SNAPSHOT_ISOLATION ON");
         }
+        if (dialect is ReportDialect.Oracle or ReportDialect.Oracle11g)
+            Skip.IfNot(await OracleSnapshotReadsWork(live), OracleSnapshotSkip);
 
         try
         {
@@ -578,11 +631,13 @@ public class LiveDialectTests
                     return (connection, scope, await Amount(connection, scope.Transaction));
                 }
                 catch (OracleException ex) when (
-                    dialect == ReportDialect.Oracle && ex.Number == 1466 && attempt < 11)
+                    dialect is ReportDialect.Oracle or ReportDialect.Oracle11g
+                    && ex.Number == 1466
+                    && attempt < 11)
                 {
-                    // The fixture has just dropped and recreated this table. Oracle's
-                    // documented recovery for an old snapshot crossing that DDL is to
-                    // roll back and re-execute; production report schemas are stable.
+                    // On a fresh schema the fixture has just created this table. Oracle's
+                    // documented recovery for a snapshot crossing that DDL is to roll
+                    // back and re-execute; production report schemas are stable.
                     if (scope is not null) await scope.DisposeAsync();
                     await connection.DisposeAsync();
                     await Task.Delay(250);
@@ -615,7 +670,7 @@ public class LiveDialectTests
         var live = LiveDb.For(dialect);
         var def = live.Definition();
         def.Name = $"live-ctx-{dialect}";
-        var marker = dialect == ReportDialect.Oracle ? ":minAmount" : "@minAmount";
+        var marker = dialect is ReportDialect.Oracle or ReportDialect.Oracle11g ? ":minAmount" : "@minAmount";
         def.Sql = $"SELECT ORDER_ID, CUSTOMER, STATUS, AMOUNT, NOTES FROM IR_TEST_ORDERS WHERE AMOUNT >= {marker}";
 
         var result = await live.Executor.Query(def, Doc(source: new StageLayer
@@ -746,13 +801,16 @@ internal sealed class LiveDb : IReportConnectionFactory
         var env = dialect switch
         {
             ReportDialect.SqlServer => "IR_TEST_SQLSERVER",
-            ReportDialect.Oracle => "IR_TEST_ORACLE",
+            ReportDialect.Oracle or ReportDialect.Oracle11g => "IR_TEST_ORACLE",
             ReportDialect.Postgres => "IR_TEST_POSTGRES",
             _ => throw new ArgumentOutOfRangeException(nameof(dialect), dialect, null),
         };
         var cs = Environment.GetEnvironmentVariable(env);
         Skip.If(string.IsNullOrWhiteSpace(cs), $"set {env} to run live {dialect} verification");
 
+        // Oracle 11g mode shares the Oracle seed: same server, same table, only the dialect
+        // the engine compiles for differs. The Oracle instance seeds; this one never does.
+        if (dialect == ReportDialect.Oracle11g) For(ReportDialect.Oracle);
         return Instances.GetOrAdd(dialect, d => new Lazy<LiveDb>(() => new LiveDb(d, cs!))).Value;
     }
 
@@ -760,14 +818,19 @@ internal sealed class LiveDb : IReportConnectionFactory
     {
         _dialect = dialect;
         _connectionString = connectionString;
-        Executor = new ReportExecutor(this, new SchemaCache());
-        Seed();
+        // The modern server accepts 12c syntax silently; in 11g mode the guard rejects it
+        // the way an 11g server would.
+        Executor = new ReportExecutor(
+            this,
+            new SchemaCache(),
+            dialect == ReportDialect.Oracle11g ? new Oracle11gVocabularyGuard<ReportExecutor>() : null);
+        if (dialect != ReportDialect.Oracle11g) Seed();
     }
 
     public DbConnection CreateConnection(string name) => _dialect switch
     {
         ReportDialect.SqlServer => new SqlConnection(_connectionString),
-        ReportDialect.Oracle => new OracleConnection(_connectionString),
+        ReportDialect.Oracle or ReportDialect.Oracle11g => new OracleConnection(_connectionString),
         ReportDialect.Postgres => new NpgsqlConnection(_connectionString),
         _ => throw new ArgumentOutOfRangeException(nameof(_dialect), _dialect, null),
     };
@@ -780,24 +843,91 @@ internal sealed class LiveDb : IReportConnectionFactory
         Sql = "SELECT ORDER_ID, CUSTOMER, STATUS, AMOUNT, NOTES FROM IR_TEST_ORDERS",
     };
 
+    /// <summary>
+    /// Creates the seed table only when it is missing, has the wrong shape, or (Oracle) can no longer
+    /// be read in a read-only snapshot, then reseeds its rows with plain DML. Recreating it on every
+    /// run would put a DDL boundary a few seconds before the first tests, and Oracle rejects a
+    /// read-only snapshot that crosses one with ORA-01466, so the table is the one object the battery
+    /// keeps between runs. A table created while the instance's clock was skewed stays unreadable in
+    /// snapshot mode after the clock is corrected, which is the case the snapshot probe catches.
+    /// </summary>
     private void Seed()
     {
         using var conn = CreateConnection("live");
         conn.Open();
 
-        Execute(conn, _dialect switch
+        var usable = HasExpectedShape(conn)
+            && (_dialect != ReportDialect.Oracle || CanSnapshotRead(conn));
+        if (!usable)
         {
-            ReportDialect.SqlServer => "IF OBJECT_ID('IR_TEST_ORDERS', 'U') IS NOT NULL DROP TABLE IR_TEST_ORDERS",
-            ReportDialect.Postgres => "DROP TABLE IF EXISTS IR_TEST_ORDERS",
-            _ => """
-                 BEGIN
-                     EXECUTE IMMEDIATE 'DROP TABLE IR_TEST_ORDERS';
-                 EXCEPTION WHEN OTHERS THEN
-                     IF SQLCODE != -942 THEN RAISE; END IF;
-                 END;
-                 """,
-        });
+            Execute(conn, _dialect switch
+            {
+                ReportDialect.SqlServer => "IF OBJECT_ID('IR_TEST_ORDERS', 'U') IS NOT NULL DROP TABLE IR_TEST_ORDERS",
+                ReportDialect.Postgres => "DROP TABLE IF EXISTS IR_TEST_ORDERS",
+                _ => """
+                     BEGIN
+                         EXECUTE IMMEDIATE 'DROP TABLE IR_TEST_ORDERS';
+                     EXCEPTION WHEN OTHERS THEN
+                         IF SQLCODE != -942 THEN RAISE; END IF;
+                     END;
+                     """,
+            });
+            CreateSeedTable(conn);
+            // A fresh Oracle table still sits inside that consistency window; let it pass once.
+            if (_dialect == ReportDialect.Oracle) Thread.Sleep(TimeSpan.FromSeconds(5));
+        }
 
+        Execute(conn, "DELETE FROM IR_TEST_ORDERS");
+        InsertSeedRows(conn);
+    }
+
+    /// <summary>Whether a read-only transaction on this connection can read the seed table (Oracle ORA-01466 otherwise).</summary>
+    internal static bool CanSnapshotRead(DbConnection conn)
+    {
+        using var transaction = conn.BeginTransaction(IsolationLevel.ReadCommitted);
+        try
+        {
+            using (var control = conn.CreateCommand())
+            {
+                control.Transaction = transaction;
+                control.CommandText = "SET TRANSACTION READ ONLY";
+                control.ExecuteNonQuery();
+            }
+            using var read = conn.CreateCommand();
+            read.Transaction = transaction;
+            read.CommandText = "SELECT COUNT(*) FROM IR_TEST_ORDERS";
+            read.ExecuteScalar();
+            return true;
+        }
+        catch (OracleException ex) when (ex.Number == 1466)
+        {
+            return false;
+        }
+        finally
+        {
+            transaction.Rollback();
+        }
+    }
+
+    private static bool HasExpectedShape(DbConnection conn)
+    {
+        try
+        {
+            using var probe = conn.CreateCommand();
+            probe.CommandText =
+                "SELECT ORDER_ID, CUSTOMER, STATUS, AMOUNT, NOTES, ORDER_DATE, ORDER_DATE_TEXT "
+                + "FROM IR_TEST_ORDERS WHERE 1 = 0";
+            probe.ExecuteScalar();
+            return true;
+        }
+        catch (DbException)
+        {
+            return false;
+        }
+    }
+
+    private void CreateSeedTable(DbConnection conn)
+    {
         Execute(conn, _dialect switch
         {
             ReportDialect.SqlServer => """
@@ -836,7 +966,10 @@ internal sealed class LiveDb : IReportConnectionFactory
                 )
                 """,
         });
+    }
 
+    private void InsertSeedRows(DbConnection conn)
+    {
         // The canonical 10 rows — must match SqliteE2EFixture. On Oracle the ''
         // note becomes NULL at insert, which is exactly the semantic the blank
         // operator's dialect handling accounts for. ORDER_DATE_TEXT is the same

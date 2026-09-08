@@ -337,7 +337,11 @@ Sequential execution limits connection pressure and works consistently with SQLi
 When a definition requests snapshot consistency, the manager maps that requirement to
 the provider's appropriate transaction behavior. When it requests no cross-statement
 consistency, each statement observes the database according to its normal isolation
-rules.
+rules. Oracle rejects a snapshot read with ORA-01466 when a queried table's definition
+changed after the snapshot time, which also happens for recently changed tables when the
+server clock or time zone changes under a running instance; the manager ends the scope
+and re-executes the whole read once before reporting the error, whose diagnosis names
+the remedy.
 
 The executor finally removes private columns, applies public column identities and
 metadata, assembles totals and decorations, and attaches the effective document. Row,

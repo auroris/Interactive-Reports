@@ -66,6 +66,57 @@ internal sealed class ReportConnectionManager(
     }
 
     /// <summary>
+    /// Runs one logical multi-statement read inside the definition's consistency scope and ends the
+    /// scope afterward. Oracle rejects a snapshot read with ORA-01466 when a queried table's definition
+    /// changed after the snapshot time; its documented action is to end the transaction and re-execute,
+    /// so such a read is retried once in a fresh scope before the error is reported.
+    /// </summary>
+    /// <typeparam name="T">The read's result type.</typeparam>
+    /// <param name="connection">The open report connection on which every scoped statement executes.</param>
+    /// <param name="definition">The definition supplying consistency, dialect, name, and command timeout.</param>
+    /// <param name="read">Executes the statements against the supplied scope; it runs again from the start on a retry.</param>
+    /// <param name="ct">Signals that the operation should be canceled.</param>
+    /// <returns>A task whose result is the value the read produced.</returns>
+    public async Task<T> Read<T>(
+        DbConnection connection,
+        ReportDefinition definition,
+        Func<ReportReadScope, Task<T>> read,
+        CancellationToken ct)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            var scope = await BeginReadScope(connection, definition, ct);
+            try
+            {
+                var result = await read(scope);
+                await scope.CompleteAsync(ct);
+                return result;
+            }
+            catch (DbException ex) when (attempt == 0 && IsOracleSnapshotRejection(definition, ex))
+            {
+                logger?.LogWarning(
+                    ex,
+                    "Report '{Report}': Oracle rejected the snapshot read because a table definition changed after the snapshot time (ORA-01466); retrying once in a fresh read scope.",
+                    definition.Name);
+            }
+            finally
+            {
+                await scope.DisposeAsync();
+            }
+        }
+    }
+
+    /// <summary>Whether an exception is Oracle's ORA-01466 for a snapshot-consistent read.</summary>
+    private static bool IsOracleSnapshotRejection(ReportDefinition definition, DbException exception)
+        => definition.Consistency == ReportConsistency.Snapshot
+            && definition.GetEffectiveDialect() is ReportDialect.Oracle or ReportDialect.Oracle11g
+            && DbErrorClassifier.Classify(definition.GetEffectiveDialect(), exception) is
+            {
+                Kind: DbErrorKind.ConcurrencyConflict,
+                ProviderCode: "ORA-01466",
+            };
+
+    /// <summary>
     /// Opens the exact consistency scope requested by the definition. A configured
     /// guarantee is either established or the request fails; there is no implicit downgrade. Oracle's READ
     /// ONLY transaction is issued directly because ADO.NET has no read-only isolation level and mapping it
