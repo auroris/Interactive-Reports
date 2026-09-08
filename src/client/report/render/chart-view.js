@@ -110,9 +110,12 @@ export function renderChartView(w, container, chartModule) {
     });
 
     // Protocol contract: the metric column is synthetic (v0/__count) when aggregated, so its
-    // server label embeds the raw column label, so rebuild it from the chart spec instead.
+    // server label embeds the raw column label, so rebuild it from the chart spec instead, in
+    // the same localized form the chip and description use.
     const metricLabel = view.fn
-        ? (view.value ? `${view.fn}(${labelOf(w, view.value)})` : fnLabel(w, "count"))
+        ? (view.value
+            ? translate(w, "aggregate.ofColumn", { function: fnLabel(w, view.fn), column: labelOf(w, view.value) })
+            : fnLabel(w, view.fn))
         : labelOf(w, valueCol.formatSource ?? valueCol.name);
 
     const description = translate(w, "chart.description", {

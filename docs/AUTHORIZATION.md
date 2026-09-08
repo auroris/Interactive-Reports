@@ -549,8 +549,8 @@ native adapter as well only when both the named policy result and a separate nat
 
 ## Administrators
 
-Administrator authority is a single fact about a caller, decided once per request by
-the first source that is implemented:
+Administrator authority is a single fact about a caller, decided by the first source
+that is implemented whenever an operation needs it:
 
 | Order | Source | Registration | Notes |
 |---|---|---|---|
@@ -810,7 +810,7 @@ Application-operation results are translated as follows:
 | Callback returns `false` | Expected denial using the applicable status above |
 | Callback throws `InteractiveReportAuthorizationDeniedException` | Expected denial using the applicable status above |
 | Request cancellation is observed | Cancellation propagates |
-| Any other callback/native-adapter exception | Logged under `InteractiveReport.Authorization`; sanitized `500` with a trace id |
+| Any other callback/native-adapter exception | Logged through the Interactive Reports logger; sanitized `500` with a trace id |
 
 The message from `InteractiveReportAuthorizationDeniedException` is not sent to the
 client. Authorization internals and resource existence remain protected. Use

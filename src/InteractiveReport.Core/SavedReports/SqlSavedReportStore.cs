@@ -99,19 +99,6 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         return rows.SingleOrDefault();
     }
 
-    /// <summary>
-    /// Loads saved-report metadata by identifier without reading state JSON.
-    /// </summary>
-    /// <param name="id">The saved-report identifier to match.</param>
-    /// <param name="ct">Signals that the operation should be canceled; defaults to <c>default</c>.</param>
-    /// <returns>The matching metadata, or <see langword="null"/> when no row exists.</returns>
-    /// <remarks>Does not select or materialize the report's state JSON.</remarks>
-    public async Task<SavedReportMetadata?> GetMetadata(long id, CancellationToken ct = default)
-    {
-        var rows = await SelectMetadata(q => q.Where("ID", id), ct);
-        return rows.SingleOrDefault();
-    }
-
     /// <summary>Finds the database identity assigned to one configured report-document file.</summary>
     public async Task<SavedReport?> FindConfiguredFile(
         string reportName,
@@ -334,7 +321,6 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         => origin switch
         {
             SavedReportOrigin.Configured => "configured",
-            SavedReportOrigin.Synthetic => "synthetic",
             _ => "user",
         };
 
@@ -363,7 +349,6 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         => text.ToLowerInvariant() switch
         {
             "configured" => SavedReportOrigin.Configured,
-            "synthetic" => SavedReportOrigin.Synthetic,
             _ => SavedReportOrigin.User,
         };
 
@@ -569,52 +554,6 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         catch (Exception ex) when (!ct.IsCancellationRequested)
         {
             LogStoreError(config, ex, "select query");
-            throw;
-        }
-    }
-
-    /// <summary>
-    /// Projects only the saved-report columns required by metadata operations.
-    /// </summary>
-    /// <param name="shape">A callback that adds predicates and ordering to the metadata query.</param>
-    /// <param name="ct">Signals that the operation should be canceled.</param>
-    /// <returns>The materialized metadata rows in database result order.</returns>
-    /// <remarks>Opens and disposes a connection, command, and reader; the query deliberately omits state JSON.</remarks>
-    private async Task<IReadOnlyList<SavedReportMetadata>> SelectMetadata(
-        Func<Query, Query> shape,
-        CancellationToken ct)
-    {
-        var cfg = Validated(_config());
-        var query = shape(new Query(cfg.TableName)
-            .Select("ID", "REPORT_NAME", "SOURCE_FILE", "TITLE", "OWNER", "IS_GLOBAL", "IS_DEFAULT", "MODIFIED_UTC", "ORIGIN"));
-
-        await using var conn = await OpenConnection(cfg, ct);
-        var compiled = DialectSupport.GetCompiler(cfg.Dialect).Compile(query);
-        await using var cmd = CommandBuilder.Build(
-            conn, compiled, NoParams, TimeoutSeconds, cfg.Dialect, _logger);
-        try
-        {
-            await using var reader = await cmd.ExecuteReaderAsync(ct);
-
-            var result = new List<SavedReportMetadata>();
-            while (await reader.ReadAsync(ct))
-            {
-                result.Add(new SavedReportMetadata(
-                    Convert.ToInt64(reader.GetValue(0), CultureInfo.InvariantCulture),
-                    reader.GetString(1),
-                    reader.IsDBNull(2) ? null : reader.GetString(2),
-                    reader.GetString(3),
-                    reader.IsDBNull(4) ? null : reader.GetString(4),
-                    Convert.ToBoolean(reader.GetValue(5), CultureInfo.InvariantCulture),
-                    Convert.ToBoolean(reader.GetValue(6), CultureInfo.InvariantCulture),
-                    DateTime.Parse(reader.GetString(7), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-                    OriginFrom(reader.GetString(8))));
-            }
-            return result;
-        }
-        catch (Exception ex) when (!ct.IsCancellationRequested)
-        {
-            LogStoreError(cfg, ex, "metadata select query");
             throw;
         }
     }

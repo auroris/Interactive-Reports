@@ -345,12 +345,14 @@ export function openDialog({
 
     const onKey = event => {
         if (openDialogs[openDialogs.length - 1] !== dlg) return;
-        if (event.key === "Escape") {
-            event.preventDefault();
-            event.stopImmediatePropagation();
-            dlg.close();
-            return;
-        }
+        if (event.key !== "Escape") return;
+        // A modeless dialog owns Escape only when the key is pressed inside it: in an open menu,
+        // another widget, or the host page the key belongs to whatever has focus there. The
+        // composed path crosses the shadow boundary that a document-level target cannot.
+        if (!modal && !event.composedPath().includes(dlg.root)) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        dlg.close();
     };
     const onResize = () => {
         if (!dlg.moved || compactWindow()) return;

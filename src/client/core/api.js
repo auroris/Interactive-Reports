@@ -190,9 +190,12 @@ export async function downloadFile(url, { method = "GET", body, signal } = {}) {
  * Side effects: starts a browser download.
  */
 export function saveBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
+    a.href = url;
     a.download = filename;
     a.click();
-    URL.revokeObjectURL(a.href);
+    // The download starts asynchronously: revoking the object URL in the same task can cancel
+    // it in some browsers, so the URL outlives the click by a moment.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

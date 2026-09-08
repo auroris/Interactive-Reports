@@ -139,6 +139,23 @@ public class CsvWriterTests
     }
 
     [Fact]
+    public void Masked_output_keeps_only_a_negative_sign_exempt_from_the_formula_guard()
+    {
+        // A format mask is document-authored: a literal prefix in it reaches the rendered text of
+        // a typed value, so only the renderer's own minus sign escapes the guard.
+        var csv = WriteString(
+            Row("x", new CsvFormattedValue("=cmd|' /C calc'!A07")),
+            Row("y", new CsvFormattedValue("+1")),
+            Row("z", new CsvFormattedValue("-$1,234.50")),
+            Row("w", new CsvFormattedValue("(1,234.50)")));
+
+        Assert.Contains("x,'=cmd|' /C calc'!A07\r\n", csv);
+        Assert.Contains("y,'+1\r\n", csv);
+        Assert.Contains("z,\"-$1,234.50\"\r\n", csv);
+        Assert.Contains("w,\"(1,234.50)\"\r\n", csv);
+    }
+
+    [Fact]
     public void Verbatim_policy_emits_text_exactly_as_stored()
     {
         var bytes = CsvWriter.Write(Columns, [Row("=SUM(A1)", 1m)], CsvCellPolicy.Verbatim);

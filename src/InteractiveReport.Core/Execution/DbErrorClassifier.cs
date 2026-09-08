@@ -55,19 +55,7 @@ public sealed record DbErrorDiagnosis(
     string Category,
     string? ProviderCode,
     string Summary,
-    string? RemediationHint)
-{
-    /// <summary>
-    /// Formats a human-readable diagnostic description including category, code, summary, and hint.
-    /// </summary>
-    /// <returns>A formatted diagnostic string.</returns>
-    public string FormatDiagnostic()
-    {
-        var codePart = ProviderCode is not null ? $" ({ProviderCode})" : "";
-        var hintPart = RemediationHint is not null ? $" Hint: {RemediationHint}" : "";
-        return $"[{Category}]{codePart} {Summary}{hintPart}";
-    }
-}
+    string? RemediationHint);
 
 /// <summary>
 /// Classifies provider exceptions per dialect without referencing provider
@@ -109,7 +97,10 @@ public static class DbErrorClassifier
         var dbEx = UnwrapDbException(exception);
         if (dbEx is not null)
         {
-            var classified = dialect switch
+            // The provider that threw is a better witness than the dialect a caller could name:
+            // the saved-report store and a report may sit on different databases, and some
+            // callers only know the host's default.
+            var classified = (DialectOf(dbEx) ?? dialect) switch
             {
                 ReportDialect.SqlServer => ClassifySqlServer(dbEx),
                 ReportDialect.Oracle or ReportDialect.Oracle11g => ClassifyOracle(dbEx),
@@ -123,6 +114,16 @@ public static class DbErrorClassifier
 
         return ClassifyGeneric(exception);
     }
+
+    /// <summary>Identifies the dialect from the provider exception type, without referencing provider assemblies.</summary>
+    private static ReportDialect? DialectOf(DbException exception) => exception.GetType().Name switch
+    {
+        "SqlException" => ReportDialect.SqlServer,
+        "OracleException" => ReportDialect.Oracle,
+        "NpgsqlException" or "PostgresException" => ReportDialect.Postgres,
+        "SqliteException" => ReportDialect.Sqlite,
+        _ => null,
+    };
 
     /// <summary>
     /// Classifies SQL Server provider exceptions by SQL Server error number.

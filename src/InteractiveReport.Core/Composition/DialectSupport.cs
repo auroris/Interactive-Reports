@@ -101,13 +101,6 @@ public static class DialectSupport
         public override SqlResult Compile(Query query)
             => RestoreLiteralQuestionMarks(base.Compile(query));
         /// <summary>
-        /// Compiles a SQL Server query batch and restores literal question marks protected in raw fragments.
-        /// </summary>
-        /// <param name="queries">The query collection to combine or execute.</param>
-        /// <returns>A SQL Server result with executable and debug SQL decoded.</returns>
-        public override SqlResult Compile(IEnumerable<Query> queries)
-            => RestoreLiteralQuestionMarks(base.Compile(queries));
-        /// <summary>
         /// Quotes a SQL Server identifier after protecting literal question marks from SqlKata parsing.
         /// </summary>
         /// <param name="value">The identifier segment to protect and quote.</param>
@@ -125,13 +118,6 @@ public static class DialectSupport
         /// <returns>An Oracle result with executable and debug SQL decoded.</returns>
         public override SqlResult Compile(Query query)
             => RestoreLiteralQuestionMarks(base.Compile(query));
-        /// <summary>
-        /// Compiles an Oracle query batch and restores literal question marks protected in raw fragments.
-        /// </summary>
-        /// <param name="queries">The query collection to combine or execute.</param>
-        /// <returns>An Oracle result with executable and debug SQL decoded.</returns>
-        public override SqlResult Compile(IEnumerable<Query> queries)
-            => RestoreLiteralQuestionMarks(base.Compile(queries));
         /// <summary>
         /// Quotes an Oracle identifier after protecting literal question marks from SqlKata parsing.
         /// </summary>
@@ -157,14 +143,6 @@ public static class DialectSupport
             => RestoreLiteralQuestionMarks(base.Compile(query));
 
         /// <summary>
-        /// Compiles an Oracle 11g query batch and restores literal question marks protected in raw fragments.
-        /// </summary>
-        /// <param name="queries">The query collection to combine or execute.</param>
-        /// <returns>An Oracle result with executable and debug SQL decoded.</returns>
-        public override SqlResult Compile(IEnumerable<Query> queries)
-            => RestoreLiteralQuestionMarks(base.Compile(queries));
-
-        /// <summary>
         /// Quotes an Oracle identifier after protecting literal question marks from SqlKata parsing.
         /// </summary>
         /// <param name="value">The identifier segment to protect and quote.</param>
@@ -183,13 +161,6 @@ public static class DialectSupport
         public override SqlResult Compile(Query query)
             => RestoreLiteralQuestionMarks(base.Compile(query));
         /// <summary>
-        /// Compiles a SQLite query batch and restores literal question marks protected in raw fragments.
-        /// </summary>
-        /// <param name="queries">The query collection to combine or execute.</param>
-        /// <returns>A SQLite result with executable and debug SQL decoded.</returns>
-        public override SqlResult Compile(IEnumerable<Query> queries)
-            => RestoreLiteralQuestionMarks(base.Compile(queries));
-        /// <summary>
         /// Quotes a SQLite identifier after protecting literal question marks from SqlKata parsing.
         /// </summary>
         /// <param name="value">The identifier segment to protect and quote.</param>
@@ -207,13 +178,6 @@ public static class DialectSupport
         /// <returns>A PostgreSQL result with executable and debug SQL decoded.</returns>
         public override SqlResult Compile(Query query)
             => RestoreLiteralQuestionMarks(base.Compile(query));
-        /// <summary>
-        /// Compiles a PostgreSQL query batch and restores literal question marks protected in raw fragments.
-        /// </summary>
-        /// <param name="queries">The query collection to combine or execute.</param>
-        /// <returns>A PostgreSQL result with executable and debug SQL decoded.</returns>
-        public override SqlResult Compile(IEnumerable<Query> queries)
-            => RestoreLiteralQuestionMarks(base.Compile(queries));
         /// <summary>
         /// Quotes a PostgreSQL identifier after protecting literal question marks from SqlKata parsing.
         /// </summary>

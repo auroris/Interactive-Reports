@@ -172,7 +172,6 @@ internal sealed class InteractiveReportGraphQLExecutor(
             InteractiveReportFailureKind.Unauthenticated => "UNAUTHENTICATED",
             InteractiveReportFailureKind.Forbidden => "FORBIDDEN",
             InteractiveReportFailureKind.NotFound => "NOT_FOUND",
-            InteractiveReportFailureKind.Conflict => "CONFLICT",
             InteractiveReportFailureKind.Invalid => "REPORT_VALIDATION_FAILED",
             _ => "INTERNAL_SERVER_ERROR",
         };

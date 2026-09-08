@@ -18,21 +18,6 @@ namespace InteractiveReport.Core.Schema;
 public static class SchemaDiscovery
 {
     /// <summary>
-    /// Probes a report's base query and returns its ordered result schema without logging SQL.
-    /// </summary>
-    /// <param name="connection">The open report connection on which to run the zero-row probe.</param>
-    /// <param name="def">The resolved report definition containing the base SQL and dialect.</param>
-    /// <param name="contextParams">Trusted values for context parameters referenced by the base SQL.</param>
-    /// <param name="ct">Signals that the operation should be canceled; defaults to <c>default</c>.</param>
-    /// <returns>A task containing the validated schema in provider column order.</returns>
-    public static Task<ReportSchema> Discover(
-        DbConnection connection,
-        ReportDefinition def,
-        IReadOnlyDictionary<string, object?> contextParams,
-        CancellationToken ct = default)
-        => Discover(connection, def, contextParams, logger: null, ct);
-
-    /// <summary>
     /// Probes a report's base query and returns its ordered result schema.
     /// </summary>
     /// <param name="connection">The open report connection on which to run the zero-row probe.</param>

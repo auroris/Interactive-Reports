@@ -71,7 +71,7 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<IOptionsMonitor<InteractiveReportOptions>>(),
             sp.GetRequiredService<SchemaCache>(),
             sp.GetRequiredService<ReportConnectionRegistry>(),
-            sp.GetRequiredService<ConfiguredReportDocumentSynchronizer>()));
+            listingEnabled: true));
         services.AddSingleton(sp => new ReportExecutor(
             sp.GetRequiredService<IReportConnectionFactory>(),
             sp.GetRequiredService<SchemaCache>(),

@@ -119,11 +119,16 @@ internal sealed class InteractiveReportStartupValidator(
         }
         if (policies.Count == 0) return;
 
-        if (services.GetService<IAuthorizationService>() is null)
+        // Authorization services pull in the host's handlers, which may be scoped (the docs tell
+        // hosts to register them with AddScoped), so they are resolved from a scope rather than
+        // the root provider: there a scoped registration throws under scope validation and
+        // otherwise silently lives for the lifetime of the host.
+        using var scope = services.CreateScope();
+        if (scope.ServiceProvider.GetService<IAuthorizationService>() is null)
             throw new InvalidOperationException(
                 $"{policies[0].Owner} names authorization policy '{policies[0].Name}' but the host has not registered authorization services (builder.Services.AddAuthorization()).");
 
-        var provider = services.GetService<IAuthorizationPolicyProvider>();
+        var provider = scope.ServiceProvider.GetService<IAuthorizationPolicyProvider>();
         if (provider is null) return;
         foreach (var (name, owner) in policies)
         {

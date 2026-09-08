@@ -170,8 +170,5 @@ internal sealed class UserDirectoryCache
         _entries[key] = new Entry(now + lifetime, users);
     }
 
-    /// <summary>Forgets every memoized answer.</summary>
-    public void Clear() => _entries.Clear();
-
     private sealed record Entry(DateTime ExpiresUtc, IReadOnlyList<InteractiveReportUser> Users);
 }

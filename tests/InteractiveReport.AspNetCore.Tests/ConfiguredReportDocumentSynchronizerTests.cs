@@ -187,59 +187,37 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
     }
 
     [Fact]
-    public async Task Configured_default_supersedes_the_synthetic_database_default()
-    {
-        var (synchronizer, store, _) = Build(_defaultPath);
-        var synthetic = new SavedReport
-        {
-            Id = 0,
-            ReportName = "orders",
-            Title = "Default",
-            Owner = null,
-            IsGlobal = true,
-            IsDefault = true,
-            StateJson = "{\"v\":3}",
-            ModifiedUtc = DateTime.UtcNow,
-            Origin = SavedReportOrigin.Synthetic,
-        };
-        await store.Create(synthetic);
-
-        await synchronizer.EnsureSynced();
-
-        var configured = Assert.Single(store.Rows.Values);
-        Assert.NotEqual(synthetic.Id, configured.Id);
-        Assert.Equal(SavedReportOrigin.Configured, configured.Origin);
-        Assert.True(configured.IsDefault);
-    }
-
-    [Fact]
     public async Task Failed_configured_default_insert_leaves_bootstrap_retryable()
     {
         var (synchronizer, store, _) = Build(_defaultPath);
-        var synthetic = new SavedReport
+        var selected = new SavedReport
         {
             Id = 0,
             ReportName = "orders",
-            Title = "Default",
-            Owner = null,
+            Title = "Selected by administrator",
+            Owner = "alice",
             IsGlobal = true,
             IsDefault = true,
             StateJson = "{\"v\":3}",
             ModifiedUtc = DateTime.UtcNow,
-            Origin = SavedReportOrigin.Synthetic,
+            Origin = SavedReportOrigin.User,
         };
-        await store.Create(synthetic);
+        await store.Create(selected);
         store.FailCreates = true;
 
+        // The previous default is demoted before the configured one is inserted; a failed insert
+        // leaves that demotion in place and the next synchronization completes the hand-over.
         await Assert.ThrowsAsync<ReportDocumentBootstrapException>(
             () => synchronizer.EnsureSynced());
-        Assert.Empty(store.Rows);
+        var demoted = Assert.Single(store.Rows.Values);
+        Assert.False(demoted.IsDefault);
 
         store.FailCreates = false;
         await synchronizer.EnsureSynced();
-        var configured = Assert.Single(store.Rows.Values);
-        Assert.True(configured.IsDefault);
+        Assert.Equal(2, store.Rows.Count);
+        var configured = Assert.Single(store.Rows.Values, row => row.IsDefault);
         Assert.Equal(SavedReportOrigin.Configured, configured.Origin);
+        Assert.Equal(SavedReportOrigin.User, store.Rows[selected.Id].Origin);
     }
 
     [Fact]
@@ -319,6 +297,35 @@ public sealed class ConfiguredReportDocumentSynchronizerTests : IDisposable
                 .Select(row => row with { })
                 .ToArray());
         }
+
+        // Answered from ListAll so the recorded call sequence stays the one the assertions expect.
+        public async Task<SavedReport?> FindConfiguredFile(string reportName, string sourceFile, CancellationToken ct = default)
+            => (await ListAll(ct)).SingleOrDefault(row =>
+                string.Equals(row.ReportName, reportName, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(row.SourceFile, sourceFile, StringComparison.Ordinal));
+
+        public Task<SavedReport?> FindTitleCollision(
+            string reportName,
+            string title,
+            string? owner,
+            bool isPublic,
+            long? exceptId = null,
+            CancellationToken ct = default)
+            => Task.FromResult(Rows.Values
+                .Where(row => row.Id != exceptId
+                              && row.ReportName == reportName
+                              && string.Equals(row.Title, title.Trim(), StringComparison.OrdinalIgnoreCase)
+                              && (isPublic ? row.IsPublic : row.IsPublic || row.Owner == owner))
+                .OrderByDescending(row => row.IsPublic)
+                .Select(row => row with { })
+                .FirstOrDefault());
+
+        public Task<IReadOnlyList<string>> ListOwners(CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<string>>(Rows.Values
+                .Select(row => row.Owner)
+                .Where(owner => !string.IsNullOrWhiteSpace(owner))
+                .Distinct(StringComparer.Ordinal)
+                .ToList()!);
 
         public Task<SavedReport?> FindDefault(string reportName, CancellationToken ct = default)
             => Task.FromResult(Rows.Values.SingleOrDefault(row =>

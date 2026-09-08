@@ -141,6 +141,9 @@ public class FormatCodesTests
     [InlineData("mm/dd/yyyy", "08/07/2026")]
     [InlineData("dd/mm/yy", "07/08/26")]
     [InlineData("m/d/yyyy", "8/7/2026")]
+    // Excel's own dialog output: a trailing text section and a locale tag are ignored.
+    [InlineData("m/d/yyyy;@", "8/7/2026")]
+    [InlineData("[$-409]mmm d, yyyy", "Aug 7, 2026")]
     [InlineData("mmm d, yyyy", "Aug 7, 2026")]
     [InlineData("mmmm d, yyyy", "August 7, 2026")]
     [InlineData("mmmmm", "A")]

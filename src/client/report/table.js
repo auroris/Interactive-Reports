@@ -63,7 +63,7 @@ export function structuralTableColumns(w, requested = w.doc?.activeTable) {
     const entry = tableEntry(w.doc, requested);
     if (Array.isArray(entry?.table?.schema)) return copyColumns(entry.table.schema);
     if (entry && sameColumn(entry.id, w.doc?.activeTable)) {
-        const response = w.lastResult?.availableColumns ?? w.lastResult?.columns;
+        const response = w.lastResult?.availableColumns;
         if (Array.isArray(response)) return copyColumns(response);
     }
     if (String(entry?.table?.from ?? "").trim().toLowerCase() === "definition")
@@ -381,7 +381,6 @@ export function terminalTableColumns(w) {
     }
     return copyColumns(activeTableSchema(w.doc)
         ?? w.lastResult?.availableColumns
-        ?? w.lastResult?.columns
         ?? w.schema?.columns);
 }
 

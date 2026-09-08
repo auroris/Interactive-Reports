@@ -28,6 +28,11 @@ app.MapInteractiveReportJson("/api/reports");
 app.MapInteractiveReportGraphQL("/graphql");
 ```
 
+`AddInteractiveReportGraphQL` registers GraphQL.NET's System.Text.Json serializer for the
+host. An application that already serves its own GraphQL.NET schema with a different
+serializer should register that serializer after this call, because the registration is
+host-wide rather than per schema.
+
 The path defaults to `/graphql` and can be changed. The mapping supports HTTP GET and
 POST queries. It disables mutations, batched requests, form posts, subscriptions, and
 WebSockets. The package does not bundle a GraphQL IDE.
@@ -140,8 +145,8 @@ reported as `NOT_FOUND`.
 
 Configured file-backed IDs use the same catalogue and load path. Their disk-backed state,
 reconciliation, and recovery behavior are described in
-[Saved reports](SAVED-REPORTS.md#reconciliation). Loading and hydration do not delete or
-repair the configured identity.
+[Saved reports](https://github.com/auroris/Interactive-Reports/blob/main/docs/SAVED-REPORTS.md#reconciliation).
+Loading and hydration do not delete or repair the configured identity.
 
 The remaining arguments replace individual parts of the loaded document before it is
 hydrated through the shared server path. They mutate a detached copy; nothing is written
@@ -210,6 +215,7 @@ query ExecuteSavedReport(
       size
     }
     totalRows
+    truncated
     ignored {
       kind
       detail
@@ -333,6 +339,7 @@ Reports and its saved-report API, then discover and execute the resulting id thr
 GraphQL.
 
 The underlying report definition still controls ordinary positive page sizes. Unpaged
-queries can return the complete filtered result, so hosts should prefer positive sizes
-and apply their normal authentication, CORS, request-size, timeout, and ASP.NET Core
-rate-limiting policies to the GraphQL endpoint.
+queries return up to the report's `maxRows` and set the result's `truncated` field when
+that cap stopped them, so hosts should prefer positive sizes and apply their normal
+authentication, CORS, request-size, timeout, and ASP.NET Core rate-limiting policies to
+the GraphQL endpoint.

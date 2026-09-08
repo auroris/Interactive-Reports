@@ -7,7 +7,7 @@ import { el, icon } from "../core/dom.js";
 import { featureEnabled } from "./schema.js";
 import { doSearch, openSearchScopeMenu } from "./search.js";
 import { actionsMenuItems, openActionsMenu } from "./menus.js";
-import { loadSavedById, refreshSavedSelect, resetToDefault } from "./saved.js";
+import { loadSavedById, refreshSavedSelect } from "./saved.js";
 import { openHelpDialog } from "./help.js";
 import { applyCreateButton } from "./create-link.js";
 

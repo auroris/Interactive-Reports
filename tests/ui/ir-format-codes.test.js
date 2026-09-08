@@ -166,6 +166,9 @@ test("separators and minus sign follow the locale while the code fixes the digit
 test("date tokens render every width", () => {
     const cases = [
         ["yyyy-mm-dd", "2026-08-07"],
+        // Excel's own dialog output: a trailing text section and a locale tag are ignored.
+        ["m/d/yyyy;@", "8/7/2026"],
+        ["[$-409]mmm d, yyyy", "Aug 7, 2026"],
         ["yyyy-mm-dd hh:mm", "2026-08-07 14:30"],
         ["yyyy-mm-dd hh:mm:ss", "2026-08-07 14:30:45"],
         ["YYYY-MM-DD HH:MM:SS", "2026-08-07 14:30:45"],

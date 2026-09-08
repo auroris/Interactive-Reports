@@ -70,14 +70,14 @@ public sealed class RowRestrictionHttpTests : IAsyncLifetime
             ["public"] = Sql.Replace(" AND {{RowRestriction}}", ""),
             ["comment"] = Sql.Replace(" AND {{RowRestriction}}", "") + "\n/* {{RowRestriction}} */",
             ["grouped"] = "SELECT SUM(p.AMOUNT) AS TOTAL FROM PRODUCTS p WHERE p.ACTIVE = 1 AND {{RowRestriction}}",
-            ["context"] = Sql + " AND p.OWNER = @__ir_row_0",
+            ["context"] = Sql + " AND p.OWNER = @ir_row_0",
         })
         {
             configuration[$"InteractiveReport:Reports:{name}:Connection"] = "data";
             configuration[$"InteractiveReport:Reports:{name}:Sql"] = sql;
             configuration[$"InteractiveReport:Reports:{name}:Authorization:AllowAnonymous"] = "true";
         }
-        configuration["InteractiveReport:Reports:context:ContextParams:__ir_row_0:Claim"] = "account_id";
+        configuration["InteractiveReport:Reports:context:ContextParams:ir_row_0:Claim"] = "account_id";
         builder.Configuration.AddInMemoryCollection(configuration);
         var reports = builder.Services.AddInteractiveReports(builder.Configuration)
             .AddConnection("data", _ =>

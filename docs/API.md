@@ -759,7 +759,7 @@ only the supported element interface; mutable controller state remains private.
 
 | Method | Result |
 |---|---|
-| `getReportDocument()` | Detached, JSON-compatible accepted report document. Requires a completed initial query. |
+| `getReportDocument()` | Detached, JSON-compatible copy of the working report document: the accepted document plus any edits accumulated while a query is in flight. Requires a completed initial query. |
 | `submitReportDocument(document)` | Replaces, queries, adopts, and renders a document. Resolves to a detached result, or `undefined` when canceled or superseded. |
 | `getListOfValues({ document, table, column, search, signal })` | Posts a complete current document and returns `{ table, column, type, items, truncated }`; `document` and `table` default to the element's current values. |
 | `getExport(format = "csv", { signal } = {})` | Resolves to `{ blob, filename, contentType, truncated }` without starting a browser download. |
@@ -820,8 +820,9 @@ Ordinary package-control edits are single-flight. An edit on an idle widget quer
 immediately. Edits made while a query is in flight accumulate in the working document;
 the in-flight result is rendered when it lands, without replacing the working document,
 and one follow-up query carries the final state. Initial loads, saved-report loads,
-explicit `submitReportDocument` calls, exports, and administration refreshes abort an
-in-flight query instead.
+explicit `submitReportDocument` calls, and administration refreshes abort an
+in-flight query instead; an export posts the working document and leaves an in-flight
+query alone.
 
 ### Client controls
 

@@ -229,7 +229,6 @@ export const messages = {
     "aggregate.max": "Max",
     "aggregate.count": "Count",
     "aggregate.countDistinct": "Count Distinct",
-    "aggregate.total": "Total",
     "aggregate.ofColumn": "{function} of {column}",
 
     "expression.expression": "Expression",
@@ -355,6 +354,8 @@ export const messages = {
     "admin.nowGlobal": "“{title}” is now global.",
     "admin.nowPrivate": "“{title}” is now private to {owner}.",
     "admin.nowDefault": "“{title}” is now the default report.",
+    "admin.makeDefaultTitle": "Make Default",
+    "admin.makeDefaultConfirm": "Make “{title}” the default report for everyone? The current default becomes an ordinary public report.",
     "admin.currentOwner": "Current owner: {owner}",
     "admin.ownerNote": "Choose a user from the list, or enter the identity value exactly as the sign-in reports it (GET …/whoami).",
     "admin.reassignOwner": "Reassign Owner",

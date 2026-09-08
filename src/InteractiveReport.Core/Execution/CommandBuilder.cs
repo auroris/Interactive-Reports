@@ -234,10 +234,11 @@ internal static class CommandBuilder
     }
 
     /// <summary>
-    /// Enables an Oracle provider command's public <c>BindByName</c> property when available.
+    /// Enables an Oracle provider command's public <c>BindByName</c> property.
     /// </summary>
     /// <param name="cmd">The provider command to mutate.</param>
-    /// <remarks>Caches a reflection setter per command type and silently does nothing for providers without the property.</remarks>
+    /// <remarks>Caches a reflection setter per command type.</remarks>
+    /// <exception cref="InvalidOperationException">Thrown when the command type exposes no writable <c>BindByName</c>: without it the provider binds by position, and a context parameter would silently receive a paging value.</exception>
     private static void EnableBindByName(DbCommand cmd)
     {
         var setter = BindByNameSetters.GetOrAdd(cmd.GetType(), static type =>
@@ -247,7 +248,11 @@ internal static class CommandBuilder
                 return null;
             return c => prop.SetValue(c, true);
         });
-        setter?.Invoke(cmd);
+        if (setter is null)
+            throw new InvalidOperationException(
+                $"Oracle report commands bind parameters by name, but '{cmd.GetType().FullName}' exposes no writable BindByName property. "
+                + "Return the provider's own command type from the connection factory, or a wrapper that forwards BindByName.");
+        setter(cmd);
     }
 
     /// <summary>

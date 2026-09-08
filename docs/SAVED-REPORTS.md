@@ -45,14 +45,19 @@ a factory registered with `AddConnection`.
 are created when first needed. Set `autoCreate` to `false` when operators provision the
 schema. The current release does not migrate an older saved-report schema in place.
 
-An absent or unreachable storage target does not prevent ordinary report queries. Saved-report
-and administration operations return a sanitized error until their target is available.
+An absent or unreachable storage target does not prevent ordinary report queries. With no
+storage configured, a report's saved-report list is simply empty, so the viewer loads
+without persistence; every other saved-report and administration operation, and every
+operation against a configured but unreachable store, returns a sanitized error until its
+target is available.
 
 ## Document ownership and visibility
 
 Every family can have one stored default document, and that default is public. Selecting a
 database-backed document as the new default publishes it and retains the former default as
-an ordinary global document. The default cannot be unset without selecting another one.
+an ordinary global document. An update cannot unset the default without selecting another
+one; deleting the default document is allowed for its owner and for administrators, after
+which the family falls back to its synthetic default until another document is selected.
 
 Private ownership uses the canonical identity resolved from
 `InteractiveReport:IdentityClaim`, then the standard identity fallbacks described in
@@ -164,8 +169,10 @@ await app.Services.GetRequiredService<ConfiguredReportDocumentSynchronizer>()
 ```
 
 The synchronizer compares the database catalogue with `documentFiles` and creates or removes
-configured identities as needed. The Workbench performs this call at startup. Neither the
-root configuration catalogue nor family listing performs synchronization.
+configured identities as needed. A file that already has an identity keeps its stored title
+and default selection: later edits to the file change the state it serves, not its catalogue
+metadata. The Workbench performs this call at startup. Neither the root configuration
+catalogue nor family listing performs synchronization.
 
 If a configured file disappears or cannot be processed, loading its existing ID follows the
 same default fallback as any other failed stored document. The load leaves its catalogue row

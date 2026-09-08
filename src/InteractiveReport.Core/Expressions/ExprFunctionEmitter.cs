@@ -88,9 +88,25 @@ internal static class ExprFunctionEmitter
     /// </summary>
     /// <param name="context">The mutable SQL and binding accumulator.</param>
     /// <param name="arguments">Text, one-based start, and optional length.</param>
-    /// <remarks>SQL Server synthesizes an omitted length with <c>LEN</c>; other dialects use <c>SUBSTR</c>.</remarks>
+    /// <remarks>SQL Server synthesizes an omitted length with <c>LEN</c>; PostgreSQL casts the bound positions to integers; other dialects use <c>SUBSTR</c>.</remarks>
     public static void EmitSubstr(EmitContext context, IReadOnlyList<ExprNode> arguments)
     {
+        if (context.Dialect == ReportDialect.Postgres)
+        {
+            // Bound positions travel as numeric, which substr(text, numeric, numeric) does not
+            // accept; the casts select the integer signature, as EmitRound does for ROUND.
+            context.Append("SUBSTR(");
+            context.Visit(arguments[0]);
+            for (var index = 1; index < arguments.Count; index++)
+            {
+                context.Append(", CAST(");
+                context.Visit(arguments[index]);
+                context.Append(" AS INT)");
+            }
+            context.Append(")");
+            return;
+        }
+
         if (context.Dialect != ReportDialect.SqlServer)
         {
             EmitPlain(context, "SUBSTR", arguments);

@@ -9,7 +9,7 @@
 #   pwsh scripts\release.ps1 -Force             # overwrite an existing releases\<version>\
 #
 # Push later with, for example:
-#   dotnet nuget push releases\0.9.1\*.nupkg --source https://api.nuget.org/v3/index.json --api-key ...
+#   dotnet nuget push releases\1.0.0\*.nupkg --source https://api.nuget.org/v3/index.json --api-key ...
 
 [CmdletBinding()]
 param(
@@ -33,8 +33,10 @@ if (-not $Version) {
     }
     $Version = $Matches[1]
 }
-if ($Version -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$') {
-    throw "release.ps1: '$Version' is not a semantic version."
+# Build metadata (+meta) is excluded: NuGet strips it from package file names, which the
+# version check below would then reject.
+if ($Version -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') {
+    throw "release.ps1: '$Version' is not a semantic version (build metadata is not supported)."
 }
 
 $target = Join-Path $root "releases\$Version"

@@ -19,8 +19,9 @@ beside the data, and saves that document under a random title,
 restarts the server, and loads it again. It exercises an explicitly configured SQLite
 connection string first, then points saved-report persistence at a registered report
 database and repeats the restart/load check. A separate HTTP test proves that a
-report-only host creates no persistence directory, database, or table and that direct
-persistence and administration requests fail cleanly until storage is configured.
+report-only host creates no persistence directory, database, or table, lists a report's
+saved reports as empty, and fails direct persistence and administration requests cleanly
+until storage is configured.
 
 `npm test` builds the packaged client and runs the fast DOM-level unit suite with
 Node.js and happy-dom, the browser-server suite, and the documentation integrity tests.

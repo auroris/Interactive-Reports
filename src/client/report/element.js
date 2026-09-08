@@ -208,7 +208,10 @@ class ReportController {
             return;
         }
         if (name === "theme") {
+            // Chart colours are read from the theme tokens at render time, so the chart is
+            // rebuilt; the previous Chart.js instance goes first or it leaks with its canvas.
             if (this._chart && this._chartModule) {
+                this.destroyChart();
                 this._chart = renderChartView(this, this.els.chartWrap, this._chartModule);
             }
             return;
@@ -378,8 +381,22 @@ class ReportController {
 
         try {
             const requestedSaved = this.requestedSavedReportId?.trim();
+            let requestedUnavailable = false;
+            const loadRequested = async () => {
+                if (!requestedSaved) return api(this.definitionUrl("default"));
+                try {
+                    return await api(this.definitionUrl(requestedSaved));
+                } catch (err) {
+                    // A saved-report attribute naming a deleted or hidden document falls back to
+                    // the default with a warning, as the in-widget saved-report path does,
+                    // instead of leaving an empty shell with nothing to recover from.
+                    if (err.status !== 404) throw err;
+                    requestedUnavailable = true;
+                    return api(this.definitionUrl("default"));
+                }
+            };
             const [loaded, schema] = await Promise.all([
-                api(this.definitionUrl(requestedSaved || "default")),
+                loadRequested(),
                 api(this.definitionUrl("schema")),
                 loadSavedList(this),
             ]);
@@ -388,6 +405,7 @@ class ReportController {
             this.currentSaved = loaded.summary;
             applyFeatureChrome(this);
             this.acceptResult(loaded.result, { source: "initial", requestId, revision });
+            if (requestedUnavailable) this.notify(this.t("saved.unavailable"), "warn");
             return seq === this._seq && this.lastResult !== null;
         } catch (err) {
             if (!quiet && err.name !== "AbortError" && seq === this._seq) this.showError(err);
@@ -427,7 +445,8 @@ class ReportController {
     }
 
     /**
-     * Returns the current accepted report document as a detached JSON-compatible object.
+     * Returns the working report document (the accepted document plus any edits accumulated
+     * while a query is in flight) as a detached JSON-compatible object.
      *
      * @returns {object} The canonical transport document. Mutating it cannot mutate the widget.
      * @throws {Error} When the initial report query has not completed successfully.

@@ -18,6 +18,16 @@ public sealed class ReportDefinition
         return copy;
     }
 
+    /// <summary>
+    /// Whether the rows a caller sees depend on who is asking: a row restriction (bound or still
+    /// declared in the SQL) or trusted context parameters. Advisory schema caches, which embed
+    /// pivot values, are then never handed from one caller to another.
+    /// </summary>
+    internal bool RestrictsRowsPerCaller
+        => RowRestrictionApplied
+            || Execution.ReportSqlTemplate.RequiresRowRestriction(Sql)
+            || ContextParams is { Count: > 0 };
+
     /// <summary>Gets or sets the canonical name assigned by the definition store; it is not part of the configuration payload.</summary>
     public string Name { get; set; } = "";
 
@@ -103,7 +113,7 @@ public sealed class ReportDefinition
     /// </summary>
     public Dictionary<string, ContextParamSpec>? ContextParams { get; set; }
 
-    /// <summary>Gets or sets report-level authentication, policy, administrator, restriction, and configured-user rules.</summary>
+    /// <summary>Gets or sets the report-level access rules: anonymous access and the optional named authorization policy.</summary>
     public ReportAuthorization? Authorization { get; set; }
 
     /// <summary>

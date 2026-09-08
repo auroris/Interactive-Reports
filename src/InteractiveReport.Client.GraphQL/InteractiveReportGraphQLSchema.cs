@@ -239,6 +239,11 @@ internal sealed class InteractiveReportResultGraphType : ObjectGraphType<ReportR
             .Resolve(context => context.Source.Page);
         Field<NonNullGraphType<LongGraphType>>("totalRows")
             .Resolve(context => context.Source.TotalRows);
+        Field<NonNullGraphType<BooleanGraphType>>("truncated")
+            .Description(
+                "Whether an unpaged query (pageSize 0) stopped at the report's maxRows cap, so rows "
+                + "holds fewer rows than totalRows. Always false for a positive page size.")
+            .Resolve(context => context.Source.Page.Size == 0 && context.Source.TotalRows > context.Source.Rows.Count);
         Field<NonNullGraphType<ListGraphType<NonNullGraphType<InteractiveReportIgnoredGraphType>>>>("ignored")
             .Description(
                 "State elements the engine dropped because they referenced columns that no "

@@ -217,6 +217,12 @@ export class InteractiveReportAdminElement extends WidgetElement {
      * Side effects: sends a saved-report update, displays a confirmation notice, and refreshes the listing.
      */
     async makeDefault(id, row) {
+        // Every user's default for the family changes and the previous default cannot simply
+        // be restored, so a single stray click must not be enough.
+        if (!await confirmDialog(
+            this,
+            this.t("admin.makeDefaultTitle"),
+            this.t("admin.makeDefaultConfirm", { title: row.TITLE }))) return;
         await api(apiUrl(this.base, id), { method: "PUT", body: { isDefault: true } });
         this.notify(this.t("admin.nowDefault", {
             title: row.TITLE,

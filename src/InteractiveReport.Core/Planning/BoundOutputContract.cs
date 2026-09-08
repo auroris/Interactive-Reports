@@ -162,17 +162,6 @@ internal sealed class BoundOutputContract
             : new BoundOutputContract(name, Columns);
 
     /// <summary>
-    /// Creates an output-contract copy with a replacement ordered column set.
-    /// </summary>
-    /// <param name="name">The logical relation name for the replacement contract.</param>
-    /// <param name="columns">The complete replacement columns in public output order.</param>
-    /// <returns>A validated contract independent of this instance.</returns>
-    public BoundOutputContract WithColumns(
-        string name,
-        IEnumerable<BoundColumnContract> columns)
-        => Create(name, columns);
-
-    /// <summary>
     /// Applies structural labels and the declaring table's presentation formats. A clear
     /// reverts labels to intrinsic defaults and removes both masks and their lineage. Unknown metadata
     /// remains document data but cannot enter this contract.

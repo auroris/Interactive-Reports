@@ -348,9 +348,9 @@ internal sealed class ReportAuthorizationService(
             .GetRequiredService<IOptionsMonitor<InteractiveReportOptions>>().CurrentValue;
         if (!ReportConnectionRegistry.IsStoreConfigured(options.SavedReports)) return false;
         var administrator = await ResolveAdministrator(context, ct);
-        if (administrator.Failure is not null)
-            throw new InvalidOperationException("Administration access lookup failed.");
-        return administrator.IsAdministrator;
+        // The hint only shapes presentation. A failed lookup is logged by the resolver and reads
+        // as "not offered" here; it must not turn every schema request into a failure.
+        return administrator.Failure is null && administrator.IsAdministrator;
     }
 
     public async Task<IReadOnlyDictionary<string, object?>> ResolveContextParameters(
@@ -507,7 +507,7 @@ internal sealed class ReportAuthorizationService(
                     resource.ReportName,
                     CallerForLog(context),
                     context.TraceIdentifier);
-                return Denied(context, hideDenied, denialDetail);
+                return Denied(context, resource, hideDenied, denialDetail);
             }
         }
 
@@ -551,7 +551,7 @@ internal sealed class ReportAuthorizationService(
                         authorizer.GetType().Name,
                         CallerForLog(context),
                         context.TraceIdentifier);
-                    return Denied(context, hideDenied, denialDetail);
+                    return Denied(context, resource, hideDenied, denialDetail);
                 }
             }
         }
@@ -615,12 +615,13 @@ internal sealed class ReportAuthorizationService(
 
     private static ReportAuthorizationFailure Denied(
         InteractiveReportRequestContext context,
+        InteractiveReportAuthorizationResource resource,
         bool hide,
         string? detail)
         => context.User.Identity?.IsAuthenticated != true
             ? Unauthenticated()
             : hide
-                ? Hidden()
+                ? Hidden(resource)
                 : new(
                     ReportAuthorizationFailureKind.Forbidden,
                     InteractiveReportErrorCodes.AuthorizationDenied,
@@ -635,4 +636,14 @@ internal sealed class ReportAuthorizationService(
         => new(
             ReportAuthorizationFailureKind.NotFound,
             InteractiveReportErrorCodes.ReportNotFound);
+
+    // A hidden denial reads exactly like the thing not existing. A document the caller may not
+    // see therefore answers with the saved-report code: the report-level code would tell a
+    // probing caller that the id is taken.
+    private static ReportAuthorizationFailure Hidden(InteractiveReportAuthorizationResource resource)
+        => resource.SavedReport is null
+            ? Hidden()
+            : new(
+                ReportAuthorizationFailureKind.NotFound,
+                InteractiveReportErrorCodes.SavedReportNotFound);
 }

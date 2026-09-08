@@ -162,19 +162,4 @@ public class DbErrorClassifierTests
         var connDiagnosis = DbErrorClassifier.Classify(ReportDialect.SqlServer, connEx);
         Assert.Equal(DbErrorKind.ConnectionFailed, connDiagnosis.Kind);
     }
-
-    [Fact]
-    public void FormatDiagnostic_produces_readable_string()
-    {
-        var diagnosis = new DbErrorDiagnosis(
-            DbErrorKind.PermissionDenied,
-            "Permissions",
-            "SQL Server 229",
-            "Permission denied on database object.",
-            "Grant SELECT permission on the table to the database user.");
-
-        var formatted = diagnosis.FormatDiagnostic();
-
-        Assert.Equal("[Permissions] (SQL Server 229) Permission denied on database object. Hint: Grant SELECT permission on the table to the database user.", formatted);
-    }
 }

@@ -19,25 +19,15 @@ public interface ISavedReportStore
     /// <returns>The detached row, or <see langword="null"/> when no id matches.</returns>
     Task<SavedReport?> Get(long id, CancellationToken ct = default);
 
-    /// <summary>
-    /// Reads only authorization and presentation metadata. Implementations should avoid
-    /// fetching the state document; the default preserves compatibility for custom stores that have not
-    /// added a projection yet.
-    /// </summary>
-    /// <param name="id">The numeric report-document identifier.</param>
-    /// <param name="ct">Cancels persistence access.</param>
-    /// <returns>The detached metadata, or <see langword="null"/> when no id matches.</returns>
-    async Task<SavedReportMetadata?> GetMetadata(long id, CancellationToken ct = default)
-        => (await Get(id, ct))?.Metadata();
-
     /// <summary>Finds the database identity assigned to one configured report-document file.</summary>
-    async Task<SavedReport?> FindConfiguredFile(
+    /// <param name="reportName">The canonical configured report name that owns the file.</param>
+    /// <param name="sourceFile">The configured document's source path, exactly as stored.</param>
+    /// <param name="ct">Cancels persistence access.</param>
+    /// <returns>The detached row, or <see langword="null"/> when the file has no stored identity.</returns>
+    Task<SavedReport?> FindConfiguredFile(
         string reportName,
         string sourceFile,
-        CancellationToken ct = default)
-        => (await ListAll(ct)).SingleOrDefault(report =>
-            string.Equals(report.ReportName, reportName, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(report.SourceFile, sourceFile, StringComparison.Ordinal));
+        CancellationToken ct = default);
 
     /// <summary>
     /// Lists the complete, unfiltered database family selected by one configured report name.
@@ -47,17 +37,9 @@ public interface ISavedReportStore
     /// <param name="reportName">The canonical configured report name whose family should be loaded.</param>
     /// <param name="ct">Cancels persistence access.</param>
     /// <returns>Every row in the configured report family.</returns>
-    async Task<IReadOnlyList<SavedReport>> ListFamily(
+    Task<IReadOnlyList<SavedReport>> ListFamily(
         string reportName,
-        CancellationToken ct = default)
-    {
-        return (await ListAll(ct))
-            .Where(report => string.Equals(
-                report.ReportName,
-                reportName,
-                StringComparison.Ordinal))
-            .ToList();
-    }
+        CancellationToken ct = default);
 
     /// <summary>
     /// Finds the specially flagged default document for one report family.
@@ -65,10 +47,7 @@ public interface ISavedReportStore
     /// <param name="reportName">The canonical report name that scopes the search.</param>
     /// <param name="ct">Cancels persistence access.</param>
     /// <returns>The flagged default document, or <see langword="null"/> when none exists.</returns>
-    async Task<SavedReport?> FindDefault(string reportName, CancellationToken ct = default)
-        => (await ListFamily(reportName, ct))
-            .Where(report => report.IsDefault)
-            .FirstOrDefault();
+    Task<SavedReport?> FindDefault(string reportName, CancellationToken ct = default);
 
     /// <summary>
     /// Finds a title collision in the proposed document's visibility scope.
@@ -78,22 +57,13 @@ public interface ISavedReportStore
     /// <param name="exceptId">A saved-report identifier to exclude from the title-collision search; <see langword="null"/> excludes none; defaults to <c>null</c>.</param>
     /// <param name="ct">Cancels persistence access.</param>
     /// <returns>The configured row first, otherwise a user row, or <see langword="null"/> when available.</returns>
-    async Task<SavedReport?> FindTitleCollision(
+    Task<SavedReport?> FindTitleCollision(
         string reportName,
         string title,
         string? owner,
         bool isPublic,
         long? exceptId = null,
-        CancellationToken ct = default)
-        => (await ListAll(ct))
-            .Where(report => report.Id != exceptId
-                             && string.Equals(report.ReportName, reportName, StringComparison.OrdinalIgnoreCase)
-                             && string.Equals(report.Title, title.Trim(), StringComparison.OrdinalIgnoreCase)
-                             && (isPublic
-                                 ? report.IsPublic
-                                 : report.IsPublic || string.Equals(report.Owner, owner, StringComparison.Ordinal)))
-            .OrderByDescending(report => report.IsPublic)
-            .FirstOrDefault();
+        CancellationToken ct = default);
 
     /// <summary>
     /// Lists every saved-report row in the system across report definitions and origins.
@@ -104,17 +74,11 @@ public interface ISavedReportStore
 
     /// <summary>
     /// Lists the distinct owner identities of every owned row, for administration account
-    /// choices. The default derives them from <see cref="ListAll"/>; a SQL store projects only
-    /// the owner column instead of loading every document.
+    /// choices. A SQL store projects only the owner column instead of loading every document.
     /// </summary>
     /// <param name="ct">Cancels persistence access.</param>
     /// <returns>Distinct non-empty owner values compared ordinally, in no particular order.</returns>
-    async Task<IReadOnlyList<string>> ListOwners(CancellationToken ct = default)
-        => (await ListAll(ct))
-            .Select(report => report.Owner)
-            .Where(owner => !string.IsNullOrWhiteSpace(owner))
-            .Distinct(StringComparer.Ordinal)
-            .ToList()!;
+    Task<IReadOnlyList<string>> ListOwners(CancellationToken ct = default);
 
     /// <summary>
     /// Inserts a new saved report and assigns its committed modification timestamp.
@@ -178,9 +142,6 @@ public enum SavedReportOrigin
 {
     /// <summary>Created through saved-report or report-document endpoints by a user or administrator.</summary>
     User,
-
-    /// <summary>Generated from the configured definition as the durable fallback default.</summary>
-    Synthetic,
 
     /// <summary>Mirrored from a definition's configured document files.</summary>
     Configured,

@@ -51,7 +51,8 @@ await uploadReport(artifact.blob, artifact.filename, artifact.contentType);
 The Actions-menu CSV command retrieves the same artifact and then invokes the browser's
 download behavior.
 
-The element also exposes its accepted report document as a detached JSON-compatible
+The element also exposes its working report document (the accepted document plus any
+edits accumulated while a query is in flight) as a detached JSON-compatible
 object. `submitReportDocument` replaces the working document transactionally, posts it
 through the ordinary query endpoint, adopts the server-enriched document, rerenders the
 report, and resolves to a detached query result. A failed submission restores the last
@@ -108,8 +109,9 @@ When that query lands, its result is rendered and `ir-query-complete` fires for 
 burst of page moves shows each page as it arrives, but its document does not replace the
 working document; one follow-up query then carries the accumulated state. At most one
 query is outstanding per widget. Initial and saved-report loads, explicit
-`submitReportDocument()` calls, exports, and administration refreshes abort any in-flight
-query and cancel accumulated edits.
+`submitReportDocument()` calls, and administration refreshes abort any in-flight
+query and cancel accumulated edits; an export posts the working document and leaves an
+in-flight query alone.
 
 After a successful hydration has been rendered, including initial and saved-report loads, `ir-query-complete`
 dispatches with detached `{ document, result, submitted, source, requestId }` snapshots.

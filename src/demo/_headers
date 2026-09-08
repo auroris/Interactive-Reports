@@ -8,18 +8,19 @@
   Referrer-Policy: strict-origin-when-cross-origin
   Cross-Origin-Opener-Policy: same-origin-allow-popups
 
-# SQLite WebAssembly binary: strict MIME type and immutable long-term caching
+# The bundles, the SQLite glue, and its WebAssembly binary are not content-hashed, so they
+# revalidate like the HTML that references them: a deployment that changes the contract
+# between ir.js and browser-server.js must never pair new HTML with a cached old bundle.
+# Cloudflare answers unchanged files with 304s, so revalidation costs a round trip, not bytes.
 /*.wasm
   Content-Type: application/wasm
-  Cache-Control: public, max-age=31536000, immutable
+  Cache-Control: public, max-age=0, must-revalidate
 
-# JavaScript bundles: cached with stale-while-revalidate
 /*.js
-  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+  Cache-Control: public, max-age=0, must-revalidate
 
-# Source maps
 /*.js.map
-  Cache-Control: public, max-age=86400
+  Cache-Control: public, max-age=0, must-revalidate
 
 # HTML documents: always revalidate so deployments update immediately
 /*.html

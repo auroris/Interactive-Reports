@@ -229,7 +229,6 @@ export const messages = {
     "aggregate.max": "Maximum",
     "aggregate.count": "Nombre",
     "aggregate.countDistinct": "Nombre distinct",
-    "aggregate.total": "Total",
     "aggregate.ofColumn": "{function} de {column}",
 
     "expression.expression": "Expression",
@@ -355,6 +354,8 @@ export const messages = {
     "admin.nowGlobal": "« {title} » est maintenant global.",
     "admin.nowPrivate": "« {title} » est maintenant privé pour {owner}.",
     "admin.nowDefault": "« {title} » est maintenant le rapport par défaut.",
+    "admin.makeDefaultTitle": "Définir par défaut",
+    "admin.makeDefaultConfirm": "Faire de « {title} » le rapport par défaut pour tout le monde? Le rapport par défaut actuel devient un rapport public ordinaire.",
     "admin.currentOwner": "Propriétaire actuel : {owner}",
     "admin.ownerNote": "Choisissez un utilisateur dans la liste, ou entrez la valeur d’identité exactement comme la connexion la signale (GET …/whoami).",
     "admin.reassignOwner": "Réattribuer le propriétaire",

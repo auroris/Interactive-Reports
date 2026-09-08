@@ -144,6 +144,17 @@ public sealed class SavedReportTitleRaceHttpTests : IAsyncLifetime
 
         public Task<SavedReport?> Get(long id, CancellationToken ct = default) => inner.Get(id, ct);
 
+        public Task<SavedReport?> FindConfiguredFile(string reportName, string sourceFile, CancellationToken ct = default)
+            => inner.FindConfiguredFile(reportName, sourceFile, ct);
+
+        public Task<IReadOnlyList<SavedReport>> ListFamily(string reportName, CancellationToken ct = default)
+            => inner.ListFamily(reportName, ct);
+
+        public Task<SavedReport?> FindDefault(string reportName, CancellationToken ct = default)
+            => inner.FindDefault(reportName, ct);
+
+        public Task<IReadOnlyList<string>> ListOwners(CancellationToken ct = default) => inner.ListOwners(ct);
+
         public Task<SavedReport?> FindTitleCollision(
             string reportName,
             string title,

@@ -66,8 +66,11 @@ public sealed class OptionalPersistenceHttpTests
 
             using var catalogue = await host.Client.GetAsync("/api/reports");
             Assert.Equal(HttpStatusCode.OK, catalogue.StatusCode);
+            // The viewer lists the family on every load: without storage the answer is an empty
+            // list, not a storage failure, so a report-only host comes up without a warning.
             using var family = await host.Client.GetAsync("/api/reports/items");
-            await AssertStorageFailure(family);
+            Assert.Equal(HttpStatusCode.OK, family.StatusCode);
+            Assert.Empty((await ReadJson(family)).EnumerateArray());
 
             using var whoami = await host.Client.GetAsync("/api/reports/whoami");
             Assert.Equal(HttpStatusCode.OK, whoami.StatusCode);

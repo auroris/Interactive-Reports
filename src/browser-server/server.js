@@ -5,7 +5,11 @@
 import { discoverSchema } from "./schema.js";
 import { executeReport, executeLov, exportCsv } from "./executor.js";
 import { renderCsvTable } from "./presentation.js";
-import { EphemeralSavedReportStore } from "./saved-reports.js";
+import {
+    DefaultReportRequiredError,
+    EphemeralSavedReportStore,
+    SavedReportTitleConflictError,
+} from "./saved-reports.js";
 
 function jsonResponse(data, status = 200) {
     return new Response(JSON.stringify(data), {
@@ -256,11 +260,20 @@ export class InteractiveReportServer {
         };
 
         try {
+            // Every family-scoped route names a registered definition first. An unknown name is
+            // the protocol's missing-or-hidden report, never a validation failure.
+            const familyMatch = /^\/([^/?#]+)\/[^/?#]+/.exec(pathname);
+            if (familyMatch) {
+                const family = decodeURIComponent(familyMatch[1]);
+                if (!/^\d+$/.test(family) && !this.definitions.has(family.toLowerCase()))
+                    return errorResponse(404, "IR-1001", "Report not found", `Report '${family}' was not found.`);
+            }
+
             // The production client posts to /api/download/{name}/{format}.
             if (isDownloadRequest) {
                 const downloadMatch = /^\/([^/?#]+)\/([^/?#]+)\/?$/.exec(pathname);
                 if (!downloadMatch || method !== "POST") {
-                    return errorResponse(404, "IR-1404", "Not Found", `No download endpoint matches '${pathname}' with method ${method}.`);
+                    return errorResponse(404, "IR-1003", "Endpoint not found", `No download endpoint matches '${pathname}' with method ${method}.`);
                 }
 
                 const name = decodeURIComponent(downloadMatch[1]);
@@ -342,7 +355,7 @@ export class InteractiveReportServer {
                 const name = decodeURIComponent(saveMatch[1]);
                 const definition = this.definitions.get(name.toLowerCase());
                 if (!definition)
-                    return errorResponse(404, "IR-1404", "Report not found", `Report '${name}' was not found.`);
+                    return errorResponse(404, "IR-1001", "Report not found", `Report '${name}' was not found.`);
                 const req = await readBody();
                 const summary = this.savedReports.save(definition.name, req);
                 return jsonResponse(summary, 201);
@@ -353,11 +366,11 @@ export class InteractiveReportServer {
             if (loadMatch && method === "GET") {
                 const name = decodeURIComponent(loadMatch[1]);
                 if (!this.definitions.has(name.toLowerCase()))
-                    return errorResponse(404, "IR-1404", "Report not found", `Report '${name}' was not found.`);
+                    return errorResponse(404, "IR-1001", "Report not found", `Report '${name}' was not found.`);
                 const id = loadMatch[2] === "default" ? null : Number(loadMatch[2]);
                 const doc = await this.loadDocument(name, id);
                 if (!doc) {
-                    return errorResponse(404, "IR-1404", "Saved report not found", `Saved report #${id} was not found for report '${name}'.`);
+                    return errorResponse(404, "IR-1002", "Saved report not found", `Saved report #${id} was not found for report '${name}'.`);
                 }
                 return jsonResponse(doc);
             }
@@ -369,7 +382,7 @@ export class InteractiveReportServer {
                 const req = await readBody();
                 const updated = this.savedReports.update(id, req);
                 if (!updated) {
-                    return errorResponse(404, "IR-1404", "Saved report not found", `Saved report #${id} was not found.`);
+                    return errorResponse(404, "IR-1002", "Saved report not found", `Saved report #${id} was not found.`);
                 }
                 return jsonResponse(updated);
             }
@@ -380,7 +393,7 @@ export class InteractiveReportServer {
                 const id = Number(deleteMatch[1]);
                 const deleted = this.savedReports.delete(id);
                 if (!deleted) {
-                    return errorResponse(400, "IR-1400", "Cannot delete report", `Saved report #${id} could not be deleted.`);
+                    return errorResponse(404, "IR-1002", "Saved report not found", `Saved report #${id} was not found.`);
                 }
                 return new Response(null, { status: 204 });
             }
@@ -396,15 +409,15 @@ export class InteractiveReportServer {
                 }
             }
 
-            return errorResponse(404, "IR-1404", "Not Found", `No endpoint matches '${pathname}' with method ${method}.`);
+            return errorResponse(404, "IR-1003", "Endpoint not found", `No endpoint matches '${pathname}' with method ${method}.`);
         } catch (err) {
-            return errorResponse(
-                400,
-                "IR-1201",
-                "Report operation failed",
-                err.message || String(err),
-                err.stack
-            );
+            // Error documents carry the protocol's codes and a sanitized description, as the C#
+            // server's do; a stack trace belongs in the console, not in the report banner.
+            if (err instanceof SavedReportTitleConflictError)
+                return errorResponse(409, "IR-1309", "Saved report title conflict", err.message);
+            if (err instanceof DefaultReportRequiredError)
+                return errorResponse(400, "IR-1312", "Default report required", err.message);
+            return errorResponse(400, "IR-1201", "Report state failed validation", err.message || String(err));
         }
     }
 }

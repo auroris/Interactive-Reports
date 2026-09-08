@@ -21,15 +21,6 @@ namespace InteractiveReport.Core.Expressions;
 public static class ExprEmitter
 {
     /// <summary>
-    /// Emits a bound value expression using the current UTC time for time-sensitive functions.
-    /// </summary>
-    /// <param name="ast">The bound expression tree to emit.</param>
-    /// <param name="dialect">The database dialect whose SQL rules apply.</param>
-    /// <returns>The SQL fragment and positional binding values in placeholder order.</returns>
-    public static (string Sql, IReadOnlyList<object> Bindings) Emit(ExprNode ast, ReportDialect dialect)
-        => Emit(ast, dialect, DateTime.UtcNow);
-
-    /// <summary>
     /// Emits a bound value expression using a fixed evaluation time.
     /// </summary>
     /// <param name="ast">The bound expression tree to emit.</param>
@@ -64,17 +55,6 @@ public static class ExprEmitter
     /// <summary>
     /// Emits an AST where SQL requires a predicate. This matters for bare boolean columns: SQL Server needs
     /// an explicit = 1 while PostgreSQL must use the boolean value directly.
-    /// </summary>
-    /// <param name="ast">The bound expression tree to emit.</param>
-    /// <param name="dialect">The database dialect whose SQL rules apply.</param>
-    /// <returns>The SQL predicate fragment and positional binding values in placeholder order.</returns>
-    public static (string Sql, IReadOnlyList<object> Bindings) EmitCondition(
-        ExprNode ast,
-        ReportDialect dialect)
-        => EmitCondition(ast, dialect, DateTime.UtcNow);
-
-    /// <summary>
-    /// Emits an expression as a SQL predicate with portable boolean semantics.
     /// </summary>
     /// <param name="ast">The bound expression tree to emit.</param>
     /// <param name="dialect">The database dialect whose SQL rules apply.</param>

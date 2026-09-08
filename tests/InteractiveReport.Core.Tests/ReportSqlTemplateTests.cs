@@ -20,11 +20,11 @@ public sealed class ReportSqlTemplateTests
         var schema = ReportSchema.Create("products", [TestFixtures.Col("ID", typeof(long))]);
         var compiled = DialectSupport.GetCompiler(dialect).Compile(ComposableSqlRelation.Definition(restricted, schema).Query);
 
-        Assert.Contains($"p.CG = {prefix}__ir_row_0 OR p.OWNER = {prefix}__ir_row_1", compiled.Sql);
+        Assert.Contains($"p.CG = {prefix}ir_row_0 OR p.OWNER = {prefix}ir_row_1", compiled.Sql);
         Assert.True(compiled.Sql.IndexOf("p.CG", StringComparison.Ordinal) < compiled.Sql.IndexOf("GROUP BY", StringComparison.Ordinal));
         Assert.DoesNotContain("alice", compiled.Sql);
-        Assert.Equal("alice' OR 1=1 --", parameters["__ir_row_1"]);
-        Assert.Equal(0, parameters["__ir_row_0"]);
+        Assert.Equal("alice' OR 1=1 --", parameters["ir_row_1"]);
+        Assert.Equal(0, parameters["ir_row_0"]);
         Assert.Contains("{{RowRestriction}}", definition.Sql);
         Assert.False(definition.RowRestrictionApplied);
         Assert.True(restricted.RowRestrictionApplied);
@@ -71,18 +71,18 @@ public sealed class ReportSqlTemplateTests
         Assert.Contains("p.TEXT = '?'", sql);
         Assert.Contains("'{literal}'", sql);
         Assert.Single(parameters);
-        Assert.Equal(17, parameters["__ir_row_0"]);
+        Assert.Equal(17, parameters["ir_row_0"]);
     }
 
     [Fact]
     public void Generated_bindings_cannot_override_context_or_existing_sql_names()
     {
-        var definition = Definition("SELECT p.ID FROM X p WHERE p.TENANT = @__ir_row_0 AND {{RowRestriction}}");
-        var context = new Dictionary<string, object?> { ["__ir_row_0"] = "tenant", ["__IR_ROW_1"] = "reserved" };
-        var (restricted, parameters) = ReportSqlTemplate.Bind(definition, "p.CG = ? AND '__ir_row_2' <> ''", [0], context);
-        Assert.Contains("p.CG = @__ir_row_3", restricted.Sql);
-        Assert.Equal("tenant", parameters["__ir_row_0"]);
-        Assert.Equal("reserved", parameters["__IR_ROW_1"]);
+        var definition = Definition("SELECT p.ID FROM X p WHERE p.TENANT = @ir_row_0 AND {{RowRestriction}}");
+        var context = new Dictionary<string, object?> { ["ir_row_0"] = "tenant", ["IR_ROW_1"] = "reserved" };
+        var (restricted, parameters) = ReportSqlTemplate.Bind(definition, "p.CG = ? AND 'ir_row_2' <> ''", [0], context);
+        Assert.Contains("p.CG = @ir_row_3", restricted.Sql);
+        Assert.Equal("tenant", parameters["ir_row_0"]);
+        Assert.Equal("reserved", parameters["IR_ROW_1"]);
         Assert.Equal(2, context.Count);
     }
 

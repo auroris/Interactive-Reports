@@ -71,5 +71,5 @@ public static class ReportIdentity
     /// </summary>
     /// <param name="value">The optional identity text to trim and test for content.</param>
     /// <returns>The trimmed value, or <see langword="null"/> when it is empty.</returns>
-    private static string? NonEmpty(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
+    private static string? NonEmpty(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }

@@ -258,8 +258,10 @@ public sealed class ReportExecutor
                 [new ValidationError("search", "search cannot exceed 200 characters")]);
 
         var schema = await GetSchema(definition, contextParams, ct);
-        var sqlCompiler = DialectSupport.GetCompiler(definition.GetEffectiveDialect());
+        // Opening can refine the dialect (an Oracle connection reveals an 11g server), so the
+        // compiler is chosen only after the connection is open.
         await using var connection = await _connections.Open(definition, ct);
+        var sqlCompiler = DialectSupport.GetCompiler(definition.GetEffectiveDialect());
         await using var scope = await _connections.BeginReadScope(connection, definition, ct);
         var reader = CreateReader(connection, sqlCompiler, definition, contextParams, scope.Transaction);
         var compiler = new ComposableTableCompiler(
@@ -337,7 +339,7 @@ public sealed class ReportExecutor
         var document = ReportStateResolver.Resolve(definition.DefaultState, state);
         // A previously returned pivot cache may contain values from a different caller's
         // dataset. Refresh it even when that table is dormant in this request.
-        if (definition.RowRestrictionApplied && document.Tables is not null)
+        if (definition.RestrictsRowsPerCaller && document.Tables is not null)
             foreach (var table in document.Tables.Values) table.Schema = null;
         ValidateSyntheticColumnIdentities(document);
         var results = new Dictionary<string, ReportResult>(StringComparer.OrdinalIgnoreCase);
@@ -353,8 +355,11 @@ public sealed class ReportExecutor
         // request search belong only to the active target completed below. Parent plans and
         // dynamic Pivot discoveries are memoized, so shared ancestry is compiled once.
         var definitionSchema = await GetSchema(definition, contextParams, ct);
-        var sqlCompiler = DialectSupport.GetCompiler(definition.GetEffectiveDialect());
+        // Opening can refine the dialect (an Oracle connection reveals an 11g server), so the
+        // compiler is chosen only after the connection is open: a schema-cache hit above opens
+        // nothing, and the request-scoped definition still says plain Oracle until then.
         await using var connection = await _connections.Open(definition, ct);
+        var sqlCompiler = DialectSupport.GetCompiler(definition.GetEffectiveDialect());
         await using var scope = await _connections.BeginReadScope(connection, definition, ct);
         var reader = CreateReader(connection, sqlCompiler, definition, contextParams, scope.Transaction);
         var tableCompiler = new ComposableTableCompiler(

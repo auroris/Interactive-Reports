@@ -67,7 +67,9 @@ public class ExprEmitterTests
         Assert.Equal("SUBSTRING([CUSTOMER], ?, LEN([CUSTOMER]))", Emit("SUBSTR(CUSTOMER, 2)", ReportDialect.SqlServer).Sql);
         Assert.Equal("SUBSTR([CUSTOMER], ?)", Emit("SUBSTR(CUSTOMER, 2)", ReportDialect.Oracle).Sql);
         Assert.Equal("SUBSTR([CUSTOMER], ?)", Emit("SUBSTR(CUSTOMER, 2)", ReportDialect.Sqlite).Sql);
-        Assert.Equal("SUBSTR([CUSTOMER], ?)", Emit("SUBSTR(CUSTOMER, 2)", ReportDialect.Postgres).Sql);
+        // PostgreSQL has no substr(text, numeric[, numeric]); the bound positions are cast.
+        Assert.Equal("SUBSTR([CUSTOMER], CAST(? AS INT))", Emit("SUBSTR(CUSTOMER, 2)", ReportDialect.Postgres).Sql);
+        Assert.Equal("SUBSTR([CUSTOMER], CAST(? AS INT), CAST(? AS INT))", Emit("SUBSTR(CUSTOMER, 2, 3)", ReportDialect.Postgres).Sql);
     }
 
     [Fact]
@@ -337,7 +339,7 @@ public class ExprEmitterTests
         {
             var (ast, error) = ExprParser.Parse(expr, schema);
             Assert.Null(error);
-            return ExprEmitter.Emit(ast!, dialect);
+            return ExprEmitter.Emit(ast!, dialect, RequestUtcNow);
         }
 
         foreach (var d in AllDialects.Where(d => d != ReportDialect.Postgres))

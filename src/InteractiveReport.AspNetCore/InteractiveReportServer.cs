@@ -320,6 +320,13 @@ internal sealed class InteractiveReportServer(
         if (denied is not null)
             return InteractiveReportServerResult<IReadOnlyList<SavedReportSummary>>.Failed(Failure(denied));
 
+        // A report-only host persists nothing, so a family lists as empty rather than as a
+        // storage failure: the viewer asks on every load and must come up clean without
+        // persistence, as the default-document path already does. The administration catalogue
+        // keeps failing loudly, and so does a store that is configured but unreachable.
+        if (!listing && !ReportConnectionRegistry.IsStoreConfigured(options.CurrentValue.SavedReports))
+            return InteractiveReportServerResult<IReadOnlyList<SavedReportSummary>>.Success([]);
+
         // Listing is a read of the persisted catalogue. Hosts synchronize configured documents
         // explicitly when they want source-controlled declarations applied to storage.
         List<SavedReport> family;
@@ -1119,9 +1126,6 @@ internal sealed class InteractiveReportServer(
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(context);
-        if (ReportIdentity.Resolve(context.User, options.CurrentValue.IdentityClaim) is null)
-            return InteractiveReportServerResult<InteractiveReportDocumentExport>.Failed(
-                new(InteractiveReportFailureKind.Unauthenticated, InteractiveReportErrorCodes.AuthenticationRequired));
         SavedReport? saved;
         try { saved = await savedReports.Get(id, ct); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -1150,7 +1154,7 @@ internal sealed class InteractiveReportServer(
             var state = ReadDocumentState(saved);
             // Cached schema data may have been produced for a different row restriction. The
             // source envelope remains useful for inspection without executing the report.
-            if (ReportSqlTemplate.RequiresRowRestriction(definition.Sql)) ClearSchemaCaches(state);
+            if (definition.RestrictsRowsPerCaller) ClearSchemaCaches(state);
             logging.Logger?.LogInformation(
                 "Exported saved report {SavedReportId} ({Title}) for report {ReportName}",
                 saved.Id, saved.Title, definition.Name);
@@ -1381,10 +1385,6 @@ internal sealed class InteractiveReportServer(
         {
             throw;
         }
-        catch (ReportDocumentBootstrapException)
-        {
-            return NotFoundDocument<SavedReportSummary>();
-        }
         catch (Exception ex)
         {
             return InteractiveReportServerResult<SavedReportSummary>.Failed(
@@ -1510,7 +1510,11 @@ internal sealed class InteractiveReportServer(
             NormalizeTitle(candidate.Title),
             NormalizeTitle(report.Title),
             StringComparison.Ordinal);
-        var scopeChanged = candidate.Public != report.IsGlobal || candidate.Default != report.IsDefault;
+        // A private title competes within its owner's scope, so a reassignment moves it into
+        // another owner's set and is re-checked like any other scope change.
+        var scopeChanged = candidate.Public != report.IsGlobal
+            || candidate.Default != report.IsDefault
+            || !string.Equals(candidate.Owner?.Trim(), report.Owner, StringComparison.Ordinal);
         var candidateIsPublic = candidate.Public || candidate.Default;
         if ((titleChanged || scopeChanged)
             && await savedReports.FindTitleCollision(
@@ -1529,8 +1533,6 @@ internal sealed class InteractiveReportServer(
         report.IsGlobal = candidate.Public;
         report.IsDefault = candidate.Default;
         report.Owner = candidate.Owner?.Trim();
-        if (current.Origin == SavedReportOrigin.Synthetic)
-            report.Origin = SavedReportOrigin.User;
 
         try
         {
@@ -1572,10 +1574,6 @@ internal sealed class InteractiveReportServer(
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             throw;
-        }
-        catch (ReportDocumentBootstrapException)
-        {
-            return NotFoundDocument<SavedReportSummary>();
         }
         catch (Exception ex)
         {
@@ -1664,7 +1662,7 @@ internal sealed class InteractiveReportServer(
             var contextParameters = prepared.Parameters;
             candidate.State = await executor.RefreshSchemaCaches(
                 definition, candidate.State, contextParameters, ct);
-            if (definition.RowRestrictionApplied) ClearSchemaCaches(candidate.State);
+            if (definition.RestrictsRowsPerCaller) ClearSchemaCaches(candidate.State);
             return null;
         }
         catch (InteractiveReportAuthorizationDeniedException)
@@ -1702,7 +1700,10 @@ internal sealed class InteractiveReportServer(
         string stateCode)
     {
         if (TitleFailure(candidate.Title, titleCode) is { } titleFailure) return titleFailure;
-        if (candidate.Owner is not null && string.IsNullOrWhiteSpace(candidate.Owner))
+        // The stored OWNER column holds 400 characters on every dialect; a longer identity would
+        // surface as a provider error instead of a validation failure.
+        if (candidate.Owner is not null
+            && (string.IsNullOrWhiteSpace(candidate.Owner) || candidate.Owner.Trim().Length > 400))
             return Invalid(InteractiveReportErrorCodes.SavedReportOwnerInvalid);
         if (candidate.StateChanged && candidate.State is null) return Invalid(stateCode);
         return null;
@@ -1827,7 +1828,7 @@ internal sealed class InteractiveReportServer(
     private static ReportState DefinitionDefaults(ReportDefinition definition)
     {
         var state = ReportDocumentDefaults.Create(definition);
-        if (definition.RowRestrictionApplied) ClearSchemaCaches(state);
+        if (definition.RestrictsRowsPerCaller) ClearSchemaCaches(state);
         return state;
     }
 

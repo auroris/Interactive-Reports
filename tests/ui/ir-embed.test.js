@@ -30,6 +30,8 @@ const requests = [];
 let savedReports = [];
 let savedDocuments = new Map();
 let whoami = { identity: "test-user" };
+// A saved-report id the mock server treats as deleted or hidden.
+const MISSING_SAVED_ID = "999";
 const json = (value, init = {}) => new Response(JSON.stringify(value), {
     status: init.status ?? 200,
     headers: { "Content-Type": "application/json" },
@@ -64,6 +66,14 @@ globalThis.fetch = async (url, options = {}) => {
     const document = /^\/custom-report-api\/([^/?]+)\/(\d+|default)$/.exec(path);
     if (method === "GET" && document) {
         const [, reportName, savedId] = document;
+        // The server answers a deleted or hidden document id with 404 IR-1002.
+        if (savedId === MISSING_SAVED_ID) {
+            return json({
+                code: "IR-1002",
+                title: "Saved report not found",
+                description: "The saved report was not found or you are not allowed to access it.",
+            }, { status: 404 });
+        }
         const selectedId = savedId === "default"
             ? String(savedReports.find(report => report.reportName === reportName && report.isDefault)?.id ?? "1")
             : savedId;
@@ -365,6 +375,35 @@ test("saved-report loads its hydrated result directly", async () => {
     report.remove();
     savedReports = [];
     savedDocuments = new Map();
+});
+
+test("a saved-report attribute naming a missing document falls back to the default with a warning", async () => {
+    requests.length = 0;
+    savedReports = [{
+        id: 1, reportName: "orders", title: "Default",
+        isGlobal: true, isDefault: true, owner: null, mine: false,
+    }];
+
+    const report = document.createElement("interactive-report");
+    report.setAttribute("report", "orders");
+    report.setAttribute("saved-report", MISSING_SAVED_ID);
+    report.setAttribute("api-base", "/custom-report-api");
+    document.body.append(report);
+
+    for (let attempt = 0; attempt < 40 && !report.shadowRoot.querySelector("tbody tr"); attempt++)
+        await new Promise(resolve => setTimeout(resolve, 5));
+
+    assert.ok(report.shadowRoot.querySelector("tbody tr"), "the default document renders instead of an empty shell");
+    assert.equal(requests.some(r => r.url === `/custom-report-api/orders/${MISSING_SAVED_ID}`), true,
+        "the requested document is tried first");
+    assert.equal(requests.some(r => r.url === "/custom-report-api/orders/default"), true,
+        "the default document is loaded in its place");
+    assert.equal(report.shadowRoot.querySelector(".ir-saved-select").value, "1");
+    assert.match(report.shadowRoot.textContent, /no longer available/,
+        "the user learns why the requested document is not shown");
+
+    report.remove();
+    savedReports = [];
 });
 
 test("the flagged default report represents the schema Default", async () => {

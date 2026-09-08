@@ -323,6 +323,10 @@ public static class FormatCodes
 
     private static List<DateToken>? ParseDateCode(string code)
     {
+        // Excel writes its own date codes with a trailing text section ("m/d/yyyy;@") and may
+        // prefix a locale tag ("[$-409]mmm d, yyyy"). The first section is the date code; a
+        // locale or currency tag is an instruction to Excel, not part of the rendering.
+        code = SplitSections(code)[0];
         var tokens = new List<DateToken>();
         void Literal(string text)
         {
@@ -332,8 +336,15 @@ public static class FormatCodes
         for (var i = 0; i < code.Length;)
         {
             var ch = code[i];
-            // Elapsed-time brackets ([h]:mm) and colors have no place in a date cell.
-            if (ch == '[') return null;
+            if (ch == '[')
+            {
+                // Elapsed-time brackets ([h]:mm) and colors have no place in a date cell; a
+                // locale or currency tag is skipped.
+                var close = code.IndexOf(']', i);
+                if (close < 0 || i + 1 >= code.Length || code[i + 1] != '$') return null;
+                i = close + 1;
+                continue;
+            }
             if (TryReadLiteral(code, i, out var text, out var next))
             {
                 Literal(text);
@@ -370,7 +381,7 @@ public static class FormatCodes
                 i += width;
                 continue;
             }
-            if (char.IsAsciiLetter(ch) || ch is '"' or '\\' or '_' or '*' or ']') return null;
+            if (char.IsAsciiLetter(ch) || ch is '"' or '\\' or '_' or '*' or ']' or '@') return null;
             Literal(ch.ToString());
             i++;
         }

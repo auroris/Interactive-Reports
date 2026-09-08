@@ -503,9 +503,10 @@ test("handleRequest handles REST endpoints as standard Response objects", async 
     assert.equal(initial.result.rows.length, 50);
     assert.equal(initial.result.document.activeTable, "base");
 
-    // 404 on unknown report
+    // An unknown report answers with the protocol's missing-report document, as the C# server does.
     const notFoundRes = await server.handleRequest("/api/reports/nonexistent/schema");
-    assert.equal(notFoundRes.status, 400); // Handled error response
+    assert.equal(notFoundRes.status, 404);
+    assert.equal((await notFoundRes.json()).code, "IR-1001");
 });
 
 test("installFetchInterceptor routes /api/reports calls in-process", async () => {

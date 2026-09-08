@@ -93,8 +93,9 @@ export async function loadSavedList(w) {
         // Protocol contract: a save/delete refresh can finish after the element has switched
         // reports. Its response and errors belong to the old report context.
         if (!stillCurrent()) return;
-        // Protocol contract: 404 means the feature is off. A real failure keeps the list we have;
-        // wiping it would present a server problem as "no saved reports".
+        // A 404 means the report itself is missing or hidden, which the parallel default and
+        // schema loads already report, so an empty list is the right answer here. A real failure
+        // keeps the list we have; wiping it would present a server problem as "no saved reports".
         if (err.status === 404) { w.savedList = []; return; }
         w.notify(w.t("saved.listRefreshFailed", { message: err.message }), "warn");
     }

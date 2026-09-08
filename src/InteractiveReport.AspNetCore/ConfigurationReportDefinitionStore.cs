@@ -21,11 +21,12 @@ public sealed partial class ConfigurationReportDefinitionStore :
 {
     private readonly IOptionsMonitor<InteractiveReportOptions> _options;
     private readonly ReportConnectionRegistry _registry;
-    private readonly ConfiguredReportDocumentSynchronizer? _synchronizer;
+    private readonly bool _listingEnabled;
     private readonly IDisposable? _reloadSubscription;
 
     /// <summary>
-    /// Initializes a definition store without saved-report document synchronization.
+    /// Initializes a definition store that exposes configured reports only, without the built-in
+    /// saved-reports listing.
     /// </summary>
     /// <param name="options">The monitored Interactive Reports configuration source.</param>
     /// <param name="schemaCache">The cache used to reuse discovered schemas across requests.</param>
@@ -35,27 +36,27 @@ public sealed partial class ConfigurationReportDefinitionStore :
         IOptionsMonitor<InteractiveReportOptions> options,
         SchemaCache schemaCache,
         ReportConnectionRegistry registry)
-        : this(options, schemaCache, registry, synchronizer: null!)
+        : this(options, schemaCache, registry, listingEnabled: false)
     {
     }
 
     /// <summary>
-    /// Initializes a definition store with configured report-document synchronization.
+    /// Initializes a definition store, optionally exposing the built-in saved-reports listing.
     /// </summary>
     /// <param name="options">The monitored Interactive Reports configuration source.</param>
     /// <param name="schemaCache">The cache used to reuse discovered schemas across requests.</param>
     /// <param name="registry">Resolves connection names and SQL dialects for definitions.</param>
-    /// <param name="synchronizer">Mirrors configured documents before saved-report reads.</param>
+    /// <param name="listingEnabled">Whether the reserved saved-reports listing resolves to its administration definition.</param>
     /// <remarks>Subscribes to option reloads and clears <paramref name="schemaCache"/> after each reload.</remarks>
     internal ConfigurationReportDefinitionStore(
         IOptionsMonitor<InteractiveReportOptions> options,
         SchemaCache schemaCache,
         ReportConnectionRegistry registry,
-        ConfiguredReportDocumentSynchronizer synchronizer)
+        bool listingEnabled)
     {
         _options = options;
         _registry = registry;
-        _synchronizer = synchronizer;
+        _listingEnabled = listingEnabled;
         _reloadSubscription = options.OnChange(_ => schemaCache.Clear());
     }
 
@@ -76,9 +77,9 @@ public sealed partial class ConfigurationReportDefinitionStore :
             if (_options.CurrentValue.Reports.ContainsKey(name))
                 throw new InvalidOperationException(
                     $"Report '{name}': this name is reserved for the built-in saved-reports listing.");
-            // A null synchronizer means this store instance does not expose the built-in
-            // persistence-backed definition. Reconciliation is deliberately owned by listing.
-            if (_synchronizer is null)
+            // A store built without the listing does not expose the built-in persistence-backed
+            // definition at all.
+            if (!_listingEnabled)
                 return ValueTask.FromResult<ReportDefinition?>(null);
             // The built-in report is an administration feature. Resolving its target here
             // produces the normal sanitized configuration error without making persistence a
@@ -121,7 +122,7 @@ public sealed partial class ConfigurationReportDefinitionStore :
             if (_options.CurrentValue.Reports.ContainsKey(name))
                 throw new InvalidOperationException(
                     $"Report '{name}': this name is reserved for the built-in saved-reports listing.");
-            if (_synchronizer is null)
+            if (!_listingEnabled)
                 return ValueTask.FromResult<ReportDefinitionAuthorization?>(null);
 
             // The listing carries no configured block: the authorization service recognizes the

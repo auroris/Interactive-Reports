@@ -59,8 +59,10 @@ internal static class ReportSqlTemplate
                 }
                 if (valueIndex >= values.Count)
                     throw new InvalidOperationException("A row restriction has more placeholders than parameter values.");
+                // The name starts with a letter: Oracle rejects a bind name that begins with an
+                // underscore (ORA-01745), and the other dialects accept either form.
                 string name;
-                do name = $"__ir_row_{parameterIndex++}";
+                do name = $"ir_row_{parameterIndex++}";
                 while (parameters.ContainsKey(name)
                     || definition.Sql.Contains(name, StringComparison.OrdinalIgnoreCase)
                     || expression.Contains(name, StringComparison.OrdinalIgnoreCase));

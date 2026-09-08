@@ -792,6 +792,31 @@ public sealed class InteractiveReportAuthorizationHttpTests
     }
 
     [Fact]
+    public async Task A_private_document_reads_exactly_like_a_missing_one_to_another_user()
+    {
+        // Within a family both callers may see, a document one of them may not read must not be
+        // distinguishable from an id that was never assigned: same status, same code.
+        await using var host = await Start();
+        using var save = await host.Client.SendAsync(Request(
+            HttpMethod.Post,
+            "/api/reports/orders/saved",
+            "alice",
+            new { title = "Alice only", state = new { } }));
+        Assert.Equal(HttpStatusCode.Created, save.StatusCode);
+        var id = (await ReadJson(save)).GetProperty("id").GetInt64();
+
+        using var hidden = await host.Client.SendAsync(Request(
+            HttpMethod.Get, $"/api/reports/orders/{id}", "bob"));
+        using var missing = await host.Client.SendAsync(Request(
+            HttpMethod.Get, "/api/reports/orders/987654321", "bob"));
+
+        Assert.Equal(HttpStatusCode.NotFound, hidden.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+        Assert.Equal("IR-1002", (await ReadJson(hidden)).GetProperty("code").GetString());
+        Assert.Equal("IR-1002", (await ReadJson(missing)).GetProperty("code").GetString());
+    }
+
+    [Fact]
     public async Task The_catalogue_is_empty_for_a_caller_who_may_see_nothing()
     {
         await using var host = await Start((reports, _) =>

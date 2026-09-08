@@ -608,12 +608,13 @@ public sealed class GraphQLHttpTests : IAsyncLifetime
 
         using var response = await Post(
             "query Search($id: ID!, $search: String) "
-            + "{ report(id: $id, search: $search) { totalRows rows } }",
+            + "{ report(id: $id, search: $search) { totalRows truncated rows } }",
             identity: null,
             new { id, search = "second" });
 
         var result = (await ReadJson(response)).GetProperty("data").GetProperty("report");
         Assert.Equal(1, result.GetProperty("totalRows").GetInt64());
+        Assert.False(result.GetProperty("truncated").GetBoolean(), "a paged result is never truncated");
         Assert.Equal("second", result.GetProperty("rows")[0].GetProperty("LABEL").GetString());
     }
 

@@ -106,14 +106,6 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
                         StringComparison.Ordinal))
                     break;
 
-                if (currentDefault.Origin == SavedReportOrigin.Synthetic)
-                {
-                    await _store.Delete(currentDefault.Id, ct);
-                    current.Remove(currentDefault.Id);
-                    deleted++;
-                    break;
-                }
-
                 var demoted = currentDefault with { IsDefault = false, IsGlobal = true };
                 if (await _store.Update(demoted, currentDefault, ct))
                 {
@@ -128,18 +120,6 @@ public sealed class ConfiguredReportDocumentSynchronizer : IDisposable
                 // the normal reconciliation path remains one database snapshot query.
                 currentDefault = await _store.FindDefault(configuredDefault.ReportName, ct);
                 if (currentDefault is not null) current[currentDefault.Id] = currentDefault;
-            }
-
-            foreach (var synthetic in current.Values.Where(report =>
-                         report.Origin == SavedReportOrigin.Synthetic
-                         && string.Equals(
-                             report.ReportName,
-                             configuredDefault.ReportName,
-                             StringComparison.OrdinalIgnoreCase)).ToArray())
-            {
-                await _store.Delete(synthetic.Id, ct);
-                current.Remove(synthetic.Id);
-                deleted++;
             }
         }
 

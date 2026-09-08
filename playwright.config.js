@@ -31,7 +31,6 @@ export default defineConfig({
             ASPNETCORE_ENVIRONMENT: "Development",
             InteractiveReportTest__SavedReportsPath: savedReportsPath,
             InteractiveReport__SavedReports__Connection: "PlaywrightSavedReports",
-            InteractiveReport__SavedReports__Dialect: "Sqlite",
         },
     },
 });

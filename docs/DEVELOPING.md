@@ -14,6 +14,14 @@ npm run start
 ```
 
 Workbench runs at `http://127.0.0.1:5042`; stop it with Ctrl+C.
+
+Workbench has no login: every request is authenticated as `workbench-dev`, which
+`appsettings.json` lists as an administrator, so the packaged pages and the
+policy-protected sample report open without credentials. A request that carries an
+`X-Workbench-User` header runs as that identity instead; the Playwright suite uses it to
+exercise denial, ownership, and non-administrator paths, and it is handy for trying them
+by hand.
+
 On Linux, replace the Playwright installation command with
 `npx playwright install --with-deps chromium` so Chromium's system libraries are
 installed as well. Windows and Linux both support the normal build, Workbench, and
@@ -66,4 +74,7 @@ The command starts Workbench, waits for it to accept requests, drives the packag
 viewer with Playwright, and stops Workbench even when capture fails. The capture widens
 the window until the toolbar fits on one row, adds the numbered callouts, and writes
 `docs/images/*.png`. `npm run build:help` performs the same capture before rebuilding
-the packaged help pages.
+the packaged help pages, and so does `npm run build`, which `pack.ps1` and
+`release.ps1` run: stop a Workbench you started with `npm run start` first, because the
+capture needs port 5042, and expect the screenshot files to change on a machine with
+different fonts or display scaling.

@@ -169,9 +169,11 @@ public static class CsvWriter
         null => ("", false),
         string text => (text, true),
         char character => (character.ToString(), true),
-        // A value the presentation layer already rendered from a typed source keeps that source's
-        // exemption from the formula guard: "-$1,234.50" is a number, not text a user typed.
-        CsvFormattedValue formatted => (formatted.Text, false),
+        // A value the presentation layer rendered from a typed source keeps that source's
+        // exemption from the formula guard only for the renderer's own leading character:
+        // "-$1,234.50" is a number. Anything else at the front of masked text came from the
+        // mask, and masks are document-authored.
+        CsvFormattedValue formatted => (formatted.Text, !RenderedNegativeNumber(formatted.Text)),
         DateTime date => (date.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture), false),
         DateTimeOffset date => (date.ToString("yyyy-MM-dd HH:mm:ss zzz", CultureInfo.InvariantCulture), false),
         DateOnly date => (date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), false),
@@ -189,12 +191,23 @@ public static class CsvWriter
            && field[0] is '=' or '+' or '-' or '@' or '\t' or '\r'
             ? "'" + field
             : field;
+
+    /// <summary>
+    /// Whether rendered text is a negative number: a minus sign followed by a digit, a currency
+    /// or grouping symbol, a bracket, or a space, never by a letter or another formula prefix.
+    /// </summary>
+    private static bool RenderedNegativeNumber(string text)
+        => text.Length > 1
+            && text[0] == '-'
+            && text[1] is not ('=' or '+' or '-' or '@')
+            && (char.IsDigit(text[1]) || char.IsSymbol(text[1]) || char.IsPunctuation(text[1]) || text[1] == ' ');
 }
 
 /// <summary>
 /// Text already rendered from a typed (number, date, or boolean) source value. <see cref="CsvWriter"/>
-/// writes it verbatim and never applies the formula guard, because the leading character of a
-/// rendered negative number or a masked date is the renderer's, not a user's.
+/// exempts a rendered negative number from the formula guard, because its leading minus sign is
+/// the renderer's, not a user's; any other formula-like prefix is guarded, because a format mask
+/// that a document authors can put one there.
 /// </summary>
 /// <param name="Text">The rendered cell text.</param>
 public sealed record CsvFormattedValue(string Text)

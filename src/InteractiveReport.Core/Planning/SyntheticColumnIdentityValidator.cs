@@ -167,8 +167,10 @@ internal static partial class SyntheticColumnIdentityValidator
 
     /// <summary>
     /// Returns the compiled expression that accepts the canonical <c>irN</c> authored-id namespace.
+    /// The id becomes a SQL alias, so its length is capped well inside Oracle's 30-byte and
+    /// PostgreSQL's 63-byte identifier limits.
     /// </summary>
     /// <returns>The compiled regular expression.</returns>
-    [GeneratedRegex(@"^ir[1-9]\d*$")]
+    [GeneratedRegex(@"^ir[1-9]\d{0,17}$")]
     private static partial Regex AuthoredIdPattern();
 }

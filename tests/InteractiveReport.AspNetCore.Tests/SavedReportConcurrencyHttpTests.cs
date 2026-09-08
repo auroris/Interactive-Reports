@@ -530,6 +530,29 @@ public sealed class SavedReportConcurrencyHttpTests
             return inner.FindDefault(reportName, ct);
         }
 
+        public Task<SavedReport?> FindConfiguredFile(
+            string reportName,
+            string sourceFile,
+            CancellationToken ct = default)
+        {
+            CheckReads();
+            return inner.FindConfiguredFile(reportName, sourceFile, ct);
+        }
+
+        public Task<IReadOnlyList<SavedReport>> ListFamily(
+            string reportName,
+            CancellationToken ct = default)
+        {
+            CheckReads();
+            return inner.ListFamily(reportName, ct);
+        }
+
+        public Task<IReadOnlyList<string>> ListOwners(CancellationToken ct = default)
+        {
+            CheckReads();
+            return inner.ListOwners(ct);
+        }
+
         public Task<SavedReport?> FindTitleCollision(
             string reportName,
             string title,

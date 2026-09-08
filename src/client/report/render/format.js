@@ -414,6 +414,10 @@ function formatNumberCode(value, code, context) {
  * @returns {Array<{token: string, width: number}|{literal: string}>|null} The token list, or `null` when the code is invalid.
  */
 function parseDateCode(code) {
+    // Excel writes its own date codes with a trailing text section ("m/d/yyyy;@") and may
+    // prefix a locale tag ("[$-409]mmm d, yyyy"). The first section is the date code; a locale
+    // or currency tag is an instruction to Excel, not part of the rendering.
+    code = splitSections(code)[0];
     const tokens = [];
     const literal = text => {
         const last = tokens[tokens.length - 1];
@@ -422,8 +426,14 @@ function parseDateCode(code) {
     };
     for (let i = 0; i < code.length;) {
         const ch = code[i];
-        // Elapsed-time brackets ([h]:mm) and colors have no place in a date cell.
-        if (ch === "[") return null;
+        if (ch === "[") {
+            // Elapsed-time brackets ([h]:mm) and colors have no place in a date cell; a locale
+            // or currency tag is skipped.
+            const close = code.indexOf("]", i);
+            if (close < 0 || code[i + 1] !== "$") return null;
+            i = close + 1;
+            continue;
+        }
         const read = readLiteral(code, i);
         if (read) { literal(read.text); i = read.next; continue; }
         const meridiem = /^(AM\/PM|am\/pm|A\/P|a\/p)/.exec(code.slice(i));
@@ -436,7 +446,7 @@ function parseDateCode(code) {
             i += width;
             continue;
         }
-        if (/[a-z"\\_*\[\]]/i.test(ch)) return null;
+        if (/[a-z"\\_*\[\]@]/i.test(ch)) return null;
         literal(ch);
         i++;
     }
@@ -618,8 +628,6 @@ export function formatInteger(value, context = null) {
 export const FN_LABELS = {
     sum: "Sum", avg: "Avg", median: "Median", min: "Min", max: "Max",
     count: "Count", countDistinct: "Count Distinct",
-    // Retained for previously stored aggregate payloads using this neutral label.
-    total: "Total",
 };
 
 /**
@@ -636,4 +644,4 @@ export function fnLabel(context, fn) {
 }
 
 /** Canonical aggregate order used by menus and subtotal rows. */
-export const FN_ORDER = ["sum", "avg", "median", "min", "max", "count", "countDistinct", "total"];
+export const FN_ORDER = ["sum", "avg", "median", "min", "max", "count", "countDistinct"];

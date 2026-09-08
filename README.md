@@ -116,7 +116,7 @@ npm ci
 npx playwright install chromium  # on Linux, use: npx playwright install --with-deps chromium
 npm run build && npm run start  # build everything, then launch Workbench
 npm run build:demo           # standalone in-browser demo for Cloudflare Pages
-npm run start:demo           # launch local web server for the in-browser demo
+npm run start:demo           # serve the in-browser demo locally (fetches the serve package on first use)
 ```
 
 The developer prerequisites are Node.js 20 or later, the .NET 10 SDK, and Playwright's
