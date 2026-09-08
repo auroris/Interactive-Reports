@@ -47,6 +47,9 @@ the database as SQL text.
 
 ## Quick start
 
+For a runnable application with one report and an explicit SQLite dependency, see
+the [minimal sample](samples/Minimal/README.md).
+
 Install packages via the command line:
 
 ```sh

@@ -385,9 +385,9 @@ predicates, null ordering, median support, snapshot setup, and older Oracle pagi
 These differences are isolated behind the lowering, expression-emission, connection,
 and persistence components rather than spread through transports or UI code.
 
-SQLite is a direct package dependency of the ASP.NET Core integration. Other ADO.NET
-providers are loaded from the host application's dependency graph, keeping optional
-database drivers out of applications that do not use them.
+All ADO.NET providers are loaded from the host application's
+dependency graph, keeping optional database drivers out of applications that do not
+use them. The Workbench sample references Microsoft.Data.Sqlite directly.
 
 ## Authorization architecture
 

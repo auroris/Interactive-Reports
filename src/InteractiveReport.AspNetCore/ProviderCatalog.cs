@@ -1,13 +1,11 @@
 using System.Data.Common;
 using InteractiveReport.Core.Model;
-using Microsoft.Data.Sqlite;
 
 namespace InteractiveReport.AspNetCore;
 
 /// <summary>
-/// Centralizes provider-token, connection-type, and dialect knowledge. SQLite is
-/// a bundled provider; every other provider loads by reflection from the host's own
-/// dependency graph, so the package
+/// Centralizes provider-token, connection-type, and dialect knowledge. Every provider
+/// loads by reflection from the host's own dependency graph, so the package
 /// carries no provider references and a missing driver fails fast naming the exact
 /// NuGet package to add. Dialect is derived, never chosen: a provider token fixes it
 /// statically, and code-registered factories are sniffed by connection type.
@@ -24,7 +22,7 @@ internal static class ProviderCatalog
     private static readonly Provider[] Providers =
     [
         new("sqlite", ReportDialect.Sqlite, "SQLite", "Microsoft.Data.Sqlite",
-            new Lazy<Type?>(() => typeof(SqliteConnection))),
+            new Lazy<Type?>(() => Type.GetType("Microsoft.Data.Sqlite.SqliteConnection, Microsoft.Data.Sqlite"))),
         new("sqlServer", ReportDialect.SqlServer, "SQL Server", "Microsoft.Data.SqlClient",
             new Lazy<Type?>(() =>
                 Type.GetType("Microsoft.Data.SqlClient.SqlConnection, Microsoft.Data.SqlClient")

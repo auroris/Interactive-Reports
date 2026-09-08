@@ -4,11 +4,13 @@ This guide takes an ASP.NET Core application from an empty integration to a work
 report. It keeps the first run small, then points to the guides that own optional
 features and operational detail.
 
+For a runnable report-only application, see the [minimal sample](../samples/Minimal/README.md).
+
 ## Prerequisites
 
 You need an ASP.NET Core application targeting .NET 8 or later and a database the
-application can reach. Interactive Reports includes SQLite support. For SQL Server,
-PostgreSQL, or Oracle, the host application must reference the matching ADO.NET driver.
+application can reach. For SQLite, SQL Server, PostgreSQL, or Oracle, the host
+application must reference the matching ADO.NET driver.
 
 ## 1. Install the packages
 
@@ -17,6 +19,12 @@ Install the server and JSON client:
 ```sh
 dotnet add package InteractiveReport.AspNetCore
 dotnet add package InteractiveReport.Client.Json
+```
+
+For the SQLite example below, also install the provider in the host application:
+
+```sh
+dotnet add package Microsoft.Data.Sqlite
 ```
 
 Add the file-download package when users should be able to export CSV:
@@ -32,7 +40,8 @@ Add a normal connection string and one report definition to `appsettings.json`:
 ```json
 {
   "ConnectionStrings": {
-    "MainDb": "Data Source=reports.db"
+    "MainDb": "Data Source=reports.db",
+    "MainDb_ProviderName": "Microsoft.Data.Sqlite"
   },
   "InteractiveReport": {
     "Reports": {
@@ -51,9 +60,9 @@ The `dataSource` value has two forms:
 - A value without `=` names an entry under `ConnectionStrings`.
 - A value containing `=` is treated as a literal connection string.
 
-SQLite is inferred from the connection string above. For another database, use the
-standard `ConnectionStrings:MainDb_ProviderName` companion setting or set the report's
-`provider` to `sqlServer`, `postgres`, or `oracle`. The host must reference
+The provider is resolved from `ConnectionStrings:MainDb_ProviderName` above. You can
+also set the report's `provider` to `sqlite`, `sqlServer`, `postgres`, or `oracle`.
+For SQL Server, PostgreSQL, or Oracle, the host must reference
 `Microsoft.Data.SqlClient`, `Npgsql`, or `Oracle.ManagedDataAccess.Core`, respectively.
 
 The `sql` value is trusted application configuration. It must be a `SELECT`; it is never
@@ -118,7 +127,7 @@ If the viewer does not start, check these boundaries first:
 
 - The configured connection string points to a reachable database.
 - The configured `SELECT` runs for the report connection's database principal.
-- A non-SQLite provider package is referenced by the host.
+- The matching ADO.NET provider package is referenced by the host.
 - The request is authenticated unless the report explicitly allows anonymous access.
 
 Definition errors fail during application startup with a message naming the invalid
