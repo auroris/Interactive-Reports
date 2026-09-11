@@ -438,6 +438,14 @@ validating its definition-level settings. Implement
 `IReportDefinitionAuthorizationStore` as well when the store can return a lightweight
 name and authorization envelope before loading the executable SQL definition.
 
+`ReportDefinitionCompiler`, registered by `AddInteractiveReports`, provides the same
+detached snapshot, validation, and registered-connection resolution as the configuration
+store. A dynamic store can return `compiler.Compile(instanceName, definition)`. Set the
+optional server-owned `ReportDefinition.SourceName` when an instance derives from another
+source. Operation authorization and row-restriction callbacks receive it as
+`SourceReportName`, falling back to `ReportName` for ordinary definitions. It is metadata
+for application rules; it does not grant access or apply a source's policy automatically.
+
 Replacing the store replaces configuration-backed report lookup and its built-in
 definition behavior. Configured-document synchronization remains a separate, explicit
 host operation. A custom definition store is an application boundary responsible for

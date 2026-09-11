@@ -671,6 +671,7 @@ reports.UseRowRestrictions(async (request, ct) =>
 | `User` | The current `ClaimsPrincipal`, including claims and roles. It may be anonymous. |
 | `UserId` | The canonical identity resolved using `InteractiveReport:IdentityClaim`, or the usual NameIdentifier / sub / Name chain. Null for an anonymous caller or a missing usable identity claim. |
 | `ReportName` | The canonical configured report key, independent of saved-report titles. |
+| `SourceReportName` | The server-owned source key for a derived definition, otherwise `ReportName`. Use this when the same row rule covers several host-created instances. |
 | `RequestServices` | The current request scope for resolving scoped application services. |
 
 Callbacks are registered once; resolve services that belong to a request through
