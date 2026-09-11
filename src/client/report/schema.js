@@ -4,6 +4,7 @@
 // definition-input table's terms; terminal-table universes live in table.js.
 
 import { activeChain, inputComposableLocation, lookupValue } from "./state.js";
+import { presentColumn } from "./embedding.js";
 
 // Public control names mirror ReportFeatures on the server. The schema list is a server-authored
 // suggestion for the packaged UI, not an authorization boundary: an embedding application may
@@ -42,10 +43,10 @@ export function pickable(w) {
     const input = w.doc ? activeChain(w.doc)[0]?.table : null;
     const columns = input?.schema ?? w.schema?.columns ?? [];
     const labels = w.doc ? inputComposableLocation(w.doc, "labels")?.composable?.labels : null;
-    if (!labels) return columns;
+    if (!labels) return columns.map(c => presentColumn(w, c));
     return columns.map(c => {
         const label = lookupValue(labels, c.name);
-        return label ? { ...c, label } : c;
+        return presentColumn(w, label ? { ...c, label } : c);
     });
 }
 
@@ -148,6 +149,7 @@ export function serverFeatureEnabled(w, feature) {
  */
 export function featureEnabled(w, feature) {
     if (w._controlOverrides?.has(feature)) return w._controlOverrides.get(feature);
+    if (w._declarativeControls != null) return w._declarativeControls.includes(feature);
     return serverFeatureEnabled(w, feature);
 }
 
@@ -164,7 +166,9 @@ export function featureEnabled(w, feature) {
  * @returns {object|null} The override, or `null` for unrestricted and derived columns.
  */
 export function columnOverride(w, name) {
-    return lookupValue(w.schema?.columnOverrides, name) ?? null;
+    const configured = lookupValue(w.schema?.columnOverrides, name);
+    const presentation = lookupValue(w._columnPresentation, name);
+    return presentation ? { ...configured, ...presentation } : configured ?? null;
 }
 
 /**

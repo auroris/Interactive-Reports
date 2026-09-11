@@ -15,6 +15,8 @@ public sealed record InteractiveReportRowRestrictionRequest
     public required string? UserId { get; init; }
     /// <summary>The canonical configured report key, independent of saved-report titles.</summary>
     public required string ReportName { get; init; }
+    /// <summary>The server-resolved source identity, independent of a host's instance name.</summary>
+    public string? SourceReportName { get; init; }
     /// <summary>The current scope for resolving application permission services.</summary>
     public required IServiceProvider RequestServices { get; init; }
 }
@@ -80,6 +82,7 @@ internal static class ReportRowRestrictions
             User = context.User,
             UserId = ReportIdentity.Resolve(context.User, identityClaim),
             ReportName = definition.Name,
+            SourceReportName = definition.SourceName ?? definition.Name,
             RequestServices = context.RequestServices,
         };
         var decided = false;

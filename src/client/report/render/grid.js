@@ -12,6 +12,7 @@ import { activeEditLink, renderEditCell } from "./edit-link.js";
 import { headerMenuAvailable, openHeaderMenu } from "../menus.js";
 import { columnClasses } from "../classes.js";
 import { alignmentStyle, presentationStyle } from "./presentation.js";
+import { presentColumn } from "../embedding.js";
 
 /**
  * Rebuilds the result table from the latest query response and active presentation instructions.
@@ -23,7 +24,7 @@ import { alignmentStyle, presentationStyle } from "./presentation.js";
  * Side effects: replaces table contents and creates handlers for column menus, edit links, and row actions.
  */
 export function renderGrid(w, table) {
-    const result = w.lastResult;
+    const result = w.lastResult && { ...w.lastResult, columns: w.lastResult.columns.map(column => presentColumn(w, column)) };
     if (!result) { table.replaceChildren(); return; }
     const ctx = tableContext(w);
     const mode = ctx.mode;
@@ -50,7 +51,7 @@ export function renderGrid(w, table) {
     // Protocol contract: labels resolve client-side: the active table's universe already
     // layered its own labels over source labels and rebuilt synthetic metric captions, so the
     // response's neutral label is only the last resort.
-    const tableColumnByName = new Map(ctx.columns.map(c => [c.name.toLowerCase(), c]));
+    const tableColumnByName = new Map(ctx.columns.map(c => [c.name.toLowerCase(), presentColumn(w, c)]));
     const displayLabel = col =>
         tableColumnByName.get(col.name.toLowerCase())?.label ?? col.label;
 
@@ -249,7 +250,7 @@ export function renderGrid(w, table) {
 
     if (!result.rows.length)
         bodyRows.push(el("tr", { class: "ir-empty" },
-            el("td", { colSpan: Math.max(columns.length, 1) + cellOffset }, translate(w, "grid.noData"))));
+            el("td", { colSpan: Math.max(columns.length, 1) + cellOffset }, w.host?.getAttribute("empty-message") ?? translate(w, "grid.noData"))));
 
     table.replaceChildren(el("thead", {}, headRow), el("tbody", {}, ...bodyRows));
 }

@@ -17,7 +17,7 @@ import { anchorClickHandler, dispatchLinkEvent, eventMode } from "./link-events.
  * Side effects: creates a detached control; activating it dispatches `ir-create`.
  */
 export function renderCreateButton(w) {
-    const createLink = w.schema?.createLink;
+    const createLink = w._createLink === undefined ? w.schema?.createLink : w._createLink;
     if (!createLink) return null;
     const label = createLink.label ?? w.t("toolbar.create");
     const url = createLink.url ?? null;

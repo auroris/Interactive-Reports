@@ -19,7 +19,7 @@ import { anchorClickHandler, dispatchLinkEvent, eventMode } from "../link-events
  * @returns {object|null} The active grid edit-link definition, or null outside grid mode.
  */
 export function activeEditLink(w, mode) {
-    return mode === "grid" ? (w.schema?.editLink ?? null) : null;
+    return mode === "grid" ? (w._editLink === undefined ? w.schema?.editLink ?? null : w._editLink) : null;
 }
 
 // Protocol contract: substitutes {COLUMN} placeholders with the row's URL-encoded values.

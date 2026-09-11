@@ -27,6 +27,7 @@ import { canRenderChart, renderChartView } from "./render/chart-view.js";
 import { renderPager } from "./render/pager.js";
 import { openViewDialog } from "./dialogs/view.js";
 import { retrieveExport } from "./export.js";
+import { controlList, pageSize, columnPresentation, linkSettings, validateEditProjection } from "./embedding.js";
 
 // Chart.js glue ships as its own bundle beside ir.js and loads the first time any report on the
 // page enters chart view. The URL is computed at runtime so the bundler leaves the import
@@ -199,6 +200,15 @@ class ReportController {
      */
     attributeChangedCallback(name, oldValue, newValue) {
         if (oldValue === newValue) return;
+        if (["report-title", "empty-message", "controls"].includes(name)) {
+            try {
+                if (name === "controls") this._declarativeControls = controlList(newValue);
+                this.refreshEmbedding();
+            } catch (error) { if (this.els) this.showError(error); }
+            return;
+        }
+        // Initial settings are seeds, not live mutations of a working report.
+        if (name === "initial-page-size") return;
         if (name === "stylesheet") {
             this.refreshStyleSheet();
             return;
@@ -342,6 +352,8 @@ class ReportController {
         }
 
         try {
+            this._declarativeControls = controlList(this.host.getAttribute("controls"));
+            pageSize(this.host.getAttribute("initial-page-size"));
             const identity = await loadWhoami(this.base);
             if (seq !== this._seq) return;
             this.whoami = identity.whoami;
@@ -381,9 +393,15 @@ class ReportController {
 
         try {
             const requestedSaved = this.requestedSavedReportId?.trim();
+            const initial = this._initialDocument == null ? null : copyReportDocument(this._initialDocument);
+            const size = pageSize(this.host.getAttribute("initial-page-size"));
             let requestedUnavailable = false;
             const loadRequested = async () => {
-                if (!requestedSaved) return api(this.definitionUrl("default"));
+                if (!requestedSaved && initial) {
+                    if (size != null) initial.page = { ...initial.page, index: 1, size };
+                    return { summary: null, result: await api(this.definitionUrl("query"), { method: "POST", body: initial }) };
+                }
+                if (!requestedSaved) return api(this.definitionUrl("default") + (size == null ? "" : `?pageSize=${size}`));
                 try {
                     return await api(this.definitionUrl(requestedSaved));
                 } catch (err) {
@@ -402,9 +420,11 @@ class ReportController {
             ]);
             if (seq !== this._seq) return false;
             this.schema = schema;
+            validateEditProjection(this);
             this.currentSaved = loaded.summary;
             applyFeatureChrome(this);
             this.acceptResult(loaded.result, { source: "initial", requestId, revision });
+            this.refreshEmbedding();
             if (requestedUnavailable) this.notify(this.t("saved.unavailable"), "warn");
             return seq === this._seq && this.lastResult !== null;
         } catch (err) {
@@ -603,6 +623,15 @@ class ReportController {
      * @returns {Record<string, boolean>} Canonically named overrides.
      */
     getControlOverrides() { return Object.fromEntries(this._controlOverrides); }
+
+    /** Repaint host-owned presentation without replacing the query document. */
+    refreshEmbedding() {
+        if (!this.els) return;
+        const title = this.host.getAttribute("report-title");
+        this.els.heading.hidden = title === null;
+        this.els.heading.textContent = title || this.schema?.title || this.definitionName || "";
+        this.refreshControlSurface();
+    }
 
     /** Synchronizes the application-owned stylesheet attribute into the shadow root. */
     refreshStyleSheet() {
@@ -1125,6 +1154,7 @@ class ReportController {
 export class InteractiveReportElement extends HTMLElement {
     static observedAttributes = [
         "report", "saved-report", "api-base", "lang", "disabled", "stylesheet", "theme",
+        "report-title", "empty-message", "controls", "initial-page-size",
     ];
 
     constructor() {
@@ -1133,6 +1163,14 @@ export class InteractiveReportElement extends HTMLElement {
         const controller = new ReportController(this, root, mount);
         controllers.set(this, controller);
         controller.refreshStyleSheet();
+        // Upgrade properties assigned by a host before the element was registered.
+        for (const name of ["initialDocument", "columnPresentation", "editLink", "createLink", "reportTitle", "emptyMessage", "initialPageSize", "controls"]) {
+            if (Object.hasOwn(this, name)) {
+                const value = this[name];
+                delete this[name];
+                this[name] = value;
+            }
+        }
     }
 
     connectedCallback() { controllerFor(this).connectedCallback(); }
@@ -1151,6 +1189,44 @@ export class InteractiveReportElement extends HTMLElement {
 
     /** The active configured definition key. */
     get definitionName() { return controllerFor(this).definitionName; }
+
+    get reportTitle() { return this.getAttribute("report-title"); }
+    set reportTitle(value) { value == null ? this.removeAttribute("report-title") : this.setAttribute("report-title", String(value)); }
+    get emptyMessage() { return this.getAttribute("empty-message"); }
+    set emptyMessage(value) { value == null ? this.removeAttribute("empty-message") : this.setAttribute("empty-message", String(value)); }
+    get initialPageSize() { return pageSize(this.getAttribute("initial-page-size")); }
+    set initialPageSize(value) {
+        const size = pageSize(value);
+        size == null ? this.removeAttribute("initial-page-size") : this.setAttribute("initial-page-size", String(size));
+    }
+    get controls() { return controlList(this.getAttribute("controls")); }
+    set controls(value) {
+        const names = controlList(value);
+        names == null ? this.removeAttribute("controls") : this.setAttribute("controls", names.join(" "));
+    }
+    get initialDocument() { return controllerFor(this)._initialDocument == null ? null : copyReportDocument(controllerFor(this)._initialDocument); }
+    set initialDocument(value) { controllerFor(this)._initialDocument = value == null ? null : copyReportDocument(value); }
+    get columnPresentation() { return structuredClone(controllerFor(this)._columnPresentation ?? null); }
+    set columnPresentation(value) {
+        const controller = controllerFor(this);
+        controller._columnPresentation = columnPresentation(value);
+        controller.refreshEmbedding();
+    }
+    get editLink() { return structuredClone(controllerFor(this)._editLink); }
+    set editLink(value) {
+        const controller = controllerFor(this);
+        const previous = controller._editLink;
+        controller._editLink = linkSettings(value, true);
+        try { if (controller.schema) validateEditProjection(controller); }
+        catch (error) { controller._editLink = previous; throw error; }
+        controller.refreshEmbedding();
+    }
+    get createLink() { return structuredClone(controllerFor(this)._createLink); }
+    set createLink(value) {
+        const controller = controllerFor(this);
+        controller._createLink = linkSettings(value);
+        controller.refreshEmbedding();
+    }
 
     /**
      * The explicit `api-base` or the bundle-relative default.

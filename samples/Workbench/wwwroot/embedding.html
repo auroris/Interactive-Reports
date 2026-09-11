@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en-CA">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Report embedding</title>
+    <style>body{font:16px system-ui;max-width:1400px;margin:2rem auto;padding:0 1rem}main{display:grid;gap:2rem}interactive-report{display:block}p{max-width:75ch}</style>
+</head>
+<body>
+    <h1>Two views of the same report</h1>
+    <p>These components use the same Orders source. Their initial state, headings, and visible controls are supplied by this ordinary HTML page.</p>
+    <main id="reports"></main>
+    <script type="module">
+        import "/api/reports/ui/ir.js";
+        const all = document.createElement("interactive-report");
+        all.setAttribute("report", "orders");
+        all.reportTitle = "All orders";
+        all.initialPageSize = 10;
+        const selected = document.createElement("interactive-report");
+        selected.setAttribute("report", "orders");
+        selected.reportTitle = "Orders of 500 or more";
+        selected.controls = ["search", "columns", "filter", "sort", "pagination"];
+        selected.initialPageSize = 5;
+        selected.initialDocument = {
+            activeTable: "base",
+            tables: { base: { from: "definition", composables: [
+                { kind: "filter", filters: [{ expr: "AMOUNT >= 500" }] }
+            ] } }
+        };
+        document.querySelector("#reports").append(all, selected);
+    </script>
+</body>
+</html>

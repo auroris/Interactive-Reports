@@ -100,6 +100,12 @@ public interface IInteractiveReportServer
         InteractiveReportRequestContext context,
         CancellationToken ct = default);
 
+    /// <summary>Loads the default with an initial page size, without modifying the stored document.</summary>
+    Task<InteractiveReportServerResult<InteractiveReportLoadedDocument>> LoadDefaultDocument(
+        string reportName, int pageSize,
+        InteractiveReportRequestContext context,
+        CancellationToken ct = default);
+
     /// <summary>Hydrates the submitted document directly, without saved-document lookup or fallback.</summary>
     Task<InteractiveReportServerResult<ReportResult>> Query(
         string reportName,
@@ -398,6 +404,20 @@ internal sealed class InteractiveReportServer(
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(reportName);
         return LoadDocumentCore(reportName, null, context, ct);
+    }
+
+    public Task<InteractiveReportServerResult<InteractiveReportLoadedDocument>> LoadDefaultDocument(
+        string reportName, int pageSize,
+        InteractiveReportRequestContext context,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(reportName);
+        if (pageSize < 1)
+            return Task.FromResult(InteractiveReportServerResult<InteractiveReportLoadedDocument>.Failed(
+                Invalid(InteractiveReportErrorCodes.ReportStateInvalid)));
+        // The ordinary query validator enforces the definition's maximum. No stored state is changed.
+        return LoadDocumentCore(reportName, null, context, ct,
+            state => state.Page = new PageRequest { Index = 1, Size = pageSize });
     }
 
     private async Task<InteractiveReportServerResult<InteractiveReportLoadedDocument>> LoadDocumentCore(

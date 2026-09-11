@@ -209,7 +209,7 @@ internal sealed class ReportAuthorizationService(
         var listing = SavedReportsListingDefinition.Matches(definition.Name);
         return AuthorizeOperations(
             actions,
-            canonicalResource,
+            canonicalResource with { SourceReportName = definition.SourceName ?? definition.Name },
             administratorRequired || listing,
             hideDenied || listing,
             denialDetail,

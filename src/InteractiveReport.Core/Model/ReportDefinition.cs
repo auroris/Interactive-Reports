@@ -31,6 +31,13 @@ public sealed class ReportDefinition
     /// <summary>Gets or sets the canonical name assigned by the definition store; it is not part of the configuration payload.</summary>
     public string Name { get; set; } = "";
 
+    /// <summary>
+    /// Optional source identity for a host-created report variant. Name still owns routes and
+    /// saved documents; application callbacks can apply dataset policy through this source name.
+    /// This is server-owned metadata and is never read from a client report-state document.
+    /// </summary>
+    public string? SourceName { get; set; }
+
     /// <summary>Gets or sets the optional display title; clients prettify <see cref="Name"/> when absent.</summary>
     public string? Title { get; set; }
 

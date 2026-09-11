@@ -67,6 +67,7 @@ public static class ServiceCollectionExtensions
             },
             sp.GetRequiredService<IReportConnectionFactory>(),
             logging.For<SqlAdministratorStore>()));
+        services.AddSingleton(sp => new ReportDefinitionCompiler(sp.GetRequiredService<ReportConnectionRegistry>()));
         services.AddSingleton<IReportDefinitionStore>(sp => new ConfigurationReportDefinitionStore(
             sp.GetRequiredService<IOptionsMonitor<InteractiveReportOptions>>(),
             sp.GetRequiredService<SchemaCache>(),

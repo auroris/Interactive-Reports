@@ -71,6 +71,7 @@ export function buildSkeleton(w) {
         onsubmit: event => { event.preventDefault(); doSearch(w); },
     }, scopeBtn, search, go);
     w.els = {
+        heading: el("h2", { class: "ir-heading", part: "heading", hidden: true }),
         search, searchWrap, views, actionsBtn, createSlot, savedSel, savedWrap, helpBtn,
         errorSlot: el("div", { role: "alert", "aria-atomic": "true" }),
         transientSlot: el("div", { role: "status", "aria-live": "polite", "aria-atomic": "true" }),
@@ -83,6 +84,7 @@ export function buildSkeleton(w) {
     w.els.tablewrap = el("div", { class: "ir-tablewrap", part: "table-container" }, w.els.table);
 
     w._mount.replaceChildren(
+        w.els.heading,
         el("div", { class: "ir-toolbar", part: "toolbar" },
             searchWrap, views, actionsBtn, createSlot,
             el("span", { class: "ir-spacer" }),

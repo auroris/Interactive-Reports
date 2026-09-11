@@ -53,6 +53,8 @@ public sealed record InteractiveReportAuthorizationResource
 {
     /// <summary>Gets the configured report name.</summary>
     public required string ReportName { get; init; }
+    /// <summary>The server-resolved source of this report variant; otherwise its own name.</summary>
+    public string? SourceReportName { get; init; }
     /// <summary>Gets immutable current saved-report metadata when the operation targets an existing row.</summary>
     public SavedReportMetadata? SavedReport { get; init; }
     /// <summary>Gets the mutable proposed saved report when the operation creates or updates a row.</summary>

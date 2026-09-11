@@ -132,7 +132,16 @@ internal static class SavedReportEndpoints
     /// <summary>Hydrates the family's stored or transient synthetic default without changing storage.</summary>
     internal static async Task<IResult> LoadDefault(string name, HttpContext ctx, CancellationToken ct)
     {
-        var loaded = await EndpointExtensions.Server(ctx).LoadDefaultDocument(name, EndpointExtensions.Context(ctx), ct);
+        int? pageSize = null;
+        if (ctx.Request.Query.TryGetValue("pageSize", out var supplied))
+        {
+            if (supplied.Count != 1 || !int.TryParse(supplied[0], out var size) || size < 1)
+                return Results.ValidationProblem(new Dictionary<string, string[]> { ["pageSize"] = ["A positive integer is required."] });
+            pageSize = size;
+        }
+        var loaded = pageSize is { } initialSize
+            ? await EndpointExtensions.Server(ctx).LoadDefaultDocument(name, initialSize, EndpointExtensions.Context(ctx), ct)
+            : await EndpointExtensions.Server(ctx).LoadDefaultDocument(name, EndpointExtensions.Context(ctx), ct);
         return Loaded(loaded, ctx);
     }
 
