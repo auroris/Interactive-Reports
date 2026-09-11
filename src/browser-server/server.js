@@ -140,9 +140,12 @@ export class InteractiveReportServer {
      *
      * @param {string} reportName
      * @param {number|null} [id=null] - Omit to load the family's default.
+     * @param {number|null} [pageSize=null] - Optional first-load page size; does not alter stored documents.
      * @returns {Promise<{summary: object|null, result: object}|null>} Null for an unknown saved ID.
      */
-    async loadDocument(reportName, id = null) {
+    async loadDocument(reportName, id = null, pageSize = null) {
+        if (pageSize !== null && (!Number.isSafeInteger(pageSize) || pageSize < 1)) throw new TypeError("pageSize must be a positive integer.");
+        const initial = state => pageSize === null ? state : { ...state, page: { index: 1, size: pageSize } };
         const requested = id === null ? null : this.savedReports.load(reportName, id);
         if (id !== null && !requested) return null;
         const defaultId = this.savedReports.defaultReportIds.get(reportName.toLowerCase());
@@ -153,7 +156,7 @@ export class InteractiveReportServer {
             try {
                 return {
                     summary: candidate.summary,
-                    result: await this.query(reportName, candidate.state),
+                    result: await this.query(reportName, initial(candidate.state)),
                 };
             } catch (err) {
                 if (err.name === "AbortError") throw err;
@@ -161,7 +164,7 @@ export class InteractiveReportServer {
         }
         return {
             summary: null,
-            result: await this.query(reportName, this.getSchema(reportName).defaultState),
+            result: await this.query(reportName, initial(this.getSchema(reportName).defaultState)),
         };
     }
 
@@ -368,7 +371,10 @@ export class InteractiveReportServer {
                 if (!this.definitions.has(name.toLowerCase()))
                     return errorResponse(404, "IR-1001", "Report not found", `Report '${name}' was not found.`);
                 const id = loadMatch[2] === "default" ? null : Number(loadMatch[2]);
-                const doc = await this.loadDocument(name, id);
+                const sizes = new URL(urlStr, "https://local.ir").searchParams.getAll("pageSize");
+                if (id === null && sizes.length && (sizes.length !== 1 || !/^[1-9]\d*$/.test(sizes[0]) || Number(sizes[0]) > 2147483647))
+                    return errorResponse(400, "IR-1201", "Report state failed validation", "pageSize must be a single positive integer.");
+                const doc = await this.loadDocument(name, id, id === null && sizes.length ? Number(sizes[0]) : null);
                 if (!doc) {
                     return errorResponse(404, "IR-1002", "Saved report not found", `Saved report #${id} was not found for report '${name}'.`);
                 }

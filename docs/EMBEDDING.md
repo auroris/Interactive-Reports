@@ -33,6 +33,65 @@ only, and duplicate titles remain distinguishable by their Public and Private gr
 Server authorization still applies when the component requests schema, report documents,
 queries, and exports.
 
+## Configuring individual instances
+
+An ordinary HTML host can configure each element independently. These settings also work
+when a CMS, dashboard, or application shell creates the element:
+
+```html
+<interactive-report report="orders" report-title="Current orders"
+  controls="search columns filter sort pagination"
+  initial-page-size="20" empty-message="No matching orders.">
+</interactive-report>
+```
+
+`report-title` opts into a heading. Omit it to preserve the original heading-free layout;
+an empty attribute uses the source title. `controls` is a space-separated list, or an array
+through the property. Omission inherits server suggestions and an empty list hides every
+optional control. Explicit `setControlEnabled` overrides take precedence over this list.
+These are presentation choices; server authorization remains authoritative.
+
+Assign structured configuration before inserting a programmatically created element:
+
+```js
+const report = document.createElement("interactive-report");
+report.setAttribute("report", "orders");
+report.reportTitle = "Large orders";
+report.initialPageSize = 10;
+report.initialDocument = {
+  activeTable: "base",
+  tables: { base: { from: "definition", composables: [
+    { kind: "filter", filters: [{ expr: "AMOUNT >= 500" }] }
+  ] } }
+};
+report.columnPresentation = { CUSTOMER: { label: "Customer name" } };
+document.querySelector("main").append(report);
+```
+
+Activation precedence is explicit `saved-report`, then `initialDocument`, then the normal
+default. An initial document goes directly through the ordinary query endpoint without
+first running the default query. Invalid initial state remains an error. Its page size is
+overridden by `initialPageSize` when supplied. Default loads use
+`GET /api/reports/{name}/default?pageSize=10`; execution clamps the size to the definition's
+maximum without changing a stored view. Both the .NET and browser demo servers support it.
+A saved-report activation retains that saved view's paging.
+
+Structured property values and getters are detached. Changes to title, controls, empty
+message, column presentation, or links update the current display without issuing a
+query. Initial settings changed after activation seed the next activation; use
+`submitReportDocument` to deliberately replace a running view.
+
+`columnPresentation` accepts only `label`, `helpText`, and `hideLabel` for each named column.
+`editLink` and `createLink` accept the same objects as their definition counterparts. Set
+either to `null` to hide it, or `undefined` to inherit. Link overrides never confer operation
+permission. Component edit-link placeholders must already appear in the server-defined
+edit-link template, because that definition owns the required hidden key projection. To
+introduce a new key column, update the server definition too. Relative and HTTP(S) URLs are
+accepted; script and other unsafe URL schemes are rejected.
+
+The Workbench's [`embedding.html`](../samples/Workbench/wwwroot/embedding.html) demonstrates
+two independently configured elements with no CMS dependency.
+
 ## Host API
 
 Once the initial report has loaded, an embedding application can retrieve an export

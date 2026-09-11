@@ -748,12 +748,21 @@ only the supported element interface; mutable controller state remains private.
 | none | `reportId` (read-only) | Current saved-report ID as a string, or `null` when the working document has no saved association. |
 | none | `definitionName` (read-only) | Canonical configured definition key learned during activation. |
 | `saved-report` | none | Optional numeric document id to load on activation. |
+| `report-title` | `reportTitle` | Opt-in heading. An empty string uses the source title; absence/null hides it. |
+| `empty-message` | `emptyMessage` | Text shown when the current result has no rows. |
+| `controls` | `controls` | Space-separated string or array of canonical control names; null inherits server suggestions, an empty list hides optional controls. Explicit control overrides take precedence. |
+| `initial-page-size` | `initialPageSize` | Positive first-load page size; null inherits. Does not replace paging from an explicit saved-report activation. |
+| none | `initialDocument` | Detached initial `ReportState`, submitted directly through the query endpoint when no explicit saved report is requested. Later assignment takes effect on the next activation. |
+| none | `columnPresentation` | Detached column-name map restricted to `label`, `helpText`, and `hideLabel`. Presentation only. |
+| none | `editLink`, `createLink` | Instance link overrides using the definition's link shapes; null hides and undefined inherits. Edit placeholders must already be projected by the server-defined edit link. |
 | `api-base` | `apiBase` | API prefix. It is inferred from the module URL when omitted. |
 | `download-base` | `downloadBase` | File-download prefix. It is inferred from the API prefix when omitted. |
 | `lang` | none | Client locale. |
 | `theme` | `theme` | `light`, `dark`, or empty to follow the surrounding page and system preference. |
 | `disabled` | `disabled` | Makes all package-owned controls inert without clearing control overrides. |
 | `stylesheet` | `styleSheet` | Application-owned stylesheet URL inserted into this element's shadow root. Set the property to `null` to remove it. |
+
+For precedence, first-load behavior, and examples, see [instance configuration](EMBEDDING.md#configuring-individual-instances).
 
 ### Methods
 

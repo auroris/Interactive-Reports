@@ -10,6 +10,21 @@ namespace InteractiveReport.AspNetCore.Tests;
 
 public sealed class ConfigurationReportDefinitionStoreTests
 {
+    [Fact]
+    public void Host_supplied_definitions_use_the_standard_validation_and_detached_compilation()
+    {
+        var source = new ReportDefinition { Connection = "db", Dialect = ReportDialect.Sqlite, Sql = "SELECT 1 AS ID", SourceName = "orders", DefaultState = new ReportState { Search = "initial" } };
+        var compiler = new ReportDefinitionCompiler(TestRegistry());
+        var compiled = compiler.Compile("dashboard-orders", source);
+        Assert.Equal("dashboard-orders", compiled.Name);
+        Assert.Equal("orders", compiled.SourceName);
+        Assert.NotSame(source.DefaultState, compiled.DefaultState);
+        compiled.DefaultState!.Search = "changed";
+        Assert.Equal("initial", source.DefaultState!.Search);
+        Assert.Equal("", source.Name);
+        Assert.Throws<InvalidOperationException>(() => compiler.Compile("broken", new ReportDefinition { Connection = "db", Sql = "" }));
+    }
+
     /// <summary>A registry with one declared connection, "db" — what every fixture definition names.</summary>
     private static ReportConnectionRegistry TestRegistry()
     {

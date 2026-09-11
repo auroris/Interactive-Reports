@@ -22,6 +22,20 @@ async function setupServer() {
     return { db, server };
 }
 
+test("default page size is a validated request override, independent of stored defaults", async () => {
+    const { server } = await setupServer();
+    for (const query of ["0", "-1", "NaN", "1&pageSize=2", "2147483648"]) {
+        assert.equal((await server.handleRequest(`/api/reports/orders/default?pageSize=${query}`)).status, 400);
+    }
+    const initial = await server.handleRequest("/api/reports/orders/default").then(r => r.json());
+    const small = await server.handleRequest("/api/reports/orders/default?pageSize=3").then(r => r.json());
+    assert.equal(small.result.rows.length, 3);
+    assert.equal(small.result.page.size, 3);
+    const again = await server.handleRequest("/api/reports/orders/default").then(r => r.json());
+    assert.deepEqual(again.result.document, initial.result.document);
+    assert.equal(server.savedReports.reports.size, 0);
+});
+
 test("server discovers schema and generates column metadata", async () => {
     const { server } = await setupServer();
     const schema = server.getSchema("orders");

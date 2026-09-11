@@ -23,6 +23,33 @@ namespace InteractiveReport.AspNetCore.Tests;
 public sealed class InteractiveReportAuthorizationHttpTests
 {
     [Fact]
+    public async Task Embedded_default_page_size_is_validated_clamped_and_request_local()
+    {
+        var sources = new ConcurrentQueue<string?>();
+        await using var host = await Start((reports, services) => {
+            services.PostConfigure<InteractiveReportOptions>(options => {
+                options.Reports["orders"].SourceName = "orders-source";
+                options.Reports["orders"].MaxPageSize = 2;
+                options.Reports["orders"].DefaultPageSize = 2;
+            });
+            reports.UseAuthorization((request, _) => { sources.Enqueue(request.Resource.SourceReportName); return ValueTask.FromResult(true); });
+        });
+        foreach (var value in new[] { "0", "-1", "bad", "1&pageSize=2" }) {
+            using var invalid = await host.Client.SendAsync(Request(HttpMethod.Get, "/api/reports/orders/default?pageSize=" + value, "alice"));
+            Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+        }
+        using var small = await host.Client.SendAsync(Request(HttpMethod.Get, "/api/reports/orders/default?pageSize=1", "alice"));
+        Assert.Equal(HttpStatusCode.OK, small.StatusCode);
+        Assert.Equal(1, (await ReadJson(small)).GetProperty("result").GetProperty("document").GetProperty("page").GetProperty("size").GetInt32());
+        using var large = await host.Client.SendAsync(Request(HttpMethod.Get, "/api/reports/orders/default?pageSize=100", "alice"));
+        Assert.Equal(HttpStatusCode.OK, large.StatusCode);
+        Assert.Equal(2, (await ReadJson(large)).GetProperty("result").GetProperty("page").GetProperty("size").GetInt32());
+        using var unchanged = await host.Client.SendAsync(Request(HttpMethod.Get, "/api/reports/orders/default", "alice"));
+        Assert.Equal(2, (await ReadJson(unchanged)).GetProperty("result").GetProperty("document").GetProperty("page").GetProperty("size").GetInt32());
+        Assert.Contains("orders-source", sources);
+    }
+
+    [Fact]
     public async Task Every_protected_endpoint_family_has_an_explicit_action()
     {
         var seen = new ConcurrentQueue<InteractiveReportAction>();
