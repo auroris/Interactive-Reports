@@ -5,7 +5,7 @@
 // els, apply/applyOrBanner, runQuery, state transitions, restoreLastGood, normalize/serialize,
 // reportUrl, and the notice slots.
 
-import { api, apiUrl, defaultApiBase, errorText } from "../core/api.js";
+import { api, apiUrl, defaultApiBase, errorText, withQuery } from "../core/api.js";
 import { banner, transientBanner } from "../core/dom.js";
 import { loadWhoami } from "../core/identity.js";
 import { resolveLocale, translate } from "../core/localization.js";
@@ -110,13 +110,15 @@ class ReportController {
     get apiBase() {
         return this.host.getAttribute("api-base") ?? defaultBase;
     }
-    get base() { return this.apiBase.replace(/\/+$/, ""); }
+    get base() { return apiUrl(this.apiBase); }
     get downloadBase() {
-        const configured = this.host.getAttribute("download-base")?.replace(/\/+$/, "");
-        if (configured) return configured;
-        return /\/reports$/i.test(this.base)
-            ? this.base.replace(/reports$/i, "download")
-            : "/api/download";
+        const configured = this.host.getAttribute("download-base");
+        if (configured) return apiUrl(configured);
+        const base = this.base;
+        const suffixIndex = base.search(/[?#]/);
+        const path = suffixIndex < 0 ? base : base.slice(0, suffixIndex);
+        const suffix = suffixIndex < 0 ? "" : base.slice(suffixIndex);
+        return (/\/reports$/i.test(path) ? path.replace(/reports$/i, "download") : "/api/download") + suffix;
     }
     get locale() { return resolveLocale(this.host); }
     getAttribute(name) { return this.host.getAttribute(name); }
@@ -401,7 +403,7 @@ class ReportController {
                     if (size != null) initial.page = { ...initial.page, index: 1, size };
                     return { summary: null, result: await api(this.definitionUrl("query"), { method: "POST", body: initial }) };
                 }
-                if (!requestedSaved) return api(this.definitionUrl("default") + (size == null ? "" : `?pageSize=${size}`));
+                if (!requestedSaved) return api(withQuery(this.definitionUrl("default"), size == null ? {} : { pageSize: size }));
                 try {
                     return await api(this.definitionUrl(requestedSaved));
                 } catch (err) {

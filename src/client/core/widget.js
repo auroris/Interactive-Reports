@@ -3,7 +3,7 @@
 // owns when a host framework removes it.
 
 import cssText from "../ir.css";
-import { defaultApiBase, errorText } from "./api.js";
+import { apiUrl, defaultApiBase, errorText } from "./api.js";
 import { banner, el, transientBanner } from "./dom.js";
 import { closeMenuOwnedBy } from "./menu.js";
 import { closeDialogsOwnedBy } from "./dialog.js";
@@ -171,7 +171,7 @@ export class WidgetElement extends HTMLElement {
      *
      * @returns {string} The configured API base without trailing slashes.
      */
-    get base() { return this.apiBase.replace(/\/+$/, ""); }
+    get base() { return apiUrl(this.apiBase); }
     /**
      * The explicit theme override on this widget ('dark', 'light', or null for auto).
      *

@@ -4,7 +4,7 @@
 // server already knows. The search box doubles as free-form identity entry, so an account the
 // directory does not list can still be named exactly.
 
-import { api, apiUrl } from "../core/api.js";
+import { api, apiUrl, withQuery } from "../core/api.js";
 import { el } from "../core/dom.js";
 
 const USER_SEARCH_DEBOUNCE_MS = 200;
@@ -22,7 +22,7 @@ const USER_SEARCH_DEBOUNCE_MS = 200;
  */
 export async function searchUsers(base, search = "", { signal } = {}) {
     const text = String(search ?? "").trim();
-    const url = apiUrl(base, "admin", "users") + (text ? `?search=${encodeURIComponent(text)}` : "");
+    const url = withQuery(apiUrl(base, "admin", "users"), { search: text || null });
     const result = await api(url, { signal });
     return { items: result.items ?? [], truncated: result.truncated === true };
 }

@@ -38,9 +38,10 @@ const json = (value, init = {}) => new Response(JSON.stringify(value), {
 });
 
 globalThis.fetch = async (url, options = {}) => {
-    const path = String(url);
+    const address = String(url);
+    const path = new URL(address, window.location.href).pathname;
     const method = options.method ?? "GET";
-    requests.push({ url: path, method, body: options.body });
+    requests.push({ url: address, method, body: options.body });
     if (path.endsWith("/schema")) {
         return json({
             // labels here mirror the server contract: friendly names reach the client
@@ -115,7 +116,44 @@ globalThis.fetch = async (url, options = {}) => {
 
 await import("../../src/InteractiveReport.Client.Json/Ui/dist/ir.js");
 
+test("base query parameters reach schema, defaults, submitted documents and exports", async () => {
+    requests.length = 0;
+    const report = document.createElement("interactive-report");
+    report.setAttribute("report", "orders");
+    report.apiBase = "/custom-report-api/?appPageQuery=%3Ftopic%3DFuel%26pageSize%3D12&route=/";
+    report.setAttribute("initial-page-size", "8");
+    document.body.append(report);
+    try {
+        for (let attempt = 0; attempt < 100 && !report.shadowRoot.querySelector("tbody tr"); attempt++)
+            await new Promise(resolve => setTimeout(resolve, 1));
+        assert.ok(report.shadowRoot.querySelector("tbody tr"), "the query-bearing API base loads the report");
+        await report.submitReportDocument(report.getReportDocument());
+        await report.getExport("csv");
+        const urls = requests.map(request => new URL(request.url, window.location.href));
+        assert.ok(urls.some(url => url.pathname.endsWith("/schema")));
+        const initial = urls.find(url => url.pathname.endsWith("/default"));
+        assert.equal(initial?.searchParams.get("pageSize"), "8");
+        assert.ok(urls.some(url => url.pathname.endsWith("/query")));
+        assert.ok(urls.some(url => url.pathname === "/api/download/orders/csv"));
+        for (const url of urls) {
+            assert.equal(url.searchParams.get("appPageQuery"), "?topic=Fuel&pageSize=12");
+            assert.equal(url.searchParams.get("route"), "/", "normalization must not trim query values");
+        }
+    } finally { report.remove(); }
+});
+
+test("implicit and explicit download bases retain their query and relative URL form", () => {
+    const report = document.createElement("interactive-report");
+    report.apiBase = "https://host.example/root/api/reports/?route=/reports#part";
+    assert.equal(report.downloadBase, "https://host.example/root/api/download?route=/reports#part");
+    report.apiBase = "../api/reports/?topic=Fuel";
+    assert.equal(report.downloadBase, "../api/download?topic=Fuel");
+    report.downloadBase = "../exports///?route=/";
+    assert.equal(report.downloadBase, "../exports?route=/");
+});
+
 test("the report is style-isolated and uses its explicit API base", async () => {
+    requests.length = 0;
     document.head.append(Object.assign(document.createElement("style"), {
         textContent: "button, table, .ir-toolbar { display: none !important; }",
     }));

@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { IntlMessageFormat } from "intl-messageformat";
-import { ApiError, apiUrl, download, downloadFile, errorLines, errorText } from "../../src/client/core/api.js";
+import { ApiError, apiUrl, download, downloadFile, errorLines, errorText, withQuery } from "../../src/client/core/api.js";
+import { searchUsers } from "../../src/client/admin/users.js";
 import { loadWhoami } from "../../src/client/core/identity.js";
 import {
     localeCatalogs,
@@ -16,6 +17,36 @@ test("API URLs normalize the base and encode every path segment", () => {
     assert.equal(
         apiUrl("/api/reports/", "sales / west", "schema"),
         "/api/reports/sales%20%2F%20west/schema");
+});
+
+test("API paths precede base queries and fragments without changing relative or absolute bases", () => {
+    assert.equal(apiUrl("/root/api/reports/?topic=Fuel%20planning&route=/", "sales / west", "schema"),
+        "/root/api/reports/sales%20%2F%20west/schema?topic=Fuel%20planning&route=/");
+    assert.equal(apiUrl("https://host.example/api/reports///?tag=one&tag=two#section", "orders", "query"),
+        "https://host.example/api/reports/orders/query?tag=one&tag=two#section");
+    assert.equal(apiUrl("../reports/?route=/", "orders"), "../reports/orders?route=/");
+    assert.equal(apiUrl("/reports///?route=/"), "/reports?route=/");
+    assert.equal(apiUrl("/reports/#part", "orders"), "/reports/orders#part");
+});
+
+test("request query values merge with base parameters and replace their own prior value", () => {
+    assert.equal(withQuery("../reports/orders/default?topic=Fuel&tag=one&tag=two&pageSize=20#part", { pageSize: 8 }),
+        "../reports/orders/default?topic=Fuel&tag=one&tag=two&pageSize=8#part");
+    assert.equal(withQuery("https://host.example/reports?topic=Fuel#part", { search: "North & East" }),
+        "https://host.example/reports?topic=Fuel&search=North+%26+East#part");
+    assert.equal(withQuery("/reports?search=old&topic=Fuel", { search: null }), "/reports?topic=Fuel");
+});
+
+test("admin user search retains base query parameters", async () => {
+    const originalFetch = globalThis.fetch;
+    const calls = [];
+    globalThis.fetch = async url => { calls.push(url); return new Response('{"items":[]}'); };
+    try {
+        await searchUsers("/reports/?tenant=west&search=old", "North & East");
+        assert.equal(calls[0], "/reports/admin/users?tenant=west&search=North+%26+East");
+        await searchUsers("/reports/?tenant=west&search=old", "");
+        assert.equal(calls[1], "/reports/admin/users?tenant=west");
+    } finally { globalThis.fetch = originalFetch; }
 });
 
 test("coded errors localize their core message and retain untranslated details", () => {

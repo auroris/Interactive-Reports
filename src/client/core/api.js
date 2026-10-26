@@ -21,9 +21,35 @@ export function defaultApiBase() {
  * @returns {string} The encoded endpoint URL.
  */
 export function apiUrl(base, ...segments) {
-    const prefix = String(base).replace(/\/+$/, "");
-    if (!segments.length) return prefix;
-    return `${prefix}/${segments.map(segment => encodeURIComponent(String(segment))).join("/")}`;
+    const text = String(base);
+    const suffixIndex = text.search(/[?#]/);
+    const prefix = (suffixIndex < 0 ? text : text.slice(0, suffixIndex)).replace(/\/+$/, "");
+    const suffix = suffixIndex < 0 ? "" : text.slice(suffixIndex);
+    const path = segments.length ? `/${segments.map(segment => encodeURIComponent(String(segment))).join("/")}` : "";
+    return `${prefix}${path}${suffix}`;
+}
+
+/**
+ * Sets request query parameters while preserving the URL's base parameters and fragment.
+ * Relative and absolute URLs retain their original path form; nullish values remove a parameter.
+ *
+ * @param {string} url - The endpoint URL to update.
+ * @param {Record<string, string|number|boolean|null|undefined>} values - Request parameter values.
+ * @returns {string} The URL with merged query parameters.
+ */
+export function withQuery(url, values) {
+    const text = String(url);
+    const fragmentIndex = text.indexOf("#");
+    const fragment = fragmentIndex < 0 ? "" : text.slice(fragmentIndex);
+    const address = fragmentIndex < 0 ? text : text.slice(0, fragmentIndex);
+    const queryIndex = address.indexOf("?");
+    const path = queryIndex < 0 ? address : address.slice(0, queryIndex);
+    const parameters = new URLSearchParams(queryIndex < 0 ? "" : address.slice(queryIndex + 1));
+    for (const [name, value] of Object.entries(values)) {
+        if (value == null) parameters.delete(name);
+        else parameters.set(name, String(value));
+    }
+    return path + (parameters.size ? `?${parameters}` : "") + fragment;
 }
 
 /**
