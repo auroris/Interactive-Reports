@@ -36,7 +36,7 @@ the database as SQL text.
   row and cell highlights, Group By, Pivot, and charts.
 - **Save and share** layouts as private or published saved reports, or ship them as
   source-controlled JSON files beside the application.
-- **Download** the current view as CSV, with every row and the user's formatting.
+- **Download** the current view as CSV or self-contained HTML, with every matching row and the user's formatting. Both formats work with the .NET server and the browser demo.
 - **Secure by construction**: the developer owns the SQL and the trusted context
   parameters; users own state, and state is always data. Report and saved-report
   access run through the host's own ASP.NET Core identity and authorization.

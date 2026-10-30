@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text;
 using InteractiveReport.AspNetCore;
 using InteractiveReport.Core.Model;
 using Microsoft.AspNetCore.Builder;
@@ -32,11 +33,15 @@ public interface IInteractiveReportDownloadWriter
         string reportName,
         string format,
         ReportResult result);
+
+    /// <summary>Provides an optional display title while preserving the canonical report name for the filename.</summary>
+    InteractiveReportDownloadFile Write(string reportName, string format, ReportResult result, string? title)
+        => Write(reportName, format, result);
 }
 
-internal sealed class CsvInteractiveReportDownloadWriter : IInteractiveReportDownloadWriter
+internal sealed class InteractiveReportDownloadWriter : IInteractiveReportDownloadWriter
 {
-    private static readonly IReadOnlyCollection<string> Formats = Array.AsReadOnly(["csv"]);
+    private static readonly IReadOnlyCollection<string> Formats = Array.AsReadOnly(["csv", "html"]);
 
     public IReadOnlyCollection<string> SupportedFormats => Formats;
 
@@ -44,12 +49,25 @@ internal sealed class CsvInteractiveReportDownloadWriter : IInteractiveReportDow
         string reportName,
         string format,
         ReportResult result)
+        => Write(reportName, format, result, null);
+
+    public InteractiveReportDownloadFile Write(string reportName, string format, ReportResult result, string? title)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(reportName);
         ArgumentException.ThrowIfNullOrWhiteSpace(format);
         ArgumentNullException.ThrowIfNull(result);
         if (!Formats.Contains(format, StringComparer.OrdinalIgnoreCase))
             throw new NotSupportedException($"Download format '{format}' is not supported.");
+
+        if (format.Equals("html", StringComparison.OrdinalIgnoreCase))
+        {
+            var html = HtmlReportPresentation.Render(title ?? reportName, result);
+            return new(async (stream, token) => {
+                await using var writer = new StreamWriter(stream, new UTF8Encoding(false), 4096, leaveOpen: true);
+                await writer.WriteAsync(html.AsMemory(), token);
+                await writer.FlushAsync(token);
+            }, InteractiveReportHttpRequest.SafeFileName(reportName, ".html"), "text/html; charset=utf-8");
+        }
 
         var table = CsvReportPresentation.Render(result);
         return new(
@@ -63,11 +81,11 @@ internal sealed class CsvInteractiveReportDownloadWriter : IInteractiveReportDow
 /// <summary>Registers and maps the Interactive Reports file-download client.</summary>
 public static class InteractiveReportFileDownloadExtensions
 {
-    /// <summary>Registers the built-in CSV download writer.</summary>
+    /// <summary>Registers the built-in CSV and self-contained HTML download writer.</summary>
     public static IServiceCollection AddInteractiveReportFileDownload(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
-        services.TryAddSingleton<IInteractiveReportDownloadWriter, CsvInteractiveReportDownloadWriter>();
+        services.TryAddSingleton<IInteractiveReportDownloadWriter, InteractiveReportDownloadWriter>();
         return services;
     }
 
@@ -94,10 +112,12 @@ public static class InteractiveReportFileDownloadExtensions
                 "Executes the posted report document without paging and returns it in the requested format.")
             .Accepts<ReportState>("application/json")
             .Produces(StatusCodes.Status200OK, contentType: "text/csv")
+            .Produces(StatusCodes.Status200OK, contentType: "text/html")
             .Produces<InteractiveReportError>(StatusCodes.Status400BadRequest)
             .Produces<InteractiveReportError>(StatusCodes.Status401Unauthorized)
             .Produces<InteractiveReportError>(StatusCodes.Status403Forbidden)
             .Produces<InteractiveReportError>(StatusCodes.Status404NotFound)
+            .Produces<InteractiveReportError>(StatusCodes.Status422UnprocessableEntity)
             .Produces<InteractiveReportError>(StatusCodes.Status500InternalServerError);
         return group;
     }
@@ -141,7 +161,23 @@ public static class InteractiveReportFileDownloadExtensions
         if (queried.Failure is not null)
             return Failure(queried.Failure, http);
 
-        var file = writer.Write(name, format, queried.Value!);
+        string? title = null;
+        if (format.Equals("html", StringComparison.OrdinalIgnoreCase))
+        {
+            if (queried.Truncated) return InteractiveReportHttpResult.Error(
+                InteractiveReportErrorCodes.ExportLimitExceeded, StatusCodes.Status422UnprocessableEntity,
+                "This report exceeds the export row limit. Narrow the filters and try again.");
+            var schema = await server.GetSchema(name, request, ct);
+            if (schema.Failure is not null) return Failure(schema.Failure, http);
+            title = schema.Value!.Title;
+        }
+        InteractiveReportDownloadFile file;
+        try { file = writer.Write(name, format, queried.Value!, title); }
+        catch (HtmlReportSizeLimitException ex)
+        {
+            return InteractiveReportHttpResult.Error(InteractiveReportErrorCodes.ExportLimitExceeded,
+                StatusCodes.Status422UnprocessableEntity, ex.Message);
+        }
         http.Response.Headers["X-IR-Truncated"] = queried.Truncated ? "true" : "false";
         // Streamed rather than buffered, so the response carries no Content-Length: an unpaged
         // export is exactly the case where holding the whole body to announce its size is the

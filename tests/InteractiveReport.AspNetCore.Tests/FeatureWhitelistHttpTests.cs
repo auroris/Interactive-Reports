@@ -58,6 +58,18 @@ public sealed class FeatureWhitelistHttpTests : IAsyncLifetime
             ["InteractiveReport:Reports:open:Dialect"] = "Sqlite",
             ["InteractiveReport:Reports:open:Sql"] = "SELECT * FROM IR_FEATURE_TEST",
             ["InteractiveReport:Reports:open:Authorization:AllowAnonymous"] = "true",
+            ["InteractiveReport:Reports:open:Title"] = "Orders <print>",
+            ["InteractiveReport:Reports:capped:Connection"] = "FeatureData",
+            ["InteractiveReport:Reports:capped:Dialect"] = "Sqlite",
+            ["InteractiveReport:Reports:capped:Sql"] = "SELECT * FROM IR_FEATURE_TEST",
+            ["InteractiveReport:Reports:capped:Authorization:AllowAnonymous"] = "true",
+            ["InteractiveReport:Reports:capped:MaxRows"] = "1",
+            ["InteractiveReport:Reports:capped:MaxPageSize"] = "1",
+            ["InteractiveReport:Reports:capped:DefaultPageSize"] = "1",
+            ["InteractiveReport:Reports:oversized:Connection"] = "FeatureData",
+            ["InteractiveReport:Reports:oversized:Dialect"] = "Sqlite",
+            ["InteractiveReport:Reports:oversized:Sql"] = "SELECT hex(zeroblob(2100000)) AS PAYLOAD",
+            ["InteractiveReport:Reports:oversized:Authorization:AllowAnonymous"] = "true",
             ["InteractiveReport:Reports:locked:Connection"] = "FeatureData",
             ["InteractiveReport:Reports:locked:Dialect"] = "Sqlite",
             ["InteractiveReport:Reports:locked:Sql"] = "SELECT * FROM IR_FEATURE_TEST",
@@ -101,6 +113,48 @@ public sealed class FeatureWhitelistHttpTests : IAsyncLifetime
         SqliteConnection.ClearAllPools();
         if (Directory.Exists(_tempRoot))
             Directory.Delete(_tempRoot, recursive: true);
+    }
+
+    [Fact]
+    public async Task Html_is_a_built_in_download_with_authorized_state_and_a_self_contained_document()
+    {
+        using var response = await _client.PostAsJsonAsync("/api/download/open/html", new {
+            page = new { index = 2, size = 1 }, activeTable = "base",
+            tables = new { @base = new { from = "definition", composables = new object[] {
+                new { kind = "select", columns = new[] { "LABEL" } },
+                new { kind = "labels", labels = new { LABEL = "<Label>" } },
+                new { kind = "sort", sorts = new[] { new { col = "ID", dir = "desc" } } },
+                new { kind = "filter", filters = new[] { new { expr = "ID > 0" } } },
+            } } },
+        });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("text/html", response.Content.Headers.ContentType!.MediaType);
+        Assert.Equal("utf-8", response.Content.Headers.ContentType.CharSet);
+        Assert.Equal("attachment", response.Content.Headers.ContentDisposition!.DispositionType);
+        Assert.Equal("open.html", response.Content.Headers.ContentDisposition.FileName!.Trim('"'));
+        Assert.True(response.Headers.CacheControl!.NoStore);
+        var html = await response.Content.ReadAsStringAsync();
+        Assert.StartsWith("<!doctype html>", html);
+        Assert.Contains("<title>Orders &lt;print&gt;</title>", html);
+        Assert.Contains("<style>", html);
+        Assert.Contains("&lt;Label&gt;", html);
+        Assert.DoesNotContain("<script", html);
+        Assert.DoesNotContain(">Id</th>", html);
+        Assert.Contains("2 of 2 rows", html);
+        Assert.True(html.IndexOf("second", StringComparison.Ordinal) < html.IndexOf("first", StringComparison.Ordinal));
+        Assert.Contains("html", _app!.Services.GetRequiredService<IInteractiveReportDownloadWriter>().SupportedFormats);
+    }
+
+    [Theory]
+    [InlineData("locked", HttpStatusCode.Forbidden, "IR-1100")]
+    [InlineData("capped", HttpStatusCode.UnprocessableEntity, "IR-1102")]
+    [InlineData("oversized", HttpStatusCode.UnprocessableEntity, "IR-1102")]
+    public async Task Html_export_enforces_permissions_and_refuses_incomplete_documents(string name, HttpStatusCode status, string code)
+    {
+        using var response = await _client.PostAsJsonAsync($"/api/download/{name}/html", new { });
+        Assert.Equal(status, response.StatusCode);
+        Assert.Equal(code, (await ReadJson(response)).GetProperty("code").GetString());
+        Assert.Null(response.Content.Headers.ContentDisposition);
     }
 
     [Fact]

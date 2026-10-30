@@ -181,7 +181,7 @@ are not shown at all.
 | [Chart…](#chart) | Draw the data as a bar, line, area, or pie chart. |
 | **Report ▸** Save / Save As… / Delete… | Manage saved reports. See [Saved reports](#saved-reports). |
 | **Reset** | Discard unsaved changes and return to the saved layout. Kept on the main menu so it is always one pick away. |
-| **Download ▸** CSV | Download the current report. See [Downloading](#downloading). |
+| **Download ▸** CSV, HTML | Download the current report. See [Downloading](#downloading). |
 
 Every dialog has an **Apply** button (sometimes named for the action, such as **Save**)
 and **Cancel**. Applying re-runs the report straight away. If the server rejects the
@@ -531,9 +531,20 @@ columns. It contains **every matching row**, not only the current page. Number a
 date format masks are applied; a link column exports its link text and an image column
 its address.
 
-Very large reports are cut off at the row limit the report's author has set. When that
+Very large CSV reports are cut off at the row limit the report's author has set. When that
 happens, a notice says *Export truncated at the report's row cap*: add filters to narrow
 the data and download again.
+
+**Actions → Download → HTML** downloads a complete document with its styles included,
+ready to open in a browser or send to a document-rendering service. It uses the same
+current report settings and all matching rows, and includes control-break subtotals and
+aggregate totals. Chart views export their data table. The document includes alternating
+row shading, aligned numeric columns, and distinct group headings and totals. Printing
+or saving to PDF from a browser uses A4 portrait pages with repeating column headers;
+rows are kept together where they fit on a page. Print styles remove the screen's
+surrounding card and shadow. Wide tables scroll horizontally on smaller screens.
+No printing service or plugin is required. If the row limit or HTML size limit would
+produce an incomplete document, the download is refused: narrow the filters and try again.
 
 ---
 

@@ -111,12 +111,16 @@ export function actionsMenuItems(w) {
         }),
         ...(anyMutableFeature(w) ? [{ label: w.t("menu.reset"), onPick: () => resetWorkingCopy(w) }] : []),
     ];
-    // Download is a submenu of formats; CSV is the only one so far.
+    // Both formats are supplied by the file-download client and the in-browser server.
     const download = feature("download", {
         label: w.t("menu.download"),
-        items: [{ label: w.t("menu.csv"), onPick: () => downloadExport(w, "csv") }],
+        items: ["csv", "html"].map(format => ({ label: w.t(`menu.${format}`), disabled: !ready, onPick: () => downloadExport(w, format) })),
     });
-    return joinSections([items, report, download]);
+    const print = w._printHandler ? feature("download", {
+        label: w.t("menu.print"), disabled: !ready,
+        onPick: () => Promise.resolve().then(() => w._printHandler?.(w.host)).catch(error => w.showError(error)),
+    }) : [];
+    return joinSections([items, report, download, print]);
 }
 
 /**

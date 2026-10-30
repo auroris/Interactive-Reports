@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createSqliteDb, InteractiveReportServer, installFetchInterceptor } from "../../src/browser-server/index.js";
 import { seedSampleOrders } from "../../src/demo/sample-data.js";
+import { reportState } from "../ui/report-state-fixture.js";
 
 async function setupServer() {
     const db = await createSqliteDb();
@@ -431,6 +432,41 @@ test("file-download endpoint reports truncation and rejects unsupported formats"
     });
     assert.equal(unsupported.status, 400);
     assert.equal((await unsupported.json()).code, "IR-1101");
+});
+
+test("HTML downloads use the demo server's own implementation and preserve the report presentation", async () => {
+    const { server } = await setupServer();
+    const state = { ...reportState({ columns: ["CUSTOMER", "AMOUNT"], labels: { CUSTOMER: "<Customer>" },
+        formats: { AMOUNT: { mask: "$#,##0.00" } }, filters: [{ expr: "AMOUNT > 0" }] }), page: { index: 2, size: 1 } };
+    const response = await server.handleRequest("/api/download/orders/html", { method: "POST", body: JSON.stringify(state) });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("Content-Type"), "text/html; charset=utf-8");
+    assert.equal(response.headers.get("Content-Disposition"), 'attachment; filename="orders.html"');
+    assert.equal(response.headers.get("Cache-Control"), "no-store");
+    const html = await response.text();
+    assert.ok(html.startsWith("<!doctype html>"));
+    assert.ok(html.includes("<title>Orders</title>"));
+    assert.ok(html.includes("&lt;Customer&gt;"));
+    assert.ok(html.includes("Acme"));
+    assert.ok(html.includes("$"));
+    assert.ok(!html.includes("<script"));
+    assert.ok(!html.includes(">Order #</th>"));
+    const counts = /All matching rows · (\d+) of (\d+) rows/.exec(html);
+    assert.equal(counts[1], counts[2]);
+    assert.ok(Number(counts[1]) > 1, "all matching rows are exported regardless of the current page");
+});
+
+test("HTML download honors the download feature and fails before returning partial or oversized HTML", async () => {
+    const { server } = await setupServer();
+    server.registerReport({ name: "locked-html", sql: "SELECT ORDER_ID FROM ORDERS", features: ["search"] });
+    server.registerReport({ name: "limited-html", sql: "SELECT ORDER_ID FROM ORDERS", maxRows: 1 });
+    server.registerReport({ name: "large-html", sql: "SELECT hex(zeroblob(2100000)) AS PAYLOAD" });
+    for (const [name, status, code] of [["locked-html", 403, "IR-1100"], ["limited-html", 422, "IR-1102"], ["large-html", 422, "IR-1102"]]) {
+        const response = await server.handleRequest(`/api/download/${name}/html`, { method: "POST", body: "{}" });
+        assert.equal(response.status, status);
+        assert.equal((await response.json()).code, code);
+        assert.equal(response.headers.get("Content-Disposition"), null);
+    }
 });
 
 test("ephemeral saved report store CRUD operations", async () => {

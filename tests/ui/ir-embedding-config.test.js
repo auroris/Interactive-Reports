@@ -127,3 +127,39 @@ test("invalid initial query does not fall back to another default", async () => 
     assert.equal(requests.some(request => request.path.includes("/default")), false);
     report.remove(); failQuery = false;
 });
+
+test("Print is an optional host capability and follows the download control", async () => {
+    const report = await mount();
+    const open = () => report.shadowRoot.querySelector(".ir-actionsbtn").click();
+    const printItem = () => [...report.shadowRoot.querySelectorAll(".ir-menu-item")].find(node => node.textContent.includes("Print"));
+    open(); assert.equal(Boolean(printItem()), false);
+    document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    let received = null;
+    report.printHandler = element => { received = element; };
+    open(); assert.ok(printItem()); printItem().click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(received === report, true);
+    assert.throws(() => { report.printHandler = "print"; }, TypeError);
+    report.setControlEnabled("download", false);
+    open(); assert.equal(Boolean(printItem()), false);
+    document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    report.setControlEnabled("download", true);
+    report.printHandler = null;
+    open(); assert.equal(Boolean(printItem()), false);
+    report.remove();
+});
+
+test("Download offers CSV and HTML without host configuration and follows the download control", async () => {
+    const report = await mount();
+    const state = report.getReportDocument(), count = requests.length;
+    const menuItem = text => [...report.shadowRoot.querySelectorAll(".ir-menu-item")].find(node => node.querySelector(".ir-menu-label")?.textContent === text);
+    const open = () => report.shadowRoot.querySelector(".ir-actionsbtn").click();
+    const close = () => document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    open(); menuItem("Download").click();
+    assert.ok(menuItem("CSV")); assert.ok(menuItem("HTML")); close(); close();
+    report.setControlEnabled("download", false);
+    open(); assert.equal(Boolean(menuItem("Download")), false); close();
+    assert.deepEqual(report.getReportDocument(), state);
+    assert.equal(requests.length, count);
+    report.remove();
+});

@@ -81,6 +81,16 @@ message, column presentation, or links update the current display without issuin
 query. Initial settings changed after activation seed the next activation; use
 `submitReportDocument` to deliberately replace a running view.
 
+**Actions → Download** offers CSV and self-contained HTML by default. Both formats are implemented by the standard file-download adapter and the in-browser demo server, using `POST {downloadBase}/{definitionName}/{format}`. `getExport("html")` retrieves the HTML artifact without starting a browser download. HTML export needs no host plugin, AppBlocks, Documents, or Pressroom; the `download` control and export authorization still govern it.
+
+`printHandler` is an optional host-owned callback for **Actions → Print**. Assign a function receiving the report element to open your application's print dialog; assign `null` to hide the entry. The callback may return a promise, and rejected promises appear in the report's error banner. Print also follows the `download` control. The widget provides no built-in printer transport: the host owns destinations, authorization, preview and submission. Assigning or removing the handler updates the menu without requerying the report.
+
+```js
+report.printHandler = async element => {
+  await openApplicationPrintDialog(element.getReportDocument());
+};
+```
+
 `columnPresentation` accepts only `label`, `helpText`, and `hideLabel` for each named column.
 `editLink` and `createLink` accept the same objects as their definition counterparts. Set
 either to `null` to hide it, or `undefined` to inherit. Link overrides never confer operation
@@ -107,7 +117,7 @@ const artifact = await report.getExport("csv", { signal: abortController.signal 
 await uploadReport(artifact.blob, artifact.filename, artifact.contentType);
 ```
 
-The Actions-menu CSV command retrieves the same artifact and then invokes the browser's
+The Actions-menu download commands retrieve the same artifacts and then invokes the browser's
 download behavior.
 
 The element also exposes its working report document (the accepted document plus any
@@ -241,10 +251,10 @@ app.MapInteractiveReportFileDownload("/api/download");
 ```
 
 The JavaScript client posts its current report document to
-`POST /api/download/{name}/csv`. The file client detaches the document, sets paging to
+`POST /api/download/{name}/csv` or `POST /api/download/{name}/html`. The file client detaches the document, sets paging to
 all rows, applies the central `Export` authorization and `download` feature gate, then
 submits the mutated document through `IInteractiveReportServer.QueryForDownload` before
-rendering CSV. Set the element's `download-base` attribute when the route is mounted at
+rendering the selected format. HTML includes its styles, display masks, breaks and totals, and uses a data table for chart views. It rejects truncated results and documents over four million characters with HTTP 422 (`IR-1102`). The public `HtmlReportPresentation.Render` method lets hosts reuse the HTML for their own document/printing services. Set the element's `download-base` attribute when the route is mounted at
 a non-default prefix.
 
 ## Behavior notes

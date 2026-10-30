@@ -543,7 +543,7 @@ With the default prefix, the principal routes are:
 | `GET /api/reports/{name}/schema` | Definition schema, presentation hints, limits, features, and client capabilities for a configured definition key. |
 | `POST /api/reports/{name}/query` | Accepts the client's `ReportState`; returns `ReportResult` with rows and the accepted server-enriched `document`. |
 | `POST /api/reports/{name}/lov` | Accepts a required current `document`, its active `table`, one `column`, and optional `search`; returns at most 50 distinct values. |
-| `POST /api/download/{name}/{format}` | File-client endpoint. Accepts the current `ReportState`; CSV is currently supported. |
+| `POST /api/download/{name}/{format}` | File-client endpoint. Accepts the current `ReportState`; supports `csv` and self-contained `html`. Both enforce export access and the `download` feature. HTML returns HTTP 422 (`IR-1102`) if row or document-size limits prevent a complete export. |
 | `POST /api/reports/{name}/saved` | Creates a private or global saved report from `SaveReportRequest` in the configured family, without an existing document ID. |
 | `GET /api/reports/{name}/{id}` | Loads and hydrates the numeric document after authorizing the named configuration and confirming family membership. Returns `{ summary, result }`, with default fallback on document failure. |
 | `GET /api/reports/{name}/default` | Loads and hydrates the family's stored default, falling back to a synthetic default. Returns `{ summary, result }`; `summary` is `null` for synthetic state. |

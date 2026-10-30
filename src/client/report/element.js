@@ -1166,7 +1166,7 @@ export class InteractiveReportElement extends HTMLElement {
         controllers.set(this, controller);
         controller.refreshStyleSheet();
         // Upgrade properties assigned by a host before the element was registered.
-        for (const name of ["initialDocument", "columnPresentation", "editLink", "createLink", "reportTitle", "emptyMessage", "initialPageSize", "controls"]) {
+        for (const name of ["initialDocument", "columnPresentation", "editLink", "createLink", "printHandler", "reportTitle", "emptyMessage", "initialPageSize", "controls"]) {
             if (Object.hasOwn(this, name)) {
                 const value = this[name];
                 delete this[name];
@@ -1223,6 +1223,15 @@ export class InteractiveReportElement extends HTMLElement {
         catch (error) { controller._editLink = previous; throw error; }
         controller.refreshEmbedding();
     }
+    /** Optional host-owned print dialog. Null hides Print; the download control also gates it. */
+    get printHandler() { return controllerFor(this)._printHandler ?? null; }
+    set printHandler(value) {
+        if (value != null && typeof value !== "function") throw new TypeError("printHandler must be a function or null.");
+        const controller = controllerFor(this);
+        controller._printHandler = value ?? null;
+        controller.refreshEmbedding();
+    }
+
     get createLink() { return structuredClone(controllerFor(this)._createLink); }
     set createLink(value) {
         const controller = controllerFor(this);

@@ -5,6 +5,7 @@
 import { discoverSchema } from "./schema.js";
 import { executeReport, executeLov, exportCsv } from "./executor.js";
 import { renderCsvTable } from "./presentation.js";
+import { renderHtmlReport, HtmlExportLimitError } from "./html.js";
 import {
     DefaultReportRequiredError,
     EphemeralSavedReportStore,
@@ -47,6 +48,14 @@ function csvResponse(name, content, truncated) {
             "X-IR-Truncated": String(truncated),
         },
     });
+}
+
+function htmlResponse(name, content) {
+    const filename = `${String(name).replace(/[\\/\r\n"]/g, "_")}.html`;
+    return new Response(content, { headers: {
+        "Content-Type": "text/html; charset=utf-8", "Content-Disposition": `attachment; filename="${filename}"`,
+        "Cache-Control": "no-store", "X-IR-Truncated": "false",
+    } });
 }
 
 export class InteractiveReportServer {
@@ -219,6 +228,14 @@ export class InteractiveReportServer {
         };
     }
 
+    /** Creates the same complete, script-free HTML representation as the .NET file client. */
+    async createHtmlExport(reportName, reportState = {}) {
+        const result = await this.query(reportName, { ...reportState, page: { index: 1, size: 0 } });
+        if (result.rows.length < result.totalRows)
+            throw new HtmlExportLimitError("This report exceeds the export row limit. Narrow the filters and try again.");
+        return renderHtmlReport(this.getSchema(reportName).title, result);
+    }
+
     /**
      * Handles an incoming Fetch Request or URL + options and returns a Web API Response.
      *
@@ -281,11 +298,14 @@ export class InteractiveReportServer {
 
                 const name = decodeURIComponent(downloadMatch[1]);
                 const format = decodeURIComponent(downloadMatch[2]).toLowerCase();
-                if (format !== "csv") {
+                if (!["csv", "html"].includes(format)) {
                     return errorResponse(400, "IR-1101", "Unsupported export format", `Export format '${format}' is not supported.`);
                 }
 
                 const state = await readBody();
+                if (!this.getSchema(name).features.includes("download"))
+                    return errorResponse(403, "IR-1100", "Feature disabled", "Downloads are not enabled for this report.");
+                if (format === "html") return htmlResponse(name, await this.createHtmlExport(name, state));
                 const exported = await this.createCsvExport(name, state);
                 return csvResponse(name, exported.content, exported.truncated);
             }
@@ -419,6 +439,8 @@ export class InteractiveReportServer {
         } catch (err) {
             // Error documents carry the protocol's codes and a sanitized description, as the C#
             // server's do; a stack trace belongs in the console, not in the report banner.
+            if (err instanceof HtmlExportLimitError)
+                return errorResponse(422, "IR-1102", "Export limit exceeded", "Narrow the report filters and try again.", err.message);
             if (err instanceof SavedReportTitleConflictError)
                 return errorResponse(409, "IR-1309", "Saved report title conflict", err.message);
             if (err instanceof DefaultReportRequiredError)

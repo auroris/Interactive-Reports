@@ -121,12 +121,12 @@ test("a whitelisted report hides the chrome its features do not cover", async ()
     report.shadowRoot.querySelector(".ir-actionsbtn").click();
     const labels = menuLabels(report);
     assert.deepEqual(labels, ["Sort…", "Reset", "Download"]);
-    // Download is a submenu of formats; opening it reveals CSV.
+    // Download is a submenu of the two built-in formats.
     const download = [...report.shadowRoot.querySelectorAll(".ir-popup .ir-menu-item")]
         .find(item => item.querySelector(".ir-menu-label").textContent === "Download");
     assert.equal(download.getAttribute("aria-haspopup"), "menu");
     download.click();
-    assert.deepEqual([...report.shadowRoot.querySelectorAll(".ir-submenu .ir-menu-label")].map(l => l.textContent), ["CSV"]);
+    assert.deepEqual([...report.shadowRoot.querySelectorAll(".ir-submenu .ir-menu-label")].map(l => l.textContent), ["CSV", "HTML"]);
     report.shadowRoot.querySelector(".ir-actionsbtn").click();
 
     // The header menu only offers what survived: sorting.
