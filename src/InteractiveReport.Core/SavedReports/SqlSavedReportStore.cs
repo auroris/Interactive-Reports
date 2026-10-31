@@ -60,6 +60,27 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     }
 
     /// <summary>
+    /// Gets the store's current connection, dialect, table, and auto-create settings, for a host
+    /// that inspects the store or gives an administrator its <see cref="SchemaStatements"/>.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Thrown when saved-report storage is not configured or names an invalid table.</exception>
+    public SavedReportStoreConfig Configuration => Validated(_config());
+
+    /// <summary>
+    /// Gets the statements auto-create runs, in order, for an administrator who creates the objects
+    /// by hand. Each one is idempotent and is written for the configured dialect.
+    /// </summary>
+    /// <param name="config">The dialect and physical table settings.</param>
+    /// <returns>The table statement, Oracle 11g's sequence and trigger when they apply, and the index statements.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when the table name is not a plain identifier.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when the dialect is unsupported.</exception>
+    public static IReadOnlyList<string> SchemaStatements(SavedReportStoreConfig config)
+    {
+        Validated(config);
+        return [.. TableStatements(config), .. IndexStatements(config)];
+    }
+
+    /// <summary>
     /// Validates the configured physical table identifier before it is interpolated into SQL.
     /// </summary>
     /// <param name="cfg">The saved-report store connection, dialect, and table configuration.</param>
@@ -748,36 +769,11 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         {
             if (_createdTargets.Contains(target)) return;
             await using var cmd = conn.CreateCommand();
-            cmd.CommandText = CreateTableSql(cfg);
-            CommandBuilder.Log(cmd, _logger);
             try
             {
-                await cmd.ExecuteNonQueryAsync(ct);
-
-                if (cfg.Dialect == ReportDialect.Oracle11g)
+                foreach (var sql in TableStatements(cfg))
                 {
-                    var seqName = OracleIdentifier(cfg.TableName, "_SEQ");
-                    var trgName = OracleIdentifier(cfg.TableName, "_TRG");
-                    cmd.CommandText = $"""
-                        BEGIN
-                            EXECUTE IMMEDIATE 'CREATE SEQUENCE "{seqName}" START WITH 1 INCREMENT BY 1 NOCACHE';
-                        EXCEPTION WHEN OTHERS THEN
-                            IF SQLCODE != -955 THEN RAISE; END IF;
-                        END;
-                        """;
-                    CommandBuilder.Log(cmd, _logger);
-                    await cmd.ExecuteNonQueryAsync(ct);
-
-                    cmd.CommandText = $"""
-                        CREATE OR REPLACE TRIGGER "{trgName}"
-                        BEFORE INSERT ON "{cfg.TableName}"
-                        FOR EACH ROW
-                        BEGIN
-                            IF :NEW.ID IS NULL THEN
-                                SELECT "{seqName}".NEXTVAL INTO :NEW.ID FROM DUAL;
-                            END IF;
-                        END;
-                        """;
+                    cmd.CommandText = sql;
                     CommandBuilder.Log(cmd, _logger);
                     await cmd.ExecuteNonQueryAsync(ct);
                 }
@@ -786,6 +782,13 @@ public sealed class SqlSavedReportStore : ISavedReportStore
             }
             catch (Exception ex) when (!ct.IsCancellationRequested)
             {
+                // An account without DDL rights can use a table an administrator created: Oracle and
+                // PostgreSQL refuse the guarded DDL on privileges even when the objects already exist.
+                if (await TableIsUsable(conn, cfg, ct))
+                {
+                    _createdTargets.Add(target);
+                    return;
+                }
                 LogStoreError(cfg, ex, "schema initialization");
                 throw;
             }
@@ -794,6 +797,30 @@ public sealed class SqlSavedReportStore : ISavedReportStore
         finally
         {
             _createLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Determines whether this account can already read every column the store uses, without writing anything.
+    /// </summary>
+    /// <param name="conn">The open connection whose DDL was refused.</param>
+    /// <param name="cfg">The validated dialect and physical table settings.</param>
+    /// <param name="ct">Signals that the operation should be canceled.</param>
+    /// <returns><see langword="true"/> when an empty read of the table succeeds; otherwise, <see langword="false"/>.</returns>
+    private async Task<bool> TableIsUsable(DbConnection conn, SavedReportStoreConfig cfg, CancellationToken ct)
+    {
+        var compiled = DialectSupport.GetCompiler(cfg.Dialect).Compile(new Query(cfg.TableName)
+            .Select("ID", "REPORT_NAME", "SOURCE_FILE", "TITLE", "TITLE_KEY", "TITLE_SCOPE", "OWNER", "IS_GLOBAL", "IS_DEFAULT", "STATE_JSON", "MODIFIED_UTC", "ORIGIN")
+            .WhereRaw("1 = 0"));
+        await using var cmd = CommandBuilder.Build(conn, compiled, NoParams, TimeoutSeconds, cfg.Dialect, _logger);
+        try
+        {
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            return true;
+        }
+        catch (DbException)
+        {
+            return false;
         }
     }
 
@@ -925,6 +952,46 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     };
 
     /// <summary>
+    /// Lists the statements that create the table and, on Oracle 11g, the sequence and trigger behind its identity.
+    /// </summary>
+    /// <param name="cfg">The validated dialect and physical table settings.</param>
+    /// <returns>The idempotent statements in the order they must run.</returns>
+    private static IEnumerable<string> TableStatements(SavedReportStoreConfig cfg)
+    {
+        yield return CreateTableSql(cfg);
+        if (cfg.Dialect != ReportDialect.Oracle11g) yield break;
+        var seqName = OracleIdentifier(cfg.TableName, "_SEQ");
+        var trgName = OracleIdentifier(cfg.TableName, "_TRG");
+        yield return $"""
+            BEGIN
+                EXECUTE IMMEDIATE 'CREATE SEQUENCE "{seqName}" START WITH 1 INCREMENT BY 1 NOCACHE';
+            EXCEPTION WHEN OTHERS THEN
+                IF SQLCODE != -955 THEN RAISE; END IF;
+            END;
+            """;
+        yield return $"""
+            CREATE OR REPLACE TRIGGER "{trgName}"
+            BEFORE INSERT ON "{cfg.TableName}"
+            FOR EACH ROW
+            BEGIN
+                IF :NEW.ID IS NULL THEN
+                    SELECT "{seqName}".NEXTVAL INTO :NEW.ID FROM DUAL;
+                END IF;
+            END;
+            """;
+    }
+
+    /// <summary>Lists the statements that create the store's unique indexes.</summary>
+    /// <param name="cfg">The validated dialect and physical table settings.</param>
+    /// <returns>The idempotent index statements.</returns>
+    private static IEnumerable<string> IndexStatements(SavedReportStoreConfig cfg)
+    {
+        yield return CreateTitleIndexSql(cfg);
+        yield return CreateSourceKeyIndexSql(cfg);
+        yield return CreateDefaultIndexSql(cfg);
+    }
+
+    /// <summary>
     /// Creates the indexes that make title scopes, configured-file identities, and defaults unique.
     /// </summary>
     /// <param name="cmd">A reusable command associated with the open store connection.</param>
@@ -935,12 +1002,7 @@ public sealed class SqlSavedReportStore : ISavedReportStore
     /// <exception cref="InvalidOperationException">Thrown when an index cannot be created.</exception>
     private async Task CreateIndexes(DbCommand cmd, SavedReportStoreConfig cfg, CancellationToken ct)
     {
-        foreach (var sql in new[]
-                 {
-                     CreateTitleIndexSql(cfg),
-                     CreateSourceKeyIndexSql(cfg),
-                     CreateDefaultIndexSql(cfg),
-                 })
+        foreach (var sql in IndexStatements(cfg))
         {
             cmd.CommandText = sql;
             try

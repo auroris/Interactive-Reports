@@ -56,6 +56,22 @@ public sealed class SqlAdministratorStore : IAdministratorStore
     }
 
     /// <summary>
+    /// Gets the store's current connection, dialect, table, and auto-create settings, for a host
+    /// that inspects the store or gives an administrator its <see cref="SchemaStatements"/>.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Thrown when saved-report storage is not configured or names an invalid table.</exception>
+    public AdministratorStoreConfig Configuration => Validated(_config());
+
+    /// <summary>
+    /// Gets the statement auto-create runs, for an administrator who creates the table by hand.
+    /// </summary>
+    /// <param name="config">The dialect and physical table settings.</param>
+    /// <returns>The idempotent statement for the configured dialect.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when the table name is not a plain identifier.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when the dialect is unsupported.</exception>
+    public static IReadOnlyList<string> SchemaStatements(AdministratorStoreConfig config) => [CreateTableSql(Validated(config))];
+
+    /// <summary>
     /// Lists every granted identity.
     /// </summary>
     /// <param name="ct">Cancels connection opening, optional table creation, query execution, and reading.</param>
@@ -249,6 +265,13 @@ public sealed class SqlAdministratorStore : IAdministratorStore
             }
             catch (Exception ex) when (!ct.IsCancellationRequested)
             {
+                // An account without DDL rights can use a table an administrator created: Oracle and
+                // PostgreSQL refuse the guarded DDL on privileges even when the table already exists.
+                if (await TableIsUsable(connection, config, ct))
+                {
+                    _createdTargets.Add(target);
+                    return;
+                }
                 LogStoreError(config, ex, "schema initialization");
                 throw;
             }
@@ -257,6 +280,29 @@ public sealed class SqlAdministratorStore : IAdministratorStore
         finally
         {
             _createLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Determines whether this account can already read the table, without writing anything.
+    /// </summary>
+    /// <param name="connection">The open connection whose DDL was refused.</param>
+    /// <param name="config">The administrator-store connection, dialect, and table configuration.</param>
+    /// <param name="ct">Cancels the read.</param>
+    /// <returns><see langword="true"/> when an empty read of the table succeeds; otherwise, <see langword="false"/>.</returns>
+    private async Task<bool> TableIsUsable(DbConnection connection, AdministratorStoreConfig config, CancellationToken ct)
+    {
+        var compiled = DialectSupport.GetCompiler(config.Dialect).Compile(
+            new Query(config.TableName).Select("IDENTITY_VALUE", "MODIFIED_UTC").WhereRaw("1 = 0"));
+        await using var command = CommandBuilder.Build(connection, compiled, NoParams, TimeoutSeconds, config.Dialect, _logger);
+        try
+        {
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            return true;
+        }
+        catch (DbException)
+        {
+            return false;
         }
     }
 
