@@ -143,7 +143,7 @@ jobs:
         uses: NuGet/login@v1
         id: login
         with:
-          user: ${{ vars.NUGET_USER }}
+          user: AurorisNet
 
       - name: Publish packages and symbols
         env:

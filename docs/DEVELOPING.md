@@ -84,7 +84,7 @@ create a version-bump commit.
 This workflow uses [NuGet Trusted Publishing](https://learn.microsoft.com/en-us/nuget/nuget-org/trusted-publishing),
 so no long-lived NuGet API key is stored in GitHub:
 
-1. In nuget.org, sign in as the account that will publish the packages and create a
+1. In nuget.org, sign in as `AurorisNet` and create a
    Trusted Publishing policy with repository owner `auroris`, repository
    `Interactive-Reports`, and workflow file **`release.yml`** (just the filename).
    Leave the environment field empty; this workflow does not use an environment.
@@ -93,8 +93,9 @@ so no long-lived NuGet API key is stored in GitHub:
    five package IDs listed in [Architecture](ARCHITECTURE.md#package-and-dependency-structure).
    Package IDs must be available or owned by your account; the workflow does not
    reserve the name in advance.
-3. In the GitHub repository, open **Settings → Secrets and variables → Actions →
-   Variables** and create **`NUGET_USER`** with that nuget.org account's username.
+
+The workflow sets the NuGet login username to `AurorisNet` directly; no GitHub
+repository variable is needed.
 
 GitHub Releases use the workflow's built-in `GITHUB_TOKEN` with `contents: write`;
 no personal access token is required. The NuGet job alone requests `id-token: write`
