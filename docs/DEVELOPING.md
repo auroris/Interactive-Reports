@@ -49,6 +49,14 @@ Package consumers never need Node.js. `ir-chart.js` (the Chart.js-based chart
 renderer) is fetched on demand the first time a report enters chart view; pages
 that never chart never load it.
 
+Each distributable project embeds its own `src/<project>/README.md` as the NuGet
+README. Keep these introductions focused on the package's role, dependencies,
+and which package a consumer should install; link to the full guides for detail.
+Use Markdown rather than raw HTML, absolute URLs for links, and images hosted on
+a [NuGet-supported domain](https://learn.microsoft.com/en-us/nuget/nuget-org/package-readme-on-nuget-org#allowed-domains-for-images).
+The repository's root README is separate and can retain its GitHub presentation.
+README changes reach nuget.org when a new package version is published.
+
 ## Publishing a release from GitHub
 
 The [release workflow](../.github/workflows/release.yml) is **manual only**: pushes,
