@@ -108,6 +108,21 @@ independent composition paths.
 The distributable projects target .NET 8. Dependencies point from optional adapters
 toward the server and core; the core has no ASP.NET Core dependency.
 
+NuGet IDs differ from the project and assembly names. Most applications install
+`AurorisNet.InteractiveReports`, the JSON/browser package, which brings in the
+ASP.NET Core server and core engine transitively:
+
+| NuGet package | Project |
+|---|---|
+| `AurorisNet.InteractiveReports` | `InteractiveReport.Client.Json` |
+| `AurorisNet.InteractiveReports.AspNetCore` | `InteractiveReport.AspNetCore` |
+| `AurorisNet.InteractiveReports.Core` | `InteractiveReport.Core` |
+| `AurorisNet.InteractiveReports.Client.FileDownload` | `InteractiveReport.Client.FileDownload` |
+| `AurorisNet.InteractiveReports.Client.GraphQL` | `InteractiveReport.Client.GraphQL` |
+
+C# namespaces and assembly names remain `InteractiveReport.*`. All five packages
+are released together at the same version.
+
 | Project or directory | Architectural responsibility |
 |---|---|
 | `InteractiveReport.Core` | Report and state models, structural validation, canonical planning, expression binding, SQL lowering, schema discovery, execution, and persistence contracts and implementations. |

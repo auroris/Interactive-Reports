@@ -11,8 +11,16 @@ editing saved reports remains a REST and packaged-UI operation.
 
 ## Installation and mapping
 
-Reference the `InteractiveReport.Client.GraphQL` package in addition to
-`InteractiveReport.AspNetCore`, then register and map its schema:
+Install `AurorisNet.InteractiveReports.Client.GraphQL`, which brings in the server
+and core dependencies. The example below also uses `AurorisNet.InteractiveReports`
+for the JSON API and browser UI:
+
+```sh
+dotnet add package AurorisNet.InteractiveReports.Client.GraphQL
+dotnet add package AurorisNet.InteractiveReports
+```
+
+Register and map the adapters using the existing `InteractiveReport.*` namespaces:
 
 ```csharp
 using InteractiveReport.AspNetCore;

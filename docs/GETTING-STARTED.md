@@ -16,11 +16,10 @@ application must reference the matching ADO.NET driver.
 
 ## 1. Install the packages
 
-Install the server and JSON client:
+Install the JSON and browser client, which brings in the server and core dependencies:
 
 ```sh
-dotnet add package InteractiveReport.AspNetCore
-dotnet add package InteractiveReport.Client.Json
+dotnet add package AurorisNet.InteractiveReports
 ```
 
 For the SQLite example below, also install the provider in the host application:
@@ -32,8 +31,12 @@ dotnet add package Microsoft.Data.Sqlite
 Add the file-download package when users should be able to export CSV:
 
 ```sh
-dotnet add package InteractiveReport.Client.FileDownload
+dotnet add package AurorisNet.InteractiveReports.Client.FileDownload
 ```
+
+For GraphQL, add `AurorisNet.InteractiveReports.Client.GraphQL`; see the
+[GraphQL adapter guide](GRAPHQL.md). NuGet package names use the
+`AurorisNet.InteractiveReports` prefix; C# namespaces remain `InteractiveReport.*`.
 
 ## 2. Configure a data source and report
 

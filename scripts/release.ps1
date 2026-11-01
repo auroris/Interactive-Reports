@@ -1,7 +1,7 @@
 # Drops a complete, versioned package set into releases\<version>\ at the repository root:
 # the five .nupkg files, their .snupkg symbol packages, and a SHA256SUMS.txt manifest. The
-# version comes from Directory.Build.props unless overridden. This is the manual stand-in for a
-# future CI release job; nothing here pushes to a feed or touches GitHub.
+# version comes from Directory.Build.props unless overridden. The manual GitHub Actions
+# workflow uses this same pipeline; this script itself never publishes anything.
 #
 #   pwsh scripts\release.ps1                    # full pipeline (npm ci, build, tests, pack)
 #   pwsh scripts\release.ps1 -SkipTests         # pack without running the test layers
@@ -35,7 +35,9 @@ if (-not $Version) {
 }
 # Build metadata (+meta) is excluded: NuGet strips it from package file names, which the
 # version check below would then reject.
-if ($Version -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') {
+$number = '(0|[1-9][0-9]*)'
+$identifier = '(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+if ($Version -cnotmatch "^$number\.$number\.$number(-$identifier(\.$identifier)*)?$") {
     throw "release.ps1: '$Version' is not a semantic version (build metadata is not supported)."
 }
 

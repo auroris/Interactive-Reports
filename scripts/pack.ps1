@@ -45,27 +45,26 @@ if (-not $SkipTests) {
 
 $output = [System.IO.Path]::GetFullPath((Join-Path $root $Output))
 New-Item -ItemType Directory -Force $output | Out-Null
-# Typed as an array: an untyped one-element result unrolls to a string, and splatting a string
-# hands MSBuild one character per argument.
-[string[]] $versionArguments = if ($Version) { @("-p:Version=$Version") } else { @() }
-foreach ($project in @(
-    "src\InteractiveReport.Core",
-    "src\InteractiveReport.AspNetCore",
-    "src\InteractiveReport.Client.Json",
-    "src\InteractiveReport.Client.GraphQL",
-    "src\InteractiveReport.Client.FileDownload")) {
+if (-not $Version) {
+    [xml] $props = Get-Content (Join-Path $root "Directory.Build.props") -Raw
+    $Version = $props.Project.PropertyGroup.Version
+}
+[string[]] $versionArguments = @("-p:Version=$Version")
+$projects = [ordered]@{
+    "src\InteractiveReport.Core" = "AurorisNet.InteractiveReports.Core"
+    "src\InteractiveReport.AspNetCore" = "AurorisNet.InteractiveReports.AspNetCore"
+    "src\InteractiveReport.Client.Json" = "AurorisNet.InteractiveReports"
+    "src\InteractiveReport.Client.GraphQL" = "AurorisNet.InteractiveReports.Client.GraphQL"
+    "src\InteractiveReport.Client.FileDownload" = "AurorisNet.InteractiveReports.Client.FileDownload"
+}
+foreach ($project in $projects.Keys) {
     Invoke-Step "dotnet pack $project" { dotnet pack $project -c Release -o $output --nologo @versionArguments }
 }
 
-$missing = @(
-    "InteractiveReport.Core",
-    "InteractiveReport.AspNetCore",
-    "InteractiveReport.Client.Json",
-    "InteractiveReport.Client.GraphQL",
-    "InteractiveReport.Client.FileDownload") |
+$missing = $projects.Values |
     Where-Object {
-        -not (Test-Path (Join-Path $output "$_.*.nupkg")) -or
-        -not (Test-Path (Join-Path $output "$_.*.snupkg"))
+        -not (Test-Path -LiteralPath (Join-Path $output "$_.${Version}.nupkg")) -or
+        -not (Test-Path -LiteralPath (Join-Path $output "$_.${Version}.snupkg"))
     }
 if ($missing) {
     throw "pack.ps1: expected package artifacts are missing for: $($missing -join ', ')."

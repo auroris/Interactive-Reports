@@ -17,6 +17,7 @@
   </ItemGroup>
 
   <PropertyGroup>
+    <PackageId>AurorisNet.InteractiveReports.Client.GraphQL</PackageId>
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>

@@ -53,11 +53,10 @@ the [minimal sample](samples/Minimal/README.md).
 The [Windows Authentication sample](samples/WindowsAuthentication/README.md) adds
 Windows identity, administration, and application authorization hooks.
 
-Install packages via the command line:
+Install the browser package (which includes the server and core dependencies):
 
 ```sh
-dotnet add package InteractiveReport.AspNetCore
-dotnet add package InteractiveReport.Client.Json
+dotnet add package AurorisNet.InteractiveReports
 ```
 
 Configure a report in `appsettings.json`:
@@ -131,6 +130,11 @@ and release artifacts is a Windows workflow. The Workbench at `http://localhost:
 hosts every packaged page against a seeded SQLite database. `npm test` runs the unit,
 SQLite browser-server, and documentation tests, and `npm run test:all` adds the Playwright suite; `dotnet test`
 covers the server. See [Developing](docs/DEVELOPING.md).
+
+Maintainers can run **Actions → Release NuGet packages → Run workflow** to build and
+test all five packages and publish a GitHub Release with packages, symbols, and
+checksums. Publishing to nuget.org is an optional workflow input; see
+[Publishing a release](docs/DEVELOPING.md#publishing-a-release-from-github) for setup.
 
 ## License
 

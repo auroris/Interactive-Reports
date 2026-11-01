@@ -1,0 +1,154 @@
+name: Release NuGet packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Package version (blank uses Directory.Build.props; e.g. 1.0.3 or 1.0.3-rc.1)'
+        required: false
+        type: string
+      publish_to_nuget:
+        description: 'Also publish the packages to nuget.org'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nuget-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build, test, and pack
+    runs-on: windows-latest
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.pack.outputs.version }}
+    env:
+      ContinuousIntegrationBuild: 'true'
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install client dependencies
+        run: npm ci
+
+      - name: Install browser for packaged help screenshots
+        run: npx playwright install chromium
+
+      - name: Build release packages
+        id: pack
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          $version = ([string] $env:RELEASE_VERSION).Trim()
+          if (-not $version) {
+            [xml] $props = Get-Content Directory.Build.props -Raw
+            $version = $props.Project.PropertyGroup.Version
+          }
+          ./scripts/release.ps1 -Version $version -SkipInstall
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Check documentation
+        run: npm run test:docs
+
+      - name: Upload packages and checksums
+        uses: actions/upload-artifact@v7
+        with:
+          name: nuget-${{ steps.pack.outputs.version }}
+          path: releases/${{ steps.pack.outputs.version }}/*
+          if-no-files-found: error
+
+  github_release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: nuget-${{ needs.build.outputs.version }}
+          path: packages
+
+      - name: Verify checksums
+        working-directory: packages
+        run: sha256sum --check SHA256SUMS.txt
+
+      - name: Create release with packages and symbols
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          tag="v$RELEASE_VERSION"
+          if tagged_commit=$(git rev-parse --verify "refs/tags/$tag^{commit}" 2>/dev/null); then
+            if [[ "$tagged_commit" != "$GITHUB_SHA" ]]; then
+              echo "::error::Tag $tag points to a different commit. Choose a new version."
+              exit 1
+            fi
+          fi
+          flags=()
+          if [[ "$RELEASE_VERSION" == *-* ]]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "$tag" packages/*.nupkg packages/*.snupkg packages/SHA256SUMS.txt \
+            --target "$GITHUB_SHA" --title "AurorisNet.InteractiveReports $RELEASE_VERSION" \
+            --generate-notes "${flags[@]}"
+
+  nuget:
+    name: Publish to nuget.org
+    needs: [build, github_release]
+    if: ${{ inputs.publish_to_nuget }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: nuget-${{ needs.build.outputs.version }}
+          path: packages
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Verify checksums
+        working-directory: packages
+        run: sha256sum --check SHA256SUMS.txt
+
+      - name: Log in to nuget.org with Trusted Publishing
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: ${{ vars.NUGET_USER }}
+
+      - name: Publish packages and symbols
+        env:
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
+        run: |
+          dotnet nuget push "packages/*.nupkg" \
+            --source https://api.nuget.org/v3/index.json \
+            --api-key "$NUGET_API_KEY" --skip-duplicate

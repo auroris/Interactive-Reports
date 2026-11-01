@@ -114,5 +114,7 @@ Check these access boundaries with accounts in the corresponding groups:
 - After restarting, saved documents and administrator grants remain available.
 
 The sample references the repository projects directly. In a separate application,
-replace those project references with the corresponding NuGet packages, which include
-the browser assets. Keep the explicit Negotiate and SQLite package references.
+replace those project references with `AurorisNet.InteractiveReports` and
+`AurorisNet.InteractiveReports.Client.FileDownload`. The main package includes the
+browser assets and brings in the server and core dependencies. Keep the explicit
+Negotiate and SQLite package references.

@@ -28,8 +28,8 @@ discarded when the process exits. Interactive Reports does not create the databa
 - `appsettings.json` supplies the connection string, provider metadata, and report SQL.
 
 For an application outside this repository, replace the two `ProjectReference`
-entries with NuGet references to `InteractiveReport.AspNetCore` and
-`InteractiveReport.Client.Json`. Keep the explicit SQLite package reference. The
+entries with one NuGet reference to `AurorisNet.InteractiveReports`, which brings in
+the server and core dependencies. Keep the explicit SQLite package reference. The
 JSON client NuGet package includes the browser assets, so a consuming application
 does not need the npm build steps.
 
